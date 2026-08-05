@@ -1,53 +1,53 @@
 :root {
-  font-family: 'Source Serif 4',Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
-  width: 100vw;
-  height: 100vh;
+    font-family: "Source Serif 4", Inter, Avenir, Helvetica, Arial, sans-serif;
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 400;
+    width: 100vw;
+    height: 100vh;
 
-  color: white;
-  background: rgba(0,0,0,1);
+    color: white;
+    background: rgba(0, 0, 0, 1);
 
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-  text-align: center;
-  --bottom-bar-height: 150px;
-  overflow: hidden;
-  isolation: isolate;
-  user-select: none;
-  -webkit-user-select: none;
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    -webkit-text-size-adjust: 100%;
+    text-align: center;
+    --bottom-bar-height: 150px;
+    overflow: hidden;
+    isolation: isolate;
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 @font-face {
-  font-family: 'Source Serif 4';
-  src: url(./assets/fonts/SourceSerif4.ttf);
-  font-style: normal;
-  font-display: swap;
+    font-family: "Source Serif 4";
+    src: url(./assets/fonts/SourceSerif4Variable-Roman.ttf);
+    font-style: normal;
+    font-display: swap;
 }
 
 @font-face {
-  font-family: 'Stack Sans Text';
-  src: url(./assets/fonts/StackSansText.ttf);
-  font-style: normal;
-  font-display: swap;
+    font-family: "Stack Sans Text";
+    src: url(./assets/fonts/StackSansText-VariableFont_wght.ttf);
+    font-style: normal;
+    font-display: swap;
 }
 
 button {
-  min-width: 44px;
-  min-height: 44px;
-  outline: none;
+    min-width: 44px;
+    min-height: 44px;
+    outline: none;
 }
 
 #libraryView {
-  position: absolute;
-  inset: 25px 0 var(--bottom-bar-height);
-  box-sizing: border-box;
-  overflow: auto;
-  padding: 40px;
-  background: black;
-  text-align: left;
+    position: absolute;
+    inset: 25px 0 var(--bottom-bar-height);
+    box-sizing: border-box;
+    overflow: auto;
+    padding: 40px;
+    background: black;
+    text-align: left;
 }
