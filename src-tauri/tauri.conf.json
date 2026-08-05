@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AMBRA",
+  "productName": "Ambra",
   "version": "0.1.0",
-  "identifier": "com.quantium.labs",
+  "identifier": "com.quantium.ambra",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "AMBRA",
+        "title": "Ambra",
         "width": 1200,
         "height": 800,
         "minHeight": 600,
