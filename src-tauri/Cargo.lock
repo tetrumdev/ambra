@@ -33,6 +33,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ambra"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "lofty",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "walkdir",
+]
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3370,20 +3384,6 @@ dependencies = [
  "webview2-com",
  "window-vibrancy",
  "windows",
-]
-
-[[package]]
-name = "tauri-app"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "lofty",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "walkdir",
 ]
 
 [[package]]

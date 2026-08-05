@@ -1,6 +1,6 @@
-# Tauri + React + Typescript
+# Ambra
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop music player built with Tauri, React, and TypeScript.
 
 ## Recommended IDE Setup
 
