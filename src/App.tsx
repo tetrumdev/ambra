@@ -1,50 +1,64 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import { AppChrome } from "./components/AppChrome";
+import { AlbumArtwork, BackgroundArtwork } from "./components/Artwork";
+import { NowPlayingBar } from "./components/NowPlayingBar";
+import { useAudioPlayer } from "./hooks/useAudioPlayer";
+import { useMusicLibrary } from "./hooks/useMusicLibrary";
+import { useState } from "react";
+
+type Screen = "bigscreen" | "library";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [screen, setScreen] = useState<Screen>("bigscreen");
+  const library = useMusicLibrary();
+  const player = useAudioPlayer(library.tracks);
+  const isBigscreen = screen === "bigscreen";
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+  if (library.isLoading) {
+    return <p>Scanning ~/Music/Ambra…</p>;
+  }
+
+  if (library.error) {
+    return <p>Could not load the music library: {library.error}</p>;
+  }
+
+  if (!player.currentTrack) {
+    return <p>Add music files to ~/Music/Ambra, then relaunch Ambra.</p>;
   }
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <>
+      {isBigscreen ? (
+        <>
+          <AppChrome
+            isBigscreen={isBigscreen}
+            onExitBigscreen={() => setScreen("library")}
+          />
+          <AlbumArtwork track={player.currentTrack} />
+          <BackgroundArtwork track={player.currentTrack} />
+        </>
+      ) : (
+        <>
+          <AppChrome isBigscreen={isBigscreen} />
+          <main id="libraryView">
+          </main>
+        </>
+      )}
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <NowPlayingBar
+        variant={isBigscreen ? "bigscreen" : "compact"}
+        track={player.currentTrack}
+        currentTime={player.currentTime}
+        duration={player.duration}
+        isPlaying={player.isPlaying}
+        audioDecks={player.audioDecks}
+        onPrevious={player.previous}
+        onTogglePlayback={player.togglePlayback}
+        onNext={player.next}
+        onSeek={player.seek}
+        onOpenBigscreen={() => setScreen("bigscreen")}
+      />
+    </>
   );
 }
 

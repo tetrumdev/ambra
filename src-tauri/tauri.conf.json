@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ambra",
+  "productName": "AMBRA",
   "version": "0.1.0",
-  "identifier": "com.quantium.ambra",
+  "identifier": "com.alexrivkin.tauri-app",
   "build": {
     "beforeDevCommand": "bun run dev",
     "devUrl": "http://localhost:1420",
@@ -12,13 +12,24 @@
   "app": {
     "windows": [
       {
-        "title": "ambra",
-        "width": 800,
-        "height": 600
+        "title": "AMBRA",
+        "width": 1200,
+        "height": 800,
+        "minHeight": 600,
+        "minWidth": 850,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "$AUDIO/Ambra/**"
+        ]
+      }
     }
   },
   "bundle": {
