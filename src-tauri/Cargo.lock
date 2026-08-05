@@ -3,6 +3,20 @@
 version = 4
 
 [[package]]
+name = "AMBRA"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "lofty",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-opener",
+ "walkdir",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -30,20 +44,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e76a019e91224d279006ff972f1e984179a6e9feb050adba6ce8274aef23195"
 dependencies = [
  "alloc-no-stdlib",
-]
-
-[[package]]
-name = "ambra"
-version = "0.1.0"
-dependencies = [
- "base64 0.22.1",
- "lofty",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-opener",
- "walkdir",
 ]
 
 [[package]]

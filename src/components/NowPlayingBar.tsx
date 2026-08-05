@@ -1,5 +1,6 @@
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { Track } from "../types/music";
+import "./NowPlayingBar.css";
 import { AudioDecks } from "./AudioDecks";
 import { PlaybackProgress } from "./PlaybackProgress";
 import { PlayerControls } from "./PlayerControls";
@@ -48,17 +49,19 @@ export function NowPlayingBar({
         </button>
       )}
       <SongInfo track={track} />
-      <PlayerControls
-        isPlaying={isPlaying}
-        onPrevious={onPrevious}
-        onTogglePlayback={onTogglePlayback}
-        onNext={onNext}
-      />
-      <PlaybackProgress
-        currentTime={currentTime}
-        duration={duration}
-        onSeek={onSeek}
-      />
+      <div id="playbackCluster">
+        <PlayerControls
+          isPlaying={isPlaying}
+          onPrevious={onPrevious}
+          onTogglePlayback={onTogglePlayback}
+          onNext={onNext}
+        />
+        <PlaybackProgress
+          currentTime={currentTime}
+          duration={duration}
+          onSeek={onSeek}
+        />
+      </div>
     </div>
   );
 }

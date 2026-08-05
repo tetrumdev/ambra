@@ -1,4 +1,5 @@
 import type { Track } from "../types/music";
+import "./Artwork.css";
 
 type ArtworkProps = {
   track: Track;

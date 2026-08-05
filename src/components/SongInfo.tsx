@@ -1,4 +1,5 @@
 import type { Track } from "../types/music";
+import "./SongInfo.css";
 
 type SongInfoProps = {
   track: Track;

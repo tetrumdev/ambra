@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
+import "./PlaybackProgress.css";
 
 type PlaybackProgressProps = {
   currentTime: number;
