@@ -1,3 +1,5 @@
+import "./PlayerControls.css";
+
 type PlayerControlsProps = {
   isPlaying: boolean;
   onPrevious: () => void;

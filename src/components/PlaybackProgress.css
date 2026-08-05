@@ -1,0 +1,84 @@
+#currentTime {
+  font-family: 'Stack Sans Text';
+  font-weight: 300;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+}
+
+#otherTime {
+  font-family: 'Stack Sans Text';
+  font-weight: 300;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: inherit;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+}
+
+#progressContainer {
+  grid-column: 2;
+  grid-row: 2;
+  align-self: start;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 5ch minmax(0, 1fr) 6ch;
+  align-items: center;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+#bottomInfoBar[data-variant="compact"] #progressContainer {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-self: center;
+}
+
+#progressBar {
+  width: 100%;
+  min-width: 0;
+  height: 10px;
+  margin: 0;
+  padding: 0;
+  appearance: none;
+  -webkit-appearance: none;
+  background: transparent;
+  outline: none;
+  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+}
+
+#progressBar::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    white 0%,
+    white var(--progress),
+    rgba(214, 214, 214, 0.45) var(--progress),
+    rgba(214, 214, 214, 0.45) 100%
+  );
+}
+
+#progressBar::-webkit-slider-thumb {
+  width: 10px;
+  height: 10px;
+  margin-top: -3px;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 50%;
+  background: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
