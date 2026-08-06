@@ -6,6 +6,7 @@ export type Track = {
   album: string;
   artist: string;
   trackNumber: number | null;
+  durationSeconds: number;
 };
 
 export type ScannedTrack = Omit<Track, "id" | "cover"> & {

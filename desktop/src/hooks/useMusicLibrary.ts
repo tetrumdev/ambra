@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
-import fallbackCover from "../assets/images/albumCover1.png";
+import fallbackCover from "../assets/images/fallbackCover.png";
 import type { ScannedTrack, Track } from "../types/music";
 
 type MusicLibrary = {

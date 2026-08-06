@@ -1,5 +1,11 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use lofty::{file::TaggedFileExt, picture::PictureType, probe::read_from_path, tag::Accessor};
+use lofty::{
+    file::{AudioFile, TaggedFileExt},
+    picture::PictureType,
+    probe::read_from_path,
+    tag::Accessor,
+};
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -14,6 +20,7 @@ struct Track {
     album: String,
     artist: String,
     track_number: Option<u32>,
+    duration_seconds: f64,
 }
 
 fn is_supported_audio(path: &Path) -> bool {
@@ -94,6 +101,8 @@ fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
             format!("data:{mime_type};base64,{}", BASE64.encode(picture.data()))
         });
 
+    let duration_seconds = tagged_file.properties().duration().as_secs_f64();
+
     Ok(Track {
         audio: path.to_string_lossy().into_owned(),
         cover: embedded_cover.or_else(|| nearby_cover(path)),
@@ -112,6 +121,7 @@ fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
             .or(folder_artist)
             .unwrap_or_else(|| "Unknown Artist".to_owned()),
         track_number: tag.and_then(|tag| tag.track()),
+        duration_seconds,
     })
 }
 

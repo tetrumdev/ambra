@@ -1,0 +1,75 @@
+:root {
+    font-family: "Stack Sans Text";
+    font-size: 0.9rem;
+    font-weight: 300;
+}
+
+.libraryHeader {
+    width: 100%;
+    height: auto;
+    padding-left: 10px;
+    display: flexbox;
+}
+
+.libraryTitle {
+    font-family: "Source Serif 4";
+    font-weight: 500;
+    font-size: 4rem;
+}
+
+.libraryInfo {
+    display: flex;
+    gap: 20px;
+    margin: 0;
+    top: 0;
+}
+
+.libraryInfo p {
+    background: #2f2f2f;
+    border: none;
+    border-radius: 10px;
+    padding: 3px 7px;
+}
+
+.libraryTrackView {
+    grid-column: 2;
+    width: 1fr;
+    grid-template-rows: repeat(100px);
+}
+
+.libraryItem {
+    gap: 0;
+    margin: 0;
+    background-color: black;
+    padding-left: 10px;
+    height: 70px;
+    border-bottom: 1px solid #2f2f2f;
+    display: grid;
+    align-content: center;
+    grid-template-columns: 50px 300px 300px 300px;
+    text-align: left;
+    font-family: inherit;
+}
+
+.coverImg {
+    width: 40px;
+    height: 40px;
+    grid-column: 1;
+    align-self: center;
+}
+
+.trackName {
+    grid-column: 2;
+    font-weight: 600;
+    align-self: center;
+}
+
+.artistName {
+    grid-column: 3;
+    align-self: center;
+}
+
+.albumName {
+    grid-column: 4;
+    align-self: center;
+}

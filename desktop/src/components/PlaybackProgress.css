@@ -5,9 +5,9 @@
     width: 100%;
     min-width: 0;
     display: grid;
-    grid-template-columns: 6ch minmax(100px, 1fr) 6ch;
+    grid-template-columns: auto minmax(100px, 1fr) auto;
     align-items: center;
-    gap: 0;
+    gap: 15px;
     margin-top: 20px;
 }
 
@@ -17,8 +17,9 @@
     min-width: 0;
     margin: 0;
     display: grid;
-    grid-template-columns: 6ch minmax(100px, 1fr) 6ch;
+    grid-template-columns: auto minmax(100px, 1fr) auto;
     align-self: center;
+    gap: 15px;
 }
 
 #currentTime {
@@ -26,9 +27,10 @@
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
-    text-align: left;
+    text-align: right;
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
-    width: 100px;
+    width: 20px;
+    overflow: visible;
 }
 
 #otherTime {
@@ -36,9 +38,9 @@
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
-    text-align: right;
+    text-align: left;
     color: inherit;
-    min-width: 0;
+    width: 20px;
     min-height: 0;
     padding: 0;
     border: 0;
@@ -46,6 +48,7 @@
     background: transparent;
     cursor: pointer;
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+    overflow: visible;
 }
 
 #progressBar {
@@ -74,9 +77,9 @@
 }
 
 #progressBar::-webkit-slider-thumb {
-    width: 15px;
-    height: 15px;
-    margin-top: -3px;
+    width: 16px;
+    height: 16px;
+    margin-top: -4px;
     appearance: none;
     -webkit-appearance: none;
     border: none;

@@ -49,4 +49,11 @@
     width: 100vw;
     height: 100vw;
     display: grid;
+    border-top: 1px solid #2f2f2f;
+}
+
+@media screen and (width <= 1100px) {
+    #library {
+        grid-template-columns: 0 1fr;
+    }
 }
