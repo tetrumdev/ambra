@@ -1,29 +1,119 @@
 import "./App.css";
 import { AppChrome } from "./components/AppChrome";
+import { LibraryView } from "./components/LibraryView";
 import { AlbumArtwork, BackgroundArtwork } from "./components/Artwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
-import { useState } from "react";
-import { runLayoutTransition } from "./utils/runLayoutTransition";
-
-type Screen = "bigscreen" | "library";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { useEffect, useRef, useState } from "react";
+import {
+  loadPreferences,
+  savePreferences,
+  type AppScreen,
+} from "./utils/preferences";
 
 function App() {
-  const [screen, setScreen] = useState<Screen>("bigscreen");
+  const [preferences, setPreferences] = useState(loadPreferences);
   const library = useMusicLibrary();
-  const player = useAudioPlayer(library.tracks);
+  const player = useAudioPlayer(library.tracks, preferences.playback);
+  const screen = preferences.ui.screen;
   const isBigscreen = screen === "bigscreen";
+  const persistedPosition = player.isPlaying
+    ? Math.floor(player.currentTime / 5) * 5
+    : player.currentTime;
+  const latestSessionRef = useRef({ preferences, player });
+  latestSessionRef.current = { preferences, player };
 
-  const changeScreen = (nextScreen: Screen) => {
-    runLayoutTransition(() => setScreen(nextScreen));
+  useEffect(() => {
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      if (event.key !== "F11" || event.repeat) return;
+
+      event.preventDefault();
+
+      try {
+        const appWindow = getCurrentWindow();
+        const isFullscreen = await appWindow.isFullscreen();
+        await appWindow.setFullscreen(!isFullscreen);
+      } catch (error) {
+        console.error("Could not toggle fullscreen:", error);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    savePreferences(preferences);
+  }, [preferences]);
+
+  useEffect(() => {
+    if (!player.isSessionRestored || !player.currentTrack) return;
+
+    setPreferences((current) => {
+      const playback = {
+        trackId: player.currentTrack!.id,
+        positionSeconds: persistedPosition,
+      };
+
+      if (
+        current.playback.trackId === playback.trackId &&
+        current.playback.positionSeconds === playback.positionSeconds
+      ) {
+        return current;
+      }
+
+      return { ...current, playback };
+    });
+  }, [persistedPosition, player.currentTrack, player.isSessionRestored]);
+
+  useEffect(() => {
+    const saveLatestSession = () => {
+      const latest = latestSessionRef.current;
+      if (!latest.player.isSessionRestored || !latest.player.currentTrack) {
+        return;
+      }
+
+      savePreferences({
+        ...latest.preferences,
+        playback: {
+          trackId: latest.player.currentTrack.id,
+          positionSeconds: latest.player.currentTime,
+        },
+      });
+    };
+
+    window.addEventListener("beforeunload", saveLatestSession);
+    return () => window.removeEventListener("beforeunload", saveLatestSession);
+  }, []);
+
+  const changeScreen = (nextScreen: AppScreen) => {
+    setPreferences((current) => ({
+      ...current,
+      ui: {
+        ...current.ui,
+        screen: nextScreen,
+      },
+    }));
   };
+
+  if (library.isLoading) {
+    return <p>Scanning Library...</p>;
+  }
 
   if (library.error) {
     return <p>Could not load the music library: {library.error}</p>;
   }
 
   if (!player.currentTrack) {
+    return <p>Add music files to ~/Music/Ambra, then relaunch Ambra.</p>;
+  }
+
+  if (library.tracks.length === 0) {
     return <p>Add music files to ~/Music/Ambra, then relaunch Ambra.</p>;
   }
 
@@ -41,7 +131,9 @@ function App() {
       ) : (
         <>
           <AppChrome isBigscreen={isBigscreen} />
-          <main id="libraryView"></main>
+          <main id="libraryView">
+            <LibraryView tracks={library.tracks} />
+          </main>
         </>
       )}
 
