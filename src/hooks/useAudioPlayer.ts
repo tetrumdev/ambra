@@ -29,6 +29,7 @@ type AudioPlayer = {
   currentTime: number;
   duration: number;
   isPlaying: boolean;
+  isSessionRestored: boolean;
   togglePlayback: () => Promise<void>;
   previous: () => void;
   next: () => void;
@@ -36,17 +37,28 @@ type AudioPlayer = {
   audioDecks: AudioDeckController;
 };
 
-export function useAudioPlayer(tracks: Track[]): AudioPlayer {
+type InitialPlayback = {
+  trackId: string | null;
+  positionSeconds: number;
+};
+
+export function useAudioPlayer(
+  tracks: Track[],
+  initialPlayback: InitialPlayback,
+): AudioPlayer {
   const firstAudioRef = useRef<HTMLAudioElement>(null);
   const secondAudioRef = useRef<HTMLAudioElement>(null);
   const tracksRef = useRef<Track[]>(tracks);
   const activeDeckRef = useRef<Deck>(0);
   const nowPlayingRef = useRef(0);
+  const initialPlaybackRef = useRef(initialPlayback);
+  const pendingRestoreTimeRef = useRef<number | null>(null);
 
   const [nowPlaying, setNowPlaying] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isSessionRestored, setIsSessionRestored] = useState(false);
 
   tracksRef.current = tracks;
   const currentTrack = tracks[nowPlaying];
@@ -82,6 +94,8 @@ export function useAudioPlayer(tracks: Track[]): AudioPlayer {
     (requestedIndex: number, shouldPlay: boolean) => {
       const library = tracksRef.current;
       if (library.length === 0) return;
+
+      pendingRestoreTimeRef.current = null;
 
       const targetIndex =
         (requestedIndex % library.length + library.length) % library.length;
@@ -172,6 +186,16 @@ export function useAudioPlayer(tracks: Track[]): AudioPlayer {
 
       const loadedDuration = event.currentTarget.duration;
       setDuration(Number.isFinite(loadedDuration) ? loadedDuration : 0);
+
+      const pendingRestoreTime = pendingRestoreTimeRef.current;
+      if (pendingRestoreTime !== null && Number.isFinite(loadedDuration)) {
+        const restoredTime = Math.min(pendingRestoreTime, loadedDuration);
+        event.currentTarget.currentTime = restoredTime;
+        setCurrentTime(restoredTime);
+        pendingRestoreTimeRef.current = null;
+      }
+
+      setIsSessionRestored(true);
     },
     [],
   );
@@ -205,20 +229,29 @@ export function useAudioPlayer(tracks: Track[]): AudioPlayer {
   useEffect(() => {
     if (tracks.length === 0) return;
 
+    const savedPlayback = initialPlaybackRef.current;
+    const savedTrackIndex = tracks.findIndex(
+      (track) => track.id === savedPlayback.trackId,
+    );
+    const initialTrackIndex = savedTrackIndex >= 0 ? savedTrackIndex : 0;
+
     activeDeckRef.current = 0;
-    nowPlayingRef.current = 0;
-    setNowPlaying(0);
+    nowPlayingRef.current = initialTrackIndex;
+    pendingRestoreTimeRef.current =
+      savedTrackIndex >= 0 ? savedPlayback.positionSeconds : 0;
+    setNowPlaying(initialTrackIndex);
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
+    setIsSessionRestored(false);
 
     for (const audio of [firstAudioRef.current, secondAudioRef.current]) {
       audio?.pause();
       delete audio?.dataset.trackIndex;
     }
 
-    prepareDeck(0, 0);
-    prepareDeck(1, tracks.length > 1 ? 1 : 0);
+    prepareDeck(0, initialTrackIndex);
+    prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
   }, [prepareDeck, tracks]);
 
   useEffect(() => {
@@ -291,6 +324,7 @@ export function useAudioPlayer(tracks: Track[]): AudioPlayer {
     currentTime,
     duration,
     isPlaying,
+    isSessionRestored,
     togglePlayback,
     previous,
     next,
