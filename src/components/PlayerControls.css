@@ -1,36 +1,38 @@
 #controls {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: end;
-  justify-self: center;
-  display: flex;
-  align-items: center;
-  gap: 10px;
+    grid-column: 2;
+    grid-row: 1;
+    align-self: end;
+    justify-self: center;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 0;
+    top: 0;
 }
 
 #bottomInfoBar[data-variant="compact"] #controls {
-  flex: 0 0 auto;
-  justify-self: center;
-  align-items: center;
-
-  /*gap: 16px;*/
+    flex: 0 0 auto;
+    align-self: center;
+    justify-self: center;
+    align-items: center;
+    margin: 0;
 }
 
 #controls button {
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  appearance: none;
-  -webkit-appearance: none;
-  cursor: pointer;
-  filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
 }
 
 #controls img {
-  max-height: 25px;
-  max-width: 25px;
+    max-height: 25px;
+    max-width: 25px;
 }

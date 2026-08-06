@@ -5,6 +5,7 @@ import { NowPlayingBar } from "./components/NowPlayingBar";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
 import { useState } from "react";
+import { runLayoutTransition } from "./utils/runLayoutTransition";
 
 type Screen = "bigscreen" | "library";
 
@@ -14,9 +15,9 @@ function App() {
   const player = useAudioPlayer(library.tracks);
   const isBigscreen = screen === "bigscreen";
 
-  if (library.isLoading) {
-    return <p>Scanning ~/Music/Ambra…</p>;
-  }
+  const changeScreen = (nextScreen: Screen) => {
+    runLayoutTransition(() => setScreen(nextScreen));
+  };
 
   if (library.error) {
     return <p>Could not load the music library: {library.error}</p>;
@@ -32,7 +33,7 @@ function App() {
         <>
           <AppChrome
             isBigscreen={isBigscreen}
-            onExitBigscreen={() => setScreen("library")}
+            onExitBigscreen={() => changeScreen("library")}
           />
           <AlbumArtwork track={player.currentTrack} />
           <BackgroundArtwork track={player.currentTrack} />
@@ -40,8 +41,7 @@ function App() {
       ) : (
         <>
           <AppChrome isBigscreen={isBigscreen} />
-          <main id="libraryView">
-          </main>
+          <main id="libraryView"></main>
         </>
       )}
 
@@ -56,7 +56,7 @@ function App() {
         onTogglePlayback={player.togglePlayback}
         onNext={player.next}
         onSeek={player.seek}
-        onOpenBigscreen={() => setScreen("bigscreen")}
+        onOpenBigscreen={() => changeScreen("bigscreen")}
       />
     </>
   );
