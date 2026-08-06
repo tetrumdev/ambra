@@ -1,6 +1,7 @@
 import "./App.css";
 import { AppChrome } from "./components/AppChrome";
 import { LibraryView } from "./components/LibraryView";
+import { Sidebar } from "./components/Sidebar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/Artwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
@@ -131,7 +132,8 @@ function App() {
       ) : (
         <>
           <AppChrome isBigscreen={isBigscreen} />
-          <main id="libraryView">
+          <main id="library">
+            <Sidebar />
             <LibraryView tracks={library.tracks} />
           </main>
         </>

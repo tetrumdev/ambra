@@ -8,7 +8,7 @@ type LibraryViewProps = {
 
 export function LibraryView({ tracks }: LibraryViewProps) {
   return (
-    <div id="library-view">
+    <div id="libraryView">
       {tracks.map((track) => (
         <p key={track.audio}>{track.name}</p>
       ))}
