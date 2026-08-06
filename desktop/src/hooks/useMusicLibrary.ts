@@ -29,6 +29,7 @@ export function useMusicLibrary(): MusicLibrary {
         setTracks(
           scannedTracks.map((track) => ({
             ...track,
+            id: track.audio,
             audio: convertFileSrc(track.audio),
             cover: playableCover(track.cover),
           })),
