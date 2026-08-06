@@ -1,4 +1,5 @@
 export type Track = {
+  id: string;
   audio: string;
   cover: string;
   name: string;
@@ -7,7 +8,7 @@ export type Track = {
   trackNumber: number | null;
 };
 
-export type ScannedTrack = Omit<Track, "cover"> & {
+export type ScannedTrack = Omit<Track, "id" | "cover"> & {
   cover: string | null;
 };
 

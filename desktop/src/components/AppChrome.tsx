@@ -5,21 +5,18 @@ type AppChromeProps = {
   onExitBigscreen?: () => void;
 };
 
-
-
-export function AppChrome({
-  isBigscreen,
-  onExitBigscreen,
-}: AppChromeProps) {
+export function AppChrome({ isBigscreen, onExitBigscreen }: AppChromeProps) {
   return (
     <>
       <div className="titlebar" data-tauri-drag-region />
 
+      <div className="mainLogo">
+        <img src="/ambra.svg" id="logoImg" />
+      </div>
+
       {isBigscreen && (
         <>
-          <div className="mainLogo">
-            <img src="/ambra.svg" id="logoImg"/>
-            {/*<h1 className="mainLogo" id="ambraText">
+          {/*<h1 className="mainLogo" id="ambraText">
               ambra
             </h1>
             <h4 className="mainLogo" id="smallText">
@@ -28,7 +25,6 @@ export function AppChrome({
             <h3 className="mainLogo" id="quantiumText">
               Quantium Labs
             </h3>*/}
-          </div>
 
           <button id="xContainer" type="button" onClick={onExitBigscreen}>
             <img src="/x.svg" alt="Close" id="closeBtn" />
