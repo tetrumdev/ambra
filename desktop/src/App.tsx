@@ -1,6 +1,6 @@
 import "./App.css";
 import { AppChrome } from "./components/AppChrome";
-import { LibraryView } from "./components/LibraryView";
+import { TracksView } from "./components/TracksView";
 import { Sidebar } from "./components/Sidebar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/Artwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
@@ -39,6 +39,20 @@ function App() {
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      if (event.code !== "Escape" || event.repeat) return;
+
+      changeScreen("library");
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -134,7 +148,7 @@ function App() {
           <AppChrome isBigscreen={isBigscreen} />
           <main id="library">
             <Sidebar />
-            <LibraryView tracks={library.tracks} />
+            <TracksView tracks={library.tracks} />
           </main>
         </>
       )}
