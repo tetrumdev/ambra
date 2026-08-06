@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use lofty::{file::TaggedFileExt, picture::PictureType, probe::read_from_path, tag::Accessor};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -161,6 +161,7 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![scan_music])
         .run(tauri::generate_context!())

@@ -1,7 +1,7 @@
 #albumCover {
     position: absolute;
-    width: 60vmin;
-    height: 60vmin;
+    width: 70vmin;
+    height: 70vmin;
     aspect-ratio: 1;
     overflow: hidden;
     top: calc((100vh - var(--bottom-bar-height)) / 2);
