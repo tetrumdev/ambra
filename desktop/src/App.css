@@ -36,12 +36,17 @@
     font-display: swap;
 }
 
-#libraryView {
+#library {
     position: absolute;
-    inset: 25px 0 var(--bottom-bar-height);
+    left: 0;
+    top: 0;
+    inset: 30px 0 var(--bottom-bar-height);
     box-sizing: border-box;
     overflow: auto;
-    padding: 40px;
     background: black;
     text-align: left;
+    grid-template-columns: 230px 1fr;
+    width: 100vw;
+    height: 100vw;
+    display: grid;
 }
