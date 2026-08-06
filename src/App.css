@@ -36,12 +36,6 @@
     font-display: swap;
 }
 
-button {
-    min-width: 44px;
-    min-height: 44px;
-    outline: none;
-}
-
 #libraryView {
     position: absolute;
     inset: 25px 0 var(--bottom-bar-height);
