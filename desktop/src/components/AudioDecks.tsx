@@ -9,7 +9,7 @@ export function AudioDecks({ controller }: AudioDecksProps) {
     <>
       <audio
         ref={controller.firstAudioRef}
-        preload="auto"
+        preload="metadata"
         onLoadedMetadata={(event) => controller.onLoadedMetadata(0, event)}
         onDurationChange={(event) => controller.onDurationChange(0, event)}
         onTimeUpdate={(event) => controller.onTimeUpdate(0, event)}
@@ -19,7 +19,7 @@ export function AudioDecks({ controller }: AudioDecksProps) {
       />
       <audio
         ref={controller.secondAudioRef}
-        preload="auto"
+        preload="metadata"
         onLoadedMetadata={(event) => controller.onLoadedMetadata(1, event)}
         onDurationChange={(event) => controller.onDurationChange(1, event)}
         onTimeUpdate={(event) => controller.onTimeUpdate(1, event)}

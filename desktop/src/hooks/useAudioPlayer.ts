@@ -6,6 +6,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import { MediaPlayer, type MediaPlayerClass } from "dashjs";
 import type { Deck, Track } from "../types/music";
 
 export type AudioDeckController = {
@@ -55,6 +56,7 @@ export function useAudioPlayer(
   const nowPlayingRef = useRef(0);
   const initialPlaybackRef = useRef(initialPlayback);
   const pendingRestoreTimeRef = useRef<number | null>(null);
+  const dashPlayersRef = useRef<Array<MediaPlayerClass | null>>([null, null]);
 
   const [nowPlaying, setNowPlaying] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
@@ -76,6 +78,23 @@ export function useAudioPlayer(
     [audioForDeck],
   );
 
+  const releaseDeck = useCallback(
+    (deck: Deck) => {
+      const dashPlayer = dashPlayersRef.current[deck];
+      if (dashPlayer) {
+        dashPlayer.reset();
+        dashPlayersRef.current[deck] = null;
+      }
+
+      const audio = audioForDeck(deck);
+      if (!audio) return;
+      audio.pause();
+      audio.removeAttribute("src");
+      delete audio.dataset.trackIndex;
+    },
+    [audioForDeck],
+  );
+
   const prepareDeck = useCallback(
     (deck: Deck, trackIndex: number) => {
       const audio = audioForDeck(deck);
@@ -84,12 +103,19 @@ export function useAudioPlayer(
       if (!audio || !track) return;
       if (audio.dataset.trackIndex === String(trackIndex)) return;
 
-      audio.pause();
-      audio.src = track.audio;
+      releaseDeck(deck);
       audio.dataset.trackIndex = String(trackIndex);
-      audio.load();
+
+      if (track.playbackKind === "dash") {
+        const dashPlayer = MediaPlayer().create();
+        dashPlayersRef.current[deck] = dashPlayer;
+        dashPlayer.initialize(audio, track.audio, false);
+      } else {
+        audio.src = track.audio;
+        audio.load();
+      }
     },
-    [audioForDeck],
+    [audioForDeck, releaseDeck],
   );
 
   const switchToTrack = useCallback(
@@ -266,14 +292,22 @@ export function useAudioPlayer(
     setIsPlaying(false);
     setIsSessionRestored(false);
 
-    for (const audio of [firstAudioRef.current, secondAudioRef.current]) {
-      audio?.pause();
-      delete audio?.dataset.trackIndex;
-    }
+    releaseDeck(0);
+    releaseDeck(1);
 
     prepareDeck(0, initialTrackIndex);
-    prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
-  }, [prepareDeck, tracks]);
+    if (tracks.length > 1) {
+      prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
+    }
+  }, [prepareDeck, releaseDeck, tracks]);
+
+  useEffect(
+    () => () => {
+      dashPlayersRef.current[0]?.reset();
+      dashPlayersRef.current[1]?.reset();
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
