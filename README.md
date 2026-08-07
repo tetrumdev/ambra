@@ -8,8 +8,8 @@ The <i><b>perfect</b></i> music player built with performance in mind.
 
 - [x] Create Functional UI
 - [ ] Add streaming support
-  - [ ] Tidal
-  - [ ] Qobuz
+  - [x] Tidal
+  - [x] Qobuz
   - [ ] Spotify
   - [ ] Youtube Music
   - [ ] Local Files
@@ -49,6 +49,37 @@ Rust and TypeScript
 Tauri, Vite, React, Bun, and NodeJS
 
 ## Additional Info
+
+### Qobuz setup
+
+Ambra reuses the Qobuz API implementation from
+[`qbz`](https://github.com/vicrodh/qbz), pinned to its 2.0.2 source revision.
+Qobuz credentials remain in the Rust server and are never returned to the
+desktop.
+
+For first login, start the server with the terminal OAuth flow:
+
+```sh
+cd server
+AMBRA_QOBUZ_INTERACTIVE_LOGIN=1 cargo run
+```
+
+Open the printed Qobuz URL, complete login, then paste the callback URL back
+into the terminal. Ambra stores the resulting session in
+`server/.qobuz-session.json` with private file permissions. Later starts use
+that session automatically. A pre-existing token can instead be supplied with
+`AMBRA_QOBUZ_USER_AUTH_TOKEN`.
+
+`AMBRA_QOBUZ_QUALITY` selects the preferred format (`5`, `6`, `7`, or `27`);
+default is `27` with qbz's automatic fallback to available lower qualities.
+Paste either a Tidal or Qobuz album URL into the desktop's library form.
+
+Streaming metadata uses one provider-neutral contract: provider IDs, title and
+version, primary/all artists, album artists and version, cover, release date,
+label, genres, UPC, track/disc numbers, duration, explicit flag, ISRC,
+copyright, delivered quality, maximum sample rate/bit depth, and a server-owned
+playback descriptor. Spotify and YouTube Music adapters can populate the same
+contract later without changing player components.
 
 ### AI Usage
 

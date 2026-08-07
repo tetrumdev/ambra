@@ -26,5 +26,8 @@ dist-ssr
 /server/.tidal-session.json
 /server/.tidal-metadata-cache.json
 /server/.library-track-ids.json
+/server/.qobuz-session.json
+/server/.qobuz-metadata-cache.json
+/server/.streaming-library.json
 /.vite/
 /src-tauri/

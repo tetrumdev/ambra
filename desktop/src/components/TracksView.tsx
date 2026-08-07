@@ -6,7 +6,7 @@ import type { Track } from "../types/music";
 type LibraryViewProps = {
   tracks: Track[];
   playTrack: (trackId: string) => void;
-  addTidalAlbum: (url: string) => Promise<boolean>;
+  addAlbum: (url: string) => Promise<boolean>;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
 };
@@ -14,7 +14,7 @@ type LibraryViewProps = {
 export function TracksView({
   tracks,
   playTrack,
-  addTidalAlbum,
+  addAlbum,
   isAddingAlbum,
   addAlbumError,
 }: LibraryViewProps) {
@@ -39,7 +39,7 @@ export function TracksView({
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = String(Math.ceil(totalSeconds % 60)).padStart(2, "0");
     if (hours > 0) {
-      return `${hours}:${String(minutes).padStart(2, "0")}:${seconds}}`;
+      return `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`;
     } else {
       return `${minutes}:${seconds}`;
     }
@@ -50,7 +50,7 @@ export function TracksView({
     const url = albumUrl.trim();
     if (!url || isAddingAlbum) return;
 
-    if (await addTidalAlbum(url)) setAlbumUrl("");
+    if (await addAlbum(url)) setAlbumUrl("");
   }
 
   return (
@@ -69,19 +69,24 @@ export function TracksView({
             type="url"
             value={albumUrl}
             onChange={(event) => setAlbumUrl(event.target.value)}
-            placeholder="https://tidal.com/album/..."
-            aria-label="Tidal album link"
+            placeholder="Paste Tidal or Qobuz album URL"
+            aria-label="Streaming album link"
             aria-invalid={addAlbumError !== null}
             disabled={isAddingAlbum}
           />
           <button
             type="submit"
-            aria-label="Add Tidal album"
+            aria-label="Add streaming album"
             disabled={isAddingAlbum}
           >
             +
           </button>
         </form>
+        {addAlbumError && (
+          <p className="albumLinkError" role="alert">
+            {addAlbumError}
+          </p>
+        )}
       </div>
       <div className="columnInfo">
         <span className="trackColumn">Track</span>

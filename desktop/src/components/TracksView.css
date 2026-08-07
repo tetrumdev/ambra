@@ -89,6 +89,14 @@
     cursor: default;
 }
 
+.albumLinkError {
+    width: min(520px, calc(100% - 60px));
+    margin: 8px 0 0;
+    color: #e68f8f;
+    font-size: 0.78rem;
+    overflow-wrap: anywhere;
+}
+
 .columnInfo {
     right: 0;
     position: sticky;

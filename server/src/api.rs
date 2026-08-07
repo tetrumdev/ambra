@@ -20,7 +20,8 @@ use tokio::sync::RwLock;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
-    models::{HealthResponse, LibraryResponse},
+    models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
+    providers::qobuz::QobuzProvider,
     providers::tidal::{PlaybackSource, TidalProvider},
 };
 
@@ -32,17 +33,33 @@ type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send +
 #[derive(Clone)]
 struct AppState {
     tidal: TidalProvider,
+    qobuz: Option<QobuzProvider>,
     http_client: reqwest::Client,
-    tidal_track_ids: Arc<RwLock<Vec<String>>>,
+    library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibraryEntry {
+    provider: MusicProvider,
+    provider_track_id: String,
 }
 
 pub async fn serve() -> ServerResult<()> {
+    let qobuz = match QobuzProvider::authenticate_if_configured().await {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("Qobuz disabled because login failed: {error}");
+            None
+        }
+    };
     let state = AppState {
         tidal: TidalProvider::authenticate().await?,
+        qobuz,
         http_client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?,
-        tidal_track_ids: Arc::new(RwLock::new(initial_tidal_track_ids())),
+        library_entries: Arc::new(RwLock::new(initial_library_entries())),
     };
 
     let cors = CorsLayer::new()
@@ -55,7 +72,9 @@ pub async fn serve() -> ServerResult<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/library", get(library))
+        .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
+        .route("/api/library/qobuz-albums", post(add_qobuz_album))
         .route(
             "/api/providers/{provider}/tracks/{track_id}/stream",
             get(stream_track),
@@ -92,54 +111,105 @@ async fn health() -> Json<HealthResponse> {
 }
 
 async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>, ApiError> {
-    let track_ids = state.tidal_track_ids.read().await.clone();
-    let tracks = load_tidal_tracks(&state.tidal, &track_ids).await?;
+    let entries = state.library_entries.read().await.clone();
+    let available_entries = entries
+        .into_iter()
+        .filter(|entry| entry.provider != MusicProvider::Qobuz || state.qobuz.is_some())
+        .collect::<Vec<_>>();
+    let tracks = load_tracks(&state, &available_entries).await?;
 
     Ok(Json(LibraryResponse { tracks }))
 }
 
 #[derive(Deserialize)]
-struct AddTidalAlbumRequest {
+struct AddAlbumRequest {
     url: String,
+}
+
+async fn add_album(
+    State(state): State<AppState>,
+    Json(request): Json<AddAlbumRequest>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    if let Some(album_id) = tidal_album_id(&request.url) {
+        return import_album(&state, MusicProvider::Tidal, album_id).await;
+    }
+    if let Some(album_id) = qobuz_album_id(&request.url) {
+        return import_album(&state, MusicProvider::Qobuz, album_id).await;
+    }
+    Err(ApiError::bad_request(
+        "Unsupported album link; paste a Tidal or Qobuz album URL",
+    ))
 }
 
 async fn add_tidal_album(
     State(state): State<AppState>,
-    Json(request): Json<AddTidalAlbumRequest>,
+    Json(request): Json<AddAlbumRequest>,
 ) -> Result<Json<LibraryResponse>, ApiError> {
     let album_id = tidal_album_id(&request.url)
         .ok_or_else(|| ApiError::bad_request("Invalid Tidal album link"))?;
-    let track_ids = state
-        .tidal
-        .album_track_ids(&album_id)
-        .await
-        .map_err(ApiError::upstream)?;
+    import_album(&state, MusicProvider::Tidal, album_id).await
+}
+
+async fn add_qobuz_album(
+    State(state): State<AppState>,
+    Json(request): Json<AddAlbumRequest>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    let album_id = qobuz_album_id(&request.url)
+        .ok_or_else(|| ApiError::bad_request("Invalid Qobuz album link"))?;
+    import_album(&state, MusicProvider::Qobuz, album_id).await
+}
+
+async fn import_album(
+    state: &AppState,
+    provider: MusicProvider,
+    album_id: String,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    let track_ids = match provider {
+        MusicProvider::Tidal => state
+            .tidal
+            .album_track_ids(&album_id)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::Qobuz => qobuz_provider(state)?
+            .album_track_ids(&album_id)
+            .await
+            .map_err(ApiError::upstream)?,
+        _ => return Err(ApiError::bad_request("Music provider is not implemented")),
+    };
 
     if track_ids.is_empty() {
         return Err(ApiError::not_found(format!(
-            "Tidal album {album_id} contains no tracks"
+            "{} album {album_id} contains no tracks",
+            provider_name(provider)
         )));
     }
 
-    let tracks = load_tidal_tracks(&state.tidal, &track_ids).await?;
+    let entries = track_ids
+        .into_iter()
+        .map(|provider_track_id| LibraryEntry {
+            provider,
+            provider_track_id,
+        })
+        .collect::<Vec<_>>();
+    let tracks = load_tracks(state, &entries).await?;
 
-    let mut library_track_ids = state.tidal_track_ids.write().await;
-    move_track_ids_to_end(&mut library_track_ids, track_ids);
-    if let Err(error) = save_library_track_ids(&library_track_ids) {
+    let mut library_entries = state.library_entries.write().await;
+    move_entries_to_end(&mut library_entries, entries);
+    if let Err(error) = save_library_entries(&library_entries) {
         eprintln!("Could not persist the streaming library cache: {error}");
     }
 
     Ok(Json(LibraryResponse { tracks }))
 }
 
-async fn load_tidal_tracks(
-    tidal: &TidalProvider,
-    track_ids: &[String],
-) -> Result<Vec<crate::models::TrackMetadata>, ApiError> {
-    stream::iter(track_ids.iter().cloned())
-        .map(|track_id| {
-            let tidal = tidal.clone();
-            async move { tidal.track_metadata(&track_id).await }
+async fn load_tracks(
+    state: &AppState,
+    entries: &[LibraryEntry],
+) -> Result<Vec<TrackMetadata>, ApiError> {
+    stream::iter(entries.iter().cloned())
+        .map(|entry| {
+            let state = state.clone();
+            async move { load_track(&state, &entry).await }
         })
         .buffered(4)
         .map_err(ApiError::upstream)
@@ -147,36 +217,60 @@ async fn load_tidal_tracks(
         .await
 }
 
-fn move_track_ids_to_end(library: &mut Vec<String>, ordered_track_ids: Vec<String>) {
-    let incoming_ids = ordered_track_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-    library.retain(|track_id| !incoming_ids.contains(track_id.as_str()));
-    library.extend(ordered_track_ids);
+async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<TrackMetadata> {
+    match entry.provider {
+        MusicProvider::Tidal => state.tidal.track_metadata(&entry.provider_track_id).await,
+        MusicProvider::Qobuz => {
+            state
+                .qobuz
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Qobuz login is not configured"))?
+                .track_metadata(&entry.provider_track_id)
+                .await
+        }
+        _ => Err(io::Error::other("Music provider is not implemented").into()),
+    }
 }
 
-fn initial_tidal_track_ids() -> Vec<String> {
-    let configured = configured_tidal_track_ids();
-    let mut cached = load_library_track_ids();
-    let cached_ids = cached.iter().map(String::as_str).collect::<HashSet<_>>();
+fn move_entries_to_end(library: &mut Vec<LibraryEntry>, ordered_entries: Vec<LibraryEntry>) {
+    let incoming_entries = ordered_entries.iter().collect::<HashSet<_>>();
+    library.retain(|entry| !incoming_entries.contains(entry));
+    library.extend(ordered_entries);
+}
+
+fn initial_library_entries() -> Vec<LibraryEntry> {
+    let configured = configured_tidal_track_ids()
+        .into_iter()
+        .map(|provider_track_id| LibraryEntry {
+            provider: MusicProvider::Tidal,
+            provider_track_id,
+        })
+        .collect::<Vec<_>>();
+    let mut cached = load_library_entries();
+    let cached_entries = cached.iter().collect::<HashSet<_>>();
     let missing_configured = configured
         .into_iter()
-        .filter(|track_id| !cached_ids.contains(track_id.as_str()))
+        .filter(|entry| !cached_entries.contains(entry))
         .collect::<Vec<_>>();
     cached.splice(0..0, missing_configured);
     cached
 }
 
-fn library_track_ids_path() -> PathBuf {
+fn library_entries_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".streaming-library.json")
+}
+
+fn legacy_library_track_ids_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".library-track-ids.json")
 }
 
-fn load_library_track_ids() -> Vec<String> {
-    let path = library_track_ids_path();
+fn load_library_entries() -> Vec<LibraryEntry> {
+    let path = library_entries_path();
     let encoded = match fs::read(&path) {
         Ok(encoded) => encoded,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Vec::new(),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return load_legacy_tidal_entries();
+        }
         Err(error) => {
             eprintln!("Could not read streaming library cache: {error}");
             return Vec::new();
@@ -189,10 +283,23 @@ fn load_library_track_ids() -> Vec<String> {
     })
 }
 
-fn save_library_track_ids(track_ids: &[String]) -> io::Result<()> {
-    let path = library_track_ids_path();
+fn load_legacy_tidal_entries() -> Vec<LibraryEntry> {
+    fs::read(legacy_library_track_ids_path())
+        .ok()
+        .and_then(|encoded| serde_json::from_slice::<Vec<String>>(&encoded).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|provider_track_id| LibraryEntry {
+            provider: MusicProvider::Tidal,
+            provider_track_id,
+        })
+        .collect()
+}
+
+fn save_library_entries(entries: &[LibraryEntry]) -> io::Result<()> {
+    let path = library_entries_path();
     let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
-    fs::write(&temporary_path, serde_json::to_vec(track_ids)?)?;
+    fs::write(&temporary_path, serde_json::to_vec(entries)?)?;
     fs::rename(temporary_path, path)
 }
 
@@ -220,29 +327,64 @@ fn tidal_album_id(link: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn qobuz_album_id(link: &str) -> Option<String> {
+    let link = link.trim();
+    let without_scheme = link
+        .strip_prefix("https://")
+        .or_else(|| link.strip_prefix("http://"))?;
+    let (host, path) = without_scheme.split_once('/')?;
+    let host = host.split(':').next()?.to_ascii_lowercase();
+    if !matches!(
+        host.as_str(),
+        "qobuz.com" | "www.qobuz.com" | "play.qobuz.com" | "open.qobuz.com"
+    ) {
+        return None;
+    }
+
+    let clean_path = path.split(['?', '#']).next()?;
+    let segments = clean_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let album_index = segments.iter().position(|segment| *segment == "album")?;
+    let album_id = segments.get(album_index + 1..)?.last()?;
+    (!album_id.is_empty()
+        && album_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'))
+    .then(|| (*album_id).to_owned())
+}
+
 async fn stream_track(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-    if provider != "tidal" {
-        return Err(ApiError::not_found(format!(
-            "Music provider '{provider}' is not configured"
-        )));
-    }
-
-    let source = state
-        .tidal
-        .playback_source(&track_id)
-        .await
-        .map_err(ApiError::upstream)?;
-
-    match source {
-        PlaybackSource::Direct { url, mime_type, .. } => {
-            proxy_direct_stream(&state.http_client, &url, &mime_type, &headers).await
+    match provider.as_str() {
+        "tidal" => {
+            let source = state
+                .tidal
+                .playback_source(&track_id)
+                .await
+                .map_err(ApiError::upstream)?;
+            match source {
+                PlaybackSource::Direct { url, mime_type, .. } => {
+                    proxy_direct_stream(&state.http_client, &url, &mime_type, &headers).await
+                }
+                PlaybackSource::Dash { .. } => Err(ApiError::not_found(format!(
+                    "Tidal track {track_id} uses its DASH manifest endpoint"
+                ))),
+            }
         }
-        PlaybackSource::Dash { .. } => Err(ApiError::not_found(format!(
-            "Tidal track {track_id} uses its DASH manifest endpoint"
+        "qobuz" => {
+            let source = qobuz_provider(&state)?
+                .playback_source(&track_id)
+                .await
+                .map_err(ApiError::upstream)?;
+            proxy_direct_stream(&state.http_client, &source.url, &source.mime_type, &headers).await
+        }
+        _ => Err(ApiError::not_found(format!(
+            "Music provider '{provider}' is not configured"
         ))),
     }
 }
@@ -450,6 +592,23 @@ fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
     }
 }
 
+fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
+    state.qobuz.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Qobuz login is not configured. Set AMBRA_QOBUZ_USER_AUTH_TOKEN, or restart with AMBRA_QOBUZ_INTERACTIVE_LOGIN=1",
+        )
+    })
+}
+
+fn provider_name(provider: MusicProvider) -> &'static str {
+    match provider {
+        MusicProvider::Tidal => "Tidal",
+        MusicProvider::Qobuz => "Qobuz",
+        MusicProvider::Spotify => "Spotify",
+        MusicProvider::YoutubeMusic => "YouTube Music",
+    }
+}
+
 async fn proxy_direct_stream(
     client: &reqwest::Client,
     url: &str,
@@ -545,6 +704,13 @@ impl ApiError {
         }
     }
 
+    fn service_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: message.into(),
+        }
+    }
+
     fn internal(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -568,8 +734,10 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        configured_tidal_track_ids, hls_playlist_body, move_track_ids_to_end, tidal_album_id,
+        LibraryEntry, configured_tidal_track_ids, hls_playlist_body, move_entries_to_end,
+        qobuz_album_id, tidal_album_id,
     };
+    use crate::models::MusicProvider;
 
     #[test]
     fn default_library_has_a_test_track() {
@@ -596,18 +764,52 @@ mod tests {
     }
 
     #[test]
-    fn moves_existing_track_into_imported_album_order() {
-        let mut library = vec!["5".to_owned(), "other".to_owned()];
+    fn extracts_qobuz_album_id_from_supported_links() {
+        assert_eq!(
+            qobuz_album_id("https://open.qobuz.com/album/abc123?utm_source=share"),
+            Some("abc123".to_owned())
+        );
+        assert_eq!(
+            qobuz_album_id("https://www.qobuz.com/us-en/album/album-title/0123456789abc"),
+            Some("0123456789abc".to_owned())
+        );
+    }
 
-        move_track_ids_to_end(
+    #[test]
+    fn rejects_non_qobuz_and_non_album_links() {
+        assert_eq!(qobuz_album_id("https://example.com/album/abc123"), None);
+        assert_eq!(qobuz_album_id("https://play.qobuz.com/artist/12345"), None);
+    }
+
+    #[test]
+    fn moves_existing_track_into_imported_album_order() {
+        let tidal = |provider_track_id: &str| LibraryEntry {
+            provider: MusicProvider::Tidal,
+            provider_track_id: provider_track_id.to_owned(),
+        };
+        let qobuz = |provider_track_id: &str| LibraryEntry {
+            provider: MusicProvider::Qobuz,
+            provider_track_id: provider_track_id.to_owned(),
+        };
+        let mut library = vec![tidal("5"), qobuz("5"), tidal("other")];
+
+        move_entries_to_end(
             &mut library,
-            ["1", "2", "3", "4", "5"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            ["1", "2", "3", "4", "5"].into_iter().map(tidal).collect(),
         );
 
-        assert_eq!(library, ["other", "1", "2", "3", "4", "5"]);
+        assert_eq!(
+            library,
+            [
+                qobuz("5"),
+                tidal("other"),
+                tidal("1"),
+                tidal("2"),
+                tidal("3"),
+                tidal("4"),
+                tidal("5")
+            ]
+        );
     }
 
     #[test]

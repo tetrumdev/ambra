@@ -88,19 +88,14 @@ impl TidalProvider {
             }
         }
 
-        let (track, album_release_date) = {
+        let (track, album_details) = {
             let client = self.client.lock().await.clone();
             let track = client.get_track(track_id).await?;
-            let release_date = match track.album.as_ref() {
-                Some(album) if album.release_date.is_none() => client
-                    .get_album(album.id.to_string())
-                    .await
-                    .ok()
-                    .map(|album| album.release_date),
-                Some(album) => album.release_date.clone(),
+            let album_details = match track.album.as_ref() {
+                Some(album) => client.get_album(album.id.to_string()).await.ok(),
                 None => None,
             };
-            (track, release_date)
+            (track, album_details)
         };
 
         if !track.allow_streaming || !track.stream_ready {
@@ -110,6 +105,11 @@ impl TidalProvider {
         let primary_artist = ArtistMetadata {
             provider_id: track.artist.id.to_string(),
             name: track.artist.name.clone(),
+            image_url: track
+                .artist
+                .picture
+                .as_deref()
+                .map(|picture| uuid_to_url_with_size(picture, 750)),
         };
         let artists = if track.artists.is_empty() {
             vec![primary_artist.clone()]
@@ -120,17 +120,52 @@ impl TidalProvider {
                 .map(|artist| ArtistMetadata {
                     provider_id: artist.id.to_string(),
                     name: artist.name.clone(),
+                    image_url: artist
+                        .picture
+                        .as_deref()
+                        .map(|picture| uuid_to_url_with_size(picture, 750)),
                 })
                 .collect()
         };
         let album = track.album.as_ref().map(|album| AlbumMetadata {
             provider_id: album.id.to_string(),
             title: album.title.clone(),
+            version: album_details
+                .as_ref()
+                .and_then(|album| album.version.clone()),
+            artists: album_details
+                .as_ref()
+                .map(|album| {
+                    album
+                        .artists
+                        .iter()
+                        .map(|artist| ArtistMetadata {
+                            provider_id: artist.id.to_string(),
+                            name: artist.name.clone(),
+                            image_url: artist
+                                .picture
+                                .as_deref()
+                                .map(|picture| uuid_to_url_with_size(picture, 750)),
+                        })
+                        .collect()
+                })
+                .filter(|artists: &Vec<_>| !artists.is_empty())
+                .unwrap_or_else(|| vec![primary_artist.clone()]),
             cover_url: album
                 .cover
                 .as_deref()
                 .map(|cover| uuid_to_url_with_size(cover, 1280)),
-            release_date: album.release_date.clone().or(album_release_date.clone()),
+            release_date: album.release_date.clone().or_else(|| {
+                album_details
+                    .as_ref()
+                    .map(|album| album.release_date.clone())
+            }),
+            label: None,
+            genres: Vec::new(),
+            upc: album_details
+                .as_ref()
+                .map(|album| album.upc.clone())
+                .filter(|upc| !upc.is_empty()),
         });
 
         let (playback, quality) = match self.playback_source(track_id).await? {
@@ -155,6 +190,7 @@ impl TidalProvider {
             provider: MusicProvider::Tidal,
             provider_track_id: track_id.to_owned(),
             title: track.title,
+            version: track.version,
             primary_artist,
             artists,
             album,
@@ -163,7 +199,10 @@ impl TidalProvider {
             disc_number: Some(track.volume_number),
             explicit: track.explicit,
             isrc: track.isrc,
+            copyright: track.copyright,
             quality: Some(quality),
+            maximum_sampling_rate_khz: None,
+            maximum_bit_depth: None,
             playback,
         };
         let mut cache = self.track_metadata_cache.lock().await;
