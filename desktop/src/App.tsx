@@ -125,11 +125,11 @@ function App() {
   }
 
   if (!player.currentTrack) {
-    return <p>Add music files to ~/Music/Ambra, then relaunch Ambra.</p>;
+    return <p>Start Ambra server or add music files to ~/Music/Ambra.</p>;
   }
 
   if (library.tracks.length === 0) {
-    return <p>Add music files to ~/Music/Ambra, then relaunch Ambra.</p>;
+    return <p>Start Ambra server or add music files to ~/Music/Ambra.</p>;
   }
 
   return (

@@ -1,6 +1,8 @@
+mod api;
+mod models;
 mod providers;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    providers::tidal::run().await
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    api::serve().await
 }
