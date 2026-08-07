@@ -33,7 +33,7 @@
     mask-image: linear-gradient(
         to right,
         black 0,
-        black calc(100% - 2-0px),
+        black calc(100% - 20px),
         transparent 100%
     );
 }

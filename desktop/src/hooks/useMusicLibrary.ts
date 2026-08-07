@@ -2,7 +2,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import fallbackCover from "../assets/images/fallbackCover.png";
 import type { ScannedTrack, Track } from "../types/music";
-import { addServerTidalAlbum, loadServerTracks } from "../api/server";
+import { addServerAlbum, loadServerTracks } from "../api/server";
 import {
   loadCachedServerTracks,
   saveCachedServerTracks,
@@ -15,7 +15,7 @@ type MusicLibrary = {
   error: string | null;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
-  addTidalAlbum: (url: string) => Promise<boolean>;
+  addAlbum: (url: string) => Promise<boolean>;
 };
 
 function playableLocalCover(cover: string | null) {
@@ -33,13 +33,26 @@ function localTrack(track: ScannedTrack): Track {
     audio: convertFileSrc(track.audio),
     cover: playableLocalCover(track.cover),
     nativeCover: track.cover,
+    version: null,
     albumId: null,
-    artists: [{ providerId: track.artist, name: track.artist }],
+    albumVersion: null,
+    albumArtists: [
+      { providerId: track.artist, name: track.artist, imageUrl: null },
+    ],
+    artists: [
+      { providerId: track.artist, name: track.artist, imageUrl: null },
+    ],
     discNumber: null,
     releaseDate: null,
     explicit: false,
     isrc: null,
+    copyright: null,
+    label: null,
+    genres: [],
+    upc: null,
     quality: null,
+    maximumSamplingRateKHz: null,
+    maximumBitDepth: null,
   };
 }
 
@@ -120,12 +133,12 @@ export function useMusicLibrary(): MusicLibrary {
     };
   }, []);
 
-  const addTidalAlbum = useCallback(async (url: string) => {
+  const addAlbum = useCallback(async (url: string) => {
     setIsAddingAlbum(true);
     setAddAlbumError(null);
 
     try {
-      const albumTracks = await addServerTidalAlbum(url);
+      const albumTracks = await addServerAlbum(url);
       setServerTracks((currentTracks) =>
         moveAlbumToEndInOrder(currentTracks, albumTracks),
       );
@@ -144,6 +157,6 @@ export function useMusicLibrary(): MusicLibrary {
     error,
     isAddingAlbum,
     addAlbumError,
-    addTidalAlbum,
+    addAlbum,
   };
 }
