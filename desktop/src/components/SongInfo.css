@@ -11,10 +11,6 @@
     text-align: left;
 }
 
-#songInfo span {
-    filter: drop-shadow(0 0 8px rgba(0 0 0 0.4));
-}
-
 #songInfo > #songName,
 #songInfo > #albumName,
 #songInfo > #artistName {

@@ -63,6 +63,11 @@
     border-radius: 8px;
     background: transparent;
     cursor: pointer;
+    transition-duration: 0.25s;
+}
+
+#compactArtwork:hover {
+    filter: brightness(0.7);
 }
 
 #compactArtwork img {

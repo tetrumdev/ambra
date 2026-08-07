@@ -21,12 +21,15 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
+    playback_cache::{CachePlan, CacheTrack, DashCacheSource, DirectCacheSource, PlaybackCache},
     providers::qobuz::QobuzProvider,
     providers::tidal::{PlaybackSource, TidalProvider},
 };
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
 const DEFAULT_TIDAL_TRACK_ID: &str = "3756725";
+const CURRENT_INITIAL_CACHE_SECONDS: u64 = 10;
+const UPCOMING_CACHE_SECONDS: u64 = 5;
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -36,6 +39,7 @@ struct AppState {
     qobuz: Option<QobuzProvider>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
+    playback_cache: PlaybackCache,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -46,6 +50,7 @@ struct LibraryEntry {
 }
 
 pub async fn serve() -> ServerResult<()> {
+    let playback_cache = PlaybackCache::initialize().await?;
     let qobuz = match QobuzProvider::authenticate_if_configured().await {
         Ok(provider) => provider,
         Err(error) => {
@@ -57,9 +62,10 @@ pub async fn serve() -> ServerResult<()> {
         tidal: TidalProvider::authenticate().await?,
         qobuz,
         http_client: reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .build()?,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
+        playback_cache,
     };
 
     let cors = CorsLayer::new()
@@ -72,6 +78,7 @@ pub async fn serve() -> ServerResult<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/library", get(library))
+        .route("/api/playback/cache-plan", post(update_cache_plan))
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
         .route("/api/library/qobuz-albums", post(add_qobuz_album))
@@ -108,6 +115,177 @@ pub async fn serve() -> ServerResult<()> {
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+async fn update_cache_plan(
+    State(state): State<AppState>,
+    Json(plan): Json<CachePlan>,
+) -> Result<(StatusCode, Json<CachePlan>), ApiError> {
+    let plan = plan.normalize().map_err(ApiError::bad_request)?;
+    let Some(generation) = state
+        .playback_cache
+        .update_plan(&plan)
+        .await
+        .map_err(ApiError::internal)?
+    else {
+        return Ok((StatusCode::ACCEPTED, Json(plan)));
+    };
+
+    spawn_cache_plan(state, plan.clone(), generation);
+
+    Ok((StatusCode::ACCEPTED, Json(plan)))
+}
+
+fn spawn_cache_plan(state: AppState, plan: CachePlan, generation: u64) {
+    tokio::spawn(async move {
+        let current = plan.current;
+        if let Some(track) = current.clone() {
+            cache_stage(
+                &state,
+                track,
+                false,
+                CURRENT_INITIAL_CACHE_SECONDS,
+                false,
+                generation,
+            )
+            .await;
+        }
+
+        if !state.playback_cache.is_current_generation(generation).await {
+            return;
+        }
+        for track in plan.upcoming {
+            cache_stage(
+                &state,
+                track,
+                false,
+                UPCOMING_CACHE_SECONDS,
+                true,
+                generation,
+            )
+            .await;
+            if !state.playback_cache.is_current_generation(generation).await {
+                return;
+            }
+        }
+
+        if let Some(track) = current {
+            cache_stage(&state, track, true, 0, false, generation).await;
+        }
+    });
+}
+
+async fn cache_stage(
+    state: &AppState,
+    track: CacheTrack,
+    full: bool,
+    prefetch_seconds: u64,
+    trim_to_prefix: bool,
+    generation: u64,
+) {
+    let label = format!(
+        "{}:{}",
+        provider_name(track.provider),
+        track.provider_track_id
+    );
+    if let Err(error) = cache_track(
+        state,
+        track,
+        full,
+        prefetch_seconds,
+        trim_to_prefix,
+        generation,
+    )
+    .await
+    {
+        eprintln!("Could not cache playback for {label}: {error}");
+    }
+}
+
+async fn cache_track(
+    state: &AppState,
+    track: CacheTrack,
+    full: bool,
+    prefetch_seconds: u64,
+    trim_to_prefix: bool,
+    generation: u64,
+) -> ServerResult<()> {
+    match track.provider {
+        MusicProvider::Tidal => match state
+            .tidal
+            .playback_source(&track.provider_track_id)
+            .await?
+        {
+            PlaybackSource::Direct { url, mime_type, .. } => {
+                state
+                    .playback_cache
+                    .cache_direct(
+                        track,
+                        DirectCacheSource { url, mime_type },
+                        full,
+                        prefetch_seconds,
+                        trim_to_prefix,
+                        generation,
+                        state.http_client.clone(),
+                    )
+                    .await?;
+            }
+            PlaybackSource::Dash {
+                initialization_url,
+                media_url_template,
+                timescale,
+                segment_duration,
+                start_number,
+                segment_count,
+                ..
+            } => {
+                state
+                    .playback_cache
+                    .cache_dash(
+                        track,
+                        DashCacheSource {
+                            initialization_url,
+                            media_url_template,
+                            timescale,
+                            segment_duration,
+                            start_number,
+                            segment_count,
+                        },
+                        full,
+                        prefetch_seconds,
+                        trim_to_prefix,
+                        generation,
+                        state.http_client.clone(),
+                    )
+                    .await?;
+            }
+        },
+        MusicProvider::Qobuz => {
+            let source = state
+                .qobuz
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Qobuz login is not configured"))?
+                .playback_source(&track.provider_track_id)
+                .await?;
+            state
+                .playback_cache
+                .cache_direct(
+                    track,
+                    DirectCacheSource {
+                        url: source.url,
+                        mime_type: source.mime_type,
+                    },
+                    full,
+                    prefetch_seconds,
+                    trim_to_prefix,
+                    generation,
+                    state.http_client.clone(),
+                )
+                .await?;
+        }
+        _ => return Err(io::Error::other("Unsupported cache provider").into()),
+    }
+    Ok(())
 }
 
 async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>, ApiError> {
@@ -360,6 +538,14 @@ async fn stream_track(
     Path((provider, track_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    if let Some(response) = state
+        .playback_cache
+        .direct_response(&provider, &track_id, &headers)
+        .await
+    {
+        return response.map_err(ApiError::internal);
+    }
+
     match provider.as_str() {
         "tidal" => {
             let source = state
@@ -514,6 +700,13 @@ async fn dash_initialization(
     Path((provider, track_id)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
+    if let Some(response) = state
+        .playback_cache
+        .dash_response(&track_id, None, "audio/mp4")
+        .await
+    {
+        return response.map_err(ApiError::internal);
+    }
 
     let source = state
         .tidal
@@ -545,6 +738,13 @@ async fn dash_segment(
     Path((provider, track_id, segment_number)): Path<(String, String, u32)>,
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
+    if let Some(response) = state
+        .playback_cache
+        .dash_response(&track_id, Some(segment_number), "audio/mp4")
+        .await
+    {
+        return response.map_err(ApiError::internal);
+    }
 
     let source = state
         .tidal
