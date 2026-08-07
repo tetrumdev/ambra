@@ -1,13 +1,21 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import fallbackCover from "../assets/images/fallbackCover.png";
 import type { ScannedTrack, Track } from "../types/music";
-import { loadServerTracks } from "../api/server";
+import { addServerTidalAlbum, loadServerTracks } from "../api/server";
+import {
+  loadCachedServerTracks,
+  saveCachedServerTracks,
+} from "../utils/libraryCache";
+import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 
 type MusicLibrary = {
   tracks: Track[];
   isLoading: boolean;
   error: string | null;
+  isAddingAlbum: boolean;
+  addAlbumError: string | null;
+  addTidalAlbum: (url: string) => Promise<boolean>;
 };
 
 function playableLocalCover(cover: string | null) {
@@ -24,6 +32,7 @@ function localTrack(track: ScannedTrack): Track {
     playbackKind: "direct",
     audio: convertFileSrc(track.audio),
     cover: playableLocalCover(track.cover),
+    nativeCover: track.cover,
     albumId: null,
     artists: [{ providerId: track.artist, name: track.artist }],
     discNumber: null,
@@ -34,32 +43,76 @@ function localTrack(track: ScannedTrack): Track {
   };
 }
 
+function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
+  const existingIds = new Set(currentTracks.map((track) => track.id));
+  return [
+    ...currentTracks,
+    ...incomingTracks.filter((track) => !existingIds.has(track.id)),
+  ];
+}
+
 export function useMusicLibrary(): MusicLibrary {
-  const [tracks, setTracks] = useState<Track[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [localTracks, setLocalTracks] = useState<Track[]>([]);
+  const [serverTracks, setServerTracks] = useState<Track[]>(
+    loadCachedServerTracks,
+  );
+  const [isLocalLoading, setIsLocalLoading] = useState(true);
+  const [isServerLoading, setIsServerLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isAddingAlbum, setIsAddingAlbum] = useState(false);
+  const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
+  const tracks = useMemo(
+    () => [...serverTracks, ...localTracks],
+    [localTracks, serverTracks],
+  );
+  const isLoading = isLocalLoading && isServerLoading;
+
+  useEffect(() => {
+    saveCachedServerTracks(serverTracks);
+  }, [serverTracks]);
 
   useEffect(() => {
     let cancelled = false;
 
-    const localTracks = isTauri()
-      ? invoke<ScannedTrack[]>("scan_music")
-      : Promise.resolve([]);
-    const serverTracks = loadServerTracks().catch((reason: unknown) => {
-      console.warn("Could not load streaming providers:", reason);
-      return [];
-    });
+    const loadLocalTracks = async () => {
+      if (!isTauri()) return [];
 
-    void Promise.all([localTracks, serverTracks])
-      .then(([scannedTracks, streamedTracks]) => {
-        if (cancelled) return;
-        setTracks([...streamedTracks, ...scannedTracks.map(localTrack)]);
+      try {
+        const cachedTracks = await invoke<ScannedTrack[]>("load_cached_music");
+        if (!cancelled && cachedTracks.length > 0) {
+          setLocalTracks(cachedTracks.map(localTrack));
+        }
+      } catch (reason) {
+        console.warn("Could not load cached local library:", reason);
+      }
+
+      return invoke<ScannedTrack[]>("scan_music");
+    };
+
+    void loadLocalTracks()
+      .then((loadedTracks) => {
+        if (!cancelled) setLocalTracks(loadedTracks.map(localTrack));
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(String(reason));
       })
       .finally(() => {
-        if (!cancelled) setIsLoading(false);
+        if (!cancelled) setIsLocalLoading(false);
+      });
+
+    void loadServerTracks()
+      .then((loadedTracks) => {
+        if (!cancelled) {
+          setServerTracks((currentTracks) =>
+            appendUniqueTracks(currentTracks, loadedTracks),
+          );
+        }
+      })
+      .catch((reason: unknown) => {
+        console.warn("Could not load streaming providers:", reason);
+      })
+      .finally(() => {
+        if (!cancelled) setIsServerLoading(false);
       });
 
     return () => {
@@ -67,5 +120,30 @@ export function useMusicLibrary(): MusicLibrary {
     };
   }, []);
 
-  return { tracks, isLoading, error };
+  const addTidalAlbum = useCallback(async (url: string) => {
+    setIsAddingAlbum(true);
+    setAddAlbumError(null);
+
+    try {
+      const albumTracks = await addServerTidalAlbum(url);
+      setServerTracks((currentTracks) =>
+        moveAlbumToEndInOrder(currentTracks, albumTracks),
+      );
+      return true;
+    } catch (reason) {
+      setAddAlbumError(String(reason));
+      return false;
+    } finally {
+      setIsAddingAlbum(false);
+    }
+  }, []);
+
+  return {
+    tracks,
+    isLoading,
+    error,
+    isAddingAlbum,
+    addAlbumError,
+    addTidalAlbum,
+  };
 }
