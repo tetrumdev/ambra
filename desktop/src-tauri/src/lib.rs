@@ -15,13 +15,17 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
-use tauri::Manager;
+use tauri::{LogicalSize, Manager};
+use tauri_plugin_window_state::{StateFlags, WindowExt};
 use walkdir::WalkDir;
 
 mod media_controls;
 mod native_audio;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+const MIN_WINDOW_WIDTH: f64 = 850.0;
+const MIN_WINDOW_HEIGHT: f64 = 600.0;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -583,12 +587,61 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
     Ok(tracks)
 }
 
+fn clamp_logical_window_size(
+    width: f64,
+    height: f64,
+    maximum_width: f64,
+    maximum_height: f64,
+) -> (f64, f64) {
+    (
+        width.clamp(MIN_WINDOW_WIDTH, maximum_width.max(MIN_WINDOW_WIDTH)),
+        height.clamp(MIN_WINDOW_HEIGHT, maximum_height.max(MIN_WINDOW_HEIGHT)),
+    )
+}
+
+fn restore_main_window(
+    app: &tauri::App,
+    flags: StateFlags,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or("The main window is unavailable")?;
+    window.set_min_size(Some(LogicalSize::new(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)))?;
+    window.restore_state(flags)?;
+
+    let scale_factor = window.scale_factor()?;
+    let size = window.inner_size()?;
+    let monitor_size = window
+        .current_monitor()?
+        .or(window.primary_monitor()?)
+        .map(|monitor| monitor.size().to_logical::<f64>(scale_factor))
+        .unwrap_or_else(|| LogicalSize::new(1200.0, 800.0));
+    let logical_size = size.to_logical::<f64>(scale_factor);
+    let (width, height) = clamp_logical_window_size(
+        logical_size.width,
+        logical_size.height,
+        monitor_size.width,
+        monitor_size.height,
+    );
+    if width != logical_size.width || height != logical_size.height {
+        window.set_size(LogicalSize::new(width, height))?;
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let window_state_flags = StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED;
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(
+            tauri_plugin_window_state::Builder::default()
+                .with_state_flags(window_state_flags)
+                .skip_initial_state("main")
+                .build(),
+        )
         .plugin(tauri_plugin_opener::init())
-        .setup(|app| {
+        .setup(move |app| {
+            restore_main_window(app, window_state_flags)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
             Ok(())
@@ -612,8 +665,20 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::folder_metadata;
+    use super::{clamp_logical_window_size, folder_metadata};
     use std::path::Path;
+
+    #[test]
+    fn clamps_restored_window_size_to_supported_bounds() {
+        assert_eq!(
+            clamp_logical_window_size(1261.0, 515.0, 1440.0, 900.0),
+            (1261.0, 600.0)
+        );
+        assert_eq!(
+            clamp_logical_window_size(1800.0, 1200.0, 1440.0, 900.0),
+            (1440.0, 900.0)
+        );
+    }
 
     #[test]
     fn derives_artist_and_album_from_library_folders() {

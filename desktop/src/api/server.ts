@@ -5,6 +5,7 @@ import type {
   TrackArtist,
 } from "../types/music";
 import fallbackCover from "../assets/images/fallbackCover.png";
+import type { PlaybackCachePlan } from "../utils/playbackCachePlan";
 
 const serverBaseUrl = (
   import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:8787"
@@ -102,7 +103,9 @@ async function libraryTracks(response: Response): Promise<Track[]> {
     } catch {
       // Preserve non-JSON upstream errors verbatim.
     }
-    throw new Error(`Ambra server returned HTTP ${response.status}: ${message}`);
+    throw new Error(
+      `Ambra server returned HTTP ${response.status}: ${message}`,
+    );
   }
 
   const library = (await response.json()) as LibraryResponse;
@@ -120,5 +123,78 @@ export async function addServerAlbum(url: string): Promise<Track[]> {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     }),
+  );
+}
+
+const playbackCachePlanUrl = `${serverBaseUrl}/api/playback/cache-plan`;
+let queuedPlaybackCachePlan: PlaybackCachePlan | undefined;
+let isPublishingPlaybackCachePlan = false;
+let playbackCacheRevision = Date.now() * 1_000;
+
+function nextPlaybackCacheRevision() {
+  playbackCacheRevision = Math.max(
+    playbackCacheRevision + 1,
+    Date.now() * 1_000,
+  );
+  return playbackCacheRevision;
+}
+
+async function postPlaybackCachePlan(plan: PlaybackCachePlan) {
+  const response = await fetch(playbackCachePlanUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...plan, revision: nextPlaybackCacheRevision() }),
+  });
+  if (!response.ok) {
+    throw new Error(`Ambra server returned HTTP ${response.status}`);
+  }
+}
+
+async function drainPlaybackCachePlans() {
+  while (queuedPlaybackCachePlan) {
+    const plan = queuedPlaybackCachePlan;
+    queuedPlaybackCachePlan = undefined;
+    try {
+      await postPlaybackCachePlan(plan);
+    } catch (error) {
+      console.warn("Could not publish playback cache plan:", error);
+    }
+  }
+  isPublishingPlaybackCachePlan = false;
+}
+
+export function publishPlaybackCachePlan(plan: PlaybackCachePlan) {
+  queuedPlaybackCachePlan = plan;
+  if (isPublishingPlaybackCachePlan) return;
+
+  isPublishingPlaybackCachePlan = true;
+  void drainPlaybackCachePlans();
+}
+
+export function publishPlaybackCachePlanOnUnload(plan: PlaybackCachePlan) {
+  const body = JSON.stringify({
+    ...plan,
+    revision: nextPlaybackCacheRevision(),
+  });
+  try {
+    if (
+      navigator.sendBeacon(
+        playbackCachePlanUrl,
+        new Blob([body], { type: "application/json" }),
+      )
+    ) {
+      return;
+    }
+  } catch (error) {
+    console.warn("Could not send playback cache plan beacon:", error);
+  }
+
+  void fetch(playbackCachePlanUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    keepalive: true,
+  }).catch((error) =>
+    console.warn("Could not clear playback cache plan on unload:", error),
   );
 }
