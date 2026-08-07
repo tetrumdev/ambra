@@ -135,7 +135,7 @@ function App() {
             <TracksView
               tracks={library.tracks}
               playTrack={player.playTrack}
-              addTidalAlbum={library.addTidalAlbum}
+              addAlbum={library.addAlbum}
               isAddingAlbum={library.isAddingAlbum}
               addAlbumError={library.addAlbumError}
             />
