@@ -148,7 +148,7 @@ function App() {
           <AppChrome isBigscreen={isBigscreen} />
           <main id="library">
             <Sidebar />
-            <TracksView tracks={library.tracks} />
+            <TracksView tracks={library.tracks} playTrack={player.playTrack} />
           </main>
         </>
       )}

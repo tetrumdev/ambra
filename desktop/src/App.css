@@ -15,7 +15,6 @@
     -moz-osx-font-smoothing: grayscale;
     -webkit-text-size-adjust: 100%;
     text-align: center;
-    --bottom-bar-height: 150px;
     overflow: hidden;
     isolation: isolate;
     user-select: none;
@@ -40,16 +39,18 @@
     position: absolute;
     left: 0;
     top: 0;
-    inset: 30px 0 var(--bottom-bar-height);
     box-sizing: border-box;
     overflow: auto;
     background: black;
     text-align: left;
     grid-template-columns: 230px 1fr;
-    width: 100vw;
-    height: 100vw;
+    width: 100%;
+    height: 100%;
     display: grid;
     border-top: 1px solid #2f2f2f;
+    margin-top: 30px;
+    padding-bottom: 130px;
+    overflow: hidden;
 }
 
 @media screen and (width <= 1100px) {

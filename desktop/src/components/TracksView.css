@@ -1,39 +1,44 @@
-:root {
-    font-family: "Stack Sans Text";
+.tracksView {
+    /*scroll-behavior: smooth;*/
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    height: 100%;
     font-size: 0.9rem;
     font-weight: 300;
+    font-family: "Stack Sans Text";
+    filter: none;
 }
 
 .libraryHeader {
     width: 100%;
     height: auto;
-    padding-left: 10px;
-    display: flexbox;
+    padding-left: 30px;
+    display: block;
+    padding-bottom: 40px;
 }
 
 .libraryTitle {
     font-family: "Source Serif 4";
     font-weight: 500;
     font-size: 4rem;
+    margin-bottom: 30px;
 }
 
 .libraryInfo {
-    display: flex;
-    gap: 20px;
+    display: block;
+    gap: 0;
     margin: 0;
     top: 0;
 }
 
 .libraryInfo p {
-    background: #2f2f2f;
-    border: none;
-    border-radius: 10px;
-    padding: 3px 7px;
+    margin: 0;
 }
 
 .libraryTrackView {
     grid-column: 2;
-    width: 1fr;
+    width: 100%;
     grid-template-rows: repeat(100px);
 }
 
@@ -42,20 +47,26 @@
     margin: 0;
     background-color: black;
     padding-left: 10px;
-    height: 70px;
+    height: 80px;
     border-bottom: 1px solid #2f2f2f;
     display: grid;
     align-content: center;
-    grid-template-columns: 50px 300px 300px 300px;
+    grid-template-columns: 75px 300px 300px 300px;
     text-align: left;
     font-family: inherit;
 }
 
-.coverImg {
-    width: 40px;
-    height: 40px;
+.trackImgContainer {
+    width: 60px;
+    height: 60px;
     grid-column: 1;
     align-self: center;
+    cursor: pointer;
+}
+
+.coverImg {
+    width: 100%;
+    height: 100%;
 }
 
 .trackName {
