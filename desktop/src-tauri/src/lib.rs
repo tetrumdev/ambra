@@ -54,7 +54,9 @@ fn save_library_cache(app: &tauri::AppHandle, tracks: &[Track]) -> Result<(), St
         )
     })?;
 
-    let temporary_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    let temporary_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary_path =
+        cache_path.with_extension(format!("{}.{}.tmp", std::process::id(), temporary_id));
     let encoded = serde_json::to_vec(tracks)
         .map_err(|error| format!("Could not encode the library cache: {error}"))?;
     fs::write(&temporary_path, encoded).map_err(|error| {
