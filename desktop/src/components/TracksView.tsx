@@ -4,30 +4,44 @@ import { Track } from "../types/music";
 
 type LibraryViewProps = {
   tracks: Track[];
+  playTrack: (trackIndex: number) => void;
 };
 
-export function TracksView({ tracks }: LibraryViewProps) {
+export function TracksView({ tracks, playTrack }: LibraryViewProps) {
   const totalDurationSeconds = tracks.reduce(
     (total, track) => total + track.durationSeconds,
     0,
   );
+
+  const hours = Math.floor(totalDurationSeconds / 3600);
+  const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
+  const seconds = Math.floor(totalDurationSeconds % 60);
+
+  function formatUnit(value: number, unit: string) {
+    return `${value} ${unit}${value === 1 ? "" : "s"}`;
+  }
 
   return (
     <div className="tracksView">
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
         <div className="libraryInfo">
-          <p className="numOfTracks">{tracks.length} tracks</p>
+          <p className="numOfTracks">{formatUnit(tracks.length, "track")}</p>
           <p className="playlistLength">
-            {Math.floor(totalDurationSeconds / 3600)} hours{" "}
-            {Math.floor(totalDurationSeconds / 60)} minutes{" "}
-            {Math.floor(totalDurationSeconds % 60)} seconds
+            {formatUnit(hours, "hour")}, {formatUnit(minutes, "minute")},{" "}
+            {formatUnit(seconds, "second")}
           </p>
         </div>
       </div>
-      {tracks.map((track) => (
+      {tracks.map((track, index) => (
         <div className="libraryItem" key={track.id}>
-          <img src={track.cover} className="coverImg" />
+          <div className="trackImgContainer">
+            <img
+              src={track.cover}
+              className="coverImg"
+              onClick={() => playTrack(index)}
+            />
+          </div>
           <span className="trackName">{track.name}</span>
           <span className="artistName">{track.artist}</span>
           <span className="albumName">{track.album}</span>

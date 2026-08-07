@@ -77,7 +77,7 @@
 }
 
 #progressBar::-webkit-slider-thumb {
-    width: 16px;
+    width: 0;
     height: 16px;
     margin-top: -4px;
     appearance: none;

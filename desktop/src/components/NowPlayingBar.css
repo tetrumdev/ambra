@@ -16,7 +16,7 @@
     column-gap: 24px;
     background-color: rgba(59, 59, 59, 0.5);
     border-top: 1px solid rgba(122, 122, 122, 0.5);
-    backdrop-filter: blur(999px);
+    backdrop-filter: blur(50px);
     z-index: 1;
 }
 
