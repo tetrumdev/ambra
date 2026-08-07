@@ -1,7 +1,8 @@
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useState } from "react";
 import fallbackCover from "../assets/images/fallbackCover.png";
 import type { ScannedTrack, Track } from "../types/music";
+import { loadServerTracks } from "../api/server";
 
 type MusicLibrary = {
   tracks: Track[];
@@ -9,9 +10,28 @@ type MusicLibrary = {
   error: string | null;
 };
 
-function playableCover(cover: string | null) {
+function playableLocalCover(cover: string | null) {
   if (cover === null) return fallbackCover;
   return cover.startsWith("data:") ? cover : convertFileSrc(cover);
+}
+
+function localTrack(track: ScannedTrack): Track {
+  return {
+    ...track,
+    id: `local:${track.audio}`,
+    provider: "local",
+    providerTrackId: track.audio,
+    playbackKind: "direct",
+    audio: convertFileSrc(track.audio),
+    cover: playableLocalCover(track.cover),
+    albumId: null,
+    artists: [{ providerId: track.artist, name: track.artist }],
+    discNumber: null,
+    releaseDate: null,
+    explicit: false,
+    isrc: null,
+    quality: null,
+  };
 }
 
 export function useMusicLibrary(): MusicLibrary {
@@ -22,18 +42,18 @@ export function useMusicLibrary(): MusicLibrary {
   useEffect(() => {
     let cancelled = false;
 
-    void invoke<ScannedTrack[]>("scan_music")
-      .then((scannedTracks) => {
-        if (cancelled) return;
+    const localTracks = isTauri()
+      ? invoke<ScannedTrack[]>("scan_music")
+      : Promise.resolve([]);
+    const serverTracks = loadServerTracks().catch((reason: unknown) => {
+      console.warn("Could not load streaming providers:", reason);
+      return [];
+    });
 
-        setTracks(
-          scannedTracks.map((track) => ({
-            ...track,
-            id: track.audio,
-            audio: convertFileSrc(track.audio),
-            cover: playableCover(track.cover),
-          })),
-        );
+    void Promise.all([localTracks, serverTracks])
+      .then(([scannedTracks, streamedTracks]) => {
+        if (cancelled) return;
+        setTracks([...streamedTracks, ...scannedTracks.map(localTrack)]);
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(String(reason));

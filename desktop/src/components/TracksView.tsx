@@ -1,6 +1,6 @@
 import "./TracksView.css";
 
-import { Track } from "../types/music";
+import type { Track } from "../types/music";
 
 type LibraryViewProps = {
   tracks: Track[];
@@ -38,6 +38,7 @@ export function TracksView({ tracks, playTrack }: LibraryViewProps) {
           <div className="trackImgContainer">
             <img
               src={track.cover}
+              alt={`${track.album} album cover`}
               className="coverImg"
               onClick={() => playTrack(index)}
             />
