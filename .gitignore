@@ -23,5 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 /server/target/
+/server/.tidal-session.json
 /.vite/
 /src-tauri/
