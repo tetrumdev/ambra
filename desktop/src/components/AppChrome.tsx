@@ -9,10 +9,13 @@ type AppChromeProps = {
 export function AppChrome({ isBigscreen, onExitBigscreen }: AppChromeProps) {
   return (
     <>
-      <div className="titlebar" data-tauri-drag-region />
+      {!isBigscreen && (
+        <div className="libraryTitlebar" data-tauri-drag-region />
+      )}
 
       {isBigscreen && (
         <>
+          <div className="bigscreenTitlebar" data-tauri-drag-region />
           <button id="xContainer" type="button" onClick={onExitBigscreen}>
             <img src="/x.svg" alt="Close" id="closeBtn" />
           </button>

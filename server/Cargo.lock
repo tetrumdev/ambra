@@ -10,6 +10,7 @@ dependencies = [
  "futures-util",
  "reqwest",
  "serde",
+ "serde_json",
  "tidlers",
  "tokio",
  "tower-http 0.7.0",

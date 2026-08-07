@@ -23,7 +23,6 @@ use crate::models::{
 };
 
 const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(5 * 60);
-
 pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone)]
@@ -31,6 +30,8 @@ pub struct TidalProvider {
     client: Arc<Mutex<TidalClient>>,
     http_client: reqwest::Client,
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
+    track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
+    track_metadata_cache_path: Arc<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -65,18 +66,30 @@ impl TidalProvider {
         let mut client = authenticated_client().await?;
         client.set_audio_quality(AudioQuality::High);
 
+        let track_metadata_cache_path = track_metadata_cache_path();
+        let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
+
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
             http_client: reqwest::Client::new(),
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
+            track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
+            track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
         validate_track_id(track_id)?;
 
+        {
+            let cache = self.track_metadata_cache.lock().await;
+            if let Some(cached) = cache.get(track_id) {
+                return Ok(cached.clone());
+            }
+        }
+
         let (track, album_release_date) = {
-            let client = self.client.lock().await;
+            let client = self.client.lock().await.clone();
             let track = client.get_track(track_id).await?;
             let release_date = match track.album.as_ref() {
                 Some(album) if album.release_date.is_none() => client
@@ -137,7 +150,7 @@ impl TidalProvider {
             ),
         };
 
-        Ok(TrackMetadata {
+        let metadata = TrackMetadata {
             id: format!("tidal:{track_id}"),
             provider: MusicProvider::Tidal,
             provider_track_id: track_id.to_owned(),
@@ -152,7 +165,42 @@ impl TidalProvider {
             isrc: track.isrc,
             quality: Some(quality),
             playback,
-        })
+        };
+        let mut cache = self.track_metadata_cache.lock().await;
+        cache.insert(track_id.to_owned(), metadata.clone());
+        if let Err(error) = save_track_metadata_cache(&self.track_metadata_cache_path, &cache) {
+            eprintln!("Could not persist Tidal metadata cache: {error}");
+        }
+
+        Ok(metadata)
+    }
+
+    pub async fn album_track_ids(&self, album_id: &str) -> ProviderResult<Vec<String>> {
+        validate_album_id(album_id)?;
+
+        let client = self.client.lock().await.clone();
+        let mut track_ids = Vec::new();
+        let mut offset = 0_u64;
+
+        loop {
+            let page = client
+                .get_album_items(album_id.to_owned(), Some(100), Some(offset))
+                .await?;
+            let page_length = page.items.len();
+            track_ids.extend(
+                page.items
+                    .into_iter()
+                    .map(|entry| entry.item.id.to_string()),
+            );
+
+            if page_length == 0 || track_ids.len() >= page.total_number_of_items.max(0) as usize {
+                break;
+            }
+
+            offset += page_length as u64;
+        }
+
+        Ok(track_ids)
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
@@ -167,12 +215,11 @@ impl TidalProvider {
             }
         }
 
-        let client = self.client.lock().await;
+        let client = self.client.lock().await.clone();
         let track = client.get_track(track_id).await?;
         let playback = client
             .get_track_postpaywall_playback_info(track_id, None)
             .await?;
-        drop(client);
         let quality = playback.audio_quality.clone();
 
         let source = match playback.manifest_parsed {
@@ -424,11 +471,51 @@ fn session_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".tidal-session.json")
 }
 
+fn track_metadata_cache_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".tidal-metadata-cache.json")
+}
+
+fn load_track_metadata_cache(path: &PathBuf) -> HashMap<String, TrackMetadata> {
+    let encoded = match fs::read(path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return HashMap::new(),
+        Err(error) => {
+            eprintln!("Could not read Tidal metadata cache: {error}");
+            return HashMap::new();
+        }
+    };
+
+    serde_json::from_slice(&encoded).unwrap_or_else(|error| {
+        eprintln!("Could not decode Tidal metadata cache: {error}");
+        HashMap::new()
+    })
+}
+
+fn save_track_metadata_cache(
+    path: &PathBuf,
+    cache: &HashMap<String, TrackMetadata>,
+) -> ProviderResult<()> {
+    let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
+    fs::write(&temporary_path, serde_json::to_vec(cache)?)?;
+    fs::rename(temporary_path, path)?;
+    Ok(())
+}
+
 fn validate_track_id(track_id: &str) -> ProviderResult<()> {
     track_id.parse::<u64>().map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("'{track_id}' is not a numeric Tidal track ID"),
+        )
+    })?;
+    Ok(())
+}
+
+fn validate_album_id(album_id: &str) -> ProviderResult<()> {
+    album_id.parse::<u64>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("'{album_id}' is not a numeric Tidal album ID"),
         )
     })?;
     Ok(())

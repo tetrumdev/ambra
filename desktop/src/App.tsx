@@ -19,7 +19,7 @@ function App() {
   const library = useMusicLibrary();
   const player = useAudioPlayer(library.tracks, preferences.playback);
   const screen = preferences.ui.screen;
-  const isBigscreen = screen === "bigscreen";
+  const isBigscreen = screen === "bigscreen" && player.currentTrack !== undefined;
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
@@ -116,22 +116,6 @@ function App() {
     }));
   };
 
-  if (library.isLoading) {
-    return <p>Scanning Library...</p>;
-  }
-
-  if (library.error) {
-    return <p>Could not load the music library: {library.error}</p>;
-  }
-
-  if (!player.currentTrack) {
-    return <p>Start Ambra server or add music files to ~/Music/Ambra.</p>;
-  }
-
-  if (library.tracks.length === 0) {
-    return <p>Start Ambra server or add music files to ~/Music/Ambra.</p>;
-  }
-
   return (
     <>
       {isBigscreen ? (
@@ -140,32 +124,40 @@ function App() {
             isBigscreen={isBigscreen}
             onExitBigscreen={() => changeScreen("library")}
           />
-          <AlbumArtwork track={player.currentTrack} />
-          <BackgroundArtwork track={player.currentTrack} />
+          <AlbumArtwork track={player.currentTrack!} />
+          <BackgroundArtwork track={player.currentTrack!} />
         </>
       ) : (
         <>
           <AppChrome isBigscreen={isBigscreen} />
           <main id="library">
             <Sidebar />
-            <TracksView tracks={library.tracks} playTrack={player.playTrack} />
+            <TracksView
+              tracks={library.tracks}
+              playTrack={player.playTrack}
+              addTidalAlbum={library.addTidalAlbum}
+              isAddingAlbum={library.isAddingAlbum}
+              addAlbumError={library.addAlbumError}
+            />
           </main>
         </>
       )}
 
-      <NowPlayingBar
-        variant={isBigscreen ? "bigscreen" : "compact"}
-        track={player.currentTrack}
-        currentTime={player.currentTime}
-        duration={player.duration}
-        isPlaying={player.isPlaying}
-        audioDecks={player.audioDecks}
-        onPrevious={player.previous}
-        onTogglePlayback={player.togglePlayback}
-        onNext={player.next}
-        onSeek={player.seek}
-        onOpenBigscreen={() => changeScreen("bigscreen")}
-      />
+      {player.currentTrack && (
+        <NowPlayingBar
+          variant={isBigscreen ? "bigscreen" : "compact"}
+          track={player.currentTrack}
+          currentTime={player.currentTime}
+          duration={player.duration}
+          isPlaying={player.isPlaying}
+          audioDecks={player.audioDecks}
+          onPrevious={player.previous}
+          onTogglePlayback={player.togglePlayback}
+          onNext={player.next}
+          onSeek={player.seek}
+          onOpenBigscreen={() => changeScreen("bigscreen")}
+        />
+      )}
     </>
   );
 }
