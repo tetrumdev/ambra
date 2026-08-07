@@ -31,6 +31,12 @@
     cursor: pointer;
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
     outline: none;
+    transition-duration: 0.15s;
+}
+
+#controls button:active {
+    filter: brightness(70%);
+    scale: 0.7;
 }
 
 #controls img {

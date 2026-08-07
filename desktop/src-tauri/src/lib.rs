@@ -7,7 +7,7 @@ use lofty::{
 };
 use oxideav_core::{ContainerRegistry, NullCodecResolver, ReadSeek};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
@@ -18,9 +18,12 @@ use std::{
 use tauri::Manager;
 use walkdir::WalkDir;
 
+mod media_controls;
+mod native_audio;
+
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Track {
     audio: String,
@@ -30,6 +33,65 @@ struct Track {
     artist: String,
     track_number: Option<u32>,
     duration_seconds: f64,
+}
+
+fn library_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_cache_dir()
+        .map(|directory| directory.join("library.json"))
+        .map_err(|error| format!("Could not locate Ambra's cache directory: {error}"))
+}
+
+fn save_library_cache(app: &tauri::AppHandle, tracks: &[Track]) -> Result<(), String> {
+    let cache_path = library_cache_path(app)?;
+    let cache_directory = cache_path
+        .parent()
+        .ok_or_else(|| "Ambra's library cache has no parent directory".to_owned())?;
+    fs::create_dir_all(cache_directory).map_err(|error| {
+        format!(
+            "Could not create library cache {}: {error}",
+            cache_directory.display()
+        )
+    })?;
+
+    let temporary_path = cache_path.with_extension(format!("{}.tmp", std::process::id()));
+    let encoded = serde_json::to_vec(tracks)
+        .map_err(|error| format!("Could not encode the library cache: {error}"))?;
+    fs::write(&temporary_path, encoded).map_err(|error| {
+        format!(
+            "Could not write library cache {}: {error}",
+            temporary_path.display()
+        )
+    })?;
+    fs::rename(&temporary_path, &cache_path).map_err(|error| {
+        let _ = fs::remove_file(&temporary_path);
+        format!(
+            "Could not replace library cache {}: {error}",
+            cache_path.display()
+        )
+    })
+}
+
+#[tauri::command]
+async fn load_cached_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
+    let cache_path = library_cache_path(&app)?;
+    let encoded = match fs::read(&cache_path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(format!(
+                "Could not read library cache {}: {error}",
+                cache_path.display()
+            ));
+        }
+    };
+
+    serde_json::from_slice(&encoded).map_err(|error| {
+        format!(
+            "Could not decode library cache {}: {error}",
+            cache_path.display()
+        )
+    })
 }
 
 struct FlacLayout {
@@ -512,6 +574,10 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
             .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
 
+    if let Err(error) = save_library_cache(&app, &tracks) {
+        eprintln!("{error}");
+    }
+
     Ok(tracks)
 }
 
@@ -520,7 +586,24 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![scan_music])
+        .setup(|app| {
+            media_controls::setup(app)?;
+            native_audio::setup(app);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            load_cached_music,
+            scan_music,
+            native_audio::load_native_audio,
+            native_audio::queue_native_audio,
+            native_audio::play_native_audio,
+            native_audio::pause_native_audio,
+            native_audio::seek_native_audio,
+            native_audio::native_audio_status,
+            media_controls::set_native_media_metadata,
+            media_controls::set_native_media_playback,
+            media_controls::set_native_media_commands_enabled
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
