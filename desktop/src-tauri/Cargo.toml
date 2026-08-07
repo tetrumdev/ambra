@@ -29,3 +29,8 @@ tauri-plugin-window-state = "2"
 oxideav-core = "0.1"
 oxideav-flac = "0.0.11"
 libc = "0.2"
+souvlaki = "0.8.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+cocoa = "0.24.1"
+objc = "0.2.7"

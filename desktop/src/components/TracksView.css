@@ -1,13 +1,25 @@
+.tracksView::before {
+    display: block;
+    height: 50px;
+    content: "";
+}
+
 .tracksView {
     /*scroll-behavior: smooth;*/
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
-    height: 100%;
+    height: 100vh;
     font-size: 0.9rem;
     font-weight: 300;
     font-family: "Stack Sans Text";
     filter: none;
+}
+
+.tracksView::after {
+    display: block;
+    height: 100px;
+    content: "";
 }
 
 .libraryHeader {
@@ -36,6 +48,86 @@
     margin: 0;
 }
 
+.albumLinkForm {
+    display: flex;
+    width: 320px;
+    height: 28px;
+    margin-top: 18px;
+}
+
+.albumLinkForm input {
+    box-sizing: border-box;
+    flex: 1;
+    min-width: 0;
+    border: 1px solid #444;
+    border-radius: 3px 0 0 3px;
+    padding: 4px 8px;
+    color: white;
+    background: #111;
+    font: inherit;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.albumLinkForm input[aria-invalid="true"] {
+    border-color: #a33;
+}
+
+.albumLinkForm button {
+    width: 30px;
+    border: 1px solid #444;
+    border-left: 0;
+    border-radius: 0 3px 3px 0;
+    color: white;
+    background: #222;
+    font: inherit;
+    cursor: pointer;
+}
+
+.albumLinkForm :disabled {
+    opacity: 0.55;
+    cursor: default;
+}
+
+.columnInfo {
+    right: 0;
+    position: sticky;
+    grid-template-columns: 75px 300px 200px auto 100px;
+    gap: 10px;
+    display: grid;
+    align-items: baseline;
+    padding-left: 10px;
+    top: 0;
+    background: linear-gradient(
+        to bottom,
+        rgb(0 0 0 / 1) 30%,
+        rgb(0 0 0 / 0.98) 38%,
+        rgb(0 0 0 / 0.92) 46%,
+        rgb(0 0 0 / 0.82) 54%,
+        rgb(0 0 0 / 0.68) 62%,
+        rgb(0 0 0 / 0.5) 70%,
+        rgb(0 0 0 / 0.32) 78%,
+        rgb(0 0 0 / 0.18) 86%,
+        rgb(0 0 0 / 0.07) 93%,
+        transparent 100%
+    );
+    color: #b6b6b6;
+    padding-top: 30px;
+    padding-bottom: 50px;
+}
+
+.trackColumn {
+    grid-column: 2;
+}
+
+.artistColumn {
+    grid-column: 3;
+}
+
+.albumColumn {
+    grid-column: 4;
+}
+
 .libraryTrackView {
     grid-column: 2;
     width: 100%;
@@ -47,11 +139,12 @@
     margin: 0;
     background-color: black;
     padding-left: 10px;
-    height: 80px;
+    height: 90px;
     border-bottom: 1px solid #2f2f2f;
     display: grid;
     align-content: center;
-    grid-template-columns: 75px 300px 300px 300px;
+    grid-template-columns: 75px 300px 200px auto 100px;
+    gap: 10px;
     text-align: left;
     font-family: inherit;
 }
@@ -62,25 +155,40 @@
     grid-column: 1;
     align-self: center;
     cursor: pointer;
+    transition-duration: 0.25s;
+}
+
+.trackImgContainer:hover {
+    filter: brightness(70%);
 }
 
 .coverImg {
     width: 100%;
     height: 100%;
+    overflow: wrap;
 }
 
 .trackName {
     grid-column: 2;
     font-weight: 600;
     align-self: center;
+    overflow: wrap;
 }
 
 .artistName {
     grid-column: 3;
     align-self: center;
+    overflow: wrap;
 }
 
 .albumName {
     grid-column: 4;
     align-self: center;
+    overflow: wrap;
+}
+
+.trackDuration {
+    grid-column: 5;
+    align-self: center;
+    overflow: wrap;
 }

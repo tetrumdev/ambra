@@ -41,21 +41,15 @@ type LibraryResponse = {
   tracks: RemoteTrack[];
 };
 
-export async function loadServerTracks(): Promise<Track[]> {
-  const response = await fetch(`${serverBaseUrl}/api/library`);
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(`Ambra server returned HTTP ${response.status}: ${message}`);
-  }
-
-  const library = (await response.json()) as LibraryResponse;
-  return library.tracks.map((track) => ({
+function playableTrack(track: RemoteTrack): Track {
+  return {
     id: track.id,
     provider: track.provider,
     providerTrackId: track.providerTrackId,
     playbackKind: track.playback.kind,
     audio: `${serverBaseUrl}${track.playback.url}`,
     cover: track.album?.coverUrl ?? fallbackCover,
+    nativeCover: track.album?.coverUrl ?? null,
     name: track.title,
     album: track.album?.title ?? "Unknown Album",
     albumId: track.album?.providerId ?? null,
@@ -68,5 +62,29 @@ export async function loadServerTracks(): Promise<Track[]> {
     explicit: track.explicit,
     isrc: track.isrc,
     quality: track.quality,
-  }));
+  };
+}
+
+async function libraryTracks(response: Response): Promise<Track[]> {
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Ambra server returned HTTP ${response.status}: ${message}`);
+  }
+
+  const library = (await response.json()) as LibraryResponse;
+  return library.tracks.map(playableTrack);
+}
+
+export async function loadServerTracks(): Promise<Track[]> {
+  return libraryTracks(await fetch(`${serverBaseUrl}/api/library`));
+}
+
+export async function addServerTidalAlbum(url: string): Promise<Track[]> {
+  return libraryTracks(
+    await fetch(`${serverBaseUrl}/api/library/tidal-albums`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    }),
+  );
 }

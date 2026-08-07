@@ -1,4 +1,4 @@
-.titlebar {
+.libraryTitlebar {
     height: 30px;
     padding-left: 80px;
     width: 100%;
@@ -11,6 +11,8 @@
     user-select: none;
     -webkit-user-select: none;
     z-index: 3;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
 }
 
 #xContainer {

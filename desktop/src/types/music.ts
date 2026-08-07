@@ -19,6 +19,7 @@ export type Track = {
   playbackKind: PlaybackKind;
   audio: string;
   cover: string;
+  nativeCover: string | null;
   name: string;
   album: string;
   albumId: string | null;

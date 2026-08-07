@@ -7,7 +7,16 @@ import {
   type SyntheticEvent,
 } from "react";
 import { MediaPlayer, type MediaPlayerClass } from "dashjs";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { Deck, Track } from "../types/music";
+import { canAttemptPlayback } from "../utils/playbackReadiness";
+import {
+  nativeAudioQueue,
+  nativeAudioSource,
+  trackForNativeAudioSource,
+} from "../utils/nativeAudioSource";
+import { trackPosition } from "../utils/trackOrder";
 
 export type AudioDeckController = {
   firstAudioRef: RefObject<HTMLAudioElement | null>;
@@ -21,7 +30,8 @@ export type AudioDeckController = {
     event: SyntheticEvent<HTMLAudioElement>,
   ) => void;
   onTimeUpdate: (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => void;
-  onPlay: (deck: Deck) => void;
+  onCanPlay: (deck: Deck) => void;
+  onPlaying: (deck: Deck) => void;
   onPause: (deck: Deck) => void;
   onEnded: (deck: Deck) => void;
 };
@@ -37,12 +47,20 @@ type AudioPlayer = {
   next: () => void;
   seek: (time: number) => void;
   audioDecks: AudioDeckController;
-  playTrack: (trackIndex: number) => void;
+  playTrack: (trackId: string) => void;
 };
 
 type InitialPlayback = {
   trackId: string | null;
   positionSeconds: number;
+};
+
+type NativeAudioStatus = {
+  currentSource: string | null;
+  currentTime: number;
+  duration: number;
+  isPlaying: boolean;
+  ended: boolean;
 };
 
 export function useAudioPlayer(
@@ -53,19 +71,32 @@ export function useAudioPlayer(
   const secondAudioRef = useRef<HTMLAudioElement>(null);
   const tracksRef = useRef<Track[]>(tracks);
   const activeDeckRef = useRef<Deck>(0);
-  const nowPlayingRef = useRef(0);
+  const currentTrackIdRef = useRef<string | null>(null);
+  const currentTimeRef = useRef(0);
+  const isPlayingRef = useRef(false);
   const initialPlaybackRef = useRef(initialPlayback);
   const pendingRestoreTimeRef = useRef<number | null>(null);
+  const pendingPlaybackDeckRef = useRef<Deck | null>(null);
+  const lastRemoteActionRef = useRef({ action: "", timestamp: 0 });
+  const deckPlaybackKindsRef = useRef<Array<Track["playbackKind"] | null>>([
+    null,
+    null,
+  ]);
   const dashPlayersRef = useRef<Array<MediaPlayerClass | null>>([null, null]);
 
-  const [nowPlaying, setNowPlaying] = useState(0);
+  const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
 
   tracksRef.current = tracks;
-  const currentTrack = tracks[nowPlaying];
+  currentTimeRef.current = currentTime;
+  isPlayingRef.current = isPlaying;
+  const usesNativeAudio = isTauri();
+  const hasTracks = tracks.length > 0;
+  const currentTrack =
+    tracks.find((track) => track.id === currentTrackId) ?? tracks[0];
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -78,8 +109,23 @@ export function useAudioPlayer(
     [audioForDeck],
   );
 
+  const runRemoteAction = useCallback((action: string, handler: () => void) => {
+    const timestamp = performance.now();
+    const previous = lastRemoteActionRef.current;
+    if (previous.action === action && timestamp - previous.timestamp < 300) {
+      return;
+    }
+
+    lastRemoteActionRef.current = { action, timestamp };
+    handler();
+  }, []);
+
   const releaseDeck = useCallback(
     (deck: Deck) => {
+      if (pendingPlaybackDeckRef.current === deck) {
+        pendingPlaybackDeckRef.current = null;
+      }
+
       const dashPlayer = dashPlayersRef.current[deck];
       if (dashPlayer) {
         dashPlayer.reset();
@@ -90,7 +136,8 @@ export function useAudioPlayer(
       if (!audio) return;
       audio.pause();
       audio.removeAttribute("src");
-      delete audio.dataset.trackIndex;
+      delete audio.dataset.trackId;
+      deckPlaybackKindsRef.current[deck] = null;
     },
     [audioForDeck],
   );
@@ -101,10 +148,12 @@ export function useAudioPlayer(
       const track = tracksRef.current[trackIndex];
 
       if (!audio || !track) return;
-      if (audio.dataset.trackIndex === String(trackIndex)) return;
+      if (audio.dataset.trackId === track.id) return;
 
       releaseDeck(deck);
-      audio.dataset.trackIndex = String(trackIndex);
+      audio.dataset.trackId = track.id;
+      if (usesNativeAudio) return;
+      deckPlaybackKindsRef.current[deck] = track.playbackKind;
 
       if (track.playbackKind === "dash") {
         const dashPlayer = MediaPlayer().create();
@@ -115,8 +164,55 @@ export function useAudioPlayer(
         audio.load();
       }
     },
-    [audioForDeck, releaseDeck],
+    [audioForDeck, releaseDeck, usesNativeAudio],
   );
+
+  const loadNativeTrack = useCallback(
+    (track: Track, positionSeconds: number, autoplay: boolean) => {
+      const queue = nativeAudioQueue(tracksRef.current, track.id);
+      if (!queue) return;
+
+      void invoke("load_native_audio", {
+        source: queue.source,
+        nextSource: queue.nextSource,
+        positionSeconds,
+        autoplay,
+      })
+        .then(() => setIsSessionRestored(true))
+        .catch((error) => console.error("Could not load native audio:", error));
+    },
+    [],
+  );
+
+  const requestDeckPlayback = useCallback(
+    (deck: Deck) => {
+      const audio = audioForDeck(deck);
+      if (!audio || deck !== activeDeckRef.current) return;
+
+      pendingPlaybackDeckRef.current = deck;
+      if (
+        !canAttemptPlayback(
+          deckPlaybackKindsRef.current[deck],
+          audio.readyState,
+        )
+      ) {
+        return;
+      }
+
+      void audio.play().catch((error) => {
+        if (pendingPlaybackDeckRef.current === deck) {
+          console.debug("Playback is waiting for media readiness:", error);
+        }
+      });
+    },
+    [audioForDeck],
+  );
+
+  const activeTrackIndex = useCallback(() => {
+    const library = tracksRef.current;
+    const trackIndex = trackPosition(library, currentTrackIdRef.current);
+    return trackIndex >= 0 ? trackIndex : 0;
+  }, []);
 
   const switchToTrack = useCallback(
     (requestedIndex: number, shouldPlay: boolean) => {
@@ -127,6 +223,19 @@ export function useAudioPlayer(
 
       const targetIndex =
         ((requestedIndex % library.length) + library.length) % library.length;
+      const targetTrack = library[targetIndex];
+
+      if (usesNativeAudio) {
+        currentTrackIdRef.current = targetTrack.id;
+        setCurrentTrackId(targetTrack.id);
+        setCurrentTime(0);
+        setDuration(targetTrack.durationSeconds);
+        setIsPlaying(false);
+        setIsSessionRestored(false);
+        loadNativeTrack(targetTrack, 0, shouldPlay);
+        return;
+      }
+
       const outgoingDeck = activeDeckRef.current;
       const incomingDeck: Deck = outgoingDeck === 0 ? 1 : 0;
       const outgoingAudio = audioForDeck(outgoingDeck);
@@ -140,63 +249,120 @@ export function useAudioPlayer(
       outgoingAudio.pause();
       outgoingAudio.currentTime = 0;
       activeDeckRef.current = incomingDeck;
-      nowPlayingRef.current = targetIndex;
+      currentTrackIdRef.current = targetTrack.id;
 
-      setNowPlaying(targetIndex);
+      setCurrentTrackId(targetTrack.id);
       setCurrentTime(0);
       setDuration(
         Number.isFinite(incomingAudio.duration) ? incomingAudio.duration : 0,
       );
-      setIsPlaying(shouldPlay);
+      setIsPlaying(false);
 
       if (shouldPlay) {
-        void incomingAudio.play().catch((error) => {
-          setIsPlaying(false);
-          console.error("Could not continue playback:", error);
-        });
+        requestDeckPlayback(incomingDeck);
       }
 
       const followingIndex = (targetIndex + 1) % library.length;
       prepareDeck(outgoingDeck, followingIndex);
     },
-    [audioForDeck, prepareDeck],
+    [
+      audioForDeck,
+      loadNativeTrack,
+      prepareDeck,
+      requestDeckPlayback,
+      usesNativeAudio,
+    ],
   );
 
   const seek = useCallback(
     (time: number) => {
+      if (usesNativeAudio) {
+        setCurrentTime(time);
+        void invoke("seek_native_audio", { positionSeconds: time }).catch(
+          (error) => console.warn("Could not seek native audio:", error),
+        );
+        return;
+      }
+
+      const deck = activeDeckRef.current;
       const audio = activeAudio();
       if (!audio) return;
 
+      const shouldContinue =
+        !audio.paused || pendingPlaybackDeckRef.current === deck;
       audio.currentTime = time;
       setCurrentTime(time);
+      if (shouldContinue) requestDeckPlayback(deck);
     },
-    [activeAudio],
+    [activeAudio, requestDeckPlayback, usesNativeAudio],
   );
 
+  const playActive = useCallback(() => {
+    if (usesNativeAudio) {
+      void invoke("play_native_audio").catch((error) =>
+        console.warn("Could not play native audio:", error),
+      );
+      return;
+    }
+    requestDeckPlayback(activeDeckRef.current);
+  }, [requestDeckPlayback, usesNativeAudio]);
+
+  const pauseActive = useCallback(() => {
+    if (usesNativeAudio) {
+      void invoke("pause_native_audio").catch((error) =>
+        console.warn("Could not pause native audio:", error),
+      );
+      return;
+    }
+    pendingPlaybackDeckRef.current = null;
+    activeAudio()?.pause();
+  }, [activeAudio, usesNativeAudio]);
+
   const togglePlayback = useCallback(async () => {
+    if (usesNativeAudio) {
+      if (isPlayingRef.current) pauseActive();
+      else playActive();
+      return;
+    }
+
+    const deck = activeDeckRef.current;
     const audio = activeAudio();
     if (!audio) return;
 
     if (!audio.paused) {
+      pendingPlaybackDeckRef.current = null;
       audio.pause();
       return;
     }
 
-    try {
-      await audio.play();
-    } catch (error) {
-      console.error("Could not play audio:", error);
-    }
-  }, [activeAudio]);
+    requestDeckPlayback(deck);
+  }, [
+    activeAudio,
+    pauseActive,
+    playActive,
+    requestDeckPlayback,
+    usesNativeAudio,
+  ]);
 
   const playTrack = useCallback(
-    (trackIndex: number) => {
+    (trackId: string) => {
+      const trackIndex = trackPosition(tracksRef.current, trackId);
+      if (trackIndex < 0) return;
       switchToTrack(trackIndex, true);
     },
     [switchToTrack],
   );
 
   const previous = useCallback(() => {
+    if (usesNativeAudio) {
+      if (currentTimeRef.current > 3) {
+        seek(0);
+        return;
+      }
+      switchToTrack(activeTrackIndex() - 1, isPlayingRef.current);
+      return;
+    }
+
     const audio = activeAudio();
     if (!audio) return;
 
@@ -205,15 +371,26 @@ export function useAudioPlayer(
       return;
     }
 
-    switchToTrack(nowPlayingRef.current - 1, !audio.paused);
-  }, [activeAudio, seek, switchToTrack]);
+    const shouldContinue =
+      !audio.paused || pendingPlaybackDeckRef.current === activeDeckRef.current;
+    switchToTrack(activeTrackIndex() - 1, shouldContinue);
+  }, [activeAudio, activeTrackIndex, seek, switchToTrack, usesNativeAudio]);
 
   const next = useCallback(() => {
+    if (usesNativeAudio) {
+      switchToTrack(activeTrackIndex() + 1, isPlayingRef.current);
+      return;
+    }
+
     const audio = activeAudio();
     if (!audio) return;
 
-    switchToTrack(nowPlayingRef.current + 1, !audio.paused && !audio.ended);
-  }, [activeAudio, switchToTrack]);
+    const shouldContinue =
+      (!audio.paused ||
+        pendingPlaybackDeckRef.current === activeDeckRef.current) &&
+      !audio.ended;
+    switchToTrack(activeTrackIndex() + 1, shouldContinue);
+  }, [activeAudio, activeTrackIndex, switchToTrack, usesNativeAudio]);
 
   const onLoadedMetadata = useCallback(
     (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => {
@@ -256,8 +433,23 @@ export function useAudioPlayer(
     [],
   );
 
-  const onPlay = useCallback((deck: Deck) => {
-    if (deck === activeDeckRef.current) setIsPlaying(true);
+  const onCanPlay = useCallback(
+    (deck: Deck) => {
+      if (
+        deck === activeDeckRef.current &&
+        pendingPlaybackDeckRef.current === deck
+      ) {
+        requestDeckPlayback(deck);
+      }
+    },
+    [requestDeckPlayback],
+  );
+
+  const onPlaying = useCallback((deck: Deck) => {
+    if (deck === activeDeckRef.current) {
+      pendingPlaybackDeckRef.current = null;
+      setIsPlaying(true);
+    }
   }, []);
 
   const onPause = useCallback((deck: Deck) => {
@@ -267,26 +459,25 @@ export function useAudioPlayer(
   const onEnded = useCallback(
     (deck: Deck) => {
       if (deck === activeDeckRef.current) {
-        switchToTrack(nowPlayingRef.current + 1, true);
+        switchToTrack(activeTrackIndex() + 1, true);
       }
     },
-    [switchToTrack],
+    [activeTrackIndex, switchToTrack],
   );
 
   useEffect(() => {
-    if (tracks.length === 0) return;
+    if (!hasTracks) return;
 
     const savedPlayback = initialPlaybackRef.current;
-    const savedTrackIndex = tracks.findIndex(
-      (track) => track.id === savedPlayback.trackId,
-    );
+    const savedTrackIndex = trackPosition(tracks, savedPlayback.trackId);
     const initialTrackIndex = savedTrackIndex >= 0 ? savedTrackIndex : 0;
+    const initialTrack = tracks[initialTrackIndex];
 
     activeDeckRef.current = 0;
-    nowPlayingRef.current = initialTrackIndex;
+    currentTrackIdRef.current = initialTrack.id;
     pendingRestoreTimeRef.current =
       savedTrackIndex >= 0 ? savedPlayback.positionSeconds : 0;
-    setNowPlaying(initialTrackIndex);
+    setCurrentTrackId(initialTrack.id);
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
@@ -295,11 +486,83 @@ export function useAudioPlayer(
     releaseDeck(0);
     releaseDeck(1);
 
+    if (usesNativeAudio) {
+      const restoredPosition =
+        savedTrackIndex >= 0 ? savedPlayback.positionSeconds : 0;
+      pendingRestoreTimeRef.current = null;
+      setDuration(initialTrack.durationSeconds);
+      loadNativeTrack(initialTrack, restoredPosition, false);
+      return;
+    }
+
     prepareDeck(0, initialTrackIndex);
     if (tracks.length > 1) {
       prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
     }
-  }, [prepareDeck, releaseDeck, tracks]);
+  }, [hasTracks, loadNativeTrack, prepareDeck, releaseDeck, usesNativeAudio]);
+
+  useEffect(() => {
+    if (!usesNativeAudio || !currentTrack) return;
+
+    let disposed = false;
+    let handledEnd = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const playback = await invoke<NativeAudioStatus>("native_audio_status");
+        if (disposed) return;
+
+        if (
+          playback.currentSource &&
+          playback.currentSource !== nativeAudioSource(currentTrack)
+        ) {
+          const advancedTrack = trackForNativeAudioSource(
+            tracksRef.current,
+            playback.currentSource,
+          );
+          if (advancedTrack) {
+            currentTrackIdRef.current = advancedTrack.id;
+            setCurrentTrackId(advancedTrack.id);
+            setDuration(advancedTrack.durationSeconds);
+
+            const advancedQueue = nativeAudioQueue(
+              tracksRef.current,
+              advancedTrack.id,
+            );
+            if (advancedQueue) {
+              void invoke("queue_native_audio", {
+                source: advancedQueue.nextSource,
+              }).catch((error) =>
+                console.warn("Could not preload the next native track:", error),
+              );
+            }
+          }
+        }
+
+        setCurrentTime(playback.currentTime);
+        if (playback.duration > 0) setDuration(playback.duration);
+        setIsPlaying(playback.isPlaying);
+
+        if (playback.ended && !handledEnd) {
+          handledEnd = true;
+          switchToTrack(activeTrackIndex() + 1, true);
+          return;
+        }
+      } catch (error) {
+        if (!disposed)
+          console.warn("Could not read native audio state:", error);
+      }
+
+      if (!disposed) timer = setTimeout(poll, 200);
+    };
+
+    void poll();
+    return () => {
+      disposed = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [activeTrackIndex, currentTrack, switchToTrack, usesNativeAudio]);
 
   useEffect(
     () => () => {
@@ -322,7 +585,7 @@ export function useAudioPlayer(
   }, [togglePlayback]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator)) return;
+    if (usesNativeAudio || !("mediaSession" in navigator)) return;
 
     const mediaSession = navigator.mediaSession;
     const register = (
@@ -336,10 +599,10 @@ export function useAudioPlayer(
       }
     };
 
-    register("play", () => void activeAudio()?.play());
-    register("pause", () => activeAudio()?.pause());
-    register("nexttrack", next);
-    register("previoustrack", previous);
+    register("play", () => runRemoteAction("play", playActive));
+    register("pause", () => runRemoteAction("pause", pauseActive));
+    register("nexttrack", () => runRemoteAction("next", next));
+    register("previoustrack", () => runRemoteAction("previous", previous));
 
     return () => {
       for (const action of [
@@ -355,24 +618,127 @@ export function useAudioPlayer(
         }
       }
     };
-  }, [activeAudio, next, previous]);
+  }, [
+    next,
+    pauseActive,
+    playActive,
+    previous,
+    runRemoteAction,
+    usesNativeAudio,
+  ]);
 
   useEffect(() => {
     if ("mediaSession" in navigator) {
-      navigator.mediaSession.playbackState = isPlaying ? "playing" : "paused";
+      navigator.mediaSession.playbackState = usesNativeAudio
+        ? "none"
+        : isPlaying
+          ? "playing"
+          : "paused";
     }
-  }, [isPlaying]);
+  }, [isPlaying, usesNativeAudio]);
 
   useEffect(() => {
     if (!("mediaSession" in navigator) || !currentTrack) return;
+    if (usesNativeAudio) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
 
-    navigator.mediaSession.metadata = new MediaMetadata({
-      title: currentTrack.name,
-      artist: currentTrack.artist,
-      album: currentTrack.album,
-      artwork: [{ src: currentTrack.cover }],
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.name,
+        artist: currentTrack.artist,
+        album: currentTrack.album,
+        artwork: [{ src: currentTrack.cover }],
+      });
+    } catch (error) {
+      console.warn("Could not publish WebKit media artwork:", error);
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: currentTrack.name,
+        artist: currentTrack.artist,
+        album: currentTrack.album,
+      });
+    }
+  }, [currentTrack, usesNativeAudio]);
+
+  useEffect(() => {
+    if (!isTauri()) return;
+
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+
+    void listen<string>("native-media-control", ({ payload }) => {
+      switch (payload) {
+        case "play":
+          runRemoteAction("play", playActive);
+          break;
+        case "pause":
+          runRemoteAction("pause", pauseActive);
+          break;
+        case "toggle":
+          runRemoteAction("toggle", () => void togglePlayback());
+          break;
+        case "next":
+          runRemoteAction("next", next);
+          break;
+        case "previous":
+          runRemoteAction("previous", previous);
+          break;
+      }
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopListening = unlisten;
     });
+
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, [
+    next,
+    pauseActive,
+    playActive,
+    previous,
+    runRemoteAction,
+    togglePlayback,
+  ]);
+
+  useEffect(() => {
+    if (!isTauri() || !currentTrack) return;
+
+    void invoke("set_native_media_metadata", {
+      metadata: {
+        title: currentTrack.name,
+        artist: currentTrack.artist,
+        album: currentTrack.album,
+        durationSeconds: currentTrack.durationSeconds,
+        coverSource: currentTrack.nativeCover,
+        assetSource: nativeAudioSource(currentTrack),
+      },
+    }).catch((error) => console.warn("Could not update Now Playing:", error));
   }, [currentTrack]);
+
+  useEffect(() => {
+    if (!isTauri() || !currentTrack) return;
+
+    void invoke("set_native_media_commands_enabled", {
+      enabled: usesNativeAudio || currentTrack.provider === "local",
+    }).catch((error) =>
+      console.warn("Could not switch native media command ownership:", error),
+    );
+  }, [currentTrack, usesNativeAudio]);
+
+  const nativePositionSeconds = Math.floor(currentTime);
+  useEffect(() => {
+    if (!isTauri() || !currentTrack) return;
+
+    void invoke("set_native_media_playback", {
+      isPlaying,
+      positionSeconds: nativePositionSeconds,
+    }).catch((error) =>
+      console.warn("Could not update native playback state:", error),
+    );
+  }, [currentTrack, isPlaying, nativePositionSeconds]);
 
   return {
     playTrack,
@@ -391,7 +757,8 @@ export function useAudioPlayer(
       onLoadedMetadata,
       onDurationChange,
       onTimeUpdate,
-      onPlay,
+      onCanPlay,
+      onPlaying,
       onPause,
       onEnded,
     },
