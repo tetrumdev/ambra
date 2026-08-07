@@ -34,6 +34,24 @@ export function parseCachedServerTracks(value: string | null): Track[] {
             typeof track.nativeCover === "string"
               ? track.nativeCover
               : track.cover,
+          version: track.version ?? null,
+          albumVersion: track.albumVersion ?? null,
+          albumArtists: Array.isArray(track.albumArtists)
+            ? track.albumArtists.map((artist) => ({
+                ...artist,
+                imageUrl: artist.imageUrl ?? null,
+              }))
+            : [],
+          artists: track.artists.map((artist) => ({
+            ...artist,
+            imageUrl: artist.imageUrl ?? null,
+          })),
+          copyright: track.copyright ?? null,
+          label: track.label ?? null,
+          genres: Array.isArray(track.genres) ? track.genres : [],
+          upc: track.upc ?? null,
+          maximumSamplingRateKHz: track.maximumSamplingRateKHz ?? null,
+          maximumBitDepth: track.maximumBitDepth ?? null,
         }))
       : [];
   } catch {
