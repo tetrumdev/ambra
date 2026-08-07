@@ -10,7 +10,15 @@ import { MediaPlayer, type MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Deck, Track } from "../types/music";
+import {
+  publishPlaybackCachePlan,
+  publishPlaybackCachePlanOnUnload,
+} from "../api/server";
 import { canAttemptPlayback } from "../utils/playbackReadiness";
+import {
+  emptyPlaybackCachePlan,
+  playbackCachePlan,
+} from "../utils/playbackCachePlan";
 import {
   nativeAudioQueue,
   nativeAudioSource,
@@ -500,6 +508,35 @@ export function useAudioPlayer(
       prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
     }
   }, [hasTracks, loadNativeTrack, prepareDeck, releaseDeck, usesNativeAudio]);
+
+  useEffect(() => {
+    publishPlaybackCachePlan(
+      playbackCachePlan(tracks, currentTrack?.id ?? null),
+    );
+  }, [currentTrack, tracks]);
+
+  useEffect(() => {
+    const clearPlanOnPageHide = (event: PageTransitionEvent) => {
+      if (!event.persisted) {
+        publishPlaybackCachePlanOnUnload(emptyPlaybackCachePlan);
+      }
+    };
+    const restorePlanOnPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        publishPlaybackCachePlan(
+          playbackCachePlan(tracksRef.current, currentTrackIdRef.current),
+        );
+      }
+    };
+
+    window.addEventListener("pagehide", clearPlanOnPageHide);
+    window.addEventListener("pageshow", restorePlanOnPageShow);
+    return () => {
+      window.removeEventListener("pagehide", clearPlanOnPageHide);
+      window.removeEventListener("pageshow", restorePlanOnPageShow);
+      publishPlaybackCachePlan(emptyPlaybackCachePlan);
+    };
+  }, []);
 
   useEffect(() => {
     if (!usesNativeAudio || !currentTrack) return;
