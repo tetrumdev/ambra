@@ -15,10 +15,11 @@ export type AudioDeckController = {
     deck: Deck,
     event: SyntheticEvent<HTMLAudioElement>,
   ) => void;
-  onTimeUpdate: (
+  onDurationChange: (
     deck: Deck,
     event: SyntheticEvent<HTMLAudioElement>,
   ) => void;
+  onTimeUpdate: (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => void;
   onPlay: (deck: Deck) => void;
   onPause: (deck: Deck) => void;
   onEnded: (deck: Deck) => void;
@@ -35,6 +36,7 @@ type AudioPlayer = {
   next: () => void;
   seek: (time: number) => void;
   audioDecks: AudioDeckController;
+  playTrack: (trackIndex: number) => void;
 };
 
 type InitialPlayback = {
@@ -98,7 +100,7 @@ export function useAudioPlayer(
       pendingRestoreTimeRef.current = null;
 
       const targetIndex =
-        (requestedIndex % library.length + library.length) % library.length;
+        ((requestedIndex % library.length) + library.length) % library.length;
       const outgoingDeck = activeDeckRef.current;
       const incomingDeck: Deck = outgoingDeck === 0 ? 1 : 0;
       const outgoingAudio = audioForDeck(outgoingDeck);
@@ -161,6 +163,13 @@ export function useAudioPlayer(
     }
   }, [activeAudio]);
 
+  const playTrack = useCallback(
+    (trackIndex: number) => {
+      switchToTrack(trackIndex, true);
+    },
+    [switchToTrack],
+  );
+
   const previous = useCallback(() => {
     const audio = activeAudio();
     if (!audio) return;
@@ -204,6 +213,18 @@ export function useAudioPlayer(
     (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => {
       if (deck === activeDeckRef.current) {
         setCurrentTime(event.currentTarget.currentTime);
+      }
+    },
+    [],
+  );
+
+  const onDurationChange = useCallback(
+    (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => {
+      if (deck !== activeDeckRef.current) return;
+
+      const updatedDuration = event.currentTarget.duration;
+      if (Number.isFinite(updatedDuration)) {
+        setDuration(updatedDuration);
       }
     },
     [],
@@ -320,6 +341,7 @@ export function useAudioPlayer(
   }, [currentTrack]);
 
   return {
+    playTrack,
     currentTrack,
     currentTime,
     duration,
@@ -333,6 +355,7 @@ export function useAudioPlayer(
       firstAudioRef,
       secondAudioRef,
       onLoadedMetadata,
+      onDurationChange,
       onTimeUpdate,
       onPlay,
       onPause,
