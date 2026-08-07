@@ -4,7 +4,7 @@
     height: 70vmin;
     aspect-ratio: 1;
     overflow: hidden;
-    top: calc((100vh - var(--bottom-bar-height)) / 2);
+    top: calc((100vh - 150px) / 2);
     left: 50%;
     transform: translate(-50%, -50%);
     filter: drop-shadow(0 0 50px rgba(0, 0, 0, 0.4));
@@ -14,7 +14,7 @@
 
 #albumCoverImg {
     position: absolute;
-    inset: -1px;
+    inset: 0;
     width: calc(100% + 2px);
     height: calc(100% + 2px);
     object-fit: cover;
