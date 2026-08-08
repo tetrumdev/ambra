@@ -1,22 +1,74 @@
 #queueList::before {
     height: 50px;
-    flex: 0 0 50px;
     content: "";
     display: block;
 }
 
 #queueList {
     color: white;
-    display: flex;
-    flex-direction: column;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    height: 100vh;
+    width: 100vw;
+    top: 0;
+    left: 0;
+    font-size: 0.9rem;
+    font-weight: 300;
+    font-family: "Stack Sans Text", Inter, sans-serif;
+    filter: none;
 }
 
-.queueTrack {
-    color: white;
+#queueList::after {
+    display: block;
+    height: 100px;
+    content: "";
+}
+
+.queueItem {
+    margin: 0;
+    background-color: black;
+    padding-left: 15px;
+    height: 90px;
+    border-bottom: 1px solid #2f2f2f;
+    display: grid;
+    align-content: center;
+    grid-template-columns: 75px 300px 200px auto 100px;
+    gap: 10px;
+    text-align: left;
+    font-family: inherit;
+    width: 100%;
 }
 
 #currentQueueTrack,
 #upcomingQueueTracks {
     display: flex;
     flex-direction: column;
+}
+
+.coverImgContainer {
+    width: 60px;
+    height: 60px;
+    grid-column: 1;
+    align-self: center;
+    cursor: pointer;
+    transition-duration: 0.25s;
+    border-radius: 7px;
+    overflow: hidden;
+}
+
+.coverImgContainer:hover {
+    filter: brightness(70%);
+}
+
+.coverImg {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.trackName {
+    grid-column: 2;
+    font-weight: 600;
+    align-self: center;
 }
