@@ -1,33 +1,27 @@
 import "./Queue.css";
-import type { LibraryTrack, QueueEntry, Track } from "../types/music";
+import type { QueueEntry } from "../types/music";
 
 type QueueProps = {
-  track: Track;
-  tracks: LibraryTrack[];
+  currentEntry: QueueEntry | undefined;
+  upcomingEntries: QueueEntry[];
 };
 
-function upcomingQueue(tracks: LibraryTrack[], currentTrack: Track): QueueEntry[] {
-  const currentIndex = tracks.findIndex(
-    (track) => track.globalId === currentTrack.globalId,
-  );
-  if (currentIndex < 0) return [];
-
-  return tracks.slice(currentIndex).map((track, index) => ({
-    queueId: index + 1,
-    track,
-  }));
-}
-
-export function Queue({ tracks, track: currentTrack }: QueueProps) {
-  const entries = upcomingQueue(tracks, currentTrack);
-
+export function Queue({ currentEntry, upcomingEntries }: QueueProps) {
   return (
     <div id="queueList">
-      {entries.map((entry) => (
-        <div key={entry.queueId} id="test">
-          {entry.track.name}
-        </div>
-      ))}
+      <div id="currentQueueTrack">
+        {currentEntry && (
+          <div className="queueTrack">{currentEntry.track.name}</div>
+        )}
+      </div>
+
+      <div id="upcomingQueueTracks">
+        {upcomingEntries.map((entry) => (
+          <div key={`queue:${entry.queueId}`} className="queueTrack">
+            {entry.track.name}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
