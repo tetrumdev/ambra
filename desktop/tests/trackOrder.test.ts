@@ -6,8 +6,8 @@ import {
 
 describe("moveAlbumToEndInOrder", () => {
   test("moves an existing track into its album position", () => {
-    const track = (id: string, trackNumber: number | null) => ({
-      id,
+    const track = (globalId: string, trackNumber: number | null) => ({
+      globalId,
       discNumber: 1,
       trackNumber,
     });
@@ -16,18 +16,17 @@ describe("moveAlbumToEndInOrder", () => {
       track(String(number), number),
     );
 
-    expect(moveAlbumToEndInOrder(current, album).map(({ id }) => id)).toEqual([
-      "other",
-      "1",
-      "2",
-      "3",
-      "4",
-      "5",
-    ]);
+    expect(
+      moveAlbumToEndInOrder(current, album).map(({ globalId }) => globalId),
+    ).toEqual(["other", "1", "2", "3", "4", "5"]);
   });
 
   test("resolves a stable track ID after its position shifts", () => {
-    const tracks = [{ id: "1" }, { id: "2" }, { id: "5" }];
+    const tracks = [
+      { globalId: "1" },
+      { globalId: "2" },
+      { globalId: "5" },
+    ];
 
     expect(trackPosition(tracks, "5")).toBe(2);
   });
