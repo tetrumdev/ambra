@@ -12,7 +12,7 @@
     height: 100vh;
     font-size: 0.9rem;
     font-weight: 300;
-    font-family: "Stack Sans Text";
+    font-family: "Stack Sans Text", Inter, sans-serif;
     filter: none;
 }
 
@@ -31,7 +31,7 @@
 }
 
 .libraryTitle {
-    font-family: "Source Serif 4";
+    font-family: "Source Serif 4", serif;
     font-weight: 500;
     font-size: 4rem;
     margin-bottom: 30px;
@@ -139,14 +139,14 @@
 .libraryTrackView {
     grid-column: 2;
     width: 100%;
-    grid-template-rows: repeat(100px);
+    /*grid-template-rows: 90px;*/
+    display: grid;
 }
 
 .libraryItem {
-    gap: 0;
     margin: 0;
     background-color: black;
-    padding-left: 10px;
+    padding-left: 15px;
     height: 90px;
     border-bottom: 1px solid #2f2f2f;
     display: grid;
@@ -157,46 +157,44 @@
     font-family: inherit;
 }
 
-.trackImgContainer {
+.coverImgContainer {
     width: 60px;
     height: 60px;
     grid-column: 1;
     align-self: center;
     cursor: pointer;
     transition-duration: 0.25s;
+    border-radius: 7px;
+    overflow: hidden;
 }
 
-.trackImgContainer:hover {
+.coverImgContainer:hover {
     filter: brightness(70%);
 }
 
 .coverImg {
     width: 100%;
     height: 100%;
-    overflow: wrap;
+    object-fit: cover;
 }
 
 .trackName {
     grid-column: 2;
     font-weight: 600;
     align-self: center;
-    overflow: wrap;
 }
 
 .artistName {
     grid-column: 3;
     align-self: center;
-    overflow: wrap;
 }
 
 .albumName {
     grid-column: 4;
     align-self: center;
-    overflow: wrap;
 }
 
 .trackDuration {
     grid-column: 5;
     align-self: center;
-    overflow: wrap;
 }

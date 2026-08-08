@@ -3,7 +3,7 @@ import { parseCachedServerTracks } from "../src/utils/libraryCache";
 import type { Track } from "../src/types/music";
 
 const cachedTrack: Track = {
-  id: "tidal:1",
+  globalId: "tidal:1",
   provider: "tidal",
   providerTrackId: "1",
   playbackKind: "dash",
@@ -42,11 +42,21 @@ describe("parseCachedServerTracks", () => {
     ]);
   });
 
+  test("migrates the previous id field to globalId", () => {
+    const { globalId, ...legacyTrack } = cachedTrack;
+
+    expect(
+      parseCachedServerTracks(
+        JSON.stringify([{ ...legacyTrack, id: globalId }]),
+      ),
+    ).toEqual([cachedTrack]);
+  });
+
   test("ignores corrupt cache entries", () => {
     expect(parseCachedServerTracks("not json")).toEqual([]);
     expect(
       parseCachedServerTracks(
-        JSON.stringify([cachedTrack, { id: "incomplete" }]),
+        JSON.stringify([cachedTrack, { globalId: "incomplete" }]),
       ),
     ).toEqual([cachedTrack]);
   });

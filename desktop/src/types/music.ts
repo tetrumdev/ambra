@@ -13,8 +13,12 @@ export type TrackArtist = {
 
 export type PlaybackKind = "direct" | "dash";
 
+export type GlobalTrackId = string;
+export type LibraryTrackId = number;
+export type QueueId = number;
+
 export type Track = {
-  id: string;
+  globalId: GlobalTrackId;
   provider: MusicProvider;
   providerTrackId: string;
   playbackKind: PlaybackKind;
@@ -42,6 +46,15 @@ export type Track = {
   quality: string | null;
   maximumSamplingRateKHz: number | null;
   maximumBitDepth: number | null;
+};
+
+export type LibraryTrack = Track & {
+  libraryId: LibraryTrackId;
+};
+
+export type QueueEntry = {
+  queueId: QueueId;
+  track: LibraryTrack;
 };
 
 export type ScannedTrack = {

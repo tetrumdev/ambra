@@ -1,14 +1,14 @@
 type PositionedTrack = {
-  id: string;
+  globalId: string;
   discNumber: number | null;
   trackNumber: number | null;
 };
 
 export function trackPosition(
-  tracks: readonly { id: string }[],
+  tracks: readonly { globalId: string }[],
   trackId: string | null,
 ) {
-  return tracks.findIndex((track) => track.id === trackId);
+  return tracks.findIndex((track) => track.globalId === trackId);
 }
 
 export function moveAlbumToEndInOrder<T extends PositionedTrack>(
@@ -20,9 +20,9 @@ export function moveAlbumToEndInOrder<T extends PositionedTrack>(
     (left.trackNumber ?? Number.MAX_SAFE_INTEGER) -
       (right.trackNumber ?? Number.MAX_SAFE_INTEGER),
   );
-  const incomingIds = new Set(orderedTracks.map((track) => track.id));
+  const incomingIds = new Set(orderedTracks.map((track) => track.globalId));
   return [
-    ...currentTracks.filter((track) => !incomingIds.has(track.id)),
+    ...currentTracks.filter((track) => !incomingIds.has(track.globalId)),
     ...orderedTracks,
   ];
 }

@@ -8,7 +8,7 @@ import {
 
 function track(overrides: Partial<Track>): Track {
   return {
-    id: "test",
+    globalId: "test",
     provider: "tidal",
     providerTrackId: "1",
     playbackKind: "direct",
@@ -67,12 +67,12 @@ describe("nativeAudioSource", () => {
 
   test("queues local and streamed tracks with the same ordering", () => {
     const local = track({
-      id: "local",
+      globalId: "local",
       provider: "local",
       providerTrackId: "/Music/Ambra/song.mp3",
     });
     const streamed = track({
-      id: "streamed",
+      globalId: "streamed",
       playbackKind: "dash",
       audio: "http://127.0.0.1:8787/api/providers/tidal/tracks/1/manifest.mpd",
     });
@@ -91,12 +91,12 @@ describe("nativeAudioSource", () => {
 
   test("maps an automatically advanced queue item back to its track", () => {
     const local = track({
-      id: "local",
+      globalId: "local",
       provider: "local",
       providerTrackId: "/Music/Ambra/song.mp3",
     });
     const streamed = track({
-      id: "streamed",
+      globalId: "streamed",
       playbackKind: "dash",
       audio: "http://127.0.0.1:8787/api/providers/tidal/tracks/1/manifest.mpd",
     });
@@ -105,7 +105,7 @@ describe("nativeAudioSource", () => {
       trackForNativeAudioSource(
         [local, streamed],
         "http://127.0.0.1:8787/api/providers/tidal/tracks/1/playlist.m3u8",
-      )?.id,
+      )?.globalId,
     ).toBe("streamed");
   });
 });

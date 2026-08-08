@@ -1,7 +1,7 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import fallbackCover from "../assets/images/fallbackCover.png";
-import type { ScannedTrack, Track } from "../types/music";
+import type { LibraryTrack, ScannedTrack, Track } from "../types/music";
 import { addServerAlbum, loadServerTracks } from "../api/server";
 import {
   loadCachedServerTracks,
@@ -10,7 +10,7 @@ import {
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 
 type MusicLibrary = {
-  tracks: Track[];
+  tracks: LibraryTrack[];
   isLoading: boolean;
   error: string | null;
   isAddingAlbum: boolean;
@@ -26,7 +26,7 @@ function playableLocalCover(cover: string | null) {
 function localTrack(track: ScannedTrack): Track {
   return {
     ...track,
-    id: `local:${track.audio}`,
+    globalId: `local:${track.audio}`,
     provider: "local",
     providerTrackId: track.audio,
     playbackKind: "direct",
@@ -57,10 +57,10 @@ function localTrack(track: ScannedTrack): Track {
 }
 
 function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
-  const existingIds = new Set(currentTracks.map((track) => track.id));
+  const existingIds = new Set(currentTracks.map((track) => track.globalId));
   return [
     ...currentTracks,
-    ...incomingTracks.filter((track) => !existingIds.has(track.id)),
+    ...incomingTracks.filter((track) => !existingIds.has(track.globalId)),
   ];
 }
 
@@ -75,7 +75,11 @@ export function useMusicLibrary(): MusicLibrary {
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
   const tracks = useMemo(
-    () => [...serverTracks, ...localTracks],
+    () =>
+      [...serverTracks, ...localTracks].map((track, index) => ({
+        ...track,
+        libraryId: index + 1,
+      })),
     [localTracks, serverTracks],
   );
   const isLoading = isLocalLoading && isServerLoading;

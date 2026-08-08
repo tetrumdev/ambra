@@ -1,165 +1,170 @@
 import "./App.css";
-import { AppChrome } from "./components/AppChrome";
-import { TracksView } from "./components/TracksView";
-import { Sidebar } from "./components/Sidebar";
-import { AlbumArtwork, BackgroundArtwork } from "./components/Artwork";
-import { NowPlayingBar } from "./components/NowPlayingBar";
-import { useAudioPlayer } from "./hooks/useAudioPlayer";
-import { useMusicLibrary } from "./hooks/useMusicLibrary";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useEffect, useRef, useState } from "react";
+import {AppChrome} from "./components/AppChrome";
+import {TracksView} from "./components/TracksView";
+import {Sidebar} from "./components/Sidebar";
+import {Queue} from "./components/Queue";
+import {AlbumArtwork, BackgroundArtwork} from "./components/BigscreenArtwork";
+import {NowPlayingBar} from "./components/NowPlayingBar";
+import {useAudioPlayer} from "./hooks/useAudioPlayer";
+import {useMusicLibrary} from "./hooks/useMusicLibrary";
+import {getCurrentWindow} from "@tauri-apps/api/window";
+import {useEffect, useRef, useState} from "react";
 import {
-  loadPreferences,
-  savePreferences,
-  type AppScreen,
+    loadPreferences,
+    savePreferences,
+    type AppScreen,
 } from "./utils/preferences";
 
 function App() {
-  const [preferences, setPreferences] = useState(loadPreferences);
-  const library = useMusicLibrary();
-  const player = useAudioPlayer(library.tracks, preferences.playback);
-  const screen = preferences.ui.screen;
-  const isBigscreen = screen === "bigscreen" && player.currentTrack !== undefined;
-  const persistedPosition = player.isPlaying
-    ? Math.floor(player.currentTime / 5) * 5
-    : player.currentTime;
-  const latestSessionRef = useRef({ preferences, player });
-  latestSessionRef.current = { preferences, player };
+    const [preferences, setPreferences] = useState(loadPreferences);
+    const library = useMusicLibrary();
+    const player = useAudioPlayer(library.tracks, preferences.playback);
+    const screen = preferences.ui.screen;
+    const isBigscreen = screen === "bigscreen" && player.currentTrack !== undefined;
+    const isQueueView = screen === "queue";
+    const persistedPosition = player.isPlaying
+        ? Math.floor(player.currentTime / 5) * 5
+        : player.currentTime;
+    const latestSessionRef = useRef({preferences, player});
+    latestSessionRef.current = {preferences, player};
 
-  useEffect(() => {
-    const handleKeyDown = async (event: KeyboardEvent) => {
-      if (event.key !== "F11" || event.repeat) return;
+    useEffect(() => {
+        const handleKeyDown = async (event: KeyboardEvent) => {
+            if (event.key !== "F11" || event.repeat) return;
 
-      event.preventDefault();
+            event.preventDefault();
 
-      try {
-        const appWindow = getCurrentWindow();
-        const isFullscreen = await appWindow.isFullscreen();
-        await appWindow.setFullscreen(!isFullscreen);
-      } catch (error) {
-        console.error("Could not toggle fullscreen:", error);
-      }
+            try {
+                const appWindow = getCurrentWindow();
+                const isFullscreen = await appWindow.isFullscreen();
+                await appWindow.setFullscreen(!isFullscreen);
+            } catch (error) {
+                console.error("Could not toggle fullscreen:", error);
+            }
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, []);
+
+    useEffect(() => {
+        const handleKeyDown = async (event: KeyboardEvent) => {
+            if (event.code !== "Escape" || event.repeat) return;
+
+            changeScreen("library");
+        };
+
+        window.addEventListener("keydown", handleKeyDown);
+
+        return () => {
+            window.removeEventListener("keydown", handleKeyDown);
+        };
+    }, []);
+
+    useEffect(() => {
+        savePreferences(preferences);
+    }, [preferences]);
+
+    useEffect(() => {
+        if (!player.isSessionRestored || !player.currentTrack) return;
+
+        setPreferences((current) => {
+            const playback = {
+                trackId: player.currentTrack!.globalId,
+                positionSeconds: persistedPosition,
+            };
+
+            if (
+                current.playback.trackId === playback.trackId &&
+                current.playback.positionSeconds === playback.positionSeconds
+            ) {
+                return current;
+            }
+
+            return {...current, playback};
+        });
+    }, [persistedPosition, player.currentTrack, player.isSessionRestored]);
+
+    useEffect(() => {
+        const saveLatestSession = () => {
+            const latest = latestSessionRef.current;
+            if (!latest.player.isSessionRestored || !latest.player.currentTrack) {
+                return;
+            }
+
+            savePreferences({
+                ...latest.preferences,
+                playback: {
+                    trackId: latest.player.currentTrack.globalId,
+                    positionSeconds: latest.player.currentTime,
+                },
+            });
+        };
+
+        window.addEventListener("beforeunload", saveLatestSession);
+        return () => window.removeEventListener("beforeunload", saveLatestSession);
+    }, []);
+
+    const changeScreen = (nextScreen: AppScreen) => {
+        setPreferences((current) => ({
+            ...current,
+            ui: {
+                ...current.ui,
+                screen: nextScreen,
+            },
+        }));
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = async (event: KeyboardEvent) => {
-      if (event.code !== "Escape" || event.repeat) return;
-
-      changeScreen("library");
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, []);
-
-  useEffect(() => {
-    savePreferences(preferences);
-  }, [preferences]);
-
-  useEffect(() => {
-    if (!player.isSessionRestored || !player.currentTrack) return;
-
-    setPreferences((current) => {
-      const playback = {
-        trackId: player.currentTrack!.id,
-        positionSeconds: persistedPosition,
-      };
-
-      if (
-        current.playback.trackId === playback.trackId &&
-        current.playback.positionSeconds === playback.positionSeconds
-      ) {
-        return current;
-      }
-
-      return { ...current, playback };
-    });
-  }, [persistedPosition, player.currentTrack, player.isSessionRestored]);
-
-  useEffect(() => {
-    const saveLatestSession = () => {
-      const latest = latestSessionRef.current;
-      if (!latest.player.isSessionRestored || !latest.player.currentTrack) {
-        return;
-      }
-
-      savePreferences({
-        ...latest.preferences,
-        playback: {
-          trackId: latest.player.currentTrack.id,
-          positionSeconds: latest.player.currentTime,
-        },
-      });
-    };
-
-    window.addEventListener("beforeunload", saveLatestSession);
-    return () => window.removeEventListener("beforeunload", saveLatestSession);
-  }, []);
-
-  const changeScreen = (nextScreen: AppScreen) => {
-    setPreferences((current) => ({
-      ...current,
-      ui: {
-        ...current.ui,
-        screen: nextScreen,
-      },
-    }));
-  };
-
-  return (
-    <>
-      {isBigscreen ? (
+    return (
         <>
-          <AppChrome
-            isBigscreen={isBigscreen}
-            onExitBigscreen={() => changeScreen("library")}
-          />
-          <AlbumArtwork track={player.currentTrack!} />
-          <BackgroundArtwork track={player.currentTrack!} />
-        </>
-      ) : (
-        <>
-          <AppChrome isBigscreen={isBigscreen} />
-          <main id="library">
-            <Sidebar />
-            <TracksView
-              tracks={library.tracks}
-              playTrack={player.playTrack}
-              addAlbum={library.addAlbum}
-              isAddingAlbum={library.isAddingAlbum}
-              addAlbumError={library.addAlbumError}
+            <AppChrome
+                currentScreen={screen}
+                onExit={() => changeScreen("library")}
             />
-          </main>
-        </>
-      )}
 
-      {player.currentTrack && (
-        <NowPlayingBar
-          variant={isBigscreen ? "bigscreen" : "compact"}
-          track={player.currentTrack}
-          currentTime={player.currentTime}
-          duration={player.duration}
-          isPlaying={player.isPlaying}
-          audioDecks={player.audioDecks}
-          onPrevious={player.previous}
-          onTogglePlayback={player.togglePlayback}
-          onNext={player.next}
-          onSeek={player.seek}
-          onOpenBigscreen={() => changeScreen("bigscreen")}
-        />
-      )}
-    </>
-  );
+            {isBigscreen ? (
+                <>
+                    <AlbumArtwork track={player.currentTrack!}/>
+                    <BackgroundArtwork track={player.currentTrack!}/>
+                </>
+            ) : isQueueView ? (
+                <main id="queue">
+                    <Queue tracks={library.tracks} track={player.currentTrack!}/>
+                </main>
+            ) : (
+                <main id="library">
+                    <Sidebar/>
+                    <TracksView
+                        tracks={library.tracks}
+                        playTrack={player.playTrack}
+                        addAlbum={library.addAlbum}
+                        isAddingAlbum={library.isAddingAlbum}
+                        addAlbumError={library.addAlbumError}
+                    />
+                </main>
+            )}
+
+            {player.currentTrack && (
+                <NowPlayingBar
+                    variant={isBigscreen ? "expanded" : "compact"}
+                    track={player.currentTrack}
+                    currentTime={player.currentTime}
+                    duration={player.duration}
+                    isPlaying={player.isPlaying}
+                    audioDecks={player.audioDecks}
+                    onPrevious={player.previous}
+                    onTogglePlayback={player.togglePlayback}
+                    onNext={player.next}
+                    onSeek={player.seek}
+                    onOpenBigscreen={() => changeScreen("bigscreen")}
+                    onOpenQueue={() => changeScreen("queue")}
+                />
+            )}
+        </>
+    );
 }
 
 export default App;

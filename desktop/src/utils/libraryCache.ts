@@ -2,12 +2,17 @@ import type { Track } from "../types/music";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
 
-function isCachedTrack(value: unknown): value is Track {
+type CachedTrack = Omit<Track, "globalId"> & {
+  globalId?: string;
+  id?: string;
+};
+
+function isCachedTrack(value: unknown): value is CachedTrack {
   if (typeof value !== "object" || value === null) return false;
 
-  const track = value as Partial<Track>;
+  const track = value as Partial<CachedTrack>;
   return (
-    typeof track.id === "string" &&
+    (typeof track.globalId === "string" || typeof track.id === "string") &&
     typeof track.provider === "string" &&
     track.provider !== "local" &&
     typeof track.providerTrackId === "string" &&
@@ -28,31 +33,36 @@ export function parseCachedServerTracks(value: string | null): Track[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     return Array.isArray(parsed)
-      ? parsed.filter(isCachedTrack).map((track) => ({
-          ...track,
-          nativeCover:
-            typeof track.nativeCover === "string"
-              ? track.nativeCover
-              : track.cover,
-          version: track.version ?? null,
-          albumVersion: track.albumVersion ?? null,
-          albumArtists: Array.isArray(track.albumArtists)
-            ? track.albumArtists.map((artist) => ({
-                ...artist,
-                imageUrl: artist.imageUrl ?? null,
-              }))
-            : [],
-          artists: track.artists.map((artist) => ({
-            ...artist,
-            imageUrl: artist.imageUrl ?? null,
-          })),
-          copyright: track.copyright ?? null,
-          label: track.label ?? null,
-          genres: Array.isArray(track.genres) ? track.genres : [],
-          upc: track.upc ?? null,
-          maximumSamplingRateKHz: track.maximumSamplingRateKHz ?? null,
-          maximumBitDepth: track.maximumBitDepth ?? null,
-        }))
+      ? parsed.filter(isCachedTrack).map((track) => {
+          const { id: legacyId, ...cachedTrack } = track;
+
+          return {
+            ...cachedTrack,
+            globalId: track.globalId ?? legacyId!,
+            nativeCover:
+              typeof track.nativeCover === "string"
+                ? track.nativeCover
+                : track.cover,
+            version: track.version ?? null,
+            albumVersion: track.albumVersion ?? null,
+            albumArtists: Array.isArray(track.albumArtists)
+              ? track.albumArtists.map((artist) => ({
+                  ...artist,
+                  imageUrl: artist.imageUrl ?? null,
+                }))
+              : [],
+            artists: track.artists.map((artist) => ({
+              ...artist,
+              imageUrl: artist.imageUrl ?? null,
+            })),
+            copyright: track.copyright ?? null,
+            label: track.label ?? null,
+            genres: Array.isArray(track.genres) ? track.genres : [],
+            upc: track.upc ?? null,
+            maximumSamplingRateKHz: track.maximumSamplingRateKHz ?? null,
+            maximumBitDepth: track.maximumBitDepth ?? null,
+          };
+        })
       : [];
   } catch {
     return [];

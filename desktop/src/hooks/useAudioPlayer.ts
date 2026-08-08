@@ -96,7 +96,7 @@ export function useAudioPlayer(
   const usesNativeAudio = isTauri();
   const hasTracks = tracks.length > 0;
   const currentTrack =
-    tracks.find((track) => track.id === currentTrackId) ?? tracks[0];
+    tracks.find((track) => track.globalId === currentTrackId) ?? tracks[0];
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -148,10 +148,10 @@ export function useAudioPlayer(
       const track = tracksRef.current[trackIndex];
 
       if (!audio || !track) return;
-      if (audio.dataset.trackId === track.id) return;
+      if (audio.dataset.trackId === track.globalId) return;
 
       releaseDeck(deck);
-      audio.dataset.trackId = track.id;
+      audio.dataset.trackId = track.globalId;
       if (usesNativeAudio) return;
       deckPlaybackKindsRef.current[deck] = track.playbackKind;
 
@@ -169,7 +169,7 @@ export function useAudioPlayer(
 
   const loadNativeTrack = useCallback(
     (track: Track, positionSeconds: number, autoplay: boolean) => {
-      const queue = nativeAudioQueue(tracksRef.current, track.id);
+      const queue = nativeAudioQueue(tracksRef.current, track.globalId);
       if (!queue) return;
 
       void invoke("load_native_audio", {
@@ -226,8 +226,8 @@ export function useAudioPlayer(
       const targetTrack = library[targetIndex];
 
       if (usesNativeAudio) {
-        currentTrackIdRef.current = targetTrack.id;
-        setCurrentTrackId(targetTrack.id);
+        currentTrackIdRef.current = targetTrack.globalId;
+        setCurrentTrackId(targetTrack.globalId);
         setCurrentTime(0);
         setDuration(targetTrack.durationSeconds);
         setIsPlaying(false);
@@ -249,9 +249,9 @@ export function useAudioPlayer(
       outgoingAudio.pause();
       outgoingAudio.currentTime = 0;
       activeDeckRef.current = incomingDeck;
-      currentTrackIdRef.current = targetTrack.id;
+      currentTrackIdRef.current = targetTrack.globalId;
 
-      setCurrentTrackId(targetTrack.id);
+      setCurrentTrackId(targetTrack.globalId);
       setCurrentTime(0);
       setDuration(
         Number.isFinite(incomingAudio.duration) ? incomingAudio.duration : 0,
@@ -474,10 +474,10 @@ export function useAudioPlayer(
     const initialTrack = tracks[initialTrackIndex];
 
     activeDeckRef.current = 0;
-    currentTrackIdRef.current = initialTrack.id;
+    currentTrackIdRef.current = initialTrack.globalId;
     pendingRestoreTimeRef.current =
       savedTrackIndex >= 0 ? savedPlayback.positionSeconds : 0;
-    setCurrentTrackId(initialTrack.id);
+    setCurrentTrackId(initialTrack.globalId);
     setCurrentTime(0);
     setDuration(0);
     setIsPlaying(false);
@@ -522,13 +522,13 @@ export function useAudioPlayer(
             playback.currentSource,
           );
           if (advancedTrack) {
-            currentTrackIdRef.current = advancedTrack.id;
-            setCurrentTrackId(advancedTrack.id);
+            currentTrackIdRef.current = advancedTrack.globalId;
+            setCurrentTrackId(advancedTrack.globalId);
             setDuration(advancedTrack.durationSeconds);
 
             const advancedQueue = nativeAudioQueue(
               tracksRef.current,
-              advancedTrack.id,
+              advancedTrack.globalId,
             );
             if (advancedQueue) {
               void invoke("queue_native_audio", {
