@@ -22,7 +22,7 @@ type RemoteAlbum = {
   upc: string | null;
 };
 
-type RemoteTrack = {
+export type RemoteTrack = {
   id: string;
   provider: MusicProvider;
   providerTrackId: string;
@@ -50,7 +50,7 @@ type LibraryResponse = {
   tracks: RemoteTrack[];
 };
 
-function playableTrack(track: RemoteTrack): Track {
+export function playableTrack(track: RemoteTrack): Track {
   const displayTitle = withVersion(track.title, track.version);
   const displayAlbum = withVersion(
     track.album?.title ?? "Unknown Album",

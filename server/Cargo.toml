@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 axum = "0.8.9"
+bytes = "1"
 futures-util = "0.3.33"
+librespot-audio = "0.8.0"
+librespot-core = "0.8.0"
+librespot-metadata = "0.8.0"
+librespot-oauth = "0.8.0"
 qbz-models = { git = "https://github.com/vicrodh/qbz.git", rev = "93ae499f38835dc7c110ebaa07a49da5c714f1f9" }
 qbz-qobuz = { git = "https://github.com/vicrodh/qbz.git", rev = "93ae499f38835dc7c110ebaa07a49da5c714f1f9" }
 reqwest = { version = "0.13.4", features = ["stream"] }
@@ -13,5 +18,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tidlers = "0.5.0"
 tokio = { version = "1.53.1", features = ["full"] }
+tokio-stream = "0.1"
 tower-http = { version = "0.7.0", features = ["cors"] }
 urlencoding = "2"
+
+[build-dependencies]
+# librespot 0.8's build helper is not compatible with vergen 9.1.
+vergen = "=9.0.6"
