@@ -57,7 +57,7 @@ function playableTrack(track: RemoteTrack): Track {
     track.album?.version ?? null,
   );
   return {
-    id: track.id,
+    globalId: track.id,
     provider: track.provider,
     providerTrackId: track.providerTrackId,
     playbackKind: track.playback.kind,

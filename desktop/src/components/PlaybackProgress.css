@@ -23,18 +23,18 @@
 }
 
 #currentTime {
-    font-family: "Stack Sans Text";
+    font-family: "Stack Sans Text", Inter, sans-serif;
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
     text-align: right;
-    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
+    /*filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));*/
     width: 20px;
     overflow: visible;
 }
 
 #otherTime {
-    font-family: "Stack Sans Text";
+    font-family: "Stack Sans Text", Inter, sans-serif;
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;

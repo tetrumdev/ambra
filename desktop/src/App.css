@@ -40,7 +40,6 @@
     left: 0;
     top: 0;
     box-sizing: border-box;
-    overflow: auto;
     background: black;
     text-align: left;
     grid-template-columns: 230px 1fr;
@@ -57,3 +56,16 @@
         grid-template-columns: 0 1fr;
     }
 }
+
+#queue {
+    position: absolute;
+    display: flex;
+    left: 0;
+    top: 0;
+    background: black;
+    text-align: left;
+    width: 100%;
+    height: 100%;
+}
+
+/*#ExtraCtrls*/

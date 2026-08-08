@@ -72,6 +72,19 @@
     object-fit: cover;
 }
 
+#queueBtn {
+    background: transparent;
+    border: none;
+    width: 35px;
+    cursor: pointer;
+    align-self: center;
+}
+
+#queueImg {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
 /*@media (max-width: 1200px) {
     #bottomInfoBar[data-variant="compact"] {
         grid-template-columns: 70px minmax(100px, 140px) minmax(0, 1fr);

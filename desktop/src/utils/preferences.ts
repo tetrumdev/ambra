@@ -1,4 +1,4 @@
-export type AppScreen = "bigscreen" | "library";
+export type AppScreen = "bigscreen" | "library" | "queue";
 
 export type AppPreferences = {
   version: 2;
@@ -17,7 +17,7 @@ const legacyScreenKey = "ambra.current-screen";
 export const defaultPreferences: AppPreferences = {
   version: 2,
   ui: {
-    screen: "bigscreen",
+    screen: "library",
   },
   playback: {
     trackId: null,
@@ -30,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAppScreen(value: unknown): value is AppScreen {
-  return value === "bigscreen" || value === "library";
+  return value === "bigscreen" || value === "library" || value === "queue";
 }
 
 function migratePreferences(value: unknown): AppPreferences {

@@ -1,11 +1,11 @@
 import "./TracksView.css";
 
 import { useState, type FormEvent } from "react";
-import type { Track } from "../types/music";
+import type { GlobalTrackId, LibraryTrack } from "../types/music";
 
 type LibraryViewProps = {
-  tracks: Track[];
-  playTrack: (trackId: string) => void;
+  tracks: LibraryTrack[];
+  playTrack: (trackId: GlobalTrackId) => void;
   addAlbum: (url: string) => Promise<boolean>;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
@@ -95,13 +95,13 @@ export function TracksView({
         <span className="durationColumn">Duration</span>
       </div>
       {tracks.map((track) => (
-        <div className="libraryItem" key={track.id}>
-          <div className="trackImgContainer">
+        <div className="libraryItem" key={track.libraryId}>
+          <div className="coverImgContainer">
             <img
               src={track.cover}
               alt={`${track.album} album cover`}
               className="coverImg"
-              onClick={() => playTrack(track.id)}
+              onClick={() => playTrack(track.globalId)}
             />
           </div>
           <span className="trackName">{track.name}</span>

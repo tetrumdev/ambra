@@ -9,7 +9,9 @@ export function nativeAudioSource(track: Track) {
 }
 
 export function nativeAudioQueue(tracks: Track[], currentTrackId: string) {
-  const currentIndex = tracks.findIndex((track) => track.id === currentTrackId);
+  const currentIndex = tracks.findIndex(
+    (track) => track.globalId === currentTrackId,
+  );
   if (currentIndex < 0) return null;
 
   const currentTrack = tracks[currentIndex];
