@@ -28,6 +28,7 @@
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
     text-align: right;
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
     width: 20px;
     overflow: visible;
 }
@@ -46,6 +47,7 @@
     margin: 0;
     background: transparent;
     cursor: pointer;
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
     overflow: visible;
 }
 
@@ -59,7 +61,7 @@
     -webkit-appearance: none;
     background: transparent;
     outline: none;
-    /*filter: drop-shadow(0 0 10px rgba(255, 191, 0, 0.7));*/
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
 }
 
 #progressBar::-webkit-slider-runnable-track {
