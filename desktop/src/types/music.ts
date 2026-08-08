@@ -16,6 +16,8 @@ export type PlaybackKind = "direct" | "dash";
 export type GlobalTrackId = string;
 export type LibraryTrackId = number;
 export type QueueId = number;
+export type QueueSourceEntryId = number;
+export type ShufflePackageId = string;
 
 export type Track = {
   globalId: GlobalTrackId;
@@ -52,9 +54,30 @@ export type LibraryTrack = Track & {
   libraryId: LibraryTrackId;
 };
 
-export type QueueEntry = {
+export type QueueSource = {
+  kind: "library" | "playlist";
+  id: string;
+  entryId: QueueSourceEntryId;
+};
+
+export type QueueItem = {
+  track: Track;
+  source: QueueSource;
+  shufflePackageId: ShufflePackageId | null;
+};
+
+export type QueueContext = {
+  source: Omit<QueueSource, "entryId">;
+  entries: QueueItem[];
+};
+
+export type QueueEntry = QueueItem & {
   queueId: QueueId;
-  track: LibraryTrack;
+};
+
+export type QueueHistoryEntry = QueueItem & {
+  historyId: string;
+  playedAt: string;
 };
 
 export type ScannedTrack = {
