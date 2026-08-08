@@ -28,7 +28,6 @@ use crate::{
 };
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
-const DEFAULT_TIDAL_TRACK_ID: &str = "3756725";
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -834,17 +833,17 @@ fn copy_header(source: &HeaderMap, destination: &mut HeaderMap, name: axum::http
 
 fn configured_tidal_track_ids() -> Vec<String> {
     env::var("AMBRA_TIDAL_TRACK_IDS")
-        .ok()
-        .map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .filter(|ids| !ids.is_empty())
-        .unwrap_or_else(|| vec![DEFAULT_TIDAL_TRACK_ID.to_owned()])
+        .map(|value| parse_configured_tidal_track_ids(&value))
+        .unwrap_or_default()
+}
+
+fn parse_configured_tidal_track_ids(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 #[derive(Debug)]
@@ -931,16 +930,16 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::{
-        LibraryEntry, configured_tidal_track_ids, hls_playlist_body, move_entries_to_end,
+        LibraryEntry, hls_playlist_body, move_entries_to_end, parse_configured_tidal_track_ids,
         qobuz_album_id, requested_byte_range, spotify_album_id, tidal_album_id,
     };
     use crate::models::MusicProvider;
     use axum::http::HeaderValue;
 
     #[test]
-    fn default_library_has_a_test_track() {
-        // Environment-independent contract: configuration always produces at least one track.
-        assert!(!configured_tidal_track_ids().is_empty());
+    fn empty_tidal_track_configuration_adds_nothing() {
+        assert!(parse_configured_tidal_track_ids("").is_empty());
+        assert!(parse_configured_tidal_track_ids(" , ").is_empty());
     }
 
     #[test]
