@@ -1,0 +1,15 @@
+#queueList::before {
+    display: block;
+    height: 50px;
+    content: "";
+}
+
+#queueList {
+    color: white;
+    display: flex;
+    flex-direction: column;
+}
+
+#test {
+    color: white;
+}
