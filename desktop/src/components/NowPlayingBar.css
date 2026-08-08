@@ -85,17 +85,16 @@
     height: 100%;
     object-fit: cover;
 }
-/*@media (max-width: 1200px) {
-    #bottomInfoBar[data-variant="compact"] {
-        grid-template-columns: 70px minmax(100px, 140px) minmax(0, 1fr);
-        column-gap: 16px;
-    }
-}*/
 
-/*@media (max-width: 700px) {
-    #bottomInfoBar:not([data-variant="compact"]) {
-        grid-template-columns: 220px 320px;
-        grid-template-rows: 65px 85px;
-        column-gap: 24px;
-    }
-}*/
+#extraCtrlsCluster {
+    grid-column: 3;
+    grid-row: 2;
+    height: auto;
+    width: auto;
+    align-items: center;
+}
+
+#bottomInfoBar[data-variant="compact"] #extraCtrlsCluster {
+    grid-column: 4;
+    grid-row: 1;
+}
