@@ -28,6 +28,8 @@ dist-ssr
 /server/.library-track-ids.json
 /server/.qobuz-session.json
 /server/.qobuz-metadata-cache.json
+/server/.spotify-cache/
+/server/.spotify-metadata-cache.json
 /server/.streaming-library.json
 /.vite/
 /src-tauri/

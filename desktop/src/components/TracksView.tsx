@@ -69,7 +69,7 @@ export function TracksView({
             type="url"
             value={albumUrl}
             onChange={(event) => setAlbumUrl(event.target.value)}
-            placeholder="Paste Tidal or Qobuz album URL"
+            placeholder="Paste Tidal, Qobuz, or Spotify album URL"
             aria-label="Streaming album link"
             aria-invalid={addAlbumError !== null}
             disabled={isAddingAlbum}

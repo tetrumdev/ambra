@@ -17,11 +17,13 @@ use axum::{
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
     providers::qobuz::QobuzProvider,
+    providers::spotify::SpotifyProvider,
     providers::tidal::{PlaybackSource, TidalProvider},
 };
 
@@ -34,6 +36,7 @@ type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send +
 struct AppState {
     tidal: TidalProvider,
     qobuz: Option<QobuzProvider>,
+    spotify: Option<SpotifyProvider>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
 }
@@ -53,9 +56,17 @@ pub async fn serve() -> ServerResult<()> {
             None
         }
     };
+    let spotify = match SpotifyProvider::authenticate_if_configured().await {
+        Ok(provider) => provider,
+        Err(error) => {
+            eprintln!("Spotify disabled because login failed: {error}");
+            None
+        }
+    };
     let state = AppState {
         tidal: TidalProvider::authenticate().await?,
         qobuz,
+        spotify,
         http_client: reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?,
@@ -75,6 +86,7 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
         .route("/api/library/qobuz-albums", post(add_qobuz_album))
+        .route("/api/library/spotify-albums", post(add_spotify_album))
         .route(
             "/api/providers/{provider}/tracks/{track_id}/stream",
             get(stream_track),
@@ -114,7 +126,7 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
     let entries = state.library_entries.read().await.clone();
     let available_entries = entries
         .into_iter()
-        .filter(|entry| entry.provider != MusicProvider::Qobuz || state.qobuz.is_some())
+        .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
     let tracks = load_tracks(&state, &available_entries).await?;
 
@@ -136,8 +148,11 @@ async fn add_album(
     if let Some(album_id) = qobuz_album_id(&request.url) {
         return import_album(&state, MusicProvider::Qobuz, album_id).await;
     }
+    if let Some(album_id) = spotify_album_id(&request.url) {
+        return import_album(&state, MusicProvider::Spotify, album_id).await;
+    }
     Err(ApiError::bad_request(
-        "Unsupported album link; paste a Tidal or Qobuz album URL",
+        "Unsupported album link; paste a Tidal, Qobuz, or Spotify album URL",
     ))
 }
 
@@ -159,6 +174,15 @@ async fn add_qobuz_album(
     import_album(&state, MusicProvider::Qobuz, album_id).await
 }
 
+async fn add_spotify_album(
+    State(state): State<AppState>,
+    Json(request): Json<AddAlbumRequest>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    let album_id = spotify_album_id(&request.url)
+        .ok_or_else(|| ApiError::bad_request("Invalid Spotify album link"))?;
+    import_album(&state, MusicProvider::Spotify, album_id).await
+}
+
 async fn import_album(
     state: &AppState,
     provider: MusicProvider,
@@ -171,6 +195,10 @@ async fn import_album(
             .await
             .map_err(ApiError::upstream)?,
         MusicProvider::Qobuz => qobuz_provider(state)?
+            .album_track_ids(&album_id)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::Spotify => spotify_provider(state)?
             .album_track_ids(&album_id)
             .await
             .map_err(ApiError::upstream)?,
@@ -225,6 +253,14 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
                 .qobuz
                 .as_ref()
                 .ok_or_else(|| io::Error::other("Qobuz login is not configured"))?
+                .track_metadata(&entry.provider_track_id)
+                .await
+        }
+        MusicProvider::Spotify => {
+            state
+                .spotify
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Spotify login is not configured"))?
                 .track_metadata(&entry.provider_track_id)
                 .await
         }
@@ -355,6 +391,40 @@ fn qobuz_album_id(link: &str) -> Option<String> {
     .then(|| (*album_id).to_owned())
 }
 
+fn spotify_album_id(link: &str) -> Option<String> {
+    let link = link.trim();
+    if let Some(album_id) = link.strip_prefix("spotify:album:") {
+        return valid_spotify_id(album_id).then(|| album_id.to_owned());
+    }
+
+    let without_scheme = link
+        .strip_prefix("https://")
+        .or_else(|| link.strip_prefix("http://"))?;
+    let (host, path) = without_scheme.split_once('/')?;
+    let host = host.split(':').next()?.to_ascii_lowercase();
+    if !matches!(host.as_str(), "open.spotify.com" | "play.spotify.com") {
+        return None;
+    }
+
+    let clean_path = path.split(['?', '#']).next()?;
+    let segments = clean_path
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let album_id = segments
+        .windows(2)
+        .find(|segments| segments[0] == "album")?
+        .get(1)?;
+    valid_spotify_id(album_id).then(|| (*album_id).to_owned())
+}
+
+fn valid_spotify_id(id: &str) -> bool {
+    id.len() == 22
+        && id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric())
+}
+
 async fn stream_track(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
@@ -383,10 +453,99 @@ async fn stream_track(
                 .map_err(ApiError::upstream)?;
             proxy_direct_stream(&state.http_client, &source.url, &source.mime_type, &headers).await
         }
+        "spotify" => stream_spotify_track(&state, &track_id, &headers).await,
         _ => Err(ApiError::not_found(format!(
             "Music provider '{provider}' is not configured"
         ))),
     }
+}
+
+async fn stream_spotify_track(
+    state: &AppState,
+    track_id: &str,
+    headers: &HeaderMap,
+) -> Result<Response, ApiError> {
+    let prepared = spotify_provider(state)?
+        .prepare_stream(track_id)
+        .await
+        .map_err(ApiError::upstream)?;
+    let total_length = prepared.content_length();
+    let (start, end_inclusive, partial) = requested_byte_range(headers.get(RANGE), total_length)?;
+    let response_length = end_inclusive.saturating_sub(start).saturating_add(1);
+    let mime_type = prepared.mime_type();
+    let stream = ReceiverStream::new(prepared.into_byte_stream(start, end_inclusive));
+
+    let mut response = Response::builder()
+        .status(if partial {
+            StatusCode::PARTIAL_CONTENT
+        } else {
+            StatusCode::OK
+        })
+        .header(CONTENT_TYPE, mime_type)
+        .header(CONTENT_LENGTH, response_length)
+        .header(ACCEPT_RANGES, "bytes")
+        .header(CACHE_CONTROL, "no-store")
+        .body(Body::from_stream(stream))
+        .map_err(ApiError::internal)?;
+    if partial {
+        response.headers_mut().insert(
+            CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {start}-{end_inclusive}/{total_length}"))
+                .map_err(ApiError::internal)?,
+        );
+    }
+    Ok(response)
+}
+
+fn requested_byte_range(
+    header: Option<&HeaderValue>,
+    total_length: u64,
+) -> Result<(u64, u64, bool), ApiError> {
+    if total_length == 0 {
+        return Err(ApiError::range_not_satisfiable(total_length));
+    }
+    let Some(header) = header else {
+        return Ok((0, total_length - 1, false));
+    };
+    let value = header
+        .to_str()
+        .map_err(|_| ApiError::range_not_satisfiable(total_length))?;
+    let range = value
+        .strip_prefix("bytes=")
+        .filter(|range| !range.contains(','))
+        .ok_or_else(|| ApiError::range_not_satisfiable(total_length))?;
+    let (start, end) = range
+        .split_once('-')
+        .ok_or_else(|| ApiError::range_not_satisfiable(total_length))?;
+
+    let (start, end_inclusive) = if start.is_empty() {
+        let suffix_length = end
+            .parse::<u64>()
+            .ok()
+            .filter(|length| *length > 0)
+            .ok_or_else(|| ApiError::range_not_satisfiable(total_length))?;
+        (total_length.saturating_sub(suffix_length), total_length - 1)
+    } else {
+        let start = start
+            .parse::<u64>()
+            .map_err(|_| ApiError::range_not_satisfiable(total_length))?;
+        if start >= total_length {
+            return Err(ApiError::range_not_satisfiable(total_length));
+        }
+        let end_inclusive = if end.is_empty() {
+            total_length - 1
+        } else {
+            end.parse::<u64>()
+                .map_err(|_| ApiError::range_not_satisfiable(total_length))?
+                .min(total_length - 1)
+        };
+        (start, end_inclusive)
+    };
+
+    if end_inclusive < start {
+        return Err(ApiError::range_not_satisfiable(total_length));
+    }
+    Ok((start, end_inclusive, true))
 }
 
 async fn dash_manifest(
@@ -600,6 +759,23 @@ fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
     })
 }
 
+fn spotify_provider(state: &AppState) -> Result<&SpotifyProvider, ApiError> {
+    state.spotify.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Spotify login is not configured. Set AMBRA_SPOTIFY_ACCESS_TOKEN, or restart with AMBRA_SPOTIFY_INTERACTIVE_LOGIN=1",
+        )
+    })
+}
+
+fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
+    match provider {
+        MusicProvider::Tidal => true,
+        MusicProvider::Qobuz => state.qobuz.is_some(),
+        MusicProvider::Spotify => state.spotify.is_some(),
+        MusicProvider::YoutubeMusic => false,
+    }
+}
+
 fn provider_name(provider: MusicProvider) -> &'static str {
     match provider {
         MusicProvider::Tidal => "Tidal",
@@ -675,6 +851,7 @@ fn configured_tidal_track_ids() -> Vec<String> {
 struct ApiError {
     status: StatusCode,
     message: String,
+    content_range: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -687,6 +864,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_REQUEST,
             message: message.into(),
+            content_range: None,
         }
     }
 
@@ -694,6 +872,7 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message,
+            content_range: None,
         }
     }
 
@@ -701,6 +880,7 @@ impl ApiError {
         Self {
             status: StatusCode::BAD_GATEWAY,
             message: error.to_string(),
+            content_range: None,
         }
     }
 
@@ -708,6 +888,7 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             message: message.into(),
+            content_range: None,
         }
     }
 
@@ -715,19 +896,35 @@ impl ApiError {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             message: error.to_string(),
+            content_range: None,
+        }
+    }
+
+    fn range_not_satisfiable(total_length: u64) -> Self {
+        Self {
+            status: StatusCode::RANGE_NOT_SATISFIABLE,
+            message: "Requested audio byte range is not satisfiable".to_owned(),
+            content_range: Some(format!("bytes */{total_length}")),
         }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (
+        let content_range = self.content_range;
+        let mut response = (
             self.status,
             Json(ErrorResponse {
                 error: self.message,
             }),
         )
-            .into_response()
+            .into_response();
+        if let Some(content_range) = content_range
+            && let Ok(value) = HeaderValue::from_str(&content_range)
+        {
+            response.headers_mut().insert(CONTENT_RANGE, value);
+        }
+        response
     }
 }
 
@@ -735,9 +932,10 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::{
         LibraryEntry, configured_tidal_track_ids, hls_playlist_body, move_entries_to_end,
-        qobuz_album_id, tidal_album_id,
+        qobuz_album_id, requested_byte_range, spotify_album_id, tidal_album_id,
     };
     use crate::models::MusicProvider;
+    use axum::http::HeaderValue;
 
     #[test]
     fn default_library_has_a_test_track() {
@@ -779,6 +977,48 @@ mod tests {
     fn rejects_non_qobuz_and_non_album_links() {
         assert_eq!(qobuz_album_id("https://example.com/album/abc123"), None);
         assert_eq!(qobuz_album_id("https://play.qobuz.com/artist/12345"), None);
+    }
+
+    #[test]
+    fn extracts_spotify_album_id_from_supported_links() {
+        assert_eq!(
+            spotify_album_id("https://open.spotify.com/album/4aawyAB9vmqN3uQ7FjRGTy?si=test"),
+            Some("4aawyAB9vmqN3uQ7FjRGTy".to_owned())
+        );
+        assert_eq!(
+            spotify_album_id("https://open.spotify.com/intl-de/album/4aawyAB9vmqN3uQ7FjRGTy"),
+            Some("4aawyAB9vmqN3uQ7FjRGTy".to_owned())
+        );
+        assert_eq!(
+            spotify_album_id("spotify:album:4aawyAB9vmqN3uQ7FjRGTy"),
+            Some("4aawyAB9vmqN3uQ7FjRGTy".to_owned())
+        );
+    }
+
+    #[test]
+    fn rejects_non_spotify_and_non_album_links() {
+        assert_eq!(
+            spotify_album_id("https://example.com/album/4aawyAB9vmqN3uQ7FjRGTy"),
+            None
+        );
+        assert_eq!(
+            spotify_album_id("https://open.spotify.com/track/4aawyAB9vmqN3uQ7FjRGTy"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_audio_byte_ranges() {
+        assert_eq!(requested_byte_range(None, 100).unwrap(), (0, 99, false));
+        assert_eq!(
+            requested_byte_range(Some(&HeaderValue::from_static("bytes=10-19")), 100).unwrap(),
+            (10, 19, true)
+        );
+        assert_eq!(
+            requested_byte_range(Some(&HeaderValue::from_static("bytes=-10")), 100).unwrap(),
+            (90, 99, true)
+        );
+        assert!(requested_byte_range(Some(&HeaderValue::from_static("bytes=100-")), 100).is_err());
     }
 
     #[test]
