@@ -19,6 +19,8 @@ export function TracksView({
   addAlbumError,
 }: LibraryViewProps) {
   const [albumUrl, setAlbumUrl] = useState("");
+  const [hoveredTrackId, setHoveredTrackId] =
+    useState<GlobalTrackId | null>(null);
   const totalDurationSeconds = tracks.reduce(
     (total, track) => total + track.durationSeconds,
     0,
@@ -51,6 +53,14 @@ export function TracksView({
     if (!url || isAddingAlbum) return;
 
     if (await addAlbum(url)) setAlbumUrl("");
+  }
+
+  function showPlayOption(trackId: GlobalTrackId) {
+    setHoveredTrackId(trackId);
+  }
+
+  function hidePlayOption() {
+    setHoveredTrackId(null);
   }
 
   return (
@@ -96,7 +106,22 @@ export function TracksView({
       </div>
       {tracks.map((track) => (
         <div className="libraryItem" key={track.libraryId}>
-          <div className="coverImgContainer">
+          <div
+            className="coverImgContainer"
+            onMouseEnter={() => showPlayOption(track.globalId)}
+            onMouseLeave={hidePlayOption}
+          >
+            <img
+              src="/Play.svg"
+              alt=""
+              aria-hidden="true"
+              className="coverPlayBtn"
+              data-variant={
+                hoveredTrackId === track.globalId
+                  ? "btnEnabled"
+                  : "btnDisabled"
+              }
+            />
             <img
               src={track.cover}
               alt={`${track.album} album cover`}
