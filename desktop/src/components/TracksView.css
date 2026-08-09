@@ -122,6 +122,7 @@
     color: #b6b6b6;
     padding-top: 30px;
     padding-bottom: 50px;
+    z-index: 10;
 }
 
 .trackColumn {
@@ -162,20 +163,45 @@
     height: 60px;
     grid-column: 1;
     align-self: center;
+    align-content: center;
+    justify-content: center;
     cursor: pointer;
-    transition-duration: 0.25s;
     border-radius: 7px;
     overflow: hidden;
+    display: grid;
+    place-items: center;
 }
 
-.coverImgContainer:hover {
-    filter: brightness(70%);
+.coverPlayBtn {
+    width: 15px;
+    grid-area: 1 / 1;
+    z-index: 1;
+    pointer-events: none;
+}
+
+.coverPlayBtn[data-variant="btnEnabled"] {
+    opacity: 100%;
+    transition: 0.25s ease-out;
+}
+
+.coverPlayBtn[data-variant="btnDisabled"] {
+    opacity: 0;
+    transition: 0.25s ease-in;
 }
 
 .coverImg {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    grid-area: 1 / 1;
+    z-index: 0;
+    transition-duration: 0.25s;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.tracksView .coverImgContainer:hover .coverImg {
+    filter: brightness(50%);
 }
 
 .trackName {

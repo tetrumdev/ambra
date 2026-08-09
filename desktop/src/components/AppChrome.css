@@ -10,7 +10,7 @@
     align-items: center;
     user-select: none;
     -webkit-user-select: none;
-    z-index: 3;
+    z-index: 50;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(10px);
 }
