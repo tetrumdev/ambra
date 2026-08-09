@@ -10,19 +10,41 @@
     overflow-x: hidden;
     min-height: 0;
     height: 100vh;
-    width: 100vw;
-    top: 0;
-    left: 0;
+    width: 90vw;
+    justify-self: center;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
     font-size: 0.9rem;
     font-weight: 300;
     font-family: "Stack Sans Text", Inter, sans-serif;
     filter: none;
+    display: grid;
+    gap: 50px;
 }
 
 #queueList::after {
     display: block;
     height: 100px;
     content: "";
+}
+
+.queueSection {
+    background: transparent;
+    position: relative;
+    top: 12px;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 0.8rem;
+}
+
+.queueSection::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background-color: #2f2f2f;
 }
 
 .queueItem {
@@ -38,6 +60,11 @@
     text-align: left;
     font-family: inherit;
     width: 100%;
+    cursor: pointer;
+}
+
+.queueItem:hover {
+    background-color: #151515;
 }
 
 #currentQueueTrack,
@@ -46,28 +73,23 @@
     flex-direction: column;
 }
 
-.coverImgContainer {
+#queueList .coverImgContainer {
     width: 60px;
     height: 60px;
     grid-column: 1;
     align-self: center;
-    cursor: pointer;
     transition-duration: 0.25s;
     border-radius: 7px;
     overflow: hidden;
 }
 
-.coverImgContainer:hover {
-    filter: brightness(70%);
-}
-
-.coverImg {
+#queueList .coverImg {
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
 
-.trackName {
+#queueList .trackName {
     grid-column: 2;
     font-weight: 600;
     align-self: center;
