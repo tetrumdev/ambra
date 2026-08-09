@@ -39,6 +39,7 @@ function App() {
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
+  const f11FullscreenRef = useRef(false);
   const latestSessionRef = useRef({ preferences, player });
   latestSessionRef.current = { preferences, player };
 
@@ -51,7 +52,9 @@ function App() {
       try {
         const appWindow = getCurrentWindow();
         const isFullscreen = await appWindow.isFullscreen();
-        await appWindow.setFullscreen(!isFullscreen);
+        const nextFullscreen = !isFullscreen;
+        await appWindow.setFullscreen(nextFullscreen);
+        f11FullscreenRef.current = nextFullscreen;
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -65,18 +68,78 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handleKeyDown = async (event: KeyboardEvent) => {
-      if (event.code !== "Escape" || event.repeat) return;
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
 
+      console.log("hello");
+    };
+
+    window.addEventListener("contextmenu", handleContextMenu);
+
+    return () => {
+      window.removeEventListener("contextmenu", handleContextMenu);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = async (event: KeyboardEvent) => {
+      if (event.code !== "Escape") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      if (f11FullscreenRef.current) {
+        if (event.repeat) return;
+
+        try {
+          const appWindow = getCurrentWindow();
+          if (!(await appWindow.isFullscreen())) {
+            await appWindow.setFullscreen(true);
+          }
+        } catch (error) {
+          console.error("Could not preserve fullscreen:", error);
+        }
+        return;
+      }
+
+      if (event.repeat) return;
       changeScreen("library");
     };
 
-    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleKeyDown, true);
     };
   }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (!isBigscreen) {
+      root.removeAttribute("data-bigscreen-idle");
+      return;
+    }
+
+    let idleTimer: ReturnType<typeof setTimeout>;
+    const markActive = () => {
+      root.removeAttribute("data-bigscreen-idle");
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        root.setAttribute("data-bigscreen-idle", "true");
+      }, 10_000);
+    };
+
+    markActive();
+    window.addEventListener("pointermove", markActive);
+    window.addEventListener("pointerdown", markActive);
+
+    return () => {
+      clearTimeout(idleTimer);
+      window.removeEventListener("pointermove", markActive);
+      window.removeEventListener("pointerdown", markActive);
+      root.removeAttribute("data-bigscreen-idle");
+    };
+  }, [isBigscreen]);
 
   useEffect(() => {
     savePreferences(preferences);
@@ -154,6 +217,7 @@ function App() {
           <Queue
             currentEntry={queue.currentEntry}
             upcomingEntries={queue.upcomingEntries}
+            playTrack={playFromLibrary}
           />
         </main>
       ) : (

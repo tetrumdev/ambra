@@ -1,19 +1,25 @@
 import "./Queue.css";
-import type { QueueEntry } from "../types/music";
+import type { QueueEntry, GlobalTrackId } from "../types/music";
 
 type QueueProps = {
   currentEntry: QueueEntry | undefined;
   upcomingEntries: QueueEntry[];
-  // track: Track[];
+  playTrack: (trackId: GlobalTrackId) => void;
 };
 
-export function Queue({ currentEntry, upcomingEntries }: QueueProps) {
+export function Queue({
+  currentEntry,
+  upcomingEntries,
+  playTrack,
+}: QueueProps) {
   return (
     <div id="queueList">
       <div id="currentQueueTrack">
-        <span id="currentTitle">Currently Playing</span>
+        <span id="currentTitle" className="queueSection">
+          Currently Playing
+        </span>
         {currentEntry && (
-          <div className="queueItem">
+          <div className="queueItem firstQueueItem">
             <div className="coverImgContainer">
               <img
                 src={currentEntry.track.cover}
@@ -26,9 +32,14 @@ export function Queue({ currentEntry, upcomingEntries }: QueueProps) {
         )}
       </div>
       <div id="upcomingQueueTracks">
-        <span id="upcomingTitle">Upcoming</span>
-        {upcomingEntries.map((entry) => (
-          <div className="queueItem">
+        <span id="upcomingTitle" className="queueSection">
+          Upcoming
+        </span>
+        {upcomingEntries.map((entry, index) => (
+          <div
+            className={`queueItem ${index === 0 ? "firstQueueItem" : ""}`}
+            onClick={() => playTrack(entry.track.globalId)}
+          >
             <div className="coverImgContainer">
               <img
                 src={entry.track.cover}
