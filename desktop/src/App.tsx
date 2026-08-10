@@ -8,7 +8,7 @@ import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
-import { useQueue } from "./hooks/useQueue";
+import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -29,6 +29,7 @@ function App() {
   const queue = useQueue(library.tracks, preferences.playback.trackId);
   const player = useAudioPlayer(library.tracks, preferences.playback, {
     next: () => queue.next()?.track,
+    completeCurrent: () => queue.completeCurrent()?.track,
     previous: () => queue.previous()?.track,
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
@@ -147,13 +148,15 @@ function App() {
   }, [preferences]);
 
   useEffect(() => {
-    if (!player.isSessionRestored || !player.currentTrack) return;
+    if (!player.isSessionRestored) return;
 
     setPreferences((current) => {
-      const playback = {
-        trackId: player.currentTrack!.globalId,
-        positionSeconds: persistedPosition,
-      };
+      const playback = player.currentTrack
+        ? {
+            trackId: player.currentTrack.globalId,
+            positionSeconds: persistedPosition,
+          }
+        : { trackId: null, positionSeconds: 0 };
 
       if (
         current.playback.trackId === playback.trackId &&
@@ -169,16 +172,16 @@ function App() {
   useEffect(() => {
     const saveLatestSession = () => {
       const latest = latestSessionRef.current;
-      if (!latest.player.isSessionRestored || !latest.player.currentTrack) {
-        return;
-      }
+      if (!latest.player.isSessionRestored) return;
 
       savePreferences({
         ...latest.preferences,
-        playback: {
-          trackId: latest.player.currentTrack.globalId,
-          positionSeconds: latest.player.currentTime,
-        },
+        playback: latest.player.currentTrack
+          ? {
+              trackId: latest.player.currentTrack.globalId,
+              positionSeconds: latest.player.currentTime,
+            }
+          : { trackId: null, positionSeconds: 0 },
       });
     };
 
@@ -199,6 +202,29 @@ function App() {
   const playFromLibrary = (trackId: GlobalTrackId) => {
     queue.playFromContext(queueContext, trackId);
     player.playTrack(trackId);
+  };
+
+  const playStandalone = (trackId: GlobalTrackId) => {
+    const entry = queueEntryForTrack(queueContext, trackId);
+    if (!entry) return;
+    queue.playStandalone(entry);
+    player.playTrack(trackId);
+  };
+
+  const addToQueue = (trackId: GlobalTrackId) => {
+    const entry = queueEntryForTrack(queueContext, trackId);
+    if (!entry) return;
+    const shouldStartPlaying = queue.currentEntry === undefined;
+    queue.addToQueue(entry);
+    if (shouldStartPlaying) player.playTrack(trackId);
+  };
+
+  const playNext = (trackId: GlobalTrackId) => {
+    const entry = queueEntryForTrack(queueContext, trackId);
+    if (!entry) return;
+    const shouldStartPlaying = queue.currentEntry === undefined;
+    queue.playNext(entry);
+    if (shouldStartPlaying) player.playTrack(trackId);
   };
 
   return (
@@ -227,6 +253,9 @@ function App() {
           <TracksView
             tracks={library.tracks}
             playTrack={playFromLibrary}
+            playStandalone={playStandalone}
+            addToQueue={addToQueue}
+            playNext={playNext}
             addAlbum={library.addAlbum}
             isAddingAlbum={library.isAddingAlbum}
             addAlbumError={library.addAlbumError}
@@ -234,22 +263,20 @@ function App() {
         </main>
       )}
 
-      {player.currentTrack && (
-        <NowPlayingBar
-          variant={isBigscreen ? "expanded" : "compact"}
-          track={player.currentTrack}
-          currentTime={player.currentTime}
-          duration={player.duration}
-          isPlaying={player.isPlaying}
-          audioDecks={player.audioDecks}
-          onPrevious={player.previous}
-          onTogglePlayback={player.togglePlayback}
-          onNext={player.next}
-          onSeek={player.seek}
-          onOpenBigscreen={() => changeScreen("bigscreen")}
-          onOpenQueue={() => changeScreen("queue")}
-        />
-      )}
+      <NowPlayingBar
+        variant={isBigscreen ? "expanded" : "compact"}
+        track={player.currentTrack}
+        currentTime={player.currentTime}
+        duration={player.duration}
+        isPlaying={player.isPlaying}
+        audioDecks={player.audioDecks}
+        onPrevious={player.previous}
+        onTogglePlayback={player.togglePlayback}
+        onNext={player.next}
+        onSeek={player.seek}
+        onOpenBigscreen={() => changeScreen("bigscreen")}
+        onOpenQueue={() => changeScreen("queue")}
+      />
     </>
   );
 }

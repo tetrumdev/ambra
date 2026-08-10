@@ -28,6 +28,23 @@ export function advanceQueue(
   };
 }
 
+export function completeQueueTrack(
+  state: QueueState,
+  archive: (item: QueueItem) => QueueHistoryEntry,
+): QueueTransition {
+  const advanced = advanceQueue(state, archive);
+  if (advanced.item || !state.current) return advanced;
+
+  return {
+    state: {
+      history: [...state.history, archive(state.current)],
+      current: null,
+      upcoming: [],
+    },
+    item: undefined,
+  };
+}
+
 export function rewindQueue(state: QueueState): QueueTransition {
   const previousEntry = state.history[state.history.length - 1];
   if (!previousEntry) return { state, item: undefined };

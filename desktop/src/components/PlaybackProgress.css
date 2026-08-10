@@ -64,6 +64,12 @@
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
 }
 
+#progressBar:disabled,
+#otherTime:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
 #progressBar::-webkit-slider-runnable-track {
     height: 6px;
     border-radius: 999px;

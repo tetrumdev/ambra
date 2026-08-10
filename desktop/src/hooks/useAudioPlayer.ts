@@ -56,6 +56,7 @@ type InitialPlayback = {
 
 export type AudioQueueNavigation = {
   next: () => Track | undefined;
+  completeCurrent: () => Track | undefined;
   previous: () => Track | undefined;
   peekNext: () => Track | undefined;
   nextTrack: Track | undefined;
@@ -104,8 +105,9 @@ export function useAudioPlayer(
   isPlayingRef.current = isPlaying;
   const usesNativeAudio = isTauri();
   const hasTracks = tracks.length > 0;
-  const currentTrack =
-    tracks.find((track) => track.globalId === currentTrackId) ?? tracks[0];
+  const currentTrack = tracks.find(
+    (track) => track.globalId === currentTrackId,
+  );
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -150,6 +152,21 @@ export function useAudioPlayer(
     },
     [audioForDeck],
   );
+
+  const clearPlayback = useCallback(() => {
+    currentTrackIdRef.current = null;
+    currentTimeRef.current = 0;
+    isPlayingRef.current = false;
+    pendingRestoreTimeRef.current = null;
+    pendingPlaybackDeckRef.current = null;
+    releaseDeck(0);
+    releaseDeck(1);
+    setCurrentTrackId(null);
+    setCurrentTime(0);
+    setDuration(0);
+    setIsPlaying(false);
+    setIsSessionRestored(true);
+  }, [releaseDeck]);
 
   const prepareDeck = useCallback(
     (deck: Deck, trackIndex: number) => {
@@ -487,13 +504,16 @@ export function useAudioPlayer(
   const onEnded = useCallback(
     (deck: Deck) => {
       if (deck === activeDeckRef.current) {
-        const nextTrack = queueNavigationRef.current.next();
-        if (!nextTrack) return;
+        const nextTrack = queueNavigationRef.current.completeCurrent();
+        if (!nextTrack) {
+          clearPlayback();
+          return;
+        }
         const nextIndex = trackPosition(tracksRef.current, nextTrack.globalId);
         if (nextIndex >= 0) switchToTrack(nextIndex, true);
       }
     },
-    [switchToTrack],
+    [clearPlayback, switchToTrack],
   );
 
   useEffect(() => {
@@ -609,13 +629,15 @@ export function useAudioPlayer(
 
         if (playback.ended && !handledEnd) {
           handledEnd = true;
-          const nextTrack = queueNavigationRef.current.next();
+          const nextTrack = queueNavigationRef.current.completeCurrent();
           if (nextTrack) {
             const nextIndex = trackPosition(
               tracksRef.current,
               nextTrack.globalId,
             );
             if (nextIndex >= 0) switchToTrack(nextIndex, true);
+          } else {
+            clearPlayback();
           }
           return;
         }
@@ -632,7 +654,7 @@ export function useAudioPlayer(
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [currentTrack, switchToTrack, usesNativeAudio]);
+  }, [clearPlayback, currentTrack, switchToTrack, usesNativeAudio]);
 
   useEffect(
     () => () => {
@@ -699,16 +721,21 @@ export function useAudioPlayer(
 
   useEffect(() => {
     if ("mediaSession" in navigator) {
-      navigator.mediaSession.playbackState = usesNativeAudio
-        ? "none"
-        : isPlaying
-          ? "playing"
-          : "paused";
+      navigator.mediaSession.playbackState =
+        usesNativeAudio || !currentTrack
+          ? "none"
+          : isPlaying
+            ? "playing"
+            : "paused";
     }
-  }, [isPlaying, usesNativeAudio]);
+  }, [currentTrack, isPlaying, usesNativeAudio]);
 
   useEffect(() => {
-    if (!("mediaSession" in navigator) || !currentTrack) return;
+    if (!("mediaSession" in navigator)) return;
+    if (!currentTrack) {
+      navigator.mediaSession.metadata = null;
+      return;
+    }
     if (usesNativeAudio) {
       navigator.mediaSession.metadata = null;
       return;
@@ -789,10 +816,12 @@ export function useAudioPlayer(
   }, [currentTrack]);
 
   useEffect(() => {
-    if (!isTauri() || !currentTrack) return;
+    if (!isTauri()) return;
 
     void invoke("set_native_media_commands_enabled", {
-      enabled: usesNativeAudio || currentTrack.provider === "local",
+      enabled:
+        currentTrack !== undefined &&
+        (usesNativeAudio || currentTrack.provider === "local"),
     }).catch((error) =>
       console.warn("Could not switch native media command ownership:", error),
     );

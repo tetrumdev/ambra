@@ -10,6 +10,9 @@ type ClickMenuProps = {
   yPos: number;
   trackId: GlobalTrackId | null;
   playTrack: (trackId: GlobalTrackId) => void;
+  playStandalone: (trackId: GlobalTrackId) => void;
+  addToQueue: (trackId: GlobalTrackId) => void;
+  playNext: (trackId: GlobalTrackId) => void;
 };
 
 export function ClickMenu({
@@ -19,11 +22,30 @@ export function ClickMenu({
   yPos,
   trackId,
   playTrack,
+  playStandalone,
+  addToQueue,
+  playNext,
 }: ClickMenuProps) {
   return menuIsShowing ? (
     <div id="preventClickCover" onClick={hideClickMenu}>
-      <div id="clickMenu" style={{ left: xPos, top: yPos }}>
-        <div id="standalonePlay" className="menuItem">
+      <div
+        id="clickMenu"
+        style={{
+          left: xPos,
+          top: yPos,
+          transform: `translate(
+            ${xPos >= window.innerWidth - 180 ? "-100%" : "0"},
+            ${yPos >= window.innerHeight - 250 ? "-100%" : "0"}
+          )`,
+        }}
+      >
+        <div
+          id="standalonePlay"
+          className="menuItem"
+          onClick={() => {
+            if (trackId !== null) playStandalone(trackId);
+          }}
+        >
           Standalone Play
         </div>
         <div
@@ -35,10 +57,22 @@ export function ClickMenu({
         >
           Play from Here
         </div>
-        <div id="addToQueue" className="menuItem">
+        <div
+          id="addToQueue"
+          className="menuItem"
+          onClick={() => {
+            if (trackId !== null) addToQueue(trackId);
+          }}
+        >
           Add to Queue
         </div>
-        <div id="playNext" className="menuItem">
+        <div
+          id="playNext"
+          className="menuItem"
+          onClick={() => {
+            if (trackId !== null) playNext(trackId);
+          }}
+        >
           Play Next
         </div>
       </div>

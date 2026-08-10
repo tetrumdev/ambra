@@ -6,6 +6,7 @@ type PlaybackProgressProps = {
   currentTime: number;
   duration: number;
   onSeek: (time: number) => void;
+  disabled?: boolean;
 };
 
 type Clock = "songLength" | "timeRemaining";
@@ -27,6 +28,7 @@ export function PlaybackProgress({
   currentTime,
   duration,
   onSeek,
+  disabled = false,
 }: PlaybackProgressProps) {
   const [clockType, setClockType] = useState<Clock>("songLength");
   const songLength = Math.max(0, duration);
@@ -54,6 +56,7 @@ export function PlaybackProgress({
         step="0.01"
         value={currentTime}
         aria-label="Playback position"
+        disabled={disabled}
         onChange={(event) => onSeek(Number(event.target.value))}
         style={{ "--progress": `${progressPercent}%` } as CSSProperties}
       />
@@ -61,6 +64,7 @@ export function PlaybackProgress({
         id="otherTime"
         type="button"
         onClick={toggleClockType}
+        disabled={disabled}
         aria-label={
           clockType === "songLength"
             ? "Show time remaining"
