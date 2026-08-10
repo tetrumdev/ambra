@@ -38,12 +38,26 @@ pub struct NativeMediaMetadata {
 }
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(target_os = "windows")]
+    let hwnd = {
+        let window = app.get_webview_window("main").ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "main window not found")
+        })?;
+
+        Some(window.hwnd()?.0)
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let hwnd = None;
+
     let config = PlatformConfig {
         dbus_name: "com.quantium.ambra",
         display_name: "AMBRA",
-        hwnd: None,
+        hwnd,
     };
+
     let mut controls = MediaControls::new(config)?;
+
     let app_handle = app.handle().clone();
     let commands_enabled = Arc::new(AtomicBool::new(false));
     let handler_enabled = commands_enabled.clone();
