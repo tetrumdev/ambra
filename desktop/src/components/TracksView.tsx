@@ -31,6 +31,7 @@ export function TracksView({
   const [xPos, setXPos] = useState(0);
   const [yPos, setYPos] = useState(0);
   const [menuIsShowing, setMenuIsShowing] = useState(false);
+  const [menuTrackId, setMenuTrackId] = useState<GlobalTrackId | null>(null);
 
   const hours = Math.floor(totalDurationSeconds / 3600);
   const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
@@ -69,9 +70,10 @@ export function TracksView({
     setHoveredTrackId(null);
   }
 
-  function showClickMenu(event: React.MouseEvent) {
+  function showClickMenu(event: React.MouseEvent, trackId: GlobalTrackId) {
     setXPos(event.clientX);
     setYPos(event.clientY);
+    setMenuTrackId(trackId);
     setMenuIsShowing(true);
   }
 
@@ -86,6 +88,8 @@ export function TracksView({
         hideClickMenu={hideClickMenu}
         xPos={xPos}
         yPos={yPos}
+        trackId={menuTrackId}
+        playTrack={playTrack}
       />
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
@@ -130,7 +134,7 @@ export function TracksView({
         <div
           className="libraryItem"
           key={track.libraryId}
-          onClick={showClickMenu}
+          onClick={(event) => showClickMenu(event, track.globalId)}
         >
           <div
             className="coverImgContainer"

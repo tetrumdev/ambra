@@ -1,12 +1,15 @@
 import "./ClickMenu.css";
+import type { GlobalTrackId } from "../types/music";
 
 type ClickMenu = "clickMenuOn" | "clickMenuOff";
 
 type ClickMenuProps = {
-  menuIsShowing: Boolean;
+  menuIsShowing: boolean;
   hideClickMenu: () => void;
   xPos: number;
   yPos: number;
+  trackId: GlobalTrackId | null;
+  playTrack: (trackId: GlobalTrackId) => void;
 };
 
 export function ClickMenu({
@@ -14,6 +17,8 @@ export function ClickMenu({
   hideClickMenu,
   xPos,
   yPos,
+  trackId,
+  playTrack,
 }: ClickMenuProps) {
   return menuIsShowing ? (
     <div id="preventClickCover" onClick={hideClickMenu}>
@@ -21,7 +26,13 @@ export function ClickMenu({
         <div id="standalonePlay" className="menuItem">
           Standalone Play
         </div>
-        <div id="normalPlay" className="menuItem">
+        <div
+          id="normalPlay"
+          className="menuItem"
+          onClick={() => {
+            if (trackId !== null) playTrack(trackId);
+          }}
+        >
           Play from Here
         </div>
         <div id="addToQueue" className="menuItem">
