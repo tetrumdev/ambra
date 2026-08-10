@@ -11,8 +11,6 @@
 #clickMenu {
     width: 100px;
     height: 100px;
-    background-color: rgba(29, 29, 29, 0.7);
-    backdrop-filter: blur(20px);
     border: 1px solid #2f2f2f;
     border-radius: 15px;
     z-index: 20;
@@ -21,6 +19,9 @@
     display: grid;
     width: 200px;
     height: 300px;
+    overflow: hidden;
+    background: none;
+    backdrop-filter: blur(20px);
 }
 
 .menuItem {
@@ -28,4 +29,10 @@
     align-content: center;
     padding-left: 20px;
     font-size: 1rem;
+    background-color: rgba(29, 29, 29, 0.7);
+}
+
+.menuItem:hover {
+    background-color: rgba(42, 42, 42, 0.7);
+    cursor: pointer;
 }
