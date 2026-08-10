@@ -30,7 +30,14 @@ oxideav-core = "0.1"
 oxideav-flac = "0.0.11"
 libc = "0.2"
 souvlaki = "0.8.3"
+symphonia = { version = "0.6", features = ["all"] }
+crossbeam-channel = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.24.1"
 objc = "0.2.7"
+coreaudio-rs = "0.13"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.22"
