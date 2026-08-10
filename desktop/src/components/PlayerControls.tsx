@@ -5,6 +5,7 @@ type PlayerControlsProps = {
   onPrevious: () => void;
   onTogglePlayback: () => void | Promise<void>;
   onNext: () => void;
+  disabled?: boolean;
 };
 
 export function PlayerControls({
@@ -12,10 +13,16 @@ export function PlayerControls({
   onPrevious,
   onTogglePlayback,
   onNext,
+  disabled = false,
 }: PlayerControlsProps) {
   return (
     <div id="controls">
-      <button id="backBtn" type="button" onClick={onPrevious}>
+      <button
+        id="backBtn"
+        type="button"
+        onClick={onPrevious}
+        disabled={disabled}
+      >
         <img src="/back.svg" alt="Previous" />
       </button>
 
@@ -24,6 +31,7 @@ export function PlayerControls({
         type="button"
         onClick={onTogglePlayback}
         className={isPlaying ? "pause" : "play"}
+        disabled={disabled}
       >
         <img
           src={isPlaying ? "/Pause.svg" : "/Play.svg"}
@@ -31,7 +39,12 @@ export function PlayerControls({
         />
       </button>
 
-      <button id="skipBtn" type="button" onClick={onNext}>
+      <button
+        id="skipBtn"
+        type="button"
+        onClick={onNext}
+        disabled={disabled}
+      >
         <img src="/skip.svg" alt="Next" />
       </button>
     </div>

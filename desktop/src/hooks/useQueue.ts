@@ -16,6 +16,7 @@ import {
 } from "../utils/queueStorage";
 import {
   advanceQueue,
+  completeQueueTrack,
   rewindQueue,
   type QueueState,
 } from "../utils/queueNavigation";
@@ -32,9 +33,11 @@ export type QueueController = {
   ) => QueueItem | undefined;
   playStandalone: (entry: QueueItem) => void;
   addToQueue: (entry: QueueItem) => void;
+  playNext: (entry: QueueItem) => void;
   shuffleContext: (context: QueueContext) => QueueItem | undefined;
   addShuffledToQueue: (context: QueueContext) => void;
   next: () => QueueItem | undefined;
+  completeCurrent: () => QueueItem | undefined;
   previous: () => QueueItem | undefined;
   peekNext: () => QueueItem | undefined;
 };
@@ -144,6 +147,15 @@ export function useQueue(
     );
   }, [commitState]);
 
+  const playNext = useCallback((entry: QueueItem) => {
+    const current = stateRef.current;
+    commitState(
+      current.current
+        ? { ...current, upcoming: [entry, ...current.upcoming] }
+        : { ...current, current: entry },
+    );
+  }, [commitState]);
+
   const shuffleContext = useCallback((context: QueueContext) => {
     const shuffled = shuffledContextEntries(context.entries);
     if (shuffled.length === 0) return undefined;
@@ -173,6 +185,12 @@ export function useQueue(
   const next = useCallback(() => {
     const transition = advanceQueue(stateRef.current, historyEntry);
     if (transition.item) commitState(transition.state);
+    return transition.item;
+  }, [commitState]);
+
+  const completeCurrent = useCallback(() => {
+    const transition = completeQueueTrack(stateRef.current, historyEntry);
+    if (transition.state !== stateRef.current) commitState(transition.state);
     return transition.item;
   }, [commitState]);
 
@@ -207,9 +225,11 @@ export function useQueue(
     playFromContext,
     playStandalone,
     addToQueue,
+    playNext,
     shuffleContext,
     addShuffledToQueue,
     next,
+    completeCurrent,
     previous,
     peekNext,
   };

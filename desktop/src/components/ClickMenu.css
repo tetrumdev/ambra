@@ -17,8 +17,8 @@
     position: absolute;
     color: white;
     display: grid;
-    width: 200px;
-    height: 300px;
+    width: 180px;
+    height: 220px;
     overflow: hidden;
     background: none;
     backdrop-filter: blur(20px);
@@ -27,8 +27,8 @@
 .menuItem {
     width: 100%;
     align-content: center;
-    padding-left: 20px;
-    font-size: 1rem;
+    padding-left: 15px;
+    font-size: 0.9rem;
     background-color: rgba(29, 29, 29, 0.7);
 }
 

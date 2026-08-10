@@ -39,6 +39,16 @@
     scale: 0.7;
 }
 
+#controls button:disabled {
+    opacity: 0.35;
+    cursor: default;
+}
+
+#controls button:disabled:active {
+    filter: none;
+    scale: 1;
+}
+
 #controls img {
     max-height: 25px;
     max-width: 25px;

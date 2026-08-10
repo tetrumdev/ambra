@@ -11,7 +11,7 @@ type PlayerBarVariant = "expanded" | "compact";
 
 type NowPlayingBarProps = {
   variant: PlayerBarVariant;
-  track: Track;
+  track: Track | undefined;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
@@ -38,6 +38,8 @@ export function NowPlayingBar({
   onSeek,
   onOpenQueue,
 }: NowPlayingBarProps) {
+  const isEmpty = track === undefined;
+
   return (
     <div id="bottomInfoBar" data-variant={variant}>
       <AudioDecks controller={audioDecks} />
@@ -47,8 +49,9 @@ export function NowPlayingBar({
           type="button"
           onClick={onOpenBigscreen}
           aria-label="Open bigscreen player"
+          disabled={isEmpty}
         >
-          <img src={track.cover} alt="" />
+          <img src={track?.cover ?? "/ambra.png"} alt="" />
         </button>
       )}
       <SongInfo track={track} />
@@ -58,11 +61,13 @@ export function NowPlayingBar({
           onPrevious={onPrevious}
           onTogglePlayback={onTogglePlayback}
           onNext={onNext}
+          disabled={isEmpty}
         />
         <PlaybackProgress
           currentTime={currentTime}
           duration={duration}
           onSeek={onSeek}
+          disabled={isEmpty}
         />
       </div>
       <div id="extraCtrlsCluster">
