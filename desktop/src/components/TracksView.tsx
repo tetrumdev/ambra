@@ -1,4 +1,5 @@
 import "./TracksView.css";
+import { ClickMenu } from "./ClickMenu";
 
 import { useState, type FormEvent } from "react";
 import type { GlobalTrackId, LibraryTrack } from "../types/music";
@@ -19,12 +20,17 @@ export function TracksView({
   addAlbumError,
 }: LibraryViewProps) {
   const [albumUrl, setAlbumUrl] = useState("");
-  const [hoveredTrackId, setHoveredTrackId] =
-    useState<GlobalTrackId | null>(null);
+  const [hoveredTrackId, setHoveredTrackId] = useState<GlobalTrackId | null>(
+    null,
+  );
   const totalDurationSeconds = tracks.reduce(
     (total, track) => total + track.durationSeconds,
     0,
   );
+
+  const [xPos, setXPos] = useState(0);
+  const [yPos, setYPos] = useState(0);
+  const [menuIsShowing, setMenuIsShowing] = useState(false);
 
   const hours = Math.floor(totalDurationSeconds / 3600);
   const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
@@ -63,8 +69,24 @@ export function TracksView({
     setHoveredTrackId(null);
   }
 
+  function showClickMenu(event: React.MouseEvent) {
+    setXPos(event.clientX);
+    setYPos(event.clientY);
+    setMenuIsShowing(true);
+  }
+
+  function hideClickMenu() {
+    setMenuIsShowing(false);
+  }
+
   return (
     <div className="tracksView">
+      <ClickMenu
+        menuIsShowing={menuIsShowing}
+        hideClickMenu={hideClickMenu}
+        xPos={xPos}
+        yPos={yPos}
+      />
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
         <div className="libraryInfo">
@@ -105,7 +127,11 @@ export function TracksView({
         <span className="durationColumn">Duration</span>
       </div>
       {tracks.map((track) => (
-        <div className="libraryItem" key={track.libraryId}>
+        <div
+          className="libraryItem"
+          key={track.libraryId}
+          onClick={showClickMenu}
+        >
           <div
             className="coverImgContainer"
             onMouseEnter={() => showPlayOption(track.globalId)}
@@ -117,9 +143,7 @@ export function TracksView({
               aria-hidden="true"
               className="coverPlayBtn"
               data-variant={
-                hoveredTrackId === track.globalId
-                  ? "btnEnabled"
-                  : "btnDisabled"
+                hoveredTrackId === track.globalId ? "btnEnabled" : "btnDisabled"
               }
             />
             <img
