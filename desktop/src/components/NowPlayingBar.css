@@ -17,7 +17,7 @@
     background-color: rgba(59, 59, 59, 0.5);
     border-top: 1px solid rgba(122, 122, 122, 0.5);
     backdrop-filter: blur(50px);
-    z-index: 50;
+    z-index: 10;
 }
 
 #bottomInfoBar[data-variant="compact"] {
