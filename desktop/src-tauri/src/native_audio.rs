@@ -239,12 +239,18 @@ fn queue(state: &NativeAudioPlayer, source: String) -> Result<(), String> {
     if inner.player == nil {
         return Err("No native audio player is loaded".to_owned());
     }
-    if inner.next_item != nil {
+    if inner.next_source.as_deref() == Some(source.as_str()) {
         return Ok(());
     }
 
     let item = player_item(&source)?;
     unsafe {
+        if inner.next_item != nil {
+            let _: () = msg_send![inner.player, removeItem: inner.next_item];
+            inner.next_item = nil;
+            inner.next_source = None;
+        }
+
         let can_insert: cocoa::base::BOOL =
             msg_send![inner.player, canInsertItem: item afterItem: nil];
         if can_insert != YES {

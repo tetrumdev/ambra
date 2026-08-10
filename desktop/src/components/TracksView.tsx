@@ -7,6 +7,9 @@ import type { GlobalTrackId, LibraryTrack } from "../types/music";
 type LibraryViewProps = {
   tracks: LibraryTrack[];
   playTrack: (trackId: GlobalTrackId) => void;
+  playStandalone: (trackId: GlobalTrackId) => void;
+  addToQueue: (trackId: GlobalTrackId) => void;
+  playNext: (trackId: GlobalTrackId) => void;
   addAlbum: (url: string) => Promise<boolean>;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
@@ -15,6 +18,9 @@ type LibraryViewProps = {
 export function TracksView({
   tracks,
   playTrack,
+  playStandalone,
+  addToQueue,
+  playNext,
   addAlbum,
   isAddingAlbum,
   addAlbumError,
@@ -71,6 +77,8 @@ export function TracksView({
   }
 
   function showClickMenu(event: React.MouseEvent, trackId: GlobalTrackId) {
+    if (event.target !== event.currentTarget) return;
+
     setXPos(event.clientX);
     setYPos(event.clientY);
     setMenuTrackId(trackId);
@@ -90,6 +98,9 @@ export function TracksView({
         yPos={yPos}
         trackId={menuTrackId}
         playTrack={playTrack}
+        playStandalone={playStandalone}
+        addToQueue={addToQueue}
+        playNext={playNext}
       />
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
@@ -134,6 +145,11 @@ export function TracksView({
         <div
           className="libraryItem"
           key={track.libraryId}
+          data-menu-open={
+            menuIsShowing && menuTrackId === track.globalId
+              ? "true"
+              : undefined
+          }
           onClick={(event) => showClickMenu(event, track.globalId)}
         >
           <div
@@ -157,10 +173,10 @@ export function TracksView({
               onClick={() => playTrack(track.globalId)}
             />
           </div>
-          <span className="trackName">{track.name}</span>
-          <span className="artistName">{track.artist}</span>
-          <span className="albumName">{track.album}</span>
-          <span className="trackDuration">
+          <span className="trackName trackDescriptor">{track.name}</span>
+          <span className="artistName trackDescriptor">{track.artist}</span>
+          <span className="albumName trackDescriptor">{track.album}</span>
+          <span className="trackDuration trackDescriptor">
             {formatTime(track.durationSeconds)}
           </span>
         </div>

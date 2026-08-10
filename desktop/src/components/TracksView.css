@@ -100,7 +100,7 @@
 .columnInfo {
     right: 0;
     position: sticky;
-    grid-template-columns: 75px 300px 200px auto 100px;
+    grid-template-columns: 75px 300px 200px 300px 100px auto;
     gap: 10px;
     display: grid;
     align-items: baseline;
@@ -152,7 +152,7 @@
     border-bottom: 1px solid #2f2f2f;
     display: grid;
     align-content: center;
-    grid-template-columns: 75px 300px 200px auto 100px;
+    grid-template-columns: 75px 300px 200px 300px 100px auto;
     gap: 10px;
     text-align: left;
     font-family: inherit;
@@ -161,6 +161,10 @@
 .libraryItem:hover {
     background-color: #151515;
     cursor: pointer;
+}
+
+.libraryItem[data-menu-open="true"] {
+    background-color: #151515;
 }
 
 .coverImgContainer {
@@ -206,26 +210,19 @@
 }
 
 .tracksView .coverImgContainer:hover .coverImg {
-    filter: brightness(50%);
+    filter: brightness(50%) blur(3px);
+}
+
+.trackDescriptor {
+    align-self: center;
+    width: fit-content;
+}
+
+.trackDescriptor:hover {
+    text-decoration: underline;
 }
 
 .trackName {
     grid-column: 2;
     font-weight: 600;
-    align-self: center;
-}
-
-.artistName {
-    grid-column: 3;
-    align-self: center;
-}
-
-.albumName {
-    grid-column: 4;
-    align-self: center;
-}
-
-.trackDuration {
-    grid-column: 5;
-    align-self: center;
 }

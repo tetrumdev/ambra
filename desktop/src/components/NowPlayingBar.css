@@ -74,6 +74,10 @@
     -webkit-user-drag: none;
 }
 
+#compactArtwork:disabled {
+    cursor: default;
+}
+
 #queueBtn {
     background: transparent;
     border: none;

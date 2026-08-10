@@ -62,7 +62,7 @@
     overflow: hidden;
 }
 
-@media screen and (width <= 1100px) {
+@media screen and (width <= 1250px) {
     #library {
         grid-template-columns: 0 1fr;
     }
