@@ -4,7 +4,11 @@ import {
   contextEntriesFrom,
   shuffledContextEntries,
 } from "../src/utils/queueModel";
-import { advanceQueue, rewindQueue } from "../src/utils/queueNavigation";
+import {
+  advanceQueue,
+  completeQueueTrack,
+  rewindQueue,
+} from "../src/utils/queueNavigation";
 import {
   parseQueueSnapshot,
   queueSnapshot,
@@ -129,5 +133,12 @@ describe("queue model", () => {
     );
     expect(exhausted.item).toBeUndefined();
     expect(exhausted.state.current?.track.globalId).toBe("c");
+
+    const completed = completeQueueTrack(exhausted.state, archive);
+    expect(completed.item).toBeUndefined();
+    expect(completed.state.current).toBeNull();
+    expect(completed.state.history.map((entry) => entry.track.globalId)).toEqual([
+      "c",
+    ]);
   });
 });
