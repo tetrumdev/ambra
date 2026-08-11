@@ -19,21 +19,15 @@
 .devAudioModeToggle {
     min-width: 92px;
     padding: 5px 8px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
+    border: 1px solid white;
     border-radius: 999px;
-    color: rgba(255, 255, 255, 0.75);
-    background: rgba(0, 0, 0, 0.22);
+    color: white;
+    background: transparent;
     font-family: "Stack Sans Text", sans-serif;
     font-size: 10px;
     font-weight: 650;
     letter-spacing: 0.08em;
     cursor: pointer;
-}
-
-.devAudioModeToggle[aria-pressed="true"] {
-    border-color: white;
-    color: w;
-    background: transparent;
 }
 
 .devAudioModeToggle:disabled {
