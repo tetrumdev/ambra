@@ -13,6 +13,7 @@ dependencies = [
  "libc",
  "lofty",
  "objc",
+ "objc2-core-audio",
  "oxideav-core",
  "oxideav-flac",
  "reqwest 0.12.28",
