@@ -14,6 +14,8 @@ use tidlers::{
         playback::AudioQuality,
         track::playback::{DashManifest, ParsedTrackManifest},
     },
+    error::TidalError,
+    requests::RequestClientError,
     resources::uuid_to_url_with_size,
 };
 use tokio::sync::Mutex;
@@ -254,11 +256,34 @@ impl TidalProvider {
             }
         }
 
-        let client = self.client.lock().await.clone();
-        let track = client.get_track(track_id).await?;
-        let playback = client
+        let client = {
+            let mut client = self.client.lock().await;
+            if client.refresh_access_token(false).await? {
+                save_session(&client)?;
+            }
+            client.clone()
+        };
+
+        let mut track = client.get_track(track_id).await;
+        let mut playback = client
             .get_track_postpaywall_playback_info(track_id, None)
-            .await?;
+            .await;
+        if track.as_ref().is_err_and(is_unauthorized)
+            || playback.as_ref().is_err_and(is_unauthorized)
+        {
+            let client = {
+                let mut client = self.client.lock().await;
+                client.refresh_access_token(true).await?;
+                save_session(&client)?;
+                client.clone()
+            };
+            track = client.get_track(track_id).await;
+            playback = client
+                .get_track_postpaywall_playback_info(track_id, None)
+                .await;
+        }
+        let track = track?;
+        let playback = playback?;
         let quality = playback.audio_quality.clone();
 
         let source = match playback.manifest_parsed {
@@ -291,6 +316,13 @@ impl TidalProvider {
 
         Ok(source)
     }
+}
+
+fn is_unauthorized(error: &TidalError) -> bool {
+    matches!(
+        error,
+        TidalError::RequestClient(RequestClientError::Unauthorized)
+    )
 }
 
 async fn playback_source_from_dash(

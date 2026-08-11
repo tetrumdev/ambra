@@ -21,6 +21,22 @@ pub trait AudioOutput {
         }
     }
 
+    fn open_device_with_mode(
+        spec: StreamSpec,
+        device_id: Option<&str>,
+        exclusive_mode: bool,
+    ) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        if !exclusive_mode {
+            return Err(
+                "Shared native audio playback is not supported on this platform".to_owned(),
+            );
+        }
+        Self::open_device(spec, device_id)
+    }
+
     fn start(&mut self) -> Result<(), String>;
     fn pause(&mut self) -> Result<(), String>;
     fn reset(&mut self) -> Result<(), String>;

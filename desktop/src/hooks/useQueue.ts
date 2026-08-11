@@ -17,6 +17,7 @@ import {
 import {
   advanceQueue,
   completeQueueTrack,
+  jumpQueue,
   rewindQueue,
   type QueueState,
 } from "../utils/queueNavigation";
@@ -39,6 +40,7 @@ export type QueueController = {
   next: () => QueueItem | undefined;
   completeCurrent: () => QueueItem | undefined;
   previous: () => QueueItem | undefined;
+  jumpTo: (queueId: number) => QueueItem | undefined;
   peekNext: () => QueueItem | undefined;
 };
 
@@ -200,6 +202,13 @@ export function useQueue(
     return transition.item;
   }, [commitState]);
 
+  const jumpTo = useCallback((queueId: number) => {
+    const upcomingIndex = queueId - 2;
+    const transition = jumpQueue(stateRef.current, upcomingIndex, historyEntry);
+    if (transition.item) commitState(transition.state);
+    return transition.item;
+  }, [commitState]);
+
   const peekNext = useCallback(
     () => stateRef.current.upcoming[0],
     [],
@@ -231,6 +240,7 @@ export function useQueue(
     next,
     completeCurrent,
     previous,
+    jumpTo,
     peekNext,
   };
 }

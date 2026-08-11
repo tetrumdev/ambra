@@ -22,11 +22,12 @@ use tauri::{App, AppHandle, Emitter, Manager, State, Url};
 pub const MEDIA_CONTROL_EVENT: &str = "native-media-control";
 
 pub struct NativeMediaControls {
-    controls: Mutex<MediaControls>,
+    controls: Arc<Mutex<MediaControls>>,
+    published: Mutex<PublishedMediaState>,
     commands_enabled: Arc<AtomicBool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeMediaMetadata {
     title: String,
@@ -35,6 +36,23 @@ pub struct NativeMediaMetadata {
     duration_seconds: f64,
     cover_source: Option<String>,
     asset_source: Option<String>,
+}
+
+#[derive(Clone, Default)]
+struct PublishedMediaState {
+    metadata: Option<PublishedMediaMetadata>,
+    is_playing: bool,
+    position_seconds: f64,
+}
+
+#[derive(Clone)]
+struct PublishedMediaMetadata {
+    title: String,
+    artist: String,
+    album: String,
+    duration_seconds: f64,
+    cover_url: Option<String>,
+    asset_url: Option<String>,
 }
 
 pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
@@ -71,7 +89,8 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     app.manage(NativeMediaControls {
-        controls: Mutex::new(controls),
+        controls: Arc::new(Mutex::new(controls)),
+        published: Mutex::new(PublishedMediaState::default()),
         commands_enabled,
     });
     Ok(())
@@ -100,22 +119,23 @@ pub fn set_native_media_metadata(
         .and_then(|source| native_cover_url(&app, source));
     let asset_url = metadata.asset_source.as_deref().and_then(native_asset_url);
 
-    controls
-        .controls
-        .lock()
-        .map_err(|_| "Native media controls are unavailable".to_owned())?
-        .set_metadata(MediaMetadata {
-            title: Some(&metadata.title),
-            artist: Some(&metadata.artist),
-            album: Some(&metadata.album),
-            cover_url: cover_url.as_deref(),
-            duration: finite_duration(metadata.duration_seconds),
-        })
-        .map_err(|error| error.to_string())?;
-    if let Some(asset_url) = asset_url {
-        set_native_asset_url(&asset_url);
-    }
-    Ok(())
+    let snapshot = {
+        let mut published = controls
+            .published
+            .lock()
+            .map_err(|_| "Native media state is unavailable".to_owned())?;
+        published.metadata = Some(PublishedMediaMetadata {
+            title: metadata.title,
+            artist: metadata.artist,
+            album: metadata.album,
+            duration_seconds: metadata.duration_seconds,
+            cover_url,
+            asset_url,
+        });
+        published.clone()
+    };
+
+    publish_media_state(&app, controls.controls.clone(), snapshot, true)
 }
 
 fn native_cover_url(app: &AppHandle, source: &str) -> Option<String> {
@@ -186,25 +206,22 @@ fn cache_embedded_cover(app: &AppHandle, source: &str) -> Result<String, String>
 
 #[tauri::command]
 pub fn set_native_media_playback(
+    app: AppHandle,
     controls: State<'_, NativeMediaControls>,
     is_playing: bool,
     position_seconds: f64,
 ) -> Result<(), String> {
-    let progress = finite_duration(position_seconds).map(MediaPosition);
-    let playback = if is_playing {
-        MediaPlayback::Playing { progress }
-    } else {
-        MediaPlayback::Paused { progress }
+    let snapshot = {
+        let mut published = controls
+            .published
+            .lock()
+            .map_err(|_| "Native media state is unavailable".to_owned())?;
+        published.is_playing = is_playing;
+        published.position_seconds = finite_seconds(position_seconds);
+        published.clone()
     };
 
-    controls
-        .controls
-        .lock()
-        .map_err(|_| "Native media controls are unavailable".to_owned())?
-        .set_playback(playback)
-        .map_err(|error| error.to_string())?;
-    set_native_playback_rate(if is_playing { 1.0 } else { 0.0 });
-    Ok(())
+    publish_media_state(&app, controls.controls.clone(), snapshot, false)
 }
 
 #[tauri::command]
@@ -212,71 +229,133 @@ pub fn set_native_media_commands_enabled(controls: State<'_, NativeMediaControls
     controls.commands_enabled.store(enabled, Ordering::Relaxed);
 }
 
-#[cfg(target_os = "macos")]
-fn set_native_playback_rate(rate: f64) {
-    use cocoa::base::{id, nil};
-    use objc::{class, msg_send, sel, sel_impl};
-
-    #[allow(non_upper_case_globals)]
-    unsafe extern "C" {
-        static MPNowPlayingInfoPropertyPlaybackRate: id;
-        static MPNowPlayingInfoPropertyDefaultPlaybackRate: id;
-    }
-
-    unsafe {
-        let media_center: id = msg_send![class!(MPNowPlayingInfoCenter), defaultCenter];
-        let previous: id = msg_send![media_center, nowPlayingInfo];
-        let now_playing: id = msg_send![class!(NSMutableDictionary), dictionary];
-        if previous != nil {
-            let _: () = msg_send![now_playing, addEntriesFromDictionary: previous];
+fn publish_media_state(
+    app: &AppHandle,
+    controls: Arc<Mutex<MediaControls>>,
+    snapshot: PublishedMediaState,
+    refresh_metadata: bool,
+) -> Result<(), String> {
+    let app = app.clone();
+    app.run_on_main_thread(move || {
+        if let Err(error) =
+            publish_media_state_on_main_thread(&controls, &snapshot, refresh_metadata)
+        {
+            eprintln!("Could not publish native media state: {error}");
         }
-        let rate_number: id = msg_send![class!(NSNumber), numberWithDouble: rate];
-        let default_rate: id = msg_send![class!(NSNumber), numberWithDouble: 1.0_f64];
-        let _: () = msg_send![now_playing, setObject: rate_number
-                                        forKey: MPNowPlayingInfoPropertyPlaybackRate];
-        let _: () = msg_send![now_playing, setObject: default_rate
-                                        forKey: MPNowPlayingInfoPropertyDefaultPlaybackRate];
-        let _: () = msg_send![media_center, setNowPlayingInfo: now_playing];
-    }
+    })
+    .map_err(|error| format!("Could not schedule native media state update: {error}"))
 }
 
-#[cfg(not(target_os = "macos"))]
-fn set_native_playback_rate(_rate: f64) {}
+fn publish_media_state_on_main_thread(
+    controls: &Mutex<MediaControls>,
+    snapshot: &PublishedMediaState,
+    refresh_metadata: bool,
+) -> Result<(), String> {
+    let mut controls = controls
+        .lock()
+        .map_err(|_| "Native media controls are unavailable".to_owned())?;
+    if refresh_metadata && let Some(metadata) = snapshot.metadata.as_ref() {
+        controls
+            .set_metadata(MediaMetadata {
+                title: Some(&metadata.title),
+                artist: Some(&metadata.artist),
+                album: Some(&metadata.album),
+                cover_url: metadata.cover_url.as_deref(),
+                duration: finite_duration(metadata.duration_seconds),
+            })
+            .map_err(|error| error.to_string())?;
+    }
+
+    let progress = Some(MediaPosition(Duration::from_secs_f64(
+        snapshot.position_seconds,
+    )));
+    controls
+        .set_playback(if snapshot.is_playing {
+            MediaPlayback::Playing { progress }
+        } else {
+            MediaPlayback::Paused { progress }
+        })
+        .map_err(|error| error.to_string())?;
+    publish_macos_media_details(snapshot);
+    Ok(())
+}
 
 #[cfg(target_os = "macos")]
-fn set_native_asset_url(url: &str) {
-    use cocoa::{
-        base::{id, nil},
-        foundation::NSString,
-    };
+fn publish_macos_media_details(snapshot: &PublishedMediaState) {
+    use cocoa::base::{id, nil};
+    use cocoa::foundation::NSString;
     use objc::{class, msg_send, sel, sel_impl};
 
     #[allow(non_upper_case_globals)]
     unsafe extern "C" {
         static MPNowPlayingInfoPropertyAssetURL: id;
+        static MPNowPlayingInfoPropertyPlaybackRate: id;
+        static MPNowPlayingInfoPropertyDefaultPlaybackRate: id;
+        static MPNowPlayingInfoPropertyElapsedPlaybackTime: id;
+        static MPNowPlayingInfoPropertyExternalContentIdentifier: id;
+        static MPNowPlayingInfoPropertyMediaType: id;
+        static MPNowPlayingInfoPropertyPlaybackProgress: id;
+        static MPNowPlayingInfoPropertyServiceIdentifier: id;
     }
 
     unsafe {
-        let url_string = NSString::alloc(nil).init_str(url);
-        let asset_url: id = msg_send![class!(NSURL), URLWithString: url_string];
-        if asset_url == nil {
-            return;
-        }
-
         let media_center: id = msg_send![class!(MPNowPlayingInfoCenter), defaultCenter];
         let previous: id = msg_send![media_center, nowPlayingInfo];
         let now_playing: id = msg_send![class!(NSMutableDictionary), dictionary];
         if previous != nil {
             let _: () = msg_send![now_playing, addEntriesFromDictionary: previous];
         }
-        let _: () = msg_send![now_playing, setObject: asset_url
-                                        forKey: MPNowPlayingInfoPropertyAssetURL];
+        let rate = if snapshot.is_playing { 1.0 } else { 0.0 };
+        let rate_number: id = msg_send![class!(NSNumber), numberWithDouble: rate];
+        let default_rate: id = msg_send![class!(NSNumber), numberWithDouble: 1.0_f64];
+        let elapsed: id = msg_send![class!(NSNumber), numberWithDouble: snapshot.position_seconds];
+        let media_type: id = msg_send![class!(NSNumber), numberWithUnsignedInteger: 1_usize];
+        let service = NSString::alloc(nil).init_str("com.quantium.ambra");
+        let _: () = msg_send![now_playing, setObject: rate_number
+                                        forKey: MPNowPlayingInfoPropertyPlaybackRate];
+        let _: () = msg_send![now_playing, setObject: default_rate
+                                        forKey: MPNowPlayingInfoPropertyDefaultPlaybackRate];
+        let _: () = msg_send![now_playing, setObject: elapsed
+                                        forKey: MPNowPlayingInfoPropertyElapsedPlaybackTime];
+        let _: () = msg_send![now_playing, setObject: media_type
+                                        forKey: MPNowPlayingInfoPropertyMediaType];
+        let _: () = msg_send![now_playing, setObject: service
+                                        forKey: MPNowPlayingInfoPropertyServiceIdentifier];
+
+        if let Some(metadata) = snapshot.metadata.as_ref() {
+            let progress = if metadata.duration_seconds > 0.0 {
+                (snapshot.position_seconds / metadata.duration_seconds).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let progress: id = msg_send![class!(NSNumber), numberWithDouble: progress];
+            let _: () = msg_send![now_playing, setObject: progress
+                                            forKey: MPNowPlayingInfoPropertyPlaybackProgress];
+
+            if let Some(url) = metadata.asset_url.as_deref() {
+                let url_string = NSString::alloc(nil).init_str(url);
+                let asset_url: id = msg_send![class!(NSURL), URLWithString: url_string];
+                if asset_url != nil {
+                    let _: () = msg_send![now_playing, setObject: asset_url
+                                                    forKey: MPNowPlayingInfoPropertyAssetURL];
+                    let identifier = NSString::alloc(nil).init_str(url);
+                    let _: () = msg_send![now_playing, setObject: identifier
+                                                    forKey: MPNowPlayingInfoPropertyExternalContentIdentifier];
+                }
+            }
+        }
         let _: () = msg_send![media_center, setNowPlayingInfo: now_playing];
+        let state = if snapshot.is_playing {
+            1_usize
+        } else {
+            2_usize
+        };
+        let _: () = msg_send![media_center, setPlaybackState: state];
     }
 }
 
 #[cfg(not(target_os = "macos"))]
-fn set_native_asset_url(_url: &str) {}
+fn publish_macos_media_details(_snapshot: &PublishedMediaState) {}
 
 fn finite_duration(seconds: f64) -> Option<Duration> {
     seconds
@@ -284,9 +363,17 @@ fn finite_duration(seconds: f64) -> Option<Duration> {
         .then(|| Duration::from_secs_f64(seconds.max(0.0)))
 }
 
+fn finite_seconds(seconds: f64) -> f64 {
+    if seconds.is_finite() {
+        seconds.max(0.0)
+    } else {
+        0.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{finite_duration, media_control_action};
+    use super::{finite_duration, finite_seconds, media_control_action};
     use souvlaki::MediaControlEvent;
     use std::time::Duration;
 
@@ -307,5 +394,7 @@ mod tests {
     fn rejects_non_finite_media_positions() {
         assert_eq!(finite_duration(f64::NAN), None);
         assert_eq!(finite_duration(-1.0), Some(Duration::ZERO));
+        assert_eq!(finite_seconds(f64::INFINITY), 0.0);
+        assert_eq!(finite_seconds(-1.0), 0.0);
     }
 }

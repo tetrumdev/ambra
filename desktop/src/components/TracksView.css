@@ -45,14 +45,20 @@
 }
 
 .libraryInfo {
-    display: block;
-    gap: 0;
+    display: flex;
+    gap: 15px;
     margin: 0;
     top: 0;
+    font-size: 0.8rem;
+    padding-left: 4px;
 }
 
-.libraryInfo p {
+.libraryInfo span {
     margin: 0;
+}
+
+.separator {
+    font-size: 1.8rem;
 }
 
 .albumLinkForm {

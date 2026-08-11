@@ -7,6 +7,7 @@ import {
 import {
   advanceQueue,
   completeQueueTrack,
+  jumpQueue,
   rewindQueue,
 } from "../src/utils/queueNavigation";
 import {
@@ -139,6 +140,35 @@ describe("queue model", () => {
     expect(completed.state.current).toBeNull();
     expect(completed.state.history.map((entry) => entry.track.globalId)).toEqual([
       "c",
+    ]);
+  });
+
+  test("jumping to an upcoming item consumes only the existing queue", () => {
+    const first = item("a", 1);
+    const second = item("b", 2);
+    const third = item("c", 3);
+    const fourth = item("d", 4);
+    const initial = {
+      history: [],
+      current: first,
+      upcoming: [second, third, fourth],
+    };
+    const archive = (entry: QueueItem) => ({
+      ...entry,
+      historyId: `history:${entry.track.globalId}`,
+      playedAt: "2026-08-11T00:00:00.000Z",
+    });
+
+    const jumped = jumpQueue(initial, 1, archive);
+
+    expect(jumped.item?.track.globalId).toBe("c");
+    expect(jumped.state.history.map((entry) => entry.track.globalId)).toEqual([
+      "a",
+      "b",
+    ]);
+    expect(jumped.state.current?.track.globalId).toBe("c");
+    expect(jumped.state.upcoming.map((entry) => entry.track.globalId)).toEqual([
+      "d",
     ]);
   });
 });
