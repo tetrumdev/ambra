@@ -128,8 +128,43 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
     let tracks = load_tracks(&state, &available_entries).await?;
+    warm_playback_sources(state.clone(), available_entries);
 
     Ok(Json(LibraryResponse { tracks }))
+}
+
+fn warm_playback_sources(state: AppState, entries: Vec<LibraryEntry>) {
+    tokio::spawn(async move {
+        stream::iter(entries)
+            .for_each_concurrent(4, |entry| {
+                let state = state.clone();
+                async move {
+                    let result = match entry.provider {
+                        MusicProvider::Tidal => state
+                            .tidal
+                            .playback_source(&entry.provider_track_id)
+                            .await
+                            .map(|_| ()),
+                        MusicProvider::Qobuz => match state.qobuz.as_ref() {
+                            Some(provider) => provider
+                                .playback_source(&entry.provider_track_id)
+                                .await
+                                .map(|_| ()),
+                            None => Ok(()),
+                        },
+                        _ => Ok(()),
+                    };
+                    if let Err(error) = result {
+                        eprintln!(
+                            "Could not warm {} track {}: {error}",
+                            provider_name(entry.provider),
+                            entry.provider_track_id
+                        );
+                    }
+                }
+            })
+            .await;
+    });
 }
 
 #[derive(Deserialize)]

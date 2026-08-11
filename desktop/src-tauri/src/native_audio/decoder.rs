@@ -284,24 +284,22 @@ impl Read for HlsSource {
         if destination.is_empty() {
             return Ok(0);
         }
-        let mut written = 0;
-        while written < destination.len() {
+        loop {
             if self.current.is_none() && !self.open_next_resource()? {
-                break;
+                return Ok(0);
             }
             let count = self
                 .current
                 .as_mut()
                 .expect("HLS resource disappeared")
-                .read(&mut destination[written..])?;
+                .read(destination)?;
             if count == 0 {
                 self.current = None;
                 continue;
             }
             self.position = self.position.saturating_add(count as u64);
-            written += count;
+            return Ok(count);
         }
-        Ok(written)
     }
 }
 
@@ -387,7 +385,7 @@ impl HttpRangeSource {
         let client = http_client()?;
         let response = client
             .get(url)
-            .header(RANGE, "bytes=0-0")
+            .header(RANGE, format!("bytes=0-{}", HTTP_CACHE_BYTES - 1))
             .send()
             .and_then(|response| response.error_for_status())
             .map_err(io_other)?;
