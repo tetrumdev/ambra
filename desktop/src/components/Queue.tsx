@@ -1,16 +1,16 @@
 import "./Queue.css";
-import type { QueueEntry, GlobalTrackId } from "../types/music";
+import type { QueueEntry, QueueId } from "../types/music";
 
 type QueueProps = {
   currentEntry: QueueEntry | undefined;
   upcomingEntries: QueueEntry[];
-  playTrack: (trackId: GlobalTrackId) => void;
+  jumpTo: (queueId: QueueId) => void;
 };
 
 export function Queue({
   currentEntry,
   upcomingEntries,
-  playTrack,
+  jumpTo,
 }: QueueProps) {
   return (
     <div id="queueList">
@@ -38,7 +38,8 @@ export function Queue({
         {upcomingEntries.map((entry, index) => (
           <div
             className={`queueItem ${index === 0 ? "firstQueueItem" : ""}`}
-            onClick={() => playTrack(entry.track.globalId)}
+            key={entry.queueId}
+            onClick={() => jumpTo(entry.queueId)}
           >
             <div className="coverImgContainer">
               <img

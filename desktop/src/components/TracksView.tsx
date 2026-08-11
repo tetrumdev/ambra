@@ -105,11 +105,14 @@ export function TracksView({
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
         <div className="libraryInfo">
-          <p className="numOfTracks">{formatUnit(tracks.length, "track")}</p>
-          <p className="playlistLength">
+          <span className="numOfTracks">
+            {formatUnit(tracks.length, "track")}
+          </span>
+          <span className="separator">•</span>
+          <span className="playlistLength">
             {formatUnit(hours, "hour")}, {formatUnit(minutes, "minute")},{" "}
             {formatUnit(seconds, "second")}
-          </p>
+          </span>
         </div>
         <form className="albumLinkForm" onSubmit={submitAlbum}>
           <input
@@ -146,9 +149,7 @@ export function TracksView({
           className="libraryItem"
           key={track.libraryId}
           data-menu-open={
-            menuIsShowing && menuTrackId === track.globalId
-              ? "true"
-              : undefined
+            menuIsShowing && menuTrackId === track.globalId ? "true" : undefined
           }
           onClick={(event) => showClickMenu(event, track.globalId)}
         >

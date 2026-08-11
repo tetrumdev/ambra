@@ -227,6 +227,11 @@ function App() {
     if (shouldStartPlaying) player.playTrack(trackId);
   };
 
+  const jumpToQueueEntry = (queueId: number) => {
+    const entry = queue.jumpTo(queueId);
+    if (entry) player.playTrack(entry.track.globalId);
+  };
+
   return (
     <>
       <AppChrome
@@ -244,7 +249,7 @@ function App() {
           <Queue
             currentEntry={queue.currentEntry}
             upcomingEntries={queue.upcomingEntries}
-            playTrack={playFromLibrary}
+            jumpTo={jumpToQueueEntry}
           />
         </main>
       ) : (

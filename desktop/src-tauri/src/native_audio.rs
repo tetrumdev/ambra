@@ -97,6 +97,13 @@ enum WorkerCommand {
         device_id: Option<String>,
         reply: Sender<Result<(), String>>,
     },
+    GetExclusiveMode {
+        reply: Sender<Result<bool, String>>,
+    },
+    SetExclusiveMode {
+        enabled: bool,
+        reply: Sender<Result<(), String>>,
+    },
     Shutdown,
 }
 
@@ -116,7 +123,7 @@ pub fn setup(app: &mut App) {
 }
 
 #[tauri::command]
-pub fn load_native_audio(
+pub async fn load_native_audio(
     player: State<'_, NativeAudioPlayer>,
     source: String,
     next_source: Option<String>,
@@ -124,39 +131,49 @@ pub fn load_native_audio(
     autoplay: bool,
 ) -> Result<(), String> {
     let position_seconds = valid_position(position_seconds)?;
-    request(&player.command_tx, |reply| WorkerCommand::Load {
+    let command_tx = player.command_tx.clone();
+    request_async(command_tx, move |reply| WorkerCommand::Load {
         source,
         next_source,
         position_seconds,
         autoplay,
         reply,
     })
+    .await
 }
 
 #[tauri::command]
-pub fn queue_native_audio(
+pub async fn queue_native_audio(
     player: State<'_, NativeAudioPlayer>,
     source: String,
 ) -> Result<(), String> {
-    request(&player.command_tx, |reply| WorkerCommand::Queue {
+    let command_tx = player.command_tx.clone();
+    request_async(command_tx, move |reply| WorkerCommand::Queue {
         source,
         reply,
     })
+    .await
 }
 
 #[tauri::command]
-pub fn play_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
-    request(&player.command_tx, |reply| WorkerCommand::Play { reply })
+pub async fn play_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::Play {
+        reply,
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn pause_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
+pub async fn pause_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
     update_status(&player.status, |status| status.is_playing = false);
-    request(&player.command_tx, |reply| WorkerCommand::Pause { reply })
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::Pause {
+        reply,
+    })
+    .await
 }
 
 #[tauri::command]
-pub fn seek_native_audio(
+pub async fn seek_native_audio(
     player: State<'_, NativeAudioPlayer>,
     position_seconds: f64,
 ) -> Result<(), String> {
@@ -168,10 +185,12 @@ pub fn seek_native_audio(
         status.ended = false;
         status.error = None;
     });
-    request(&player.command_tx, |reply| WorkerCommand::Seek {
+    let command_tx = player.command_tx.clone();
+    request_async(command_tx, move |reply| WorkerCommand::Seek {
         position_seconds,
         reply,
     })
+    .await
 }
 
 #[tauri::command]
@@ -191,26 +210,50 @@ pub fn native_audio_status(
 }
 
 #[tauri::command]
-pub fn list_native_audio_devices(
+pub async fn list_native_audio_devices(
     player: State<'_, NativeAudioPlayer>,
 ) -> Result<Vec<NativeAudioDevice>, String> {
-    request(&player.command_tx, |reply| WorkerCommand::ListDevices {
-        reply,
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::ListDevices { reply }
     })
+    .await
 }
 
 #[tauri::command]
-pub fn select_native_audio_device(
+pub async fn select_native_audio_device(
     player: State<'_, NativeAudioPlayer>,
     device_id: Option<String>,
 ) -> Result<(), String> {
     if device_id.as_ref().is_some_and(|id| id.is_empty()) {
         return Err("The native audio device ID cannot be empty".to_owned());
     }
-    request(&player.command_tx, |reply| WorkerCommand::SelectDevice {
+    let command_tx = player.command_tx.clone();
+    request_async(command_tx, move |reply| WorkerCommand::SelectDevice {
         device_id,
         reply,
     })
+    .await
+}
+
+#[tauri::command]
+pub async fn native_audio_exclusive_mode(
+    player: State<'_, NativeAudioPlayer>,
+) -> Result<bool, String> {
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::GetExclusiveMode { reply }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_native_audio_exclusive_mode(
+    player: State<'_, NativeAudioPlayer>,
+    enabled: bool,
+) -> Result<(), String> {
+    request_async(player.command_tx.clone(), move |reply| {
+        WorkerCommand::SetExclusiveMode { enabled, reply }
+    })
+    .await
 }
 
 impl Drop for NativeAudioPlayer {
@@ -240,6 +283,15 @@ fn request<T>(
         .map_err(|_| "The native audio worker did not respond".to_owned())?
 }
 
+async fn request_async<T: Send + 'static>(
+    command_tx: Sender<WorkerCommand>,
+    command: impl FnOnce(Sender<Result<T, String>>) -> WorkerCommand + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || request(&command_tx, command))
+        .await
+        .map_err(|error| format!("The native audio command task failed: {error}"))?
+}
+
 fn valid_position(position_seconds: f64) -> Result<f64, String> {
     position_seconds
         .is_finite()
@@ -263,6 +315,7 @@ struct PlaybackWorker {
     current_source: Option<String>,
     rendering: bool,
     selected_device_id: Option<String>,
+    exclusive_mode: bool,
 }
 
 struct QueuedSource {
@@ -361,6 +414,7 @@ impl PlaybackWorker {
             current_source: None,
             rendering: false,
             selected_device_id: None,
+            exclusive_mode: false,
         }
     }
 
@@ -465,6 +519,13 @@ impl PlaybackWorker {
                 let result = self.select_device(device_id);
                 let _ = reply.send(result);
             }
+            WorkerCommand::GetExclusiveMode { reply } => {
+                let _ = reply.send(Ok(self.exclusive_mode));
+            }
+            WorkerCommand::SetExclusiveMode { enabled, reply } => {
+                let result = self.set_exclusive_mode(enabled);
+                let _ = reply.send(result);
+            }
             WorkerCommand::Shutdown => return true,
         }
         false
@@ -505,6 +566,33 @@ impl PlaybackWorker {
         Ok(())
     }
 
+    fn set_exclusive_mode(&mut self, enabled: bool) -> Result<(), String> {
+        if self.exclusive_mode == enabled {
+            return Ok(());
+        }
+
+        let previous_mode = self.exclusive_mode;
+        let position_seconds = lock_status(&self.status).current_time;
+        let has_loaded_source = self.current_source.is_some();
+
+        if let Some(output) = self.output.as_mut() {
+            output.reset()?;
+        }
+
+        self.output = None;
+        self.exclusive_mode = enabled;
+
+        if has_loaded_source {
+            if let Err(error) = self.seek(position_seconds) {
+                self.exclusive_mode = previous_mode;
+                let _ = self.seek(position_seconds);
+                return Err(error);
+            }
+        }
+
+        Ok(())
+    }
+
     fn load(
         &mut self,
         source: String,
@@ -535,7 +623,9 @@ impl PlaybackWorker {
         let selected_device_id = self.selected_device_id.as_deref();
 
         self.output = autoplay
-            .then(|| PlatformOutput::open_device(spec, selected_device_id))
+            .then(|| {
+                PlatformOutput::open_device_with_mode(spec, selected_device_id, self.exclusive_mode)
+            })
             .transpose()?;
 
         update_status(&self.status, |status| {
@@ -558,9 +648,10 @@ impl PlaybackWorker {
             let spec = self
                 .spec
                 .ok_or_else(|| "No native audio track is loaded".to_owned())?;
-            self.output = Some(PlatformOutput::open_device(
+            self.output = Some(PlatformOutput::open_device_with_mode(
                 spec,
                 self.selected_device_id.as_deref(),
+                self.exclusive_mode,
             )?);
         }
         self.desired_playing = true;
@@ -603,9 +694,10 @@ impl PlaybackWorker {
         let prepared = prepare_source_at(source, position_seconds)?;
         self.install_prepared(prepared)?;
         if self.desired_playing && self.output.is_none() {
-            self.output = Some(PlatformOutput::open_device(
+            self.output = Some(PlatformOutput::open_device_with_mode(
                 spec,
                 self.selected_device_id.as_deref(),
+                self.exclusive_mode,
             )?);
         }
         update_status(&self.status, |status| {
@@ -781,9 +873,10 @@ impl PlaybackWorker {
             if let Some(output) = self.output.as_mut() {
                 output.reset()?;
             }
-            self.output = Some(PlatformOutput::open_device(
+            self.output = Some(PlatformOutput::open_device_with_mode(
                 next_spec,
                 self.selected_device_id.as_deref(),
+                self.exclusive_mode,
             )?);
 
             self.rendering = false;

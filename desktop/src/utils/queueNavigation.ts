@@ -66,3 +66,24 @@ export function rewindQueue(state: QueueState): QueueTransition {
     item: previousItem,
   };
 }
+
+export function jumpQueue(
+  state: QueueState,
+  upcomingIndex: number,
+  archive: (item: QueueItem) => QueueHistoryEntry,
+): QueueTransition {
+  const item = state.upcoming[upcomingIndex];
+  if (!state.current || !item || upcomingIndex < 0) {
+    return { state, item: undefined };
+  }
+
+  const skipped = [state.current, ...state.upcoming.slice(0, upcomingIndex)];
+  return {
+    state: {
+      history: [...state.history, ...skipped.map(archive)],
+      current: item,
+      upcoming: state.upcoming.slice(upcomingIndex + 1),
+    },
+    item,
+  };
+}

@@ -604,6 +604,8 @@ pub fn run() {
             native_audio::native_audio_status,
             native_audio::list_native_audio_devices,
             native_audio::select_native_audio_device,
+            native_audio::native_audio_exclusive_mode,
+            native_audio::set_native_audio_exclusive_mode,
             media_controls::set_native_media_metadata,
             media_controls::set_native_media_playback,
             media_controls::set_native_media_commands_enabled
