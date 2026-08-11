@@ -9,6 +9,18 @@ pub trait AudioOutput {
     where
         Self: Sized;
 
+    fn open_device(spec: StreamSpec, device_id: Option<&str>) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        match device_id {
+            Some(_) => {
+                Err("Selecting an audio device is not supported on this platform".to_owned())
+            }
+            None => Self::open(spec),
+        }
+    }
+
     fn start(&mut self) -> Result<(), String>;
     fn pause(&mut self) -> Result<(), String>;
     fn reset(&mut self) -> Result<(), String>;

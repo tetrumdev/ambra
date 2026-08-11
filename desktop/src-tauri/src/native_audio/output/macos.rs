@@ -8,21 +8,20 @@ use std::{
     time::Duration,
 };
 
-use coreaudio::{
-    audio_unit::{
-        Element, SampleFormat, Scope, StreamFormat,
-        audio_format::LinearPcmFlags,
-        macos_helpers::{
-            audio_unit_from_device_id, find_matching_physical_format, get_default_device_id,
-            get_hogging_pid, set_device_physical_stream_format, toggle_hog_mode,
-        },
-        render_callback::{self, data},
+use coreaudio::audio_unit::{
+    Element, SampleFormat, Scope, StreamFormat,
+    audio_format::LinearPcmFlags,
+    macos_helpers::{
+        audio_unit_from_device_id, find_matching_physical_format, get_audio_device_ids_for_scope,
+        get_audio_device_supports_scope, get_default_device_id, get_device_name, get_hogging_pid,
+        set_device_physical_stream_format, toggle_hog_mode,
     },
-    sys::AudioDeviceID,
+    render_callback::{self, data},
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
+use objc2_core_audio::AudioDeviceID;
 
-use super::{AudioOutput, StreamSpec, normalized_to_signed};
+use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed};
 
 const RENDER_BLOCKS: usize = 8;
 const MAX_RENDER_BLOCK_FRAMES: usize = 8_192;
@@ -46,14 +45,47 @@ struct RenderBlock {
 }
 
 impl AudioOutput for PlatformOutput {
+    fn list_devices() -> Result<Vec<NativeAudioDevice>, String> {
+        let device_ids = get_audio_device_ids_for_scope(Scope::Output).map_err(coreaudio_error)?;
+        let default_device_id = get_default_device_id(false);
+
+        device_ids
+            .into_iter()
+            .filter(|device_id| {
+                get_audio_device_supports_scope(*device_id, Scope::Output).unwrap_or(false)
+            })
+            .map(|device_id| {
+                let name = get_device_name(device_id).map_err(coreaudio_error)?;
+
+                Ok(NativeAudioDevice {
+                    id: device_id.to_string(),
+                    name,
+                    is_default: Some(device_id) == default_device_id,
+                })
+            })
+            .collect()
+    }
+
     fn open(spec: StreamSpec) -> Result<Self, String> {
-        let device_id = get_default_device_id(false)
-            .ok_or_else(|| "No default CoreAudio output device is available".to_owned())?;
+        Self::open_device(spec, None)
+    }
+
+    fn open_device(spec: StreamSpec, device_id: Option<&str>) -> Result<Self, String> {
+        let device_id = match device_id {
+            Some(device_id) => device_id
+                .parse::<AudioDeviceID>()
+                .map_err(|_| "The selected CoreAudio device ID is invalid".to_owned())?,
+            None => get_default_device_id(false)
+                .ok_or_else(|| "No default CoreAudio output device is available".to_owned())?,
+        };
+
         let owns_hog_mode = claim_hog_mode(device_id)?;
         let result = Self::open_claimed(spec, device_id, owns_hog_mode);
+
         if result.is_err() && owns_hog_mode {
             let _ = toggle_hog_mode(device_id);
         }
+
         result
     }
 
@@ -142,9 +174,14 @@ impl PlatformOutput {
         owns_hog_mode: bool,
     ) -> Result<Self, String> {
         let physical_candidates: &[SampleFormat] = match spec.bits_per_sample {
-            0..=16 => &[SampleFormat::I16, SampleFormat::I24, SampleFormat::I32],
-            17..=24 => &[SampleFormat::I24, SampleFormat::I32],
-            _ => &[SampleFormat::I32],
+            0..=16 => &[
+                SampleFormat::I16,
+                SampleFormat::I24,
+                SampleFormat::I32,
+                SampleFormat::F32,
+            ],
+            17..=24 => &[SampleFormat::I24, SampleFormat::I32, SampleFormat::F32],
+            _ => &[SampleFormat::I32, SampleFormat::F32],
         };
         let physical_description = physical_candidates
             .iter()

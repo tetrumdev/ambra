@@ -14,14 +14,19 @@
     font-weight: 300;
     font-family: "Stack Sans Text", Inter, sans-serif;
     filter: none;
-    scrollbar-width: 0;
-    -webkit-scrollbar: 0;
+    scrollbar-width: none;
+    -webkit-scrollbar: none;
+    -ms-overflow-style: none;
 }
 
 .tracksView::after {
     display: block;
     height: 100px;
     content: "";
+}
+
+.tracksView::-webkit-scrollbar {
+    display: none;
 }
 
 .libraryHeader {
