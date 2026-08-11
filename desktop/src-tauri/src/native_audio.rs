@@ -475,20 +475,34 @@ impl PlaybackWorker {
             return Ok(());
         }
 
-        let Some(device_id) = device_id else {
-            self.selected_device_id = None;
-            return Ok(());
-        };
+        if let Some(device_id) = device_id.as_ref() {
+            let devices = PlatformOutput::list_devices()?;
 
-        let devices = PlatformOutput::list_devices()?;
-        if !devices.iter().any(|device| device.id == device_id) {
-            return Err("The selected native audio device is no longer available".to_owned());
+            if !devices.iter().any(|device| &device.id == device_id) {
+                return Err("The selected native audio device is no longer available".to_owned());
+            }
         }
 
-        Err(
-            "Selecting a native audio device is not connected to the platform output yet"
-                .to_owned(),
-        )
+        let previous_device_id = self.selected_device_id.clone();
+        let position_seconds = lock_status(&self.status).current_time;
+        let has_loaded_source = self.current_source.is_some();
+
+        if let Some(output) = self.output.as_mut() {
+            output.reset()?;
+        }
+
+        self.output = None;
+        self.selected_device_id = device_id;
+
+        if has_loaded_source {
+            if let Err(error) = self.seek(position_seconds) {
+                self.selected_device_id = previous_device_id;
+                let _ = self.seek(position_seconds);
+                return Err(error);
+            }
+        }
+
+        Ok(())
     }
 
     fn load(
@@ -518,7 +532,11 @@ impl PlaybackWorker {
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         self.install_prepared(prepared)?;
-        self.output = autoplay.then(|| PlatformOutput::open(spec)).transpose()?;
+        let selected_device_id = self.selected_device_id.as_deref();
+
+        self.output = autoplay
+            .then(|| PlatformOutput::open_device(spec, selected_device_id))
+            .transpose()?;
 
         update_status(&self.status, |status| {
             status.current_source = Some(source);
@@ -540,7 +558,10 @@ impl PlaybackWorker {
             let spec = self
                 .spec
                 .ok_or_else(|| "No native audio track is loaded".to_owned())?;
-            self.output = Some(PlatformOutput::open(spec)?);
+            self.output = Some(PlatformOutput::open_device(
+                spec,
+                self.selected_device_id.as_deref(),
+            )?);
         }
         self.desired_playing = true;
         update_status(&self.status, |status| {
@@ -582,7 +603,10 @@ impl PlaybackWorker {
         let prepared = prepare_source_at(source, position_seconds)?;
         self.install_prepared(prepared)?;
         if self.desired_playing && self.output.is_none() {
-            self.output = Some(PlatformOutput::open(spec)?);
+            self.output = Some(PlatformOutput::open_device(
+                spec,
+                self.selected_device_id.as_deref(),
+            )?);
         }
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
@@ -757,7 +781,11 @@ impl PlaybackWorker {
             if let Some(output) = self.output.as_mut() {
                 output.reset()?;
             }
-            self.output = Some(PlatformOutput::open(next_spec)?);
+            self.output = Some(PlatformOutput::open_device(
+                next_spec,
+                self.selected_device_id.as_deref(),
+            )?);
+
             self.rendering = false;
         }
 
