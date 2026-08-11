@@ -34,8 +34,8 @@ export function ClickMenu({
           left: xPos,
           top: yPos,
           transform: `translate(
-            ${xPos >= window.innerWidth - 180 ? "-100%" : "0"},
-            ${yPos >= window.innerHeight - 250 ? "-100%" : "0"}
+            ${xPos >= window.innerWidth - 180 ? "-100%" : "1%"},
+            ${yPos >= window.innerHeight - 250 ? "-100%" : "1%"}
           )`,
         }}
       >
