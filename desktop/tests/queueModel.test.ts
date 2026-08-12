@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { QueueItem, Track } from "../src/types/music";
 import {
   contextEntriesFrom,
+  searchQueueContext,
   shuffledContextEntries,
 } from "../src/utils/queueModel";
 import {
@@ -62,6 +63,21 @@ function item(
 }
 
 describe("queue model", () => {
+  test("search results retain their own queue context", () => {
+    const context = searchQueueContext(
+      [track("tidal:1"), track("tidal:2")],
+      "search:tidal:test",
+    );
+
+    expect(context.source).toEqual({
+      kind: "search",
+      id: "search:tidal:test",
+    });
+    expect(context.entries.map((entry) => entry.source.entryId)).toEqual([
+      1, 2,
+    ]);
+  });
+
   test("normal context playback ignores shuffle packages", () => {
     const entries = [item("a", 1), item("b", 2, "pair"), item("c", 3, "pair")];
     const context = {

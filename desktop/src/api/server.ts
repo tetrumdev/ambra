@@ -50,6 +50,11 @@ type LibraryResponse = {
   tracks: RemoteTrack[];
 };
 
+export type SearchProvider = Extract<
+  MusicProvider,
+  "tidal" | "qobuz" | "spotify"
+>;
+
 export function playableTrack(track: RemoteTrack): Track {
   const displayTitle = withVersion(track.title, track.version);
   const displayAlbum = withVersion(
@@ -92,7 +97,7 @@ function withVersion(title: string, version: string | null) {
   return version?.trim() ? `${title} (${version})` : title;
 }
 
-async function libraryTracks(response: Response): Promise<Track[]> {
+async function responseTracks(response: Response): Promise<Track[]> {
   if (!response.ok) {
     const body = await response.text();
     let message = body;
@@ -110,15 +115,26 @@ async function libraryTracks(response: Response): Promise<Track[]> {
 }
 
 export async function loadServerTracks(): Promise<Track[]> {
-  return libraryTracks(await fetch(`${serverBaseUrl}/api/library`));
+  return responseTracks(await fetch(`${serverBaseUrl}/api/library`));
 }
 
 export async function addServerAlbum(url: string): Promise<Track[]> {
-  return libraryTracks(
+  return responseTracks(
     await fetch(`${serverBaseUrl}/api/library/albums`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
     }),
+  );
+}
+
+export async function searchServerTracks(
+  query: string,
+  provider: SearchProvider,
+  signal?: AbortSignal,
+): Promise<Track[]> {
+  const parameters = new URLSearchParams({ query, provider });
+  return responseTracks(
+    await fetch(`${serverBaseUrl}/api/search/tracks?${parameters}`, { signal }),
   );
 }

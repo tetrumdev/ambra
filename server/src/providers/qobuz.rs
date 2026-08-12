@@ -107,6 +107,18 @@ impl QobuzProvider {
         Ok(track_ids)
     }
 
+    pub async fn search_track_ids(&self, query: &str, limit: u32) -> ProviderResult<Vec<String>> {
+        Ok(self
+            .client
+            .search_tracks(query, limit, 0, None)
+            .await?
+            .items
+            .into_iter()
+            .filter(|track| track.streamable)
+            .map(|track| track.id.to_string())
+            .collect())
+    }
+
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
         let numeric_track_id = validate_track_id(track_id)?;
 
