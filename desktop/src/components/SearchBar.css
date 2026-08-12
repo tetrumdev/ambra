@@ -1,0 +1,41 @@
+#searchBar {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 9999;
+    display: flex;
+    top: 3%;
+    overflow: hidden;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    color: white;
+    background-color: #111111;
+}
+
+#searchBar:focus-within {
+    outline: 2px solid white;
+}
+
+#input{
+    width: 400px;
+    height: 40px;
+    border-radius: 20px;
+    border: none;
+    outline: none;
+    color: white;
+    padding: 0 20px;
+    font-size: 16px;
+    background-color: transparent;
+}
+
+#select{
+    width: 100px;
+    height: 40px;
+    background-color: transparent;
+    color: white;
+    padding: 0 20px;
+    font-size: 16px;
+    outline: none;
+    border: none;
+}
