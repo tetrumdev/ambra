@@ -1,4 +1,6 @@
 import "./App.css";
+
+//Components
 import { AppChrome } from "./components/AppChrome";
 import { TracksView } from "./components/TracksView";
 import { Sidebar } from "./components/Sidebar";
@@ -6,6 +8,9 @@ import { Queue } from "./components/Queue";
 // import { ClickMenu } from "./components/ClickMenu";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
+import { SearchBar } from "./components/SearchBar";
+
+
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
@@ -254,7 +259,8 @@ function App() {
         </main>
       ) : (
         <main id="library">
-          <Sidebar />
+            <SearchBar/>
+          <Sidebar/>
           <TracksView
             tracks={library.tracks}
             playTrack={playFromLibrary}
