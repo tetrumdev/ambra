@@ -3,6 +3,7 @@ import type {
   LibraryTrack,
   QueueContext,
   QueueItem,
+  Track,
 } from "../types/music";
 
 export function libraryQueueContext(tracks: LibraryTrack[]): QueueContext {
@@ -14,6 +15,21 @@ export function libraryQueueContext(tracks: LibraryTrack[]): QueueContext {
         kind: "library",
         id: "library",
         entryId: track.libraryId,
+      },
+      shufflePackageId: null,
+    })),
+  };
+}
+
+export function searchQueueContext(tracks: Track[], id: string): QueueContext {
+  return {
+    source: { kind: "search", id },
+    entries: tracks.map((track, index) => ({
+      track,
+      source: {
+        kind: "search",
+        id,
+        entryId: index + 1,
       },
       shufflePackageId: null,
     })),

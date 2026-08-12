@@ -12,6 +12,7 @@ use tidlers::{
     auth::TidalAuth,
     client::models::{
         playback::AudioQuality,
+        search::config::{SearchConfig, SearchType},
         track::playback::{DashManifest, ParsedTrackManifest},
     },
     error::TidalError,
@@ -242,6 +243,27 @@ impl TidalProvider {
         }
 
         Ok(track_ids)
+    }
+
+    pub async fn search_track_ids(&self, query: &str, limit: u32) -> ProviderResult<Vec<String>> {
+        let client = self.client.lock().await.clone();
+        let results = client
+            .search(SearchConfig {
+                query: query.to_owned(),
+                types: vec![SearchType::Tracks],
+                limit,
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(results
+            .tracks
+            .into_iter()
+            .flat_map(|section| section.items)
+            .filter(|track| track.allow_streaming.unwrap_or(true))
+            .filter(|track| track.stream_ready.unwrap_or(true))
+            .map(|track| track.id.to_string())
+            .collect())
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {

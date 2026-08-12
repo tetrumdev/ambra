@@ -57,6 +57,26 @@
     margin: 0;
 }
 
+.searchQuery,
+.searchStatus {
+    margin: 0;
+    padding-left: 4px;
+}
+
+.searchQuery {
+    font-size: 1rem;
+}
+
+.searchStatus {
+    margin-top: 8px;
+    color: #b6b6b6;
+    font-size: 0.8rem;
+}
+
+.searchStatus[data-error="true"] {
+    color: #e68f8f;
+}
+
 .separator {
     font-size: 1.8rem;
 }

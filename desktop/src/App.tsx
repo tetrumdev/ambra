@@ -9,10 +9,12 @@ import { Queue } from "./components/Queue";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { SearchBar } from "./components/SearchBar";
+import { SearchResultsView } from "./components/SearchResultsView";
 
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
+import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -21,18 +23,43 @@ import {
   savePreferences,
   type AppScreen,
 } from "./utils/preferences";
-import type { GlobalTrackId } from "./types/music";
-import { libraryQueueContext } from "./utils/queueModel";
+import type { GlobalTrackId, Track } from "./types/music";
+import type { SearchProvider } from "./api/server";
+import {
+  libraryQueueContext,
+  searchQueueContext,
+} from "./utils/queueModel";
 
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchProvider, setSearchProvider] =
+    useState<SearchProvider>("tidal");
   const library = useMusicLibrary();
+  const search = useTrackSearch(searchQuery, searchProvider);
+  const availableTracks = useMemo(() => {
+    const tracksById = new Map<string, Track>(
+      library.tracks.map((track) => [track.globalId, track]),
+    );
+    for (const track of search.knownTracks) {
+      tracksById.set(track.globalId, track);
+    }
+    return [...tracksById.values()];
+  }, [library.tracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
   );
-  const queue = useQueue(library.tracks, preferences.playback.trackId);
-  const player = useAudioPlayer(library.tracks, preferences.playback, {
+  const currentSearchContext = useMemo(
+    () =>
+      searchQueueContext(
+        search.results,
+        `search:${searchProvider}:${searchQuery.trim()}`,
+      ),
+    [search.results, searchProvider, searchQuery],
+  );
+  const queue = useQueue(availableTracks, preferences.playback.trackId);
+  const player = useAudioPlayer(availableTracks, preferences.playback, {
     next: () => queue.next()?.track,
     completeCurrent: () => queue.completeCurrent()?.track,
     previous: () => queue.previous()?.track,
@@ -209,23 +236,31 @@ function App() {
     player.playTrack(trackId);
   };
 
-  const playStandalone = (trackId: GlobalTrackId) => {
-    const entry = queueEntryForTrack(queueContext, trackId);
+  const playFromSearch = (trackId: GlobalTrackId) => {
+    queue.playFromContext(currentSearchContext, trackId);
+    player.playTrack(trackId);
+  };
+
+  const playStandalone = (
+    context: typeof queueContext,
+    trackId: GlobalTrackId,
+  ) => {
+    const entry = queueEntryForTrack(context, trackId);
     if (!entry) return;
     queue.playStandalone(entry);
     player.playTrack(trackId);
   };
 
-  const addToQueue = (trackId: GlobalTrackId) => {
-    const entry = queueEntryForTrack(queueContext, trackId);
+  const addToQueue = (context: typeof queueContext, trackId: GlobalTrackId) => {
+    const entry = queueEntryForTrack(context, trackId);
     if (!entry) return;
     const shouldStartPlaying = queue.currentEntry === undefined;
     queue.addToQueue(entry);
     if (shouldStartPlaying) player.playTrack(trackId);
   };
 
-  const playNext = (trackId: GlobalTrackId) => {
-    const entry = queueEntryForTrack(queueContext, trackId);
+  const playNext = (context: typeof queueContext, trackId: GlobalTrackId) => {
+    const entry = queueEntryForTrack(context, trackId);
     if (!entry) return;
     const shouldStartPlaying = queue.currentEntry === undefined;
     queue.playNext(entry);
@@ -259,18 +294,45 @@ function App() {
         </main>
       ) : (
         <main id="library">
-            <SearchBar/>
-          <Sidebar/>
-          <TracksView
-            tracks={library.tracks}
-            playTrack={playFromLibrary}
-            playStandalone={playStandalone}
-            addToQueue={addToQueue}
-            playNext={playNext}
-            addAlbum={library.addAlbum}
-            isAddingAlbum={library.isAddingAlbum}
-            addAlbumError={library.addAlbumError}
+          <SearchBar
+            query={searchQuery}
+            provider={searchProvider}
+            onQueryChange={setSearchQuery}
+            onProviderChange={setSearchProvider}
           />
+          <Sidebar />
+          {searchQuery.trim() ? (
+            <SearchResultsView
+              query={searchQuery}
+              provider={searchProvider}
+              tracks={search.results}
+              isSearching={search.isSearching}
+              error={search.error}
+              playTrack={playFromSearch}
+              playStandalone={(trackId) =>
+                playStandalone(currentSearchContext, trackId)
+              }
+              addToQueue={(trackId) =>
+                addToQueue(currentSearchContext, trackId)
+              }
+              playNext={(trackId) =>
+                playNext(currentSearchContext, trackId)
+              }
+            />
+          ) : (
+            <TracksView
+              tracks={library.tracks}
+              playTrack={playFromLibrary}
+              playStandalone={(trackId) =>
+                playStandalone(queueContext, trackId)
+              }
+              addToQueue={(trackId) => addToQueue(queueContext, trackId)}
+              playNext={(trackId) => playNext(queueContext, trackId)}
+              addAlbum={library.addAlbum}
+              isAddingAlbum={library.isAddingAlbum}
+              addAlbumError={library.addAlbumError}
+            />
+          )}
         </main>
       )}
 

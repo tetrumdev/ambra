@@ -63,7 +63,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isQueueSource(value: unknown): value is QueueSource {
   if (!isRecord(value)) return false;
   return (
-    (value.kind === "library" || value.kind === "playlist") &&
+    (value.kind === "library" ||
+      value.kind === "playlist" ||
+      value.kind === "search") &&
     typeof value.id === "string" &&
     typeof value.entryId === "number" &&
     Number.isFinite(value.entryId)
