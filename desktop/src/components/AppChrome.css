@@ -1,5 +1,5 @@
 .libraryTitlebar {
-    height: 30px;
+    height: var(--library-titlebar-height);
     padding-left: 80px;
     width: 100%;
     display: flex;

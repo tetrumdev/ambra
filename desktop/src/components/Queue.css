@@ -1,5 +1,5 @@
 #queueList::before {
-    height: 50px;
+    height: var(--content-top-spacer);
     content: "";
     display: block;
 }
@@ -44,7 +44,7 @@
     content: "";
     flex: 1;
     height: 1px;
-    background-color: #2f2f2f;
+    background-color: #535353;
 }
 
 .queueItem {
@@ -52,7 +52,7 @@
     background-color: black;
     padding-left: 15px;
     height: 90px;
-    border-bottom: 1px solid #2f2f2f;
+    border-bottom: 1px solid #535353;
     display: grid;
     align-content: center;
     grid-template-columns: 75px 300px 200px auto 100px;
