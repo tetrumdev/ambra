@@ -3,7 +3,7 @@ use std::{collections::HashSet, env, fs, io, path::PathBuf, sync::Arc, time::Dur
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
@@ -28,6 +28,7 @@ use crate::{
 };
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
+const SEARCH_RESULT_LIMIT: u32 = 25;
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -82,6 +83,7 @@ pub async fn serve() -> ServerResult<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/library", get(library))
+        .route("/api/search/tracks", get(search_tracks))
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
         .route("/api/library/qobuz-albums", post(add_qobuz_album))
@@ -129,6 +131,58 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .collect::<Vec<_>>();
     let tracks = load_tracks(&state, &available_entries).await?;
     warm_playback_sources(state.clone(), available_entries);
+
+    Ok(Json(LibraryResponse { tracks }))
+}
+
+#[derive(Deserialize)]
+struct SearchTracksRequest {
+    provider: MusicProvider,
+    query: String,
+}
+
+async fn search_tracks(
+    State(state): State<AppState>,
+    Query(request): Query<SearchTracksRequest>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Ok(Json(LibraryResponse { tracks: Vec::new() }));
+    }
+    if query.chars().count() > 200 {
+        return Err(ApiError::bad_request(
+            "Search query cannot exceed 200 characters",
+        ));
+    }
+
+    let provider_track_ids = match request.provider {
+        MusicProvider::Tidal => state
+            .tidal
+            .search_track_ids(query, SEARCH_RESULT_LIMIT)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::Qobuz => qobuz_provider(&state)?
+            .search_track_ids(query, SEARCH_RESULT_LIMIT)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::Spotify => spotify_provider(&state)?
+            .search_track_ids(query, SEARCH_RESULT_LIMIT as usize)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::YoutubeMusic => {
+            return Err(ApiError::bad_request(
+                "YouTube Music search is not implemented",
+            ));
+        }
+    };
+    let entries = provider_track_ids
+        .into_iter()
+        .map(|provider_track_id| LibraryEntry {
+            provider: request.provider,
+            provider_track_id,
+        })
+        .collect::<Vec<_>>();
+    let tracks = load_search_tracks(&state, &entries).await;
 
     Ok(Json(LibraryResponse { tracks }))
 }
@@ -276,6 +330,33 @@ async fn load_tracks(
         .buffered(4)
         .map_err(ApiError::upstream)
         .try_collect()
+        .await
+}
+
+async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<TrackMetadata> {
+    stream::iter(entries.iter().cloned())
+        .map(|entry| {
+            let state = state.clone();
+            async move {
+                let result = load_track(&state, &entry).await;
+                (entry, result)
+            }
+        })
+        .buffered(4)
+        .filter_map(|(entry, result)| async move {
+            match result {
+                Ok(track) => Some(track),
+                Err(error) => {
+                    eprintln!(
+                        "Could not load {} search result {}: {error}",
+                        provider_name(entry.provider),
+                        entry.provider_track_id
+                    );
+                    None
+                }
+            }
+        })
+        .collect()
         .await
 }
 
