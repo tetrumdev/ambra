@@ -5,15 +5,21 @@ type QueueProps = {
   currentEntry: QueueEntry | undefined;
   upcomingEntries: QueueEntry[];
   jumpTo: (queueId: QueueId) => void;
+  registerScrollElement: (element: HTMLDivElement | null) => void;
 };
 
 export function Queue({
   currentEntry,
   upcomingEntries,
   jumpTo,
+  registerScrollElement,
 }: QueueProps) {
   return (
-    <div id="queueList">
+    <div
+      id="queueList"
+      className="smoothScroll"
+      ref={registerScrollElement}
+    >
       <div id="currentQueueTrack">
         <span id="currentTitle" className="queueSection">
           Currently Playing

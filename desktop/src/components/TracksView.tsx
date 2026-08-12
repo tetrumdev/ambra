@@ -12,6 +12,7 @@ type LibraryViewProps = {
   addAlbum: (url: string) => Promise<boolean>;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
+  registerScrollElement: (element: HTMLDivElement | null) => void;
 };
 
 export function TracksView({
@@ -23,13 +24,13 @@ export function TracksView({
   addAlbum,
   isAddingAlbum,
   addAlbumError,
+  registerScrollElement,
 }: LibraryViewProps) {
   const [albumUrl, setAlbumUrl] = useState("");
   const totalDurationSeconds = tracks.reduce(
     (total, track) => total + track.durationSeconds,
     0,
   );
-
   const hours = Math.floor(totalDurationSeconds / 3600);
   const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
   const seconds = Math.floor(totalDurationSeconds % 60);
@@ -47,7 +48,7 @@ export function TracksView({
   }
 
   return (
-    <div className="tracksView">
+    <div className="tracksView smoothScroll" ref={registerScrollElement}>
       <div className="libraryHeader">
         <h1 className="libraryTitle">My Library</h1>
         <div className="libraryInfo">

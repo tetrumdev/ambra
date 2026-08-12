@@ -6,14 +6,23 @@
 }
 
 #queueBtn {
-    width: 32px;
-    align-self: center;
+    display: grid;
+    place-items: center;
+    width: 35px;
+    height: 35px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    line-height: 0;
+    cursor: pointer;
 }
 
 #queueImg {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
+    display: block;
+    width: 20px;
+    height: auto;
+    object-fit: contain;
 }
 
 .devAudioModeToggle {

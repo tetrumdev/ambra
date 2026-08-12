@@ -1,11 +1,12 @@
 .tracksView::before {
     display: block;
-    height: 50px;
+    height: var(--content-top-spacer);
     content: "";
 }
 
 .tracksView {
-    scroll-behavior: smooth;
+    --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
+        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
@@ -14,19 +15,12 @@
     font-weight: 300;
     font-family: "Stack Sans Text", Inter, sans-serif;
     filter: none;
-    scrollbar-width: none;
-    -webkit-scrollbar: none;
-    -ms-overflow-style: none;
 }
 
 .tracksView::after {
     display: block;
-    height: 100px;
+    height: 99px;
     content: "";
-}
-
-.tracksView::-webkit-scrollbar {
-    display: none;
 }
 
 .libraryHeader {
@@ -133,8 +127,11 @@
 .columnInfo {
     right: 0;
     position: sticky;
-    grid-template-columns: 75px 300px 200px 300px 100px auto;
-    gap: 10px;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: var(--library-columns);
+    gap: 15px;
     display: grid;
     align-items: baseline;
     padding-left: 10px;
@@ -159,7 +156,7 @@
 }
 
 .trackColumn {
-    grid-column: 2;
+    grid-column: 1;
 }
 
 .artistColumn {
@@ -170,23 +167,35 @@
     grid-column: 4;
 }
 
+.durationColumn {
+    grid-column: 5;
+}
+
 .libraryTrackView {
-    grid-column: 2;
+    grid-column: 5;
     width: 100%;
     /*grid-template-rows: 90px;*/
     display: grid;
+}
+
+.columnInfo + .libraryItem {
+    border-top: 1px solid #535454;
 }
 
 .libraryItem {
     margin: 0;
     background-color: black;
     padding-left: 15px;
-    height: 90px;
-    border-bottom: 1px solid #2f2f2f;
+    height: 76px;
+    border-bottom: 1px solid #535454;
     display: grid;
-    align-content: center;
-    grid-template-columns: 75px 300px 200px 300px 100px auto;
-    gap: 10px;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: var(--library-columns);
+    grid-template-rows: 100%;
+    gap: 15px;
     text-align: left;
     font-family: inherit;
 }
@@ -201,8 +210,8 @@
 }
 
 .coverImgContainer {
-    width: 60px;
-    height: 60px;
+    width: 56px;
+    height: 56px;
     grid-column: 1;
     align-self: center;
     align-content: center;
@@ -215,10 +224,11 @@
 }
 
 .coverPlayBtn {
-    width: 15px;
+    width: 13px;
     grid-area: 1 / 1;
     z-index: 1;
     pointer-events: none;
+    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.7));
 }
 
 .coverPlayBtn[data-variant="btnEnabled"] {
@@ -248,7 +258,11 @@
 
 .trackDescriptor {
     align-self: center;
-    width: fit-content;
+    min-width: 0;
+    max-width: fit-content;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .trackDescriptor:hover {
@@ -258,4 +272,42 @@
 .trackName {
     grid-column: 2;
     font-weight: 600;
+}
+
+.trackName:hover {
+    text-decoration: none;
+}
+
+.trackDuration:hover {
+    text-decoration: none;
+}
+
+.libraryItemMenuContainer {
+    grid-column: 6;
+    margin: 0;
+    padding: 0;
+    align-self: stretch;
+    justify-self: stretch;
+    height: 100%;
+    min-height: 0;
+    width: 40px;
+    box-sizing: border-box;
+    display: grid;
+    place-items: center;
+    border-left: 1px solid transparent;
+}
+
+.libraryItemMenuContainer:hover {
+    background-color: black;
+    border-left: 1px solid #535353;
+}
+
+.libraryItemMenuContainer img {
+    display: block;
+    height: 15px;
+    object-fit: cover;
+    align-self: center;
+    justify-self: center;
+    user-select: none;
+    -webkit-user-drag: none;
 }

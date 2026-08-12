@@ -5,6 +5,7 @@ import { AppChrome } from "./components/AppChrome";
 import { TracksView } from "./components/TracksView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
+import { AppScrollbar } from "./components/AppScrollbar";
 // import { ClickMenu } from "./components/ClickMenu";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
@@ -76,6 +77,8 @@ function App() {
   const f11FullscreenRef = useRef(false);
   const latestSessionRef = useRef({ preferences, player });
   latestSessionRef.current = { preferences, player };
+  const [activeScrollElement, setActiveScrollElement] =
+    useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
@@ -290,6 +293,7 @@ function App() {
             currentEntry={queue.currentEntry}
             upcomingEntries={queue.upcomingEntries}
             jumpTo={jumpToQueueEntry}
+            registerScrollElement={setActiveScrollElement}
           />
         </main>
       ) : (
@@ -318,6 +322,7 @@ function App() {
               playNext={(trackId) =>
                 playNext(currentSearchContext, trackId)
               }
+              registerScrollElement={setActiveScrollElement}
             />
           ) : (
             <TracksView
@@ -331,6 +336,7 @@ function App() {
               addAlbum={library.addAlbum}
               isAddingAlbum={library.isAddingAlbum}
               addAlbumError={library.addAlbumError}
+              registerScrollElement={setActiveScrollElement}
             />
           )}
         </main>
@@ -350,6 +356,8 @@ function App() {
         onOpenBigscreen={() => changeScreen("bigscreen")}
         onOpenQueue={() => changeScreen("queue")}
       />
+
+      {!isBigscreen && <AppScrollbar scrollElement={activeScrollElement} />}
     </>
   );
 }
