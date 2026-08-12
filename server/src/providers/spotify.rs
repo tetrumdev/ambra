@@ -156,6 +156,41 @@ impl SpotifyProvider {
             .collect::<ProviderResult<Vec<_>>>()
     }
 
+    pub async fn search_track_ids(&self, query: &str, limit: usize) -> ProviderResult<Vec<String>> {
+        let search_query = query
+            .split_whitespace()
+            .map(urlencoding::encode)
+            .collect::<Vec<_>>()
+            .join("+");
+        let context = self
+            .session
+            .spclient()
+            .get_context(&format!("spotify:search:{search_query}"))
+            .await?;
+        let mut track_ids = Vec::new();
+
+        for uri in context
+            .pages
+            .into_iter()
+            .flat_map(|page| page.tracks)
+            .filter_map(|track| track.uri)
+        {
+            let Some(track_id) = uri.strip_prefix("spotify:track:") else {
+                continue;
+            };
+            if validate_spotify_id("track", track_id).is_ok()
+                && !track_ids.iter().any(|existing| existing == track_id)
+            {
+                track_ids.push(track_id.to_owned());
+                if track_ids.len() == limit {
+                    break;
+                }
+            }
+        }
+
+        Ok(track_ids)
+    }
+
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
         validate_spotify_id("track", track_id)?;
 

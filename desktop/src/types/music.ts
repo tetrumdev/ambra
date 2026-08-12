@@ -55,7 +55,7 @@ export type LibraryTrack = Track & {
 };
 
 export type QueueSource = {
-  kind: "library" | "playlist";
+  kind: "library" | "playlist" | "search";
   id: string;
   entryId: QueueSourceEntryId;
 };
