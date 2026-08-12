@@ -1,0 +1,43 @@
+.appScrollbar {
+    position: fixed;
+    top: var(--library-titlebar-height);
+    right: 0;
+    bottom: var(--player-height);
+    width: var(--scrollbar-column-width);
+    background: black;
+    z-index: 9;
+    touch-action: none;
+    border-left: 1px solid #535353;
+    padding-bottom: 3px;
+    padding-top: 3px;
+}
+
+.appScrollbarThumb {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%; /* Full 14px hitbox */
+    min-height: 36px;
+    /*cursor: default;*/
+    touch-action: none;
+    will-change: transform;
+}
+
+.appScrollbarThumb::before {
+    content: "";
+    position: absolute;
+    inset: 4px auto 4px 5px;
+    width: 4px; /* Visible thumb remains narrow */
+    border-radius: 999px;
+    background: rgb(255 255 255 / 30%);
+    transition: background-color 80ms;
+}
+
+.appScrollbarThumb:hover::before,
+.appScrollbarThumb[data-dragging="true"]::before {
+    background: rgb(255 255 255 / 55%);
+}
+
+.appScrollbarThumb[data-dragging="true"] {
+    cursor: grabbing;
+}

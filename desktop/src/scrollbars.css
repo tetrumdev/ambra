@@ -1,0 +1,9 @@
+.smoothScroll {
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+
+.smoothScroll::-webkit-scrollbar {
+    display: none;
+}
