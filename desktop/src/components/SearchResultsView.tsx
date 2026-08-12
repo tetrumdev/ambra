@@ -13,6 +13,7 @@ type SearchResultsViewProps = {
   playStandalone: (trackId: GlobalTrackId) => void;
   addToQueue: (trackId: GlobalTrackId) => void;
   playNext: (trackId: GlobalTrackId) => void;
+  registerScrollElement: (element: HTMLDivElement | null) => void;
 };
 
 const providerNames: Record<SearchProvider, string> = {
@@ -31,6 +32,7 @@ export function SearchResultsView({
   playStandalone,
   addToQueue,
   playNext,
+  registerScrollElement,
 }: SearchResultsViewProps) {
   let status = `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} from ${providerNames[provider]}`;
   if (isSearching) status = `Searching ${providerNames[provider]}…`;
@@ -38,7 +40,10 @@ export function SearchResultsView({
   else if (tracks.length === 0) status = "No songs found";
 
   return (
-    <div className="tracksView searchResultsView">
+    <div
+      className="tracksView searchResultsView smoothScroll"
+      ref={registerScrollElement}
+    >
       <div className="libraryHeader searchResultsHeader">
         <h1 className="libraryTitle">Search</h1>
         <p className="searchQuery">Results for “{query.trim()}”</p>

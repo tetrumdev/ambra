@@ -19,6 +19,15 @@
     isolation: isolate;
     user-select: none;
     -webkit-user-select: none;
+    --player-height: 100px;
+    --scrollbar-column-width: 14px;
+    --library-titlebar-height: 30px;
+    --content-top-spacer: 50px;
+}
+
+:root[data-platform="windows"] {
+    --library-titlebar-height: 0px;
+    --content-top-spacer: 20px;
 }
 
 :root[data-bigscreen-idle="true"],
@@ -86,4 +95,23 @@
     position: absolute;
     left: --clientX;
     top: --clientY;
+}
+
+#library,
+#queue {
+    inset: 0 var(--scrollbar-column-width) 0 0;
+    width: auto;
+    height: auto;
+}
+
+.tracksView,
+#queueList {
+    height: 100%;
+}
+
+.tracksView::after,
+#queueList::after {
+    content: "";
+    display: block;
+    height: var(--player-height);
 }

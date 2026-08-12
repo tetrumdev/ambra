@@ -36,7 +36,11 @@ export function TrackList({
   const [menuIsShowing, setMenuIsShowing] = useState(false);
 
   function showClickMenu(event: React.MouseEvent, trackId: GlobalTrackId) {
-    if (event.target !== event.currentTarget) return;
+    const target = event.target as HTMLElement;
+    const clickedRow = target === event.currentTarget;
+    const clickedTrigger = target.closest("[data-click-menu-trigger]");
+
+    if (!clickedRow && !clickedTrigger) return;
 
     setMenuPosition({ x: event.clientX, y: event.clientY });
     setMenuTrackId(trackId);
@@ -94,12 +98,20 @@ export function TrackList({
               onClick={() => playTrack(track.globalId)}
             />
           </div>
-          <span className="trackName trackDescriptor">{track.name}</span>
+          <span className="trackName trackDescriptor" data-click-menu-trigger>
+            {track.name}
+          </span>
           <span className="artistName trackDescriptor">{track.artist}</span>
           <span className="albumName trackDescriptor">{track.album}</span>
-          <span className="trackDuration trackDescriptor">
+          <span
+            className="trackDuration trackDescriptor"
+            data-click-menu-trigger
+          >
             {formatTime(track.durationSeconds)}
           </span>
+          <div className="libraryItemMenuContainer" data-click-menu-trigger>
+            <img src="/menu.svg" alt="Menu" />
+          </div>
         </div>
       ))}
     </>

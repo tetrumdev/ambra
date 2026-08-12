@@ -17,6 +17,10 @@
         "height": 800,
         "minHeight": 600,
         "minWidth": 850,
+        "backgroundColor": "#000000",
+        "theme": "Dark",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-smooth-scrolling",
+        "scrollBarStyle": "fluentOverlay",
         "decorations": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true

@@ -86,8 +86,20 @@ pub struct PlatformOutput {
 
 impl AudioOutput for PlatformOutput {
     fn open(spec: StreamSpec) -> Result<Self, String> {
+        Self::open_device_with_mode(spec, None, true)
+    }
+
+    fn open_device_with_mode(
+        spec: StreamSpec,
+        device_id: Option<&str>,
+        exclusive_mode: bool,
+    ) -> Result<Self, String> {
+        if device_id.is_some() {
+            return Err("Selecting a Windows audio device is not implemented yet".to_owned());
+        }
+
         initialize_mta().ok().map_err(wasapi_error)?;
-        let result = Self::open_initialized(spec);
+        let result = Self::open_initialized(spec, exclusive_mode);
         if result.is_err() {
             deinitialize();
         }
@@ -173,42 +185,69 @@ impl AudioOutput for PlatformOutput {
 }
 
 impl PlatformOutput {
-    fn open_initialized(spec: StreamSpec) -> Result<Self, String> {
+    fn open_initialized(spec: StreamSpec, exclusive_mode: bool) -> Result<Self, String> {
         let enumerator = DeviceEnumerator::new().map_err(wasapi_error)?;
         let device = enumerator
             .get_default_device(&Direction::Render)
             .map_err(wasapi_error)?;
         let mut audio_client = device.get_iaudioclient().map_err(wasapi_error)?;
-        let (sample_format, wave_format) = supported_format(&audio_client, spec)?;
         let (default_period, minimum_period) =
             audio_client.get_device_period().map_err(wasapi_error)?;
-        let period = audio_client
-            .calculate_aligned_period_near(
-                default_period.max(minimum_period),
-                Some(128),
-                &wave_format,
+        let (sample_format, wave_format) = if exclusive_mode {
+            supported_format(&audio_client, spec)?
+        } else {
+            // Shared WASAPI can convert this stream to the endpoint's mix format. Using
+            // float PCM also keeps the conversion from the decoder lossless until it
+            // reaches the Windows audio engine.
+            (
+                DeviceSampleFormat::Float32,
+                DeviceSampleFormat::Float32.wave_format(spec),
             )
-            .map_err(wasapi_error)?;
-        let mode = polling_mode(period);
-        if let Err(error) = audio_client.initialize_client(&wave_format, &Direction::Render, &mode)
-        {
-            if wasapi_hresult(&error) == Some(0x8889_0019) {
-                let buffer_frames = audio_client.get_buffer_size().map_err(wasapi_error)?;
-                let aligned_period = calculate_period_100ns(
-                    i64::from(buffer_frames),
-                    wave_format.get_samplespersec() as i64,
-                );
-                audio_client = device.get_iaudioclient().map_err(wasapi_error)?;
-                audio_client
-                    .initialize_client(
-                        &wave_format,
-                        &Direction::Render,
-                        &polling_mode(aligned_period),
-                    )
-                    .map_err(exclusive_mode_error)?;
-            } else {
-                return Err(exclusive_mode_error(error));
+        };
+
+        if exclusive_mode {
+            let period = audio_client
+                .calculate_aligned_period_near(
+                    default_period.max(minimum_period),
+                    Some(128),
+                    &wave_format,
+                )
+                .map_err(wasapi_error)?;
+            if let Err(error) = audio_client.initialize_client(
+                &wave_format,
+                &Direction::Render,
+                &exclusive_polling_mode(period),
+            ) {
+                if wasapi_hresult(&error) == Some(0x8889_0019) {
+                    let buffer_frames = audio_client.get_buffer_size().map_err(wasapi_error)?;
+                    let aligned_period = calculate_period_100ns(
+                        i64::from(buffer_frames),
+                        wave_format.get_samplespersec() as i64,
+                    );
+                    audio_client = device.get_iaudioclient().map_err(wasapi_error)?;
+                    audio_client
+                        .initialize_client(
+                            &wave_format,
+                            &Direction::Render,
+                            &exclusive_polling_mode(aligned_period),
+                        )
+                        .map_err(exclusive_mode_error)?;
+                } else {
+                    return Err(exclusive_mode_error(error));
+                }
             }
+        } else {
+            let mode = StreamMode::PollingShared {
+                autoconvert: true,
+                buffer_duration_hns: default_period,
+            };
+            audio_client
+                .initialize_client(&wave_format, &Direction::Render, &mode)
+                .map_err(|error| {
+                    format!(
+                        "Could not open the default audio device in WASAPI shared mode: {error}"
+                    )
+                })?;
         }
         let render_client = audio_client.get_audiorenderclient().map_err(wasapi_error)?;
         let buffer_frames = audio_client.get_buffer_size().map_err(wasapi_error)? as usize;
@@ -274,7 +313,7 @@ fn supported_format(
     ))
 }
 
-fn polling_mode(period_hns: i64) -> StreamMode {
+fn exclusive_polling_mode(period_hns: i64) -> StreamMode {
     StreamMode::PollingExclusive {
         period_hns,
         buffer_duration_hns: period_hns.saturating_mul(POLLING_BUFFER_PERIODS),
@@ -397,6 +436,25 @@ mod tests {
             bits_per_sample: 24,
         };
         let mut output = PlatformOutput::open(spec).unwrap();
+        let silence = vec![0.0; 4_800 * spec.channels];
+        output.start().unwrap();
+        let mut offset = 0;
+        while offset < silence.len() {
+            let frames = output.write(&silence[offset..], &[]).unwrap();
+            offset += frames * spec.channels;
+        }
+        output.reset().unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a Windows audio endpoint"]
+    fn opens_and_services_the_default_shared_endpoint() {
+        let spec = StreamSpec {
+            sample_rate: 48_000,
+            channels: 2,
+            bits_per_sample: 24,
+        };
+        let mut output = PlatformOutput::open_device_with_mode(spec, None, false).unwrap();
         let silence = vec![0.0; 4_800 * spec.channels];
         output.start().unwrap();
         let mut offset = 0;
