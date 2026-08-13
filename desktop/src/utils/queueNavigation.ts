@@ -1,4 +1,4 @@
-import type { QueueHistoryEntry, QueueItem } from "../types/music";
+import type { QueueHistoryEntry, QueueId, QueueItem } from "../types/music";
 
 export type QueueState = {
   history: QueueHistoryEntry[];
@@ -10,6 +10,42 @@ export type QueueTransition = {
   state: QueueState;
   item: QueueItem | undefined;
 };
+
+export type QueueRemovalTransition = QueueTransition & {
+  currentRemoved: boolean;
+};
+
+export function removeQueueEntries(
+  state: QueueState,
+  queueIds: ReadonlySet<QueueId>,
+): QueueRemovalTransition {
+  if (queueIds.size === 0 || state.current === null) {
+    return { state, item: state.current ?? undefined, currentRemoved: false };
+  }
+
+  const currentRemoved = queueIds.has(1);
+  const upcoming = state.upcoming.filter(
+    (_, index) => !queueIds.has(index + 2),
+  );
+  if (!currentRemoved) {
+    return {
+      state: { ...state, upcoming },
+      item: state.current,
+      currentRemoved: false,
+    };
+  }
+
+  const current = upcoming[0] ?? null;
+  return {
+    state: {
+      ...state,
+      current,
+      upcoming: upcoming.slice(1),
+    },
+    item: current ?? undefined,
+    currentRemoved: true,
+  };
+}
 
 export function advanceQueue(
   state: QueueState,

@@ -1,10 +1,9 @@
 #searchBar {
     position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 9999;
+    right: 5%;
+    z-index: 10;
     display: flex;
-    top: 3%;
+    top: 8%;
     overflow: hidden;
     border-radius: 8px;
     border: none;
@@ -14,11 +13,11 @@
 }
 
 #searchBar:focus-within {
-    outline: 2px solid white;
+    outline: none;
 }
 
-#input{
-    width: 400px;
+#input {
+    width: 200px;
     height: 40px;
     border-radius: 20px;
     border: none;
@@ -35,7 +34,7 @@
     cursor: pointer;
 }
 
-#select{
+#select {
     width: 100px;
     height: 40px;
     background-color: transparent;

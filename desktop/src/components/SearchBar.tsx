@@ -21,7 +21,12 @@ export function SearchBar({
         type="search"
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
-        placeholder="What are you itching for?"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === "Escape") {
+            event.currentTarget.blur();
+          }
+        }}
+        placeholder="Search..."
         aria-label="Search songs"
         autoComplete="off"
       />

@@ -1,11 +1,23 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import fallbackCover from "../assets/images/fallbackCover.png";
-import type { LibraryTrack, ScannedTrack, Track } from "../types/music";
-import { addServerAlbum, loadServerTracks } from "../api/server";
+import type {
+  GlobalTrackId,
+  LibraryTrack,
+  ScannedTrack,
+  Track,
+} from "../types/music";
+import {
+  addServerAlbum,
+  addServerTrack,
+  loadServerTracks,
+  type SearchProvider,
+} from "../api/server";
 import {
   loadCachedServerTracks,
+  loadRemovedLibraryTrackIds,
   saveCachedServerTracks,
+  saveRemovedLibraryTrackIds,
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 
@@ -16,6 +28,12 @@ type MusicLibrary = {
   isAddingAlbum: boolean;
   addAlbumError: string | null;
   addAlbum: (url: string) => Promise<boolean>;
+  addTrack: (
+    provider: SearchProvider,
+    providerTrackId: string,
+  ) => Promise<boolean>;
+  deleteTrack: (trackId: GlobalTrackId) => void;
+  deleteTracks: (trackIds: GlobalTrackId[]) => void;
 };
 
 function playableLocalCover(cover: string | null) {
@@ -69,6 +87,9 @@ export function useMusicLibrary(): MusicLibrary {
   const [serverTracks, setServerTracks] = useState<Track[]>(
     loadCachedServerTracks,
   );
+  const [removedTrackIds, setRemovedTrackIds] = useState(
+    loadRemovedLibraryTrackIds,
+  );
   const [isLocalLoading, setIsLocalLoading] = useState(true);
   const [isServerLoading, setIsServerLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -76,17 +97,23 @@ export function useMusicLibrary(): MusicLibrary {
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
   const tracks = useMemo(
     () =>
-      [...serverTracks, ...localTracks].map((track, index) => ({
-        ...track,
-        libraryId: index + 1,
-      })),
-    [localTracks, serverTracks],
+      [...serverTracks, ...localTracks]
+        .filter((track) => !removedTrackIds.has(track.globalId))
+        .map((track, index) => ({
+          ...track,
+          libraryId: index + 1,
+        })),
+    [localTracks, removedTrackIds, serverTracks],
   );
   const isLoading = isLocalLoading && isServerLoading;
 
   useEffect(() => {
     saveCachedServerTracks(serverTracks);
   }, [serverTracks]);
+
+  useEffect(() => {
+    saveRemovedLibraryTrackIds(removedTrackIds);
+  }, [removedTrackIds]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +170,18 @@ export function useMusicLibrary(): MusicLibrary {
 
     try {
       const albumTracks = await addServerAlbum(url);
+      const albumTrackIds = new Set(
+        albumTracks.map((track) => track.globalId),
+      );
+      setRemovedTrackIds((currentTrackIds) => {
+        if (![...albumTrackIds].some((trackId) => currentTrackIds.has(trackId))) {
+          return currentTrackIds;
+        }
+
+        return new Set(
+          [...currentTrackIds].filter((trackId) => !albumTrackIds.has(trackId)),
+        );
+      });
       setServerTracks((currentTracks) =>
         moveAlbumToEndInOrder(currentTracks, albumTracks),
       );
@@ -155,6 +194,55 @@ export function useMusicLibrary(): MusicLibrary {
     }
   }, []);
 
+  const addTrack = useCallback(
+    async (provider: SearchProvider, providerTrackId: string) => {
+      try {
+        const [track] = await addServerTrack(provider, providerTrackId);
+        if (!track) return false;
+
+        setRemovedTrackIds((currentTrackIds) => {
+          if (!currentTrackIds.has(track.globalId)) return currentTrackIds;
+          const nextTrackIds = new Set(currentTrackIds);
+          nextTrackIds.delete(track.globalId);
+          return nextTrackIds;
+        });
+        setServerTracks((currentTracks) =>
+          appendUniqueTracks(currentTracks, [track]),
+        );
+        return true;
+      } catch (reason) {
+        console.error("Could not add track to library:", reason);
+        return false;
+      }
+    },
+    [],
+  );
+
+  const deleteTrack = useCallback((trackId: GlobalTrackId) => {
+    setRemovedTrackIds((currentTrackIds) => {
+      if (currentTrackIds.has(trackId)) return currentTrackIds;
+
+      const nextTrackIds = new Set(currentTrackIds);
+      nextTrackIds.add(trackId);
+      return nextTrackIds;
+    });
+  }, []);
+
+  const deleteTracks = useCallback((trackIds: GlobalTrackId[]) => {
+    const deletedTrackIds = new Set(trackIds);
+    if (deletedTrackIds.size === 0) return;
+
+    setRemovedTrackIds((currentTrackIds) => {
+      if ([...deletedTrackIds].every((trackId) => currentTrackIds.has(trackId))) {
+        return currentTrackIds;
+      }
+
+      const nextTrackIds = new Set(currentTrackIds);
+      for (const trackId of deletedTrackIds) nextTrackIds.add(trackId);
+      return nextTrackIds;
+    });
+  }, []);
+
   return {
     tracks,
     isLoading,
@@ -162,5 +250,8 @@ export function useMusicLibrary(): MusicLibrary {
     isAddingAlbum,
     addAlbumError,
     addAlbum,
+    addTrack,
+    deleteTrack,
+    deleteTracks,
   };
 }

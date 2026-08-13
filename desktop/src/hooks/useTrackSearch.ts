@@ -12,6 +12,20 @@ type TrackSearch = {
   error: string | null;
 };
 
+const searchResultsCache = new Map<string, Track[]>();
+const MAX_CACHED_SEARCHES = 100;
+
+function cacheSearchResults(cacheKey: string, tracks: Track[]) {
+  if (
+    !searchResultsCache.has(cacheKey) &&
+    searchResultsCache.size >= MAX_CACHED_SEARCHES
+  ) {
+    const oldestKey = searchResultsCache.keys().next().value;
+    if (oldestKey !== undefined) searchResultsCache.delete(oldestKey);
+  }
+  searchResultsCache.set(cacheKey, tracks);
+}
+
 export function useTrackSearch(
   query: string,
   provider: SearchProvider,
@@ -30,6 +44,24 @@ export function useTrackSearch(
       return;
     }
 
+    const cacheKey = `${provider}:${trimmedQuery.toLocaleLowerCase()}`;
+    const cachedResults = searchResultsCache.get(cacheKey);
+    if (cachedResults) {
+      setResults(cachedResults);
+      setKnownTracks((current) => {
+        const tracksById = new Map(
+          current.map((track) => [track.globalId, track]),
+        );
+        for (const track of cachedResults) {
+          tracksById.set(track.globalId, track);
+        }
+        return [...tracksById.values()];
+      });
+      setIsSearching(false);
+      setError(null);
+      return;
+    }
+
     const controller = new AbortController();
     setResults([]);
     setIsSearching(true);
@@ -38,6 +70,7 @@ export function useTrackSearch(
     const timer = window.setTimeout(() => {
       void searchServerTracks(trimmedQuery, provider, controller.signal)
         .then((tracks) => {
+          cacheSearchResults(cacheKey, tracks);
           setResults(tracks);
           setKnownTracks((current) => {
             const tracksById = new Map(
@@ -53,7 +86,7 @@ export function useTrackSearch(
         .finally(() => {
           if (!controller.signal.aborted) setIsSearching(false);
         });
-    }, 350);
+    }, 120);
 
     return () => {
       window.clearTimeout(timer);

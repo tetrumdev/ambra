@@ -4,7 +4,6 @@ import type { GlobalTrackId } from "../types/music";
 type ClickMenu = "clickMenuOn" | "clickMenuOff";
 
 type ClickMenuProps = {
-  menuIsShowing: boolean;
   hideClickMenu: () => void;
   xPos: number;
   yPos: number;
@@ -16,7 +15,6 @@ type ClickMenuProps = {
 };
 
 export function ClickMenu({
-  menuIsShowing,
   hideClickMenu,
   xPos,
   yPos,
@@ -26,7 +24,7 @@ export function ClickMenu({
   addToQueue,
   playNext,
 }: ClickMenuProps) {
-  return menuIsShowing ? (
+  return (
     <div id="preventClickCover" onClick={hideClickMenu}>
       <div
         id="clickMenu"
@@ -77,7 +75,5 @@ export function ClickMenu({
         </div>
       </div>
     </div>
-  ) : (
-    <></>
   );
 }

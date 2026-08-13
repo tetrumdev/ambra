@@ -47,6 +47,7 @@ type AudioPlayer = {
   seek: (time: number) => void;
   audioDecks: AudioDeckController;
   playTrack: (trackId: string) => void;
+  clear: () => void;
 };
 
 type InitialPlayback = {
@@ -67,6 +68,7 @@ type NativeAudioStatus = {
   currentTime: number;
   duration: number;
   isPlaying: boolean;
+  buffering: boolean;
   ended: boolean;
 };
 
@@ -341,6 +343,11 @@ export function useAudioPlayer(
     pendingPlaybackDeckRef.current = null;
     activeAudio()?.pause();
   }, [activeAudio, usesNativeAudio]);
+
+  const stopPlayback = useCallback(() => {
+    pauseActive();
+    clearPlayback();
+  }, [clearPlayback, pauseActive]);
 
   const togglePlayback = useCallback(async () => {
     if (usesNativeAudio) {
@@ -625,7 +632,11 @@ export function useAudioPlayer(
 
         setCurrentTime(playback.currentTime);
         if (playback.duration > 0) setDuration(playback.duration);
-        setIsPlaying(playback.isPlaying);
+        // Keep the pause control active through a short rebuffer. The native
+        // worker still intends to play and will resume by itself.
+        if (!playback.buffering || playback.isPlaying) {
+          setIsPlaying(playback.isPlaying);
+        }
 
         if (playback.ended && !handledEnd) {
           handledEnd = true;
@@ -667,6 +678,15 @@ export function useAudioPlayer(
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.code !== "Space") return;
+
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.closest("input, textarea, select, [contenteditable='true']"))
+      ) {
+        return;
+      }
 
       event.preventDefault();
       if (!event.repeat) void togglePlayback();
@@ -841,6 +861,7 @@ export function useAudioPlayer(
 
   return {
     playTrack,
+    clear: stopPlayback,
     currentTrack,
     currentTime,
     duration,

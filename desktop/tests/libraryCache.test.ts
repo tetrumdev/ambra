@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { parseCachedServerTracks } from "../src/utils/libraryCache";
+import {
+  parseCachedServerTracks,
+  parseRemovedLibraryTrackIds,
+} from "../src/utils/libraryCache";
 import type { Track } from "../src/types/music";
 
 const cachedTrack: Track = {
@@ -59,5 +62,22 @@ describe("parseCachedServerTracks", () => {
         JSON.stringify([cachedTrack, { globalId: "incomplete" }]),
       ),
     ).toEqual([cachedTrack]);
+  });
+});
+
+describe("parseRemovedLibraryTrackIds", () => {
+  test("restores unique track IDs", () => {
+    expect(
+      parseRemovedLibraryTrackIds(
+        JSON.stringify(["local:/song.flac", "tidal:1", "tidal:1"]),
+      ),
+    ).toEqual(["local:/song.flac", "tidal:1"]);
+  });
+
+  test("ignores invalid stored values", () => {
+    expect(parseRemovedLibraryTrackIds("not json")).toEqual([]);
+    expect(parseRemovedLibraryTrackIds(JSON.stringify({ track: "tidal:1" }))).toEqual(
+      [],
+    );
   });
 });

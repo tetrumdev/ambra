@@ -7,13 +7,19 @@ use std::{
     time::{Duration, Instant},
 };
 
+use base64::{Engine, engine::general_purpose};
+use futures_util::{StreamExt, stream};
+use quick_xml::{Reader, events::Event};
+use serde::Deserialize;
 use tidlers::{
     TidalClient,
     auth::TidalAuth,
     client::models::{
-        playback::AudioQuality,
-        search::config::{SearchConfig, SearchType},
-        track::playback::{DashManifest, ParsedTrackManifest},
+        search::{
+            SearchTrackHit,
+            config::{SearchConfig, SearchType},
+        },
+        track::playback::{DashManifest, JsonTrackManifest},
     },
     error::TidalError,
     requests::RequestClientError,
@@ -25,7 +31,9 @@ use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
 };
 
-const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(5 * 60);
+const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(30 * 60);
+const TIDAL_MAX_AUDIO_QUALITY: &str = "HI_RES_LOSSLESS";
+const TIDAL_API_BASE_URL: &str = "https://api.tidal.com/v1";
 pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 #[derive(Clone)]
@@ -33,6 +41,7 @@ pub struct TidalProvider {
     client: Arc<Mutex<TidalClient>>,
     http_client: reqwest::Client,
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
+    maximum_playback_cache: Arc<Mutex<HashMap<String, CachedMaximumPlayback>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -42,7 +51,6 @@ pub enum PlaybackSource {
     Direct {
         url: String,
         mime_type: String,
-        quality: String,
     },
     Dash {
         initialization_url: String,
@@ -55,7 +63,6 @@ pub enum PlaybackSource {
         start_number: u32,
         segment_count: Option<u32>,
         track_duration_seconds: u64,
-        quality: String,
     },
 }
 
@@ -64,18 +71,47 @@ struct CachedPlaybackSource {
     cached_at: Instant,
 }
 
+struct CachedMaximumPlayback {
+    playback: RawPlaybackInfo,
+    cached_at: Instant,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawPlaybackInfo {
+    audio_quality: String,
+    manifest: String,
+}
+
+enum MaximumPlaybackManifest {
+    Direct(JsonTrackManifest),
+    Dash(DashManifest),
+}
+
+struct MaximumPlaybackInfo {
+    audio_quality: String,
+    manifest: MaximumPlaybackManifest,
+    sampling_rate_khz: Option<f64>,
+    bit_depth: Option<u32>,
+}
+
 impl TidalProvider {
     pub async fn authenticate() -> ProviderResult<Self> {
-        let mut client = authenticated_client().await?;
-        client.set_audio_quality(AudioQuality::High);
+        let client = authenticated_client().await?;
 
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
         Ok(Self {
             client: Arc::new(Mutex::new(client)),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(15))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .tcp_keepalive(Duration::from_secs(30))
+                .build()?,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
+            maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
@@ -171,22 +207,8 @@ impl TidalProvider {
                 .filter(|upc| !upc.is_empty()),
         });
 
-        let (playback, quality) = match self.playback_source(track_id).await? {
-            PlaybackSource::Direct { quality, .. } => (
-                PlaybackMetadata {
-                    kind: PlaybackKind::Direct,
-                    url: format!("/api/providers/tidal/tracks/{track_id}/stream"),
-                },
-                quality,
-            ),
-            PlaybackSource::Dash { quality, .. } => (
-                PlaybackMetadata {
-                    kind: PlaybackKind::Dash,
-                    url: format!("/api/providers/tidal/tracks/{track_id}/manifest.mpd"),
-                },
-                quality,
-            ),
-        };
+        let (playback, quality, sampling_rate_khz, bit_depth) =
+            self.playback_metadata(track_id).await?;
 
         let metadata = TrackMetadata {
             id: format!("tidal:{track_id}"),
@@ -204,8 +226,8 @@ impl TidalProvider {
             isrc: track.isrc,
             copyright: track.copyright,
             quality: Some(quality),
-            maximum_sampling_rate_khz: None,
-            maximum_bit_depth: None,
+            maximum_sampling_rate_khz: sampling_rate_khz,
+            maximum_bit_depth: bit_depth,
             playback,
         };
         let mut cache = self.track_metadata_cache.lock().await;
@@ -245,7 +267,23 @@ impl TidalProvider {
         Ok(track_ids)
     }
 
-    pub async fn search_track_ids(&self, query: &str, limit: u32) -> ProviderResult<Vec<String>> {
+    pub async fn album_upc(&self, album_id: &str) -> ProviderResult<Option<String>> {
+        validate_album_id(album_id)?;
+        let album = self
+            .client
+            .lock()
+            .await
+            .clone()
+            .get_album(album_id.to_owned())
+            .await?;
+        Ok((!album.upc.is_empty()).then_some(album.upc))
+    }
+
+    pub async fn search_tracks(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> ProviderResult<Vec<TrackMetadata>> {
         let client = self.client.lock().await.clone();
         let results = client
             .search(SearchConfig {
@@ -256,14 +294,71 @@ impl TidalProvider {
             })
             .await?;
 
-        Ok(results
+        let tracks = results
             .tracks
             .into_iter()
             .flat_map(|section| section.items)
             .filter(|track| track.allow_streaming.unwrap_or(true))
             .filter(|track| track.stream_ready.unwrap_or(true))
-            .map(|track| track.id.to_string())
-            .collect())
+            .map(search_track_metadata)
+            .collect::<Vec<_>>();
+
+        Ok(stream::iter(tracks)
+            .map(|mut track| async move {
+                match self.playback_metadata(&track.provider_track_id).await {
+                    Ok((playback, quality, sampling_rate_khz, bit_depth)) => {
+                        track.playback = playback;
+                        track.quality = Some(quality);
+                        track.maximum_sampling_rate_khz = sampling_rate_khz;
+                        track.maximum_bit_depth = bit_depth;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "Could not inspect Tidal search result {} quality: {error}",
+                            track.provider_track_id
+                        );
+                        track.quality = None;
+                        track.maximum_sampling_rate_khz = None;
+                        track.maximum_bit_depth = None;
+                    }
+                }
+                track
+            })
+            .buffered(6)
+            .collect()
+            .await)
+    }
+
+    async fn playback_metadata(
+        &self,
+        track_id: &str,
+    ) -> ProviderResult<(PlaybackMetadata, String, Option<f64>, Option<u32>)> {
+        validate_track_id(track_id)?;
+
+        let playback = self.maximum_playback_info(track_id).await?;
+        let quality = tidal_stream_quality_label(
+            &playback.manifest,
+            playback.sampling_rate_khz,
+            playback.bit_depth,
+            &playback.audio_quality,
+        );
+        let metadata = match playback.manifest {
+            MaximumPlaybackManifest::Direct(_) => PlaybackMetadata {
+                kind: PlaybackKind::Direct,
+                url: format!("/api/providers/tidal/tracks/{track_id}/stream"),
+            },
+            MaximumPlaybackManifest::Dash(_) => PlaybackMetadata {
+                kind: PlaybackKind::Dash,
+                url: format!("/api/providers/tidal/tracks/{track_id}/manifest.mpd"),
+            },
+        };
+
+        Ok((
+            metadata,
+            quality,
+            playback.sampling_rate_khz,
+            playback.bit_depth,
+        ))
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
@@ -287,12 +382,7 @@ impl TidalProvider {
         };
 
         let mut track = client.get_track(track_id).await;
-        let mut playback = client
-            .get_track_postpaywall_playback_info(track_id, None)
-            .await;
-        if track.as_ref().is_err_and(is_unauthorized)
-            || playback.as_ref().is_err_and(is_unauthorized)
-        {
+        if track.as_ref().is_err_and(is_unauthorized) {
             let client = {
                 let mut client = self.client.lock().await;
                 client.refresh_access_token(true).await?;
@@ -300,16 +390,12 @@ impl TidalProvider {
                 client.clone()
             };
             track = client.get_track(track_id).await;
-            playback = client
-                .get_track_postpaywall_playback_info(track_id, None)
-                .await;
         }
         let track = track?;
-        let playback = playback?;
-        let quality = playback.audio_quality.clone();
+        let playback = self.maximum_playback_info(track_id).await?;
 
-        let source = match playback.manifest_parsed {
-            Some(ParsedTrackManifest::Json(manifest)) => {
+        let source = match playback.manifest {
+            MaximumPlaybackManifest::Direct(manifest) => {
                 let url = manifest.urls.into_iter().next().ok_or_else(|| {
                     io::Error::other("Tidal playback manifest contains no stream URL")
                 })?;
@@ -317,15 +403,10 @@ impl TidalProvider {
                 PlaybackSource::Direct {
                     url: normalize_dash_url(&url),
                     mime_type: manifest.mime_type,
-                    quality,
                 }
             }
-            Some(ParsedTrackManifest::Dash(manifest)) => {
-                playback_source_from_dash(&self.http_client, manifest, track.duration, quality)
-                    .await?
-            }
-            None => {
-                return Err(io::Error::other("Tidlers did not parse the playback manifest").into());
+            MaximumPlaybackManifest::Dash(manifest) => {
+                playback_source_from_dash(&self.http_client, manifest, track.duration).await?
             }
         };
         self.playback_sources.lock().await.insert(
@@ -337,6 +418,310 @@ impl TidalProvider {
         );
 
         Ok(source)
+    }
+
+    async fn maximum_playback_info(&self, track_id: &str) -> ProviderResult<MaximumPlaybackInfo> {
+        {
+            let cache = self.maximum_playback_cache.lock().await;
+            if let Some(cached) = cache.get(track_id)
+                && cached.cached_at.elapsed() < PLAYBACK_SOURCE_TTL
+            {
+                return parse_maximum_playback_info(cached.playback.clone());
+            }
+        }
+
+        let mut client = {
+            let mut client = self.client.lock().await;
+            if client.refresh_access_token(false).await? {
+                save_session(&client)?;
+            }
+            client.clone()
+        };
+        let mut response = self.maximum_playback_response(&client, track_id).await?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            client = {
+                let mut client = self.client.lock().await;
+                client.refresh_access_token(true).await?;
+                save_session(&client)?;
+                client.clone()
+            };
+            response = self.maximum_playback_response(&client, track_id).await?;
+        }
+
+        let response = response.error_for_status()?;
+        let raw = response.json::<RawPlaybackInfo>().await?;
+        let parsed = parse_maximum_playback_info(raw.clone())?;
+        self.maximum_playback_cache.lock().await.insert(
+            track_id.to_owned(),
+            CachedMaximumPlayback {
+                playback: raw,
+                cached_at: Instant::now(),
+            },
+        );
+        Ok(parsed)
+    }
+
+    async fn maximum_playback_response(
+        &self,
+        client: &TidalClient,
+        track_id: &str,
+    ) -> ProviderResult<reqwest::Response> {
+        let access_token = client
+            .session
+            .auth
+            .access_token
+            .as_deref()
+            .ok_or_else(|| io::Error::other("Tidal access token is missing"))?;
+        let country_code = client
+            .user_info
+            .as_ref()
+            .map(|user| user.country_code.as_str())
+            .ok_or_else(|| io::Error::other("Tidal account country is missing"))?;
+
+        Ok(self
+            .http_client
+            .get(format!(
+                "{TIDAL_API_BASE_URL}/tracks/{track_id}/playbackinfopostpaywall"
+            ))
+            .bearer_auth(access_token)
+            .query(&[
+                ("countryCode", country_code),
+                ("audioquality", TIDAL_MAX_AUDIO_QUALITY),
+                ("playbackmode", "STREAM"),
+                ("assetpresentation", "FULL"),
+            ])
+            .send()
+            .await?)
+    }
+}
+
+fn parse_maximum_playback_info(raw: RawPlaybackInfo) -> ProviderResult<MaximumPlaybackInfo> {
+    let decoded = general_purpose::STANDARD.decode(&raw.manifest)?;
+
+    if let Ok(manifest) = serde_json::from_slice::<JsonTrackManifest>(&decoded) {
+        return Ok(MaximumPlaybackInfo {
+            audio_quality: raw.audio_quality,
+            manifest: MaximumPlaybackManifest::Direct(manifest),
+            sampling_rate_khz: None,
+            bit_depth: None,
+        });
+    }
+
+    let xml = std::str::from_utf8(&decoded)?;
+    let (manifest, sampling_rate_khz, bit_depth) = parse_dash_manifest(xml)?;
+    Ok(MaximumPlaybackInfo {
+        audio_quality: raw.audio_quality,
+        manifest: MaximumPlaybackManifest::Dash(manifest),
+        sampling_rate_khz,
+        bit_depth,
+    })
+}
+
+fn parse_dash_manifest(xml: &str) -> ProviderResult<(DashManifest, Option<f64>, Option<u32>)> {
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut urls = Vec::new();
+    let mut mime_type = String::new();
+    let mut codecs = String::new();
+    let mut bitrate = None;
+    let mut initialization_url = None;
+    let mut media_url_template = None;
+    let mut timescale = None;
+    let mut duration = None;
+    let mut start_number = None;
+    let mut sampling_rate_hz = None;
+    let mut bit_depth = None;
+    let mut buffer = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Empty(element)) | Ok(Event::Start(element)) => {
+                match element.name().as_ref() {
+                    b"AdaptationSet" => {
+                        for attribute in element.attributes().flatten() {
+                            if attribute.key.as_ref() == b"mimeType" {
+                                mime_type = String::from_utf8_lossy(&attribute.value).to_string();
+                            }
+                        }
+                    }
+                    b"Representation" => {
+                        for attribute in element.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attribute.value);
+                            match attribute.key.as_ref() {
+                                b"id" => {
+                                    bit_depth = value
+                                        .rsplit(',')
+                                        .next()
+                                        .and_then(|value| value.parse::<u32>().ok());
+                                }
+                                b"codecs" => codecs = value.to_string(),
+                                b"bandwidth" => bitrate = value.parse::<u32>().ok(),
+                                b"audioSamplingRate" => {
+                                    sampling_rate_hz = value.parse::<u32>().ok()
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"SegmentTemplate" => {
+                        for attribute in element.attributes().flatten() {
+                            let value = String::from_utf8_lossy(&attribute.value).to_string();
+                            match attribute.key.as_ref() {
+                                b"initialization" => initialization_url = Some(value),
+                                b"media" => media_url_template = Some(value),
+                                b"timescale" => timescale = value.parse::<u32>().ok(),
+                                b"duration" => duration = value.parse::<u32>().ok(),
+                                b"startNumber" => start_number = value.parse::<u32>().ok(),
+                                _ => {}
+                            }
+                        }
+                    }
+                    b"BaseURL" => {
+                        if let Ok(Event::Text(text)) = reader.read_event_into(&mut buffer) {
+                            let url = String::from_utf8_lossy(text.as_ref()).to_string();
+                            if !url.is_empty() {
+                                urls.push(url);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(error) => {
+                return Err(io::Error::other(format!(
+                    "Could not parse Tidal DASH manifest: {error}"
+                ))
+                .into());
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+
+    if let Some(url) = initialization_url.as_ref() {
+        urls.push(url.clone());
+    }
+    if let Some(url) = media_url_template.as_ref() {
+        urls.push(url.clone());
+    }
+    if urls.is_empty() {
+        return Err(io::Error::other("Tidal DASH manifest contains no stream URLs").into());
+    }
+
+    let sampling_rate_khz = sampling_rate_hz.map(|rate| f64::from(rate) / 1_000.0);
+    Ok((
+        DashManifest {
+            mime_type,
+            codecs,
+            urls,
+            bitrate,
+            initialization_url,
+            media_url_template,
+            timescale,
+            duration,
+            start_number,
+        },
+        sampling_rate_khz,
+        bit_depth,
+    ))
+}
+
+fn tidal_stream_quality_label(
+    manifest: &MaximumPlaybackManifest,
+    sampling_rate_khz: Option<f64>,
+    bit_depth: Option<u32>,
+    provider_quality: &str,
+) -> String {
+    let codec = match manifest {
+        MaximumPlaybackManifest::Dash(manifest) => manifest.codecs.as_str(),
+        MaximumPlaybackManifest::Direct(manifest) => manifest.codecs.as_str(),
+    };
+    let codec = if codec.eq_ignore_ascii_case("flac") {
+        "FLAC"
+    } else if codec.starts_with("mp4a") {
+        "AAC"
+    } else if codec.is_empty() {
+        provider_quality
+    } else {
+        codec
+    };
+
+    match (bit_depth, sampling_rate_khz) {
+        (Some(depth), Some(rate)) => {
+            let rate = if rate.fract() == 0.0 {
+                format!("{rate:.0}")
+            } else {
+                format!("{rate:.1}")
+            };
+            format!("{codec} {depth}-bit/{rate} kHz")
+        }
+        _ if codec == "AAC" && provider_quality == "HIGH" => "AAC 320 kbps".to_owned(),
+        _ => codec.to_owned(),
+    }
+}
+
+fn search_track_metadata(track: SearchTrackHit) -> TrackMetadata {
+    let track_id = track.id.to_string();
+    let mut artists = track
+        .artists
+        .into_iter()
+        .filter_map(|artist| {
+            let name = artist.name.filter(|name| !name.trim().is_empty())?;
+            Some(ArtistMetadata {
+                provider_id: artist.id.map(|id| id.to_string()).unwrap_or_default(),
+                name,
+                image_url: artist
+                    .picture
+                    .filter(|picture| !picture.is_empty())
+                    .map(|picture| uuid_to_url_with_size(&picture, 750)),
+            })
+        })
+        .collect::<Vec<_>>();
+    if artists.is_empty() {
+        artists.push(ArtistMetadata {
+            provider_id: String::new(),
+            name: "Unknown Artist".to_owned(),
+            image_url: None,
+        });
+    }
+    let primary_artist = artists[0].clone();
+    let album = track.album.map(|album| AlbumMetadata {
+        provider_id: album.id.to_string(),
+        title: album.title,
+        version: album.version,
+        artists: artists.clone(),
+        cover_url: (!album.cover.is_empty()).then(|| uuid_to_url_with_size(&album.cover, 1280)),
+        release_date: album.release_date,
+        label: None,
+        genres: track.genres.clone().unwrap_or_default(),
+        upc: None,
+    });
+
+    TrackMetadata {
+        id: format!("tidal:{track_id}"),
+        provider: MusicProvider::Tidal,
+        provider_track_id: track_id.clone(),
+        title: track.title,
+        version: track.version,
+        primary_artist,
+        artists,
+        album,
+        duration_seconds: track.duration,
+        track_number: track.track_number,
+        disc_number: track.volume_number,
+        explicit: track.explicit,
+        isrc: track.isrc,
+        copyright: track.copyright,
+        quality: track.audio_quality,
+        maximum_sampling_rate_khz: None,
+        maximum_bit_depth: None,
+        playback: PlaybackMetadata {
+            kind: PlaybackKind::Dash,
+            url: format!("/api/providers/tidal/tracks/{track_id}/manifest.mpd"),
+        },
     }
 }
 
@@ -351,7 +736,6 @@ async fn playback_source_from_dash(
     http_client: &reqwest::Client,
     manifest: DashManifest,
     track_duration_seconds: u64,
-    quality: String,
 ) -> ProviderResult<PlaybackSource> {
     let initialization_url = manifest
         .get_init_url()
@@ -386,7 +770,6 @@ async fn playback_source_from_dash(
         start_number,
         segment_count: dash_segment_count(timescale, segment_duration, track_duration_seconds),
         track_duration_seconds,
-        quality,
     })
 }
 
@@ -578,10 +961,18 @@ fn load_track_metadata_cache(path: &PathBuf) -> HashMap<String, TrackMetadata> {
         }
     };
 
-    serde_json::from_slice(&encoded).unwrap_or_else(|error| {
-        eprintln!("Could not decode Tidal metadata cache: {error}");
-        HashMap::new()
-    })
+    let mut cache = serde_json::from_slice::<HashMap<String, TrackMetadata>>(&encoded)
+        .unwrap_or_else(|error| {
+            eprintln!("Could not decode Tidal metadata cache: {error}");
+            HashMap::new()
+        });
+    cache.retain(|_, metadata| {
+        !matches!(
+            metadata.quality.as_deref(),
+            Some("LOW" | "HIGH" | "LOSSLESS" | "HI_RES" | "HI_RES_LOSSLESS")
+        )
+    });
+    cache
 }
 
 fn save_track_metadata_cache(
@@ -616,7 +1007,31 @@ fn validate_album_id(album_id: &str) -> ProviderResult<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{base_media_decode_time, dash_segment_count, normalize_dash_url};
+    use super::{
+        MaximumPlaybackManifest, base_media_decode_time, dash_segment_count, normalize_dash_url,
+        parse_dash_manifest, tidal_stream_quality_label,
+    };
+
+    #[test]
+    fn reads_exact_hi_res_quality_from_tidal_manifest() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<MPD><Period><AdaptationSet mimeType="audio/mp4"><Representation id="FLAC_HIRES,192000,24" codecs="flac" bandwidth="5607961" audioSamplingRate="192000"><SegmentTemplate timescale="192000" duration="768000" startNumber="1" initialization="https://audio.example/init" media="https://audio.example/$Number$" /></Representation></AdaptationSet></Period></MPD>"#;
+
+        let (manifest, sampling_rate_khz, bit_depth) = parse_dash_manifest(xml).unwrap();
+
+        assert_eq!(manifest.codecs, "flac");
+        assert_eq!(sampling_rate_khz, Some(192.0));
+        assert_eq!(bit_depth, Some(24));
+        assert_eq!(
+            tidal_stream_quality_label(
+                &MaximumPlaybackManifest::Dash(manifest),
+                sampling_rate_khz,
+                bit_depth,
+                "HI_RES_LOSSLESS",
+            ),
+            "FLAC 24-bit/192 kHz"
+        );
+    }
 
     #[test]
     fn decodes_xml_entities_in_signed_dash_urls() {
