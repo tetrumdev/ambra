@@ -17,6 +17,7 @@ import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -33,9 +34,8 @@ import {
 
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchProvider, setSearchProvider] =
-    useState<SearchProvider>("tidal");
+  const searchQuery = preferences.search.query;
+  const searchProvider = preferences.search.provider;
   const library = useMusicLibrary();
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
@@ -50,14 +50,6 @@ function App() {
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
-  );
-  const currentSearchContext = useMemo(
-    () =>
-      searchQueueContext(
-        search.results,
-        `search:${searchProvider}:${searchQuery.trim()}`,
-      ),
-    [search.results, searchProvider, searchQuery],
   );
   const queue = useQueue(availableTracks, preferences.playback.trackId);
   const playbackTracks = useMemo(() => {
@@ -84,8 +76,9 @@ function App() {
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const f11FullscreenRef = useRef(false);
+  const fullscreenFocusTimersRef = useRef<number[]>([]);
   const queueReturnScreenRef = useRef<"library" | "search">(
     screen === "search" ? "search" : "library",
   );
@@ -104,7 +97,10 @@ function App() {
     const syncFullscreen = async () => {
       try {
         const fullscreen = await appWindow.isFullscreen();
-        if (!disposed) setIsFullscreen(fullscreen);
+        if (!disposed) {
+          f11FullscreenRef.current = fullscreen;
+          setIsFullscreen(fullscreen);
+        }
       } catch (error) {
         console.error("Could not read fullscreen state:", error);
       }
@@ -125,7 +121,7 @@ function App() {
   useEffect(() => {
     document.documentElement.toggleAttribute(
       "data-window-fullscreen",
-      isFullscreen,
+      isFullscreen === true,
     );
 
     return () => {
@@ -146,6 +142,23 @@ function App() {
         await appWindow.setFullscreen(nextFullscreen);
         f11FullscreenRef.current = nextFullscreen;
         setIsFullscreen(nextFullscreen);
+
+        for (const timer of fullscreenFocusTimersRef.current) {
+          window.clearTimeout(timer);
+        }
+        fullscreenFocusTimersRef.current = [0, 250, 700].map((delay) =>
+          window.setTimeout(() => {
+            void appWindow
+              .setFocus()
+              .then(() => getCurrentWebview().setFocus())
+              .catch((error) => {
+                console.error(
+                  "Could not restore focus after fullscreen transition:",
+                  error,
+                );
+              });
+          }, delay),
+        );
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -155,6 +168,9 @@ function App() {
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
+      for (const timer of fullscreenFocusTimersRef.current) {
+        window.clearTimeout(timer);
+      }
     };
   }, []);
 
@@ -181,9 +197,13 @@ function App() {
         return;
       }
 
-      if (f11FullscreenRef.current) {
-        if (event.repeat) return;
+      if (event.repeat) return;
+      setPreferences((current) => ({
+        ...current,
+        ui: { ...current.ui, screen: queueReturnScreenRef.current },
+      }));
 
+      if (f11FullscreenRef.current) {
         try {
           const appWindow = getCurrentWindow();
           if (!(await appWindow.isFullscreen())) {
@@ -194,12 +214,6 @@ function App() {
         }
         return;
       }
-
-      if (event.repeat) return;
-      setPreferences((current) => ({
-        ...current,
-        ui: { ...current.ui, screen: queueReturnScreenRef.current },
-      }));
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
@@ -294,8 +308,27 @@ function App() {
   };
 
   const changeSearchQuery = (nextQuery: string) => {
-    setSearchQuery(nextQuery);
-    changeScreen(nextQuery.trim() ? "search" : "library");
+    setPreferences((current) => ({
+      ...current,
+      ui: {
+        ...current.ui,
+        screen: nextQuery.trim() ? "search" : "library",
+      },
+      search: {
+        ...current.search,
+        query: nextQuery,
+      },
+    }));
+  };
+
+  const changeSearchProvider = (provider: SearchProvider) => {
+    setPreferences((current) => ({
+      ...current,
+      search: {
+        ...current.search,
+        provider,
+      },
+    }));
   };
 
   const playFromLibrary = (trackId: GlobalTrackId) => {
@@ -303,9 +336,70 @@ function App() {
     player.playTrack(trackId);
   };
 
-  const playFromSearch = (trackId: GlobalTrackId) => {
-    queue.playFromContext(currentSearchContext, trackId);
-    player.playTrack(trackId);
+  const resolvedSearchContext = async (trackId: GlobalTrackId) => {
+    const track = await search.resolveTrack(trackId);
+    const tracks = track
+      ? search.results.map((candidate) =>
+          candidate.globalId === trackId ? track : candidate,
+        )
+      : search.results;
+    return {
+      context: searchQueueContext(
+        tracks,
+        `search:${searchProvider}:${searchQuery.trim()}`,
+      ),
+      track,
+    };
+  };
+
+  const visibleSearchContext = () =>
+    searchQueueContext(
+      search.results,
+      `search:${searchProvider}:${searchQuery.trim()}`,
+    );
+
+  const playFromSearch = async (trackId: GlobalTrackId) => {
+    const { context, track } = await resolvedSearchContext(trackId);
+    queue.playFromContext(context, trackId);
+    player.playTrack(trackId, track);
+  };
+
+  const playStandaloneFromSearch = async (trackId: GlobalTrackId) => {
+    const { context, track } = await resolvedSearchContext(trackId);
+    const entry = queueEntryForTrack(context, trackId);
+    if (!entry) return;
+    queue.playStandalone(entry);
+    player.playTrack(trackId, track);
+  };
+
+  const addToQueueFromSearch = async (trackId: GlobalTrackId) => {
+    if (queue.currentEntry) {
+      const entry = queueEntryForTrack(visibleSearchContext(), trackId);
+      if (!entry) return;
+      queue.addToQueue(entry);
+      void search.resolveTrack(trackId);
+      return;
+    }
+    const { context, track } = await resolvedSearchContext(trackId);
+    const entry = queueEntryForTrack(context, trackId);
+    if (!entry) return;
+    queue.addToQueue(entry);
+    player.playTrack(trackId, track);
+  };
+
+  const playNextFromSearch = async (trackId: GlobalTrackId) => {
+    if (queue.currentEntry) {
+      const entry = queueEntryForTrack(visibleSearchContext(), trackId);
+      if (!entry) return;
+      queue.playNext(entry);
+      void search.resolveTrack(trackId);
+      return;
+    }
+    const { context, track } = await resolvedSearchContext(trackId);
+    const entry = queueEntryForTrack(context, trackId);
+    if (!entry) return;
+    queue.playNext(entry);
+    player.playTrack(trackId, track);
   };
 
   const playStandalone = (
@@ -358,14 +452,19 @@ function App() {
     <>
       <AppChrome
         currentScreen={screen}
+        isFullscreen={isFullscreen}
         onExit={closeCurrentScreen}
       />
 
+      {player.currentTrack && (
+        <BackgroundArtwork
+          track={player.currentTrack}
+          active={isBigscreen}
+        />
+      )}
+
       {isBigscreen ? (
-        <>
-          <AlbumArtwork track={player.currentTrack!} />
-          <BackgroundArtwork track={player.currentTrack!} />
-        </>
+        <AlbumArtwork track={player.currentTrack!} />
       ) : isQueueView ? (
         <main id="queue">
           <Queue
@@ -382,7 +481,7 @@ function App() {
             query={searchQuery}
             provider={searchProvider}
             onQueryChange={changeSearchQuery}
-            onProviderChange={setSearchProvider}
+            onProviderChange={changeSearchProvider}
           />
           <Sidebar />
           {isSearchView ? (
@@ -393,15 +492,9 @@ function App() {
               isSearching={search.isSearching}
               error={search.error}
               playTrack={playFromSearch}
-              playStandalone={(trackId) =>
-                playStandalone(currentSearchContext, trackId)
-              }
-              addToQueue={(trackId) =>
-                addToQueue(currentSearchContext, trackId)
-              }
-              playNext={(trackId) =>
-                playNext(currentSearchContext, trackId)
-              }
+              playStandalone={playStandaloneFromSearch}
+              addToQueue={addToQueueFromSearch}
+              playNext={playNextFromSearch}
               addToLibrary={(trackId) => {
                 const track = search.results.find(
                   (candidate) => candidate.globalId === trackId,

@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 type FluidGradientBackgroundProps = {
   colors: string[];
   seed: string;
+  active: boolean;
 };
 
 const COLOR_TRANSITION_MS = 1800;
@@ -21,7 +22,7 @@ precision mediump float;
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_seed;
-uniform vec3 u_colors[3];
+uniform vec3 u_colors[4];
 
 float hash(vec2 point) {
   return fract(sin(dot(point, vec2(127.1, 311.7)) + u_seed) * 43758.5453);
@@ -66,18 +67,19 @@ void main() {
   );
   vec2 fluidPoint = point + (firstWarp - 0.5) * 0.95 + (secondWarp - 0.5) * 0.4;
 
-  vec3 fields = vec3(
+  vec4 fields = vec4(
     fbm(fluidPoint * 1.25 + vec2(0.0, time)),
     fbm(fluidPoint * 1.31 + vec2(5.7 + time * 0.7, -3.1)),
-    fbm(fluidPoint * 1.18 + vec2(-4.2, 6.8 - time * 0.83))
+    fbm(fluidPoint * 1.18 + vec2(-4.2, 6.8 - time * 0.83)),
+    fbm(fluidPoint * 1.38 + vec2(2.6 - time * 0.52, -7.4 + time * 0.35))
   );
-  fields += vec3(0.08, 0.02, -0.08);
-  fields = exp((fields - max(fields.x, max(fields.y, fields.z))) * 9.0);
-  fields /= fields.x + fields.y + fields.z;
+  fields = exp((fields - max(max(fields.x, fields.y), max(fields.z, fields.w))) * 9.0);
+  fields /= fields.x + fields.y + fields.z + fields.w;
 
   vec3 color = u_colors[0] * fields.x
     + u_colors[1] * fields.y
-    + u_colors[2] * fields.z;
+    + u_colors[2] * fields.z
+    + u_colors[3] * fields.w;
   float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
   color = mix(vec3(luminance), color, 1.18);
   color *= 0.84 + 0.22 * fbm(fluidPoint * 2.2 + secondWarp);
@@ -108,8 +110,8 @@ function colorComponents(color: string) {
 }
 
 function paletteComponents(colors: string[]) {
-  const palette = colors.slice(0, 3);
-  while (palette.length < 3) palette.push(palette[0] ?? "#000000");
+  const palette = colors.slice(0, 4);
+  while (palette.length < 4) palette.push(palette[0] ?? "#000000");
   return palette.flatMap(colorComponents);
 }
 
@@ -136,9 +138,10 @@ function seedNumber(seed: string) {
 export function FluidGradientBackground({
   colors,
   seed,
+  active,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const paletteKey = colors.slice(0, 3).join(":");
+  const paletteKey = colors.slice(0, 4).join(":");
   const initialSeedRef = useRef(seed);
   const transitionRef = useRef({
     from: paletteComponents(colors),
@@ -146,6 +149,8 @@ export function FluidGradientBackground({
     startedAt: 0,
   });
   const drawRef = useRef<((now: number) => void) | null>(null);
+  const animationFrameRef = useRef(0);
+  const activeRef = useRef(active);
   const reducedMotionRef = useRef(false);
 
   useEffect(() => {
@@ -154,11 +159,20 @@ export function FluidGradientBackground({
     const progress = easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS);
     const target = paletteComponents(colors);
     const current = mixPalette(previous.from, previous.to, progress);
-    transitionRef.current = reducedMotionRef.current
+    transitionRef.current = reducedMotionRef.current || !activeRef.current
       ? { from: target, to: target, startedAt: now }
       : { from: current, to: target, startedAt: now };
-    if (reducedMotionRef.current) drawRef.current?.(now);
+    if (reducedMotionRef.current || !activeRef.current) drawRef.current?.(now);
   }, [paletteKey]);
+
+  useEffect(() => {
+    activeRef.current = active;
+    cancelAnimationFrame(animationFrameRef.current);
+    animationFrameRef.current = 0;
+    if (drawRef.current) {
+      animationFrameRef.current = requestAnimationFrame(drawRef.current);
+    }
+  }, [active]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -215,9 +229,9 @@ export function FluidGradientBackground({
 
     const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     reducedMotionRef.current = reducedMotion;
-    let animationFrame = 0;
     const startedAt = performance.now();
     const draw = (now: number) => {
+      animationFrameRef.current = 0;
       const pixelRatio = Math.min(window.devicePixelRatio, 1.5);
       const width = Math.max(1, Math.round(canvas.clientWidth * pixelRatio));
       const height = Math.max(1, Math.round(canvas.clientHeight * pixelRatio));
@@ -237,14 +251,17 @@ export function FluidGradientBackground({
       gl.uniform2f(resolution, width, height);
       gl.uniform1f(time, reducedMotion ? 0 : (now - startedAt) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (!reducedMotion) animationFrame = requestAnimationFrame(draw);
+      if (!reducedMotion && activeRef.current) {
+        animationFrameRef.current = requestAnimationFrame(draw);
+      }
     };
     drawRef.current = draw;
-    animationFrame = requestAnimationFrame(draw);
+    animationFrameRef.current = requestAnimationFrame(draw);
 
     return () => {
       drawRef.current = null;
-      cancelAnimationFrame(animationFrame);
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = 0;
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
       gl.deleteShader(vertexShader);
