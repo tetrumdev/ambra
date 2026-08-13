@@ -16,6 +16,15 @@
     border-bottom: 1px solid #535353;
 }
 
+.bigscreenTitlebar {
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 30px;
+    z-index: 50;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
 .xContainer {
     position: absolute;
     top: 40px;

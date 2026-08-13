@@ -25,3 +25,28 @@ export function nativeAudioQueue(tracks: Track[], currentTrackId: string) {
 export function trackForNativeAudioSource(tracks: Track[], source: string) {
   return tracks.find((track) => nativeAudioSource(track) === source);
 }
+
+export function trackForNativeAudioStatus(
+  tracks: Track[],
+  currentTrackId: string | null,
+  nextTrack: Track | undefined,
+  currentSource: string | null,
+) {
+  if (!currentSource) return undefined;
+
+  const currentTrack = tracks.find(
+    (track) => track.globalId === currentTrackId,
+  );
+  if (
+    currentTrack &&
+    nativeAudioSource(currentTrack) === currentSource
+  ) {
+    return { track: currentTrack, advanced: false };
+  }
+
+  const sourceTrack = trackForNativeAudioSource(tracks, currentSource);
+  if (!sourceTrack || sourceTrack.globalId !== nextTrack?.globalId) {
+    return undefined;
+  }
+  return { track: sourceTrack, advanced: true };
+}

@@ -163,13 +163,11 @@ pub fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
 
     let mut selected = vec![candidates.remove(0)];
     if !candidates.is_empty() {
-        let second = best_cluster_index(&candidates, &selected, |frequency, distance| {
-            frequency * (0.6 + 0.4 * distance)
-        });
+        let second = balanced_cluster_index(&candidates, &selected);
         selected.push(candidates.remove(second));
     }
 
-    if !candidates.is_empty() {
+    while selected.len() < 4 && !candidates.is_empty() {
         let minimum_accent_pixels = ((pixels.len() as f32 * 0.005).ceil() as usize).max(2);
         let significant = candidates
             .iter()
@@ -190,7 +188,7 @@ pub fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
         selected.push(candidates.remove(accent));
     }
 
-    while selected.len() < 3 {
+    while selected.len() < 4 {
         selected.push(*selected.last()?);
     }
 
@@ -216,11 +214,7 @@ struct ColorCluster {
     color: [f32; 3],
 }
 
-fn best_cluster_index(
-    candidates: &[ColorCluster],
-    selected: &[ColorCluster],
-    score: impl Fn(f32, f32) -> f32,
-) -> usize {
+fn balanced_cluster_index(candidates: &[ColorCluster], selected: &[ColorCluster]) -> usize {
     let total = candidates
         .iter()
         .map(|cluster| cluster.count)
@@ -231,9 +225,10 @@ fn best_cluster_index(
         .enumerate()
         .max_by(|(_, left), (_, right)| {
             let cluster_score = |cluster: &ColorCluster| {
-                let frequency = cluster.count as f32 / total as f32;
+                let frequency = (cluster.count as f32 / total as f32).powf(0.75);
                 let distance = normalized_nearest_distance(cluster.color, selected);
-                score(frequency, distance)
+                let chroma = color_chroma(cluster.color);
+                frequency * (0.35 + 0.35 * distance + 0.3 * chroma)
             };
             cluster_score(left).total_cmp(&cluster_score(right))
         })
@@ -244,7 +239,15 @@ fn best_cluster_index(
 fn accent_score(cluster: &ColorCluster, selected: &[ColorCluster], total: usize) -> f32 {
     let frequency = (cluster.count as f32 / total as f32).powf(0.25);
     let diversity = normalized_nearest_distance(cluster.color, selected);
-    frequency * diversity.powi(2)
+    let hue_diversity = normalized_nearest_chromatic_distance(cluster.color, selected);
+    let chroma = color_chroma(cluster.color);
+    frequency * (diversity * 0.25 + hue_diversity * 0.6 + chroma * 0.15).powi(2)
+}
+
+fn color_chroma(color: [f32; 3]) -> f32 {
+    let maximum = color.into_iter().fold(0.0_f32, f32::max);
+    let minimum = color.into_iter().fold(255.0_f32, f32::min);
+    (maximum - minimum) / 255.0
 }
 
 fn normalized_nearest_distance(color: [f32; 3], selected: &[ColorCluster]) -> f32 {
@@ -255,6 +258,29 @@ fn normalized_nearest_distance(color: [f32; 3], selected: &[ColorCluster]) -> f3
         .sqrt()
         / 765.0)
         .clamp(0.0, 1.0)
+}
+
+fn normalized_nearest_chromatic_distance(color: [f32; 3], selected: &[ColorCluster]) -> f32 {
+    let chromaticity = color_chromaticity(color);
+    selected
+        .iter()
+        .map(|cluster| {
+            let selected_chromaticity = color_chromaticity(cluster.color);
+            chromaticity
+                .iter()
+                .zip(selected_chromaticity)
+                .map(|(left, right)| (left - right).powi(2))
+                .sum::<f32>()
+                .sqrt()
+                / (255.0 * 2.0_f32.sqrt())
+        })
+        .fold(f32::INFINITY, f32::min)
+        .clamp(0.0, 1.0)
+}
+
+fn color_chromaticity(color: [f32; 3]) -> [f32; 3] {
+    let average = (color[0] + color[1] + color[2]) / 3.0;
+    color.map(|channel| channel - average)
 }
 
 fn nearest_color_distance(color: [f32; 3], centroids: &[[f32; 3]]) -> f32 {
@@ -349,7 +375,7 @@ mod tests {
     };
 
     #[test]
-    fn extracts_three_dominant_artwork_colors() {
+    fn extracts_four_balanced_artwork_colors() {
         use std::io::Cursor;
 
         let mut image = image::RgbImage::new(30, 10);
@@ -368,7 +394,7 @@ mod tests {
             .unwrap();
 
         let colors = dominant_colors(encoded.get_ref()).unwrap();
-        assert_eq!(colors.len(), 3);
+        assert_eq!(colors.len(), 4);
         let dominant_red = u8::from_str_radix(&colors[0][1..3], 16).unwrap();
         let dominant_green = u8::from_str_radix(&colors[0][3..5], 16).unwrap();
         let dominant_blue = u8::from_str_radix(&colors[0][5..7], 16).unwrap();
@@ -397,12 +423,81 @@ mod tests {
             .unwrap();
 
         let colors = dominant_colors(encoded.get_ref()).unwrap();
-        assert_eq!(colors.len(), 3);
-        let accent = &colors[2];
-        let red = u8::from_str_radix(&accent[1..3], 16).unwrap();
-        let green = u8::from_str_radix(&accent[3..5], 16).unwrap();
-        let blue = u8::from_str_radix(&accent[5..7], 16).unwrap();
-        assert!(red > 180 && red > green * 3 && red > blue * 3);
+        assert_eq!(colors.len(), 4);
+        assert!(colors.iter().any(|accent| {
+            let red = u8::from_str_radix(&accent[1..3], 16).unwrap();
+            let green = u8::from_str_radix(&accent[3..5], 16).unwrap();
+            let blue = u8::from_str_radix(&accent[5..7], 16).unwrap();
+            red > 180 && red > green * 3 && red > blue * 3
+        }));
+    }
+
+    #[test]
+    fn preserves_multiple_color_families_in_neutral_heavy_artwork() {
+        use std::io::Cursor;
+
+        let mut image = image::RgbImage::new(100, 100);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let index = y * 100 + x;
+            *pixel = if index < 5_000 {
+                image::Rgb([240, 237, 232])
+            } else if index < 7_000 {
+                image::Rgb([160, 159, 154])
+            } else if index < 8_700 {
+                image::Rgb([125, 88, 65])
+            } else {
+                image::Rgb([120, 175, 190])
+            };
+        }
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+
+        let colors = dominant_colors(encoded.get_ref()).unwrap();
+        assert_eq!(colors.len(), 4);
+        assert!(colors.iter().any(|color| {
+            let red = u8::from_str_radix(&color[1..3], 16).unwrap();
+            let blue = u8::from_str_radix(&color[5..7], 16).unwrap();
+            u16::from(blue) > u16::from(red) + 30
+        }));
+        assert!(colors.iter().any(|color| {
+            let red = u8::from_str_radix(&color[1..3], 16).unwrap();
+            let blue = u8::from_str_radix(&color[5..7], 16).unwrap();
+            u16::from(red) > u16::from(blue) + 30
+        }));
+    }
+
+    #[test]
+    fn keeps_a_fourth_major_accent_family() {
+        use std::io::Cursor;
+
+        let mut image = image::RgbImage::new(100, 100);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let index = y * 100 + x;
+            *pixel = if index < 5_000 {
+                image::Rgb([125, 178, 184])
+            } else if index < 7_000 {
+                image::Rgb([116, 136, 137])
+            } else if index < 8_500 {
+                image::Rgb([232, 214, 36])
+            } else {
+                image::Rgb([233, 138, 173])
+            };
+        }
+        let mut encoded = Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+
+        let colors = dominant_colors(encoded.get_ref()).unwrap();
+        assert_eq!(colors.len(), 4);
+        assert!(colors.iter().any(|color| {
+            let red = u8::from_str_radix(&color[1..3], 16).unwrap();
+            let green = u8::from_str_radix(&color[3..5], 16).unwrap();
+            let blue = u8::from_str_radix(&color[5..7], 16).unwrap();
+            red > 200 && blue > 140 && green < 170
+        }));
     }
 
     #[test]

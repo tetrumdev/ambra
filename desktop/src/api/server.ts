@@ -63,8 +63,18 @@ export type ArtworkQuality = {
   colors: string[];
 };
 
+type TrackPlayback = {
+  quality: string;
+  maximumSamplingRateKHz: number | null;
+  maximumBitDepth: number | null;
+  playback: {
+    kind: PlaybackKind;
+    url: string;
+  };
+};
+
 const artworkQualityRequests = new Map<string, Promise<ArtworkQuality | null>>();
-const artworkPaletteVersion = "palette-v2";
+const artworkPaletteVersion = "palette-v4";
 
 export function highestQualityArtwork(
   track: Track,
@@ -105,7 +115,7 @@ export function highestQualityArtwork(
         );
       }
       const artwork = (await response.json()) as ArtworkQuality;
-      if (!Array.isArray(artwork.colors) || artwork.colors.length !== 3) {
+      if (!Array.isArray(artwork.colors) || artwork.colors.length !== 4) {
         artworkQualityRequests.delete(cacheKey);
       }
       return artwork;
@@ -215,4 +225,33 @@ export async function searchServerTracks(
   return responseTracks(
     await fetch(`${serverBaseUrl}/api/search/tracks?${parameters}`, { signal }),
   );
+}
+
+export async function resolveTrackPlayback(
+  track: Track,
+  signal?: AbortSignal,
+): Promise<Track> {
+  if (track.provider !== "tidal") return track;
+
+  const parameters = new URLSearchParams({
+    durationSeconds: String(track.durationSeconds),
+  });
+  const response = await fetch(
+    `${serverBaseUrl}/api/providers/tidal/tracks/${encodeURIComponent(track.providerTrackId)}/playback?${parameters}`,
+    { signal },
+  );
+  if (!response.ok) {
+    throw new Error(
+      `Tidal playback resolver returned HTTP ${response.status}`,
+    );
+  }
+  const details = (await response.json()) as TrackPlayback;
+  return {
+    ...track,
+    audio: `${serverBaseUrl}${details.playback.url}`,
+    playbackKind: details.playback.kind,
+    quality: details.quality,
+    maximumSamplingRateKHz: details.maximumSamplingRateKHz,
+    maximumBitDepth: details.maximumBitDepth,
+  };
 }

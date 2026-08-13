@@ -19,6 +19,7 @@ import {
   advanceQueue,
   completeQueueTrack,
   jumpQueue,
+  refreshQueueTracks,
   removeQueueEntries,
   rewindQueue,
   type QueueState,
@@ -131,6 +132,12 @@ export function useQueue(
       queueSnapshot(state.history, state.current, state.upcoming),
     );
   }, [isRestored, state]);
+
+  useEffect(() => {
+    if (!isRestored) return;
+    const refreshed = refreshQueueTracks(stateRef.current, availableTracks);
+    if (refreshed !== stateRef.current) commitState(refreshed);
+  }, [availableTracks, commitState, isRestored]);
 
   const playFromContext = useCallback(
     (context: QueueContext, startTrackId: GlobalTrackId) => {

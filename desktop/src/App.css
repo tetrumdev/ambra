@@ -40,6 +40,12 @@
     display: none;
 }
 
+:root[data-platform="windows"] [data-tauri-drag-region],
+:root[data-window-fullscreen] [data-tauri-drag-region] {
+    display: none !important;
+    pointer-events: none !important;
+}
+
 :root[data-window-fullscreen] .libraryView::before,
 :root[data-window-fullscreen] .searchView::before,
 :root[data-window-fullscreen] #queueList::before {

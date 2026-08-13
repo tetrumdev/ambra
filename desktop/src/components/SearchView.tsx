@@ -84,6 +84,9 @@ function SearchResult({
           alt={`${track.album} album cover`}
           width={124}
           height={124}
+          loading={variant === "featured" ? "eager" : "lazy"}
+          fetchPriority={variant === "featured" ? "high" : "auto"}
+          decoding="async"
         />
       </button>
 
@@ -202,7 +205,7 @@ export function SearchView({
         </p>
       </div>
 
-      {!isSearching && !error && featuredTrack && (
+      {featuredTrack && (
         <div id="searchResults">
           <div id="firstResult">
             <SearchResult

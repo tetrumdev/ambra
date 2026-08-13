@@ -52,4 +52,6 @@
 #controls img {
     max-height: 25px;
     max-width: 25px;
+    user-select: none;
+    -webkit-user-drag: none;
 }

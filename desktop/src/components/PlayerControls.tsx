@@ -1,4 +1,9 @@
 import "./PlayerControls.css";
+import { gsap } from "gsap";
+import { useGSAP } from "@gsap/react";
+import { MorphSVGPlugin } from "gsap/MorphSVGPlugin";
+
+gsap.registerPlugin(useGSAP, MorphSVGPlugin);
 
 type PlayerControlsProps = {
   isPlaying: boolean;
@@ -39,12 +44,7 @@ export function PlayerControls({
         />
       </button>
 
-      <button
-        id="skipBtn"
-        type="button"
-        onClick={onNext}
-        disabled={disabled}
-      >
+      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled}>
         <img src="/skip.svg" alt="Next" />
       </button>
     </div>

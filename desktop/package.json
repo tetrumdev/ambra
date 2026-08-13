@@ -10,9 +10,11 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@gsap/react": "^2.1.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "dashjs": "^5.2.0",
+    "gsap": "^3.15.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },

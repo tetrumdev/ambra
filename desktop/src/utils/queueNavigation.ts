@@ -1,4 +1,9 @@
-import type { QueueHistoryEntry, QueueId, QueueItem } from "../types/music";
+import type {
+  QueueHistoryEntry,
+  QueueId,
+  QueueItem,
+  Track,
+} from "../types/music";
 
 export type QueueState = {
   history: QueueHistoryEntry[];
@@ -14,6 +19,28 @@ export type QueueTransition = {
 export type QueueRemovalTransition = QueueTransition & {
   currentRemoved: boolean;
 };
+
+export function refreshQueueTracks(
+  state: QueueState,
+  availableTracks: Track[],
+): QueueState {
+  const tracksById = new Map(
+    availableTracks.map((track) => [track.globalId, track]),
+  );
+  const refresh = <Entry extends QueueItem>(entry: Entry): Entry => {
+    const track = tracksById.get(entry.track.globalId);
+    return track && track !== entry.track ? { ...entry, track } : entry;
+  };
+  const history = state.history.map(refresh);
+  const current = state.current ? refresh(state.current) : null;
+  const upcoming = state.upcoming.map(refresh);
+  const changed =
+    current !== state.current ||
+    history.some((entry, index) => entry !== state.history[index]) ||
+    upcoming.some((entry, index) => entry !== state.upcoming[index]);
+
+  return changed ? { history, current, upcoming } : state;
+}
 
 export function removeQueueEntries(
   state: QueueState,
