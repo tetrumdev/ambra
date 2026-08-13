@@ -18,8 +18,12 @@ mod output;
 use decoder::DecodedSource;
 use output::{AudioOutput, PlatformOutput};
 
-const PREBUFFER_MILLISECONDS: usize = 150;
-const MAX_BUFFER_MILLISECONDS: usize = 750;
+const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
+const LOCAL_MAX_BUFFER_MILLISECONDS: usize = 750;
+const NETWORK_PREBUFFER_MILLISECONDS: usize = 1_500;
+const NETWORK_PRELOAD_MILLISECONDS: usize = 6_000;
+const NETWORK_MAX_BUFFER_MILLISECONDS: usize = 12_000;
+const STREAM_RECOVERY_ATTEMPTS: usize = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const PAUSED_DEVICE_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const DECODE_BLOCKS: usize = 8;
@@ -327,6 +331,7 @@ struct PreparedSource {
     decoder: DecodedSource,
     pcm: VecDeque<f64>,
     decoder_ended: bool,
+    max_buffer_samples: usize,
 }
 
 enum DecodeMessage {
@@ -389,7 +394,7 @@ impl QueuedSource {
         thread::Builder::new()
             .name("ambra-audio-preload".to_owned())
             .spawn(move || {
-                let _ = sender.send(prepare_source(decoder_source));
+                let _ = sender.send(prepare_source(decoder_source, true));
             })
             .map_err(|error| format!("Could not start native audio preloading: {error}"))?;
         Ok(Self { source, receiver })
@@ -446,7 +451,9 @@ impl PlaybackWorker {
                 continue;
             }
             if let Err(error) = self.pump() {
-                self.fail(error);
+                if let Err(error) = self.recover_stream(error) {
+                    self.fail(error);
+                }
             }
         }
         if let Some(output) = self.output.as_mut() {
@@ -641,8 +648,16 @@ impl PlaybackWorker {
     }
 
     fn play(&mut self) -> Result<(), String> {
-        if self.current_source.is_none() {
-            return Err("No native audio track is loaded".to_owned());
+        let source = self
+            .current_source
+            .clone()
+            .ok_or_else(|| "No native audio track is loaded".to_owned())?;
+        if self.decoder.is_none() && !self.decoder_ended {
+            let status = lock_status(&self.status).clone();
+            let position_seconds = status.current_time;
+            self.set_buffering(Some(source.clone()), position_seconds, status.duration);
+            let prepared = prepare_source_at(source, position_seconds)?;
+            self.install_prepared(prepared)?;
         }
         if self.output.is_none() {
             let spec = self
@@ -714,7 +729,7 @@ impl PlaybackWorker {
         let spec = self
             .spec
             .ok_or_else(|| "The native audio format is unavailable".to_owned())?;
-        let prebuffer = prebuffer_samples(spec);
+        let prebuffer = prebuffer_samples(spec, self.current_source.as_deref(), false);
         self.drain_decoder()?;
 
         if !self.rendering && self.pcm.len() < prebuffer && !self.decoder_ended {
@@ -722,6 +737,7 @@ impl PlaybackWorker {
                 status.is_playing = false;
                 status.buffering = true;
             });
+            thread::sleep(Duration::from_millis(1));
             return Ok(());
         }
 
@@ -812,7 +828,16 @@ impl PlaybackWorker {
     }
 
     fn drain_decoder(&mut self) -> Result<(), String> {
-        while self.pcm.len() < self.spec.map_or(0, max_buffer_samples) && !self.decoder_ended {
+        let network_source = self
+            .current_source
+            .as_deref()
+            .is_some_and(is_network_source);
+        while self.pcm.len()
+            < self
+                .spec
+                .map_or(0, |spec| max_buffer_samples(spec, network_source))
+            && !self.decoder_ended
+        {
             let message = match self.decoder.as_ref() {
                 Some(decoder) => decoder.receiver.try_recv(),
                 None => return Ok(()),
@@ -903,9 +928,10 @@ impl PlaybackWorker {
             decoder,
             mut pcm,
             decoder_ended,
+            max_buffer_samples,
         } = prepared;
         let spec = decoder.spec();
-        pcm.reserve(max_buffer_samples(spec).saturating_sub(pcm.len()));
+        pcm.reserve(max_buffer_samples.saturating_sub(pcm.len()));
         let stream = (!decoder_ended)
             .then(|| DecoderStream::start(decoder))
             .transpose()?;
@@ -975,8 +1001,7 @@ impl PlaybackWorker {
         self.output = None;
         self.decoder = None;
         self.pcm.clear();
-        self.current_source = None;
-        self.spec = None;
+        self.decoder_ended = false;
         self.rendering = false;
         update_status(&self.status, |status| {
             status.is_playing = false;
@@ -984,21 +1009,91 @@ impl PlaybackWorker {
             status.error = Some(error);
         });
     }
+
+    fn recover_stream(&mut self, original_error: String) -> Result<(), String> {
+        let source = self
+            .current_source
+            .clone()
+            .filter(|source| is_network_source(source))
+            .filter(|_| is_retryable_stream_error(&original_error))
+            .ok_or(original_error.clone())?;
+        let status = lock_status(&self.status).clone();
+        let position_seconds = status.current_time;
+
+        if let Some(output) = self.output.as_mut() {
+            let _ = output.reset();
+        }
+        self.rendering = false;
+        self.decoder = None;
+        self.pcm.clear();
+        self.decoder_ended = false;
+        self.set_buffering(Some(source.clone()), position_seconds, status.duration);
+
+        let mut recovery_error = original_error.clone();
+        for attempt in 0..STREAM_RECOVERY_ATTEMPTS {
+            if attempt > 0 {
+                thread::sleep(Duration::from_millis(250 * attempt as u64));
+            }
+            match prepare_source_at(source.clone(), position_seconds) {
+                Ok(prepared) => {
+                    let spec = prepared.decoder.spec();
+                    let duration = prepared.decoder.duration_seconds();
+                    if self.spec != Some(spec) {
+                        self.output = None;
+                    }
+                    self.install_prepared(prepared)?;
+                    if self.output.is_none() {
+                        self.output = Some(PlatformOutput::open_device_with_mode(
+                            spec,
+                            self.selected_device_id.as_deref(),
+                            self.exclusive_mode,
+                        )?);
+                    }
+                    self.position_base = position_seconds;
+                    self.rendered_frames = 0;
+                    update_status(&self.status, |status| {
+                        status.current_time = position_seconds;
+                        status.duration = duration;
+                        status.is_playing = false;
+                        status.buffering = true;
+                        status.ended = false;
+                        status.error = None;
+                    });
+                    return Ok(());
+                }
+                Err(error) => recovery_error = error,
+            }
+        }
+        Err(format!(
+            "{original_error}. Automatic stream recovery also failed: {recovery_error}"
+        ))
+    }
 }
 
-fn prepare_source(source: String) -> Result<PreparedSource, String> {
-    prepare_source_at(source, 0.0)
+fn prepare_source(source: String, preload: bool) -> Result<PreparedSource, String> {
+    prepare_source_with_buffer(source, 0.0, preload)
 }
 
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {
+    prepare_source_with_buffer(source, position_seconds, false)
+}
+
+fn prepare_source_with_buffer(
+    source: String,
+    position_seconds: f64,
+    preload: bool,
+) -> Result<PreparedSource, String> {
+    let network_source = is_network_source(&source);
     let mut decoder = DecodedSource::open(source)?;
     if position_seconds > 0.0 {
         decoder.seek(position_seconds)?;
     }
     let spec = decoder.spec();
-    let mut pcm = VecDeque::with_capacity(max_buffer_samples(spec));
+    let max_buffer_samples = max_buffer_samples(spec, network_source);
+    let prebuffer_samples = prebuffer_samples_for_kind(spec, network_source, preload);
+    let mut pcm = VecDeque::with_capacity(max_buffer_samples);
     let mut decoder_ended = false;
-    while pcm.len() < prebuffer_samples(spec) && !decoder_ended {
+    while pcm.len() < prebuffer_samples && !decoder_ended {
         match decoder.decode_next()? {
             Some(samples) => pcm.extend(samples.iter().copied()),
             None => decoder_ended = true,
@@ -1008,15 +1103,42 @@ fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSo
         decoder,
         pcm,
         decoder_ended,
+        max_buffer_samples,
     })
 }
 
-fn prebuffer_samples(spec: StreamSpec) -> usize {
-    spec.sample_rate as usize * spec.channels * PREBUFFER_MILLISECONDS / 1_000
+fn prebuffer_samples(spec: StreamSpec, source: Option<&str>, preload: bool) -> usize {
+    prebuffer_samples_for_kind(spec, source.is_some_and(is_network_source), preload)
 }
 
-fn max_buffer_samples(spec: StreamSpec) -> usize {
-    spec.sample_rate as usize * spec.channels * MAX_BUFFER_MILLISECONDS / 1_000
+fn prebuffer_samples_for_kind(spec: StreamSpec, network_source: bool, preload: bool) -> usize {
+    let milliseconds = if network_source {
+        if preload {
+            NETWORK_PRELOAD_MILLISECONDS
+        } else {
+            NETWORK_PREBUFFER_MILLISECONDS
+        }
+    } else {
+        LOCAL_PREBUFFER_MILLISECONDS
+    };
+    spec.sample_rate as usize * spec.channels * milliseconds / 1_000
+}
+
+fn max_buffer_samples(spec: StreamSpec, network_source: bool) -> usize {
+    let milliseconds = if network_source {
+        NETWORK_MAX_BUFFER_MILLISECONDS
+    } else {
+        LOCAL_MAX_BUFFER_MILLISECONDS
+    };
+    spec.sample_rate as usize * spec.channels * milliseconds / 1_000
+}
+
+fn is_network_source(source: &str) -> bool {
+    source.starts_with("http://") || source.starts_with("https://")
+}
+
+fn is_retryable_stream_error(error: &str) -> bool {
+    error.starts_with("Could not read ") || error == "The native audio decoder stopped unexpectedly"
 }
 
 fn update_status(status: &Arc<Mutex<PlaybackStatus>>, update: impl FnOnce(&mut PlaybackStatus)) {
@@ -1047,7 +1169,15 @@ mod tests {
             channels: 2,
             bits_per_sample: 24,
         };
-        assert_eq!(prebuffer_samples(spec), 14_400);
-        assert_eq!(max_buffer_samples(spec), 72_000);
+        assert_eq!(
+            prebuffer_samples(spec, Some("file:///track.flac"), false),
+            14_400
+        );
+        assert_eq!(max_buffer_samples(spec, false), 72_000);
+        assert_eq!(
+            prebuffer_samples(spec, Some("https://audio.test/track.flac"), false),
+            144_000
+        );
+        assert_eq!(max_buffer_samples(spec, true), 1_152_000);
     }
 }

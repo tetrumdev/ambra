@@ -1,10 +1,12 @@
-.tracksView::before {
+.libraryView::before,
+.searchView::before {
     display: block;
     height: var(--content-top-spacer);
     content: "";
 }
 
-.tracksView {
+.libraryView,
+.searchView {
     --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
         minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     overflow-y: auto;
@@ -17,7 +19,8 @@
     filter: none;
 }
 
-.tracksView::after {
+.libraryView::after,
+.searchView::after {
     display: block;
     height: 99px;
     content: "";
@@ -73,55 +76,6 @@
 
 .separator {
     font-size: 1.8rem;
-}
-
-.albumLinkForm {
-    display: flex;
-    width: 320px;
-    height: 28px;
-    margin-top: 18px;
-}
-
-.albumLinkForm input {
-    box-sizing: border-box;
-    flex: 1;
-    min-width: 0;
-    border: 1px solid #444;
-    border-radius: 3px 0 0 3px;
-    padding: 4px 8px;
-    color: white;
-    background: #111;
-    font: inherit;
-    user-select: text;
-    -webkit-user-select: text;
-}
-
-.albumLinkForm input[aria-invalid="true"] {
-    border-color: #a33;
-}
-
-.albumLinkForm button {
-    width: 30px;
-    border: 1px solid #444;
-    border-left: 0;
-    border-radius: 0 3px 3px 0;
-    color: white;
-    background: #222;
-    font: inherit;
-    cursor: pointer;
-}
-
-.albumLinkForm :disabled {
-    opacity: 0.55;
-    cursor: default;
-}
-
-.albumLinkError {
-    width: min(520px, calc(100% - 60px));
-    margin: 8px 0 0;
-    color: #e68f8f;
-    font-size: 0.78rem;
-    overflow-wrap: anywhere;
 }
 
 .columnInfo {
@@ -209,6 +163,48 @@
     background-color: #151515;
 }
 
+.libraryItem[data-selected="true"],
+.libraryItem[data-selected="true"]:hover {
+    background-color: #603c01;
+}
+
+.libraryItem[data-selecting="true"] .coverPlayBtn {
+    opacity: 0;
+}
+
+.libraryView
+    .libraryItem[data-selecting="true"]
+    .coverImgContainer:hover
+    .coverImg {
+    filter: none;
+}
+
+.selectionDeleteButton {
+    grid-column: 4 / 7;
+    justify-self: end;
+    position: relative;
+    z-index: 1;
+    min-width: 160px;
+    height: 34px;
+    padding: 0 16px;
+    border: 1px solid #ad3c3c;
+    border-radius: 7px;
+    background: #702727;
+    color: white;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.selectionDeleteButton:hover {
+    background: #8a3030;
+}
+
+.selectionDeleteButton:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
 .coverImgContainer {
     width: 56px;
     height: 56px;
@@ -252,7 +248,8 @@
     -webkit-user-drag: none;
 }
 
-.tracksView .coverImgContainer:hover .coverImg {
+.libraryView .coverImgContainer:hover .coverImg,
+.searchView .coverImgContainer:hover .coverImg {
     filter: brightness(50%) blur(3px);
 }
 
@@ -267,6 +264,10 @@
 
 .trackDescriptor:hover {
     text-decoration: underline;
+}
+
+.libraryItem[data-selecting="true"] .trackDescriptor:hover {
+    text-decoration: none;
 }
 
 .trackName {
@@ -302,6 +303,11 @@
     border-left: 1px solid #535353;
 }
 
+.libraryItem[data-selecting="true"] .libraryItemMenuContainer:hover {
+    background-color: transparent;
+    border-left: 1px solid transparent;
+}
+
 .libraryItemMenuContainer img {
     display: block;
     height: 15px;
@@ -310,4 +316,10 @@
     justify-self: center;
     user-select: none;
     -webkit-user-drag: none;
+}
+
+.libraryItemMenuContainer .selectionIndicator {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
 }

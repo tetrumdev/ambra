@@ -30,6 +30,23 @@
     --content-top-spacer: 20px;
 }
 
+:root[data-window-fullscreen] {
+    --library-titlebar-height: 0px;
+    --content-top-spacer: 0px;
+}
+
+:root[data-window-fullscreen] .libraryTitlebar,
+:root[data-window-fullscreen] .bigscreenTitlebar {
+    display: none;
+}
+
+:root[data-window-fullscreen] .libraryView::before,
+:root[data-window-fullscreen] .searchView::before,
+:root[data-window-fullscreen] #queueList::before {
+    content: none;
+    display: none;
+}
+
 :root[data-bigscreen-idle="true"],
 :root[data-bigscreen-idle="true"] * {
     cursor: none !important;
@@ -56,7 +73,8 @@
     font-display: swap;
 }
 
-#library {
+#library,
+#search {
     position: absolute;
     left: 0;
     top: 0;
@@ -73,7 +91,8 @@
 }
 
 @media screen and (width <= 1250px) {
-    #library {
+    #library,
+    #search {
         grid-template-columns: 0 1fr;
     }
 }
@@ -98,18 +117,21 @@
 }
 
 #library,
+#search,
 #queue {
     inset: 0 var(--scrollbar-column-width) 0 0;
     width: auto;
     height: auto;
 }
 
-.tracksView,
+.libraryView,
+.searchView,
 #queueList {
     height: 100%;
 }
 
-.tracksView::after,
+.libraryView::after,
+.searchView::after,
 #queueList::after {
     content: "";
     display: block;
