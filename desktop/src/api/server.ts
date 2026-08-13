@@ -55,6 +55,71 @@ export type SearchProvider = Extract<
   "tidal" | "qobuz" | "spotify"
 >;
 
+export type ArtworkQuality = {
+  provider: Exclude<MusicProvider, "local">;
+  url: string;
+  width: number;
+  height: number;
+  colors: string[];
+};
+
+const artworkQualityRequests = new Map<string, Promise<ArtworkQuality | null>>();
+const artworkPaletteVersion = "palette-v2";
+
+export function highestQualityArtwork(
+  track: Track,
+): Promise<ArtworkQuality | null> {
+  if (
+    track.provider === "local" ||
+    track.albumId === null ||
+    track.nativeCover === null ||
+    !track.nativeCover.startsWith("https://")
+  ) {
+    return Promise.resolve(null);
+  }
+
+  const cacheKey = [
+    artworkPaletteVersion,
+    track.provider,
+    track.albumId,
+    track.upc ?? "",
+    track.nativeCover,
+  ].join(":");
+  const cached = artworkQualityRequests.get(cacheKey);
+  if (cached) return cached;
+
+  const request = fetch(`${serverBaseUrl}/api/quality/artwork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sourceProvider: track.provider,
+      albumId: track.albumId,
+      upc: track.upc,
+      coverUrl: track.nativeCover,
+    }),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(
+          `Artwork quality resolver returned HTTP ${response.status}`,
+        );
+      }
+      const artwork = (await response.json()) as ArtworkQuality;
+      if (!Array.isArray(artwork.colors) || artwork.colors.length !== 3) {
+        artworkQualityRequests.delete(cacheKey);
+      }
+      return artwork;
+    })
+    .catch((reason: unknown) => {
+      artworkQualityRequests.delete(cacheKey);
+      console.warn("Could not resolve highest-quality album artwork:", reason);
+      return null;
+    });
+
+  artworkQualityRequests.set(cacheKey, request);
+  return request;
+}
+
 export function playableTrack(track: RemoteTrack): Track {
   const displayTitle = withVersion(track.title, track.version);
   const displayAlbum = withVersion(
@@ -124,6 +189,19 @@ export async function addServerAlbum(url: string): Promise<Track[]> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ url }),
+    }),
+  );
+}
+
+export async function addServerTrack(
+  provider: SearchProvider,
+  providerTrackId: string,
+): Promise<Track[]> {
+  return responseTracks(
+    await fetch(`${serverBaseUrl}/api/library/tracks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ provider, providerTrackId }),
     }),
   );
 }

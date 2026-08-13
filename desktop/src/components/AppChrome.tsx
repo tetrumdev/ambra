@@ -12,9 +12,10 @@ export function AppChrome({ currentScreen, onExit }: AppChromeProps) {
 
   return (
     <>
-      {currentScreen === "library" && !isWindows && (
-        <div className="libraryTitlebar" data-tauri-drag-region />
-      )}
+      {(currentScreen === "library" || currentScreen === "search") &&
+        !isWindows && (
+          <div className="libraryTitlebar" data-tauri-drag-region />
+        )}
 
       {currentScreen === "bigscreen" && (
         <>
@@ -30,7 +31,12 @@ export function AppChrome({ currentScreen, onExit }: AppChromeProps) {
           {!isWindows && (
             <div className="libraryTitlebar" data-tauri-drag-region />
           )}
-          <button className="xContainer" type="button" onClick={onExit}>
+          <button
+            className="xContainer"
+            type="button"
+            onClick={onExit}
+            data-queue-positioning
+          >
             <img src="/x.svg" alt="Close" className="closeBtn" />
           </button>
         </>
