@@ -3,13 +3,24 @@
     width: 70vmin;
     height: 70vmin;
     aspect-ratio: 1;
-    overflow: hidden;
+    overflow: visible;
     top: calc((100vh - 150px) / 2);
     left: 50%;
     transform: translate(-50%, -50%);
-    filter: drop-shadow(0 0 50px rgba(0, 0, 0, 0.4));
     pointer-events: none;
     z-index: 1;
+}
+
+.albumCoverContrast {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: -1;
+    object-fit: cover;
+    transform: scale(1.008);
+    filter: grayscale(1) contrast(1.8) invert(1) blur(18px);
+    opacity: 0.06;
 }
 
 #albumCoverImg {
@@ -18,6 +29,7 @@
     width: calc(100% + 2px);
     height: calc(100% + 2px);
     object-fit: cover;
+    clip-path: inset(0);
 }
 
 #backgroundFX {
@@ -26,6 +38,11 @@
     pointer-events: none;
     z-index: 0;
     inset: 0;
+    visibility: hidden;
+}
+
+#backgroundFX[data-active="true"] {
+    visibility: visible;
 }
 
 #backgroundFXCanvas {
