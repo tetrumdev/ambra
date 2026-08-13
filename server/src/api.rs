@@ -152,6 +152,10 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/library", get(library))
         .route("/api/library/tracks", post(add_track))
         .route("/api/search/tracks", get(search_tracks))
+        .route(
+            "/api/providers/{provider}/tracks/{track_id}/playback",
+            get(track_playback),
+        )
         .route("/api/quality/artwork", post(resolve_artwork_quality))
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
@@ -280,7 +284,7 @@ async fn resolve_artwork_quality(
         .await
         .unwrap_or_default();
 
-    if best.colors.len() == 3 {
+    if best.colors.len() == 4 {
         state
             .artwork_quality_cache
             .write()
@@ -446,6 +450,61 @@ async fn search_tracks(
     search_cache.insert(cache_key, tracks.clone());
 
     Ok(Json(LibraryResponse { tracks }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackPlaybackResponse {
+    quality: String,
+    maximum_sampling_rate_khz: Option<f64>,
+    maximum_bit_depth: Option<u32>,
+    playback: crate::models::PlaybackMetadata,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TrackPlaybackRequest {
+    duration_seconds: Option<u64>,
+}
+
+async fn track_playback(
+    State(state): State<AppState>,
+    Path((provider, track_id)): Path<(String, String)>,
+    Query(request): Query<TrackPlaybackRequest>,
+) -> Result<Json<TrackPlaybackResponse>, ApiError> {
+    if provider != "tidal" {
+        return Err(ApiError::bad_request(
+            "Deferred playback inspection is only needed for Tidal",
+        ));
+    }
+    if let Some(duration_seconds) = request
+        .duration_seconds
+        .filter(|duration| (1..=86_400).contains(duration))
+    {
+        state
+            .tidal
+            .playback_source_with_duration(&track_id, duration_seconds)
+            .await
+            .map_err(ApiError::upstream)?;
+    } else {
+        state
+            .tidal
+            .playback_source(&track_id)
+            .await
+            .map_err(ApiError::upstream)?;
+    }
+    let (playback, quality, maximum_sampling_rate_khz, maximum_bit_depth) = state
+        .tidal
+        .playback_metadata(&track_id)
+        .await
+        .map_err(ApiError::upstream)?;
+
+    Ok(Json(TrackPlaybackResponse {
+        quality,
+        maximum_sampling_rate_khz,
+        maximum_bit_depth,
+        playback,
+    }))
 }
 
 #[derive(Deserialize)]

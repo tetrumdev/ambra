@@ -13,7 +13,7 @@ import type { Deck, Track } from "../types/music";
 import { canAttemptPlayback } from "../utils/playbackReadiness";
 import {
   nativeAudioSource,
-  trackForNativeAudioSource,
+  trackForNativeAudioStatus,
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
 
@@ -46,7 +46,7 @@ type AudioPlayer = {
   next: () => void;
   seek: (time: number) => void;
   audioDecks: AudioDeckController;
-  playTrack: (trackId: string) => void;
+  playTrack: (trackId: string, preparedTrack?: Track) => void;
   clear: () => void;
 };
 
@@ -94,6 +94,8 @@ export function useAudioPlayer(
     null,
   ]);
   const dashPlayersRef = useRef<Array<MediaPlayerClass | null>>([null, null]);
+  const nativeLoadGenerationRef = useRef(0);
+  const nativeReadyGenerationRef = useRef<number | null>(null);
 
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -156,6 +158,8 @@ export function useAudioPlayer(
   );
 
   const clearPlayback = useCallback(() => {
+    nativeLoadGenerationRef.current += 1;
+    nativeReadyGenerationRef.current = null;
     currentTrackIdRef.current = null;
     currentTimeRef.current = 0;
     isPlayingRef.current = false;
@@ -198,6 +202,9 @@ export function useAudioPlayer(
   const loadNativeTrack = useCallback(
     (track: Track, positionSeconds: number, autoplay: boolean) => {
       const nextTrack = queueNavigationRef.current.peekNext();
+      const loadGeneration = nativeLoadGenerationRef.current + 1;
+      nativeLoadGenerationRef.current = loadGeneration;
+      nativeReadyGenerationRef.current = null;
 
       void invoke("load_native_audio", {
         source: nativeAudioSource(track),
@@ -205,7 +212,11 @@ export function useAudioPlayer(
         positionSeconds,
         autoplay,
       })
-        .then(() => setIsSessionRestored(true))
+        .then(() => {
+          if (nativeLoadGenerationRef.current !== loadGeneration) return;
+          nativeReadyGenerationRef.current = loadGeneration;
+          setIsSessionRestored(true);
+        })
         .catch((error) => console.error("Could not load native audio:", error));
     },
     [],
@@ -376,7 +387,18 @@ export function useAudioPlayer(
   ]);
 
   const playTrack = useCallback(
-    (trackId: string) => {
+    (trackId: string, preparedTrack?: Track) => {
+      if (preparedTrack) {
+        const preparedIndex = trackPosition(
+          tracksRef.current,
+          preparedTrack.globalId,
+        );
+        tracksRef.current = preparedIndex < 0
+          ? [...tracksRef.current, preparedTrack]
+          : tracksRef.current.map((track, index) =>
+              index === preparedIndex ? preparedTrack : track,
+            );
+      }
       const trackIndex = trackPosition(tracksRef.current, trackId);
       if (trackIndex < 0) return;
       switchToTrack(trackIndex, true);
@@ -598,35 +620,49 @@ export function useAudioPlayer(
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const poll = async () => {
+      const statusGeneration = nativeLoadGenerationRef.current;
+      if (nativeReadyGenerationRef.current !== statusGeneration) {
+        timer = setTimeout(poll, 200);
+        return;
+      }
+
       try {
         const playback = await invoke<NativeAudioStatus>("native_audio_status");
         if (disposed) return;
 
         if (
-          playback.currentSource &&
-          playback.currentSource !== nativeAudioSource(currentTrack)
+          statusGeneration !== nativeLoadGenerationRef.current ||
+          nativeReadyGenerationRef.current !== statusGeneration
         ) {
-          const advancedTrack = trackForNativeAudioSource(
-            tracksRef.current,
-            playback.currentSource,
-          );
-          if (advancedTrack) {
-            const expectedTrack = queueNavigationRef.current.peekNext();
-            if (expectedTrack?.globalId === advancedTrack.globalId) {
-              queueNavigationRef.current.next();
-            }
-            currentTrackIdRef.current = advancedTrack.globalId;
-            setCurrentTrackId(advancedTrack.globalId);
-            setDuration(advancedTrack.durationSeconds);
+          timer = setTimeout(poll, 200);
+          return;
+        }
 
-            const followingTrack = queueNavigationRef.current.peekNext();
-            if (followingTrack) {
-              void invoke("queue_native_audio", {
-                source: nativeAudioSource(followingTrack),
-              }).catch((error) =>
-                console.warn("Could not preload the next native track:", error),
-              );
-            }
+        const statusTrack = trackForNativeAudioStatus(
+          tracksRef.current,
+          currentTrackIdRef.current,
+          queueNavigationRef.current.peekNext(),
+          playback.currentSource,
+        );
+        if (!statusTrack) {
+          timer = setTimeout(poll, 200);
+          return;
+        }
+
+        if (statusTrack.advanced) {
+          const advancedTrack = statusTrack.track;
+          queueNavigationRef.current.next();
+          currentTrackIdRef.current = advancedTrack.globalId;
+          setCurrentTrackId(advancedTrack.globalId);
+          setDuration(advancedTrack.durationSeconds);
+
+          const followingTrack = queueNavigationRef.current.peekNext();
+          if (followingTrack) {
+            void invoke("queue_native_audio", {
+              source: nativeAudioSource(followingTrack),
+            }).catch((error) =>
+              console.warn("Could not preload the next native track:", error),
+            );
           }
         }
 

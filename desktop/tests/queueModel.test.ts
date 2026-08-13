@@ -9,6 +9,7 @@ import {
   advanceQueue,
   completeQueueTrack,
   jumpQueue,
+  refreshQueueTracks,
   removeQueueEntries,
   rewindQueue,
 } from "../src/utils/queueNavigation";
@@ -77,6 +78,22 @@ describe("queue model", () => {
     expect(context.entries.map((entry) => entry.source.entryId)).toEqual([
       1, 2,
     ]);
+  });
+
+  test("refreshes queued tracks after deferred playback metadata arrives", () => {
+    const current = item("tidal:1", 1);
+    const resolved = {
+      ...current.track,
+      playbackKind: "dash" as const,
+      audio: "/playlist.m3u8",
+      quality: "FLAC 24-bit/96 kHz",
+    };
+    const state = { history: [], current, upcoming: [] };
+
+    const refreshed = refreshQueueTracks(state, [resolved]);
+
+    expect(refreshed.current?.track).toBe(resolved);
+    expect(refreshQueueTracks(refreshed, [resolved])).toBe(refreshed);
   });
 
   test("normal context playback ignores shuffle packages", () => {

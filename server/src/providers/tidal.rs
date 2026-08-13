@@ -8,7 +8,6 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose};
-use futures_util::{StreamExt, stream};
 use quick_xml::{Reader, events::Event};
 use serde::Deserialize;
 use tidlers::{
@@ -288,48 +287,26 @@ impl TidalProvider {
         let results = client
             .search(SearchConfig {
                 query: query.to_owned(),
+                include_contributors: false,
+                include_user_playlists: false,
+                supports_user_data: false,
                 types: vec![SearchType::Tracks],
                 limit,
                 ..Default::default()
             })
             .await?;
 
-        let tracks = results
+        Ok(results
             .tracks
             .into_iter()
             .flat_map(|section| section.items)
             .filter(|track| track.allow_streaming.unwrap_or(true))
             .filter(|track| track.stream_ready.unwrap_or(true))
             .map(search_track_metadata)
-            .collect::<Vec<_>>();
-
-        Ok(stream::iter(tracks)
-            .map(|mut track| async move {
-                match self.playback_metadata(&track.provider_track_id).await {
-                    Ok((playback, quality, sampling_rate_khz, bit_depth)) => {
-                        track.playback = playback;
-                        track.quality = Some(quality);
-                        track.maximum_sampling_rate_khz = sampling_rate_khz;
-                        track.maximum_bit_depth = bit_depth;
-                    }
-                    Err(error) => {
-                        eprintln!(
-                            "Could not inspect Tidal search result {} quality: {error}",
-                            track.provider_track_id
-                        );
-                        track.quality = None;
-                        track.maximum_sampling_rate_khz = None;
-                        track.maximum_bit_depth = None;
-                    }
-                }
-                track
-            })
-            .buffered(6)
-            .collect()
-            .await)
+            .collect())
     }
 
-    async fn playback_metadata(
+    pub async fn playback_metadata(
         &self,
         track_id: &str,
     ) -> ProviderResult<(PlaybackMetadata, String, Option<f64>, Option<u32>)> {
@@ -392,6 +369,26 @@ impl TidalProvider {
             track = client.get_track(track_id).await;
         }
         let track = track?;
+        self.playback_source_with_duration(track_id, track.duration)
+            .await
+    }
+
+    pub async fn playback_source_with_duration(
+        &self,
+        track_id: &str,
+        duration_seconds: u64,
+    ) -> ProviderResult<PlaybackSource> {
+        validate_track_id(track_id)?;
+
+        {
+            let cache = self.playback_sources.lock().await;
+            if let Some(cached) = cache.get(track_id)
+                && cached.cached_at.elapsed() < PLAYBACK_SOURCE_TTL
+            {
+                return Ok(cached.source.clone());
+            }
+        }
+
         let playback = self.maximum_playback_info(track_id).await?;
 
         let source = match playback.manifest {
@@ -406,7 +403,7 @@ impl TidalProvider {
                 }
             }
             MaximumPlaybackManifest::Dash(manifest) => {
-                playback_source_from_dash(&self.http_client, manifest, track.duration).await?
+                playback_source_from_dash(&self.http_client, manifest, duration_seconds).await?
             }
         };
         self.playback_sources.lock().await.insert(
@@ -715,7 +712,11 @@ fn search_track_metadata(track: SearchTrackHit) -> TrackMetadata {
         explicit: track.explicit,
         isrc: track.isrc,
         copyright: track.copyright,
-        quality: track.audio_quality,
+        quality: track.audio_quality.map(|quality| match quality.as_str() {
+            "HI_RES" | "HI_RES_LOSSLESS" | "LOSSLESS" => "FLAC".to_owned(),
+            "HIGH" => "AAC 320 kbps".to_owned(),
+            _ => quality,
+        }),
         maximum_sampling_rate_khz: None,
         maximum_bit_depth: None,
         playback: PlaybackMetadata {

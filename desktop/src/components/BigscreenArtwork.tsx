@@ -1,11 +1,16 @@
 import { useEffect, useState } from "react";
 import { highestQualityArtwork } from "../api/server";
 import type { Track } from "../types/music";
+import { separateCollapsedPalette } from "../utils/backgroundPalette";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
 
 type ArtworkProps = {
   track: Track;
+};
+
+type BackgroundArtworkProps = ArtworkProps & {
+  active: boolean;
 };
 
 export function AlbumArtwork({ track }: ArtworkProps) {
@@ -16,7 +21,9 @@ export function AlbumArtwork({ track }: ArtworkProps) {
     setCover(track.cover);
 
     void highestQualityArtwork(track).then((artwork) => {
-      if (!cancelled && artwork !== null) setCover(artwork.url);
+      if (!cancelled && artwork !== null) {
+        setCover(artwork.url);
+      }
     });
 
     return () => {
@@ -34,6 +41,12 @@ export function AlbumArtwork({ track }: ArtworkProps) {
   return (
     <div id="albumCover">
       <img
+        src={cover}
+        alt=""
+        aria-hidden="true"
+        className="albumCoverContrast"
+      />
+      <img
         key={track.audio}
         src={cover}
         alt={`${track.album} album cover`}
@@ -44,15 +57,20 @@ export function AlbumArtwork({ track }: ArtworkProps) {
   );
 }
 
-export function BackgroundArtwork({ track }: ArtworkProps) {
-  const [colors, setColors] = useState(["#000000", "#000000", "#000000"]);
+export function BackgroundArtwork({ track, active }: BackgroundArtworkProps) {
+  const [colors, setColors] = useState([
+    "#000000",
+    "#000000",
+    "#000000",
+    "#000000",
+  ]);
 
   useEffect(() => {
     let cancelled = false;
 
     void highestQualityArtwork(track).then((artwork) => {
-      if (!cancelled && artwork?.colors?.length === 3) {
-        setColors(artwork.colors);
+      if (!cancelled && artwork?.colors?.length === 4) {
+        setColors(separateCollapsedPalette(artwork.colors));
       }
     });
 
@@ -69,8 +87,12 @@ export function BackgroundArtwork({ track }: ArtworkProps) {
   ]);
 
   return (
-    <div id="backgroundFX" aria-hidden="true">
-      <FluidGradientBackground colors={colors} seed={track.globalId} />
+    <div id="backgroundFX" aria-hidden="true" data-active={active}>
+      <FluidGradientBackground
+        colors={colors}
+        seed={track.globalId}
+        active={active}
+      />
     </div>
   );
 }
