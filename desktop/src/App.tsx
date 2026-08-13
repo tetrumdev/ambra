@@ -2,7 +2,7 @@ import "./App.css";
 
 //Components
 import { AppChrome } from "./components/AppChrome";
-import { TracksView } from "./components/TracksView";
+import { LibraryView } from "./components/LibraryView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
@@ -10,7 +10,7 @@ import { AppScrollbar } from "./components/AppScrollbar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { SearchBar } from "./components/SearchBar";
-import { SearchResultsView } from "./components/SearchResultsView";
+import { SearchView } from "./components/SearchView";
 
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
@@ -60,7 +60,16 @@ function App() {
     [search.results, searchProvider, searchQuery],
   );
   const queue = useQueue(availableTracks, preferences.playback.trackId);
-  const player = useAudioPlayer(availableTracks, preferences.playback, {
+  const playbackTracks = useMemo(() => {
+    const tracksById = new Map(
+      availableTracks.map((track) => [track.globalId, track]),
+    );
+    for (const entry of [...queue.historyEntries, ...queue.entries]) {
+      tracksById.set(entry.track.globalId, entry.track);
+    }
+    return [...tracksById.values()];
+  }, [availableTracks, queue.entries, queue.historyEntries]);
+  const player = useAudioPlayer(playbackTracks, preferences.playback, {
     next: () => queue.next()?.track,
     completeCurrent: () => queue.completeCurrent()?.track,
     previous: () => queue.previous()?.track,
@@ -71,14 +80,58 @@ function App() {
   const isBigscreen =
     screen === "bigscreen" && player.currentTrack !== undefined;
   const isQueueView = screen === "queue";
+  const isSearchView = screen === "search";
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const f11FullscreenRef = useRef(false);
+  const queueReturnScreenRef = useRef<"library" | "search">(
+    screen === "search" ? "search" : "library",
+  );
+  if (screen === "library" || screen === "search") {
+    queueReturnScreenRef.current = screen;
+  }
   const latestSessionRef = useRef({ preferences, player });
   latestSessionRef.current = { preferences, player };
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    const appWindow = getCurrentWindow();
+    const syncFullscreen = async () => {
+      try {
+        const fullscreen = await appWindow.isFullscreen();
+        if (!disposed) setIsFullscreen(fullscreen);
+      } catch (error) {
+        console.error("Could not read fullscreen state:", error);
+      }
+    };
+
+    void syncFullscreen();
+    void appWindow.onResized(syncFullscreen).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopListening = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.toggleAttribute(
+      "data-window-fullscreen",
+      isFullscreen,
+    );
+
+    return () => {
+      document.documentElement.removeAttribute("data-window-fullscreen");
+    };
+  }, [isFullscreen]);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
@@ -92,6 +145,7 @@ function App() {
         const nextFullscreen = !isFullscreen;
         await appWindow.setFullscreen(nextFullscreen);
         f11FullscreenRef.current = nextFullscreen;
+        setIsFullscreen(nextFullscreen);
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -105,16 +159,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const handleContextMenu = (event: MouseEvent) => {
+    const disableContextMenu = (event: MouseEvent) => {
       event.preventDefault();
-
-      console.log("hello");
     };
 
-    window.addEventListener("contextmenu", handleContextMenu);
-
+    window.addEventListener("contextmenu", disableContextMenu, true);
     return () => {
-      window.removeEventListener("contextmenu", handleContextMenu);
+      window.removeEventListener("contextmenu", disableContextMenu, true);
     };
   }, []);
 
@@ -124,6 +175,11 @@ function App() {
 
       event.preventDefault();
       event.stopPropagation();
+
+      if (event.target instanceof HTMLInputElement && event.target.id === "input") {
+        event.target.blur();
+        return;
+      }
 
       if (f11FullscreenRef.current) {
         if (event.repeat) return;
@@ -140,7 +196,10 @@ function App() {
       }
 
       if (event.repeat) return;
-      changeScreen("library");
+      setPreferences((current) => ({
+        ...current,
+        ui: { ...current.ui, screen: queueReturnScreenRef.current },
+      }));
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
@@ -234,6 +293,11 @@ function App() {
     }));
   };
 
+  const changeSearchQuery = (nextQuery: string) => {
+    setSearchQuery(nextQuery);
+    changeScreen(nextQuery.trim() ? "search" : "library");
+  };
+
   const playFromLibrary = (trackId: GlobalTrackId) => {
     queue.playFromContext(queueContext, trackId);
     player.playTrack(trackId);
@@ -275,11 +339,26 @@ function App() {
     if (entry) player.playTrack(entry.track.globalId);
   };
 
+  const deleteQueueEntries = (queueIds: number[]) => {
+    const result = queue.removeEntries(queueIds);
+    if (!result.currentRemoved) return;
+    if (result.item) player.playTrack(result.item.track.globalId);
+    else player.clear();
+  };
+
+  const closeCurrentScreen = () => {
+    changeScreen(
+      screen === "queue" ? queueReturnScreenRef.current : "library",
+    );
+  };
+
+  const openQueue = () => changeScreen("queue");
+
   return (
     <>
       <AppChrome
         currentScreen={screen}
-        onExit={() => changeScreen("library")}
+        onExit={closeCurrentScreen}
       />
 
       {isBigscreen ? (
@@ -293,20 +372,21 @@ function App() {
             currentEntry={queue.currentEntry}
             upcomingEntries={queue.upcomingEntries}
             jumpTo={jumpToQueueEntry}
+            deleteEntries={deleteQueueEntries}
             registerScrollElement={setActiveScrollElement}
           />
         </main>
       ) : (
-        <main id="library">
+        <main id={isSearchView ? "search" : "library"}>
           <SearchBar
             query={searchQuery}
             provider={searchProvider}
-            onQueryChange={setSearchQuery}
+            onQueryChange={changeSearchQuery}
             onProviderChange={setSearchProvider}
           />
           <Sidebar />
-          {searchQuery.trim() ? (
-            <SearchResultsView
+          {isSearchView ? (
+            <SearchView
               query={searchQuery}
               provider={searchProvider}
               tracks={search.results}
@@ -322,10 +402,23 @@ function App() {
               playNext={(trackId) =>
                 playNext(currentSearchContext, trackId)
               }
+              addToLibrary={(trackId) => {
+                const track = search.results.find(
+                  (candidate) => candidate.globalId === trackId,
+                );
+                if (
+                  track &&
+                  (track.provider === "tidal" ||
+                    track.provider === "qobuz" ||
+                    track.provider === "spotify")
+                ) {
+                  void library.addTrack(track.provider, track.providerTrackId);
+                }
+              }}
               registerScrollElement={setActiveScrollElement}
             />
           ) : (
-            <TracksView
+            <LibraryView
               tracks={library.tracks}
               playTrack={playFromLibrary}
               playStandalone={(trackId) =>
@@ -333,9 +426,8 @@ function App() {
               }
               addToQueue={(trackId) => addToQueue(queueContext, trackId)}
               playNext={(trackId) => playNext(queueContext, trackId)}
-              addAlbum={library.addAlbum}
-              isAddingAlbum={library.isAddingAlbum}
-              addAlbumError={library.addAlbumError}
+              deleteTrack={library.deleteTrack}
+              deleteTracks={library.deleteTracks}
               registerScrollElement={setActiveScrollElement}
             />
           )}
@@ -354,7 +446,7 @@ function App() {
         onNext={player.next}
         onSeek={player.seek}
         onOpenBigscreen={() => changeScreen("bigscreen")}
-        onOpenQueue={() => changeScreen("queue")}
+        onOpenQueue={openQueue}
       />
 
       {!isBigscreen && <AppScrollbar scrollElement={activeScrollElement} />}

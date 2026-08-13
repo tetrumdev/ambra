@@ -1,14 +1,15 @@
 use std::{
     collections::VecDeque,
     fs::File,
-    io::{self, Read, Seek, SeekFrom},
+    io::{self, Cursor, Read, Seek, SeekFrom},
     path::Path,
+    thread,
     time::Duration,
 };
 
 use reqwest::{
     StatusCode, Url,
-    blocking::{Client, Response},
+    blocking::Client,
     header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE},
 };
 use symphonia::core::{
@@ -23,7 +24,10 @@ use symphonia::core::{
 
 use super::StreamSpec;
 
-const HTTP_CACHE_BYTES: u64 = 512 * 1024;
+const HTTP_INITIAL_CACHE_BYTES: u64 = 512 * 1024;
+const HTTP_STARTUP_WINDOW_BYTES: u64 = 1024 * 1024;
+const HTTP_CACHE_BYTES: u64 = 4 * 1024 * 1024;
+const HTTP_ATTEMPTS: usize = 3;
 
 pub struct DecodedSource {
     source: String,
@@ -38,6 +42,13 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn open(source: String) -> Result<Self, String> {
+        Self::open_hls_position(source, None)
+    }
+
+    fn open_hls_position(
+        source: String,
+        hls_position_seconds: Option<f64>,
+    ) -> Result<Self, String> {
         let mut hint = Hint::new();
         let is_hls = is_http_source(&source) && source_path(&source).ends_with(".m3u8");
         if is_hls {
@@ -47,9 +58,13 @@ impl DecodedSource {
         }
 
         let mut duration_hint = None;
+        let mut hls_segment_start = 0.0;
         let media_source: Box<dyn MediaSource> = if is_hls {
-            let hls = HlsSource::open(&source).map_err(|error| error.to_string())?;
+            let (hls, segment_start) =
+                HlsSource::open_at(&source, hls_position_seconds.unwrap_or_default())
+                    .map_err(|error| error.to_string())?;
             duration_hint = Some(hls.duration_seconds);
+            hls_segment_start = segment_start;
             Box::new(hls)
         } else if is_http_source(&source) {
             Box::new(HttpRangeSource::open(&source).map_err(|error| error.to_string())?)
@@ -112,7 +127,7 @@ impl DecodedSource {
             .or(duration_hint)
             .unwrap_or(0.0);
 
-        Ok(Self {
+        let mut decoded = Self {
             source,
             format,
             decoder,
@@ -125,7 +140,11 @@ impl DecodedSource {
             duration_seconds,
             scratch: Vec::with_capacity(16_384 * channels),
             scratch_pending: false,
-        })
+        };
+        if let Some(position_seconds) = hls_position_seconds {
+            decoded.skip_frames((position_seconds - hls_segment_start).max(0.0))?;
+        }
+        Ok(decoded)
     }
 
     pub fn spec(&self) -> StreamSpec {
@@ -197,25 +216,27 @@ impl DecodedSource {
     }
 
     fn reopen_hls_at(&mut self, position_seconds: f64) -> Result<(), String> {
-        let mut replacement = Self::open(self.source.clone())?;
-        let target_frames =
-            (position_seconds * f64::from(replacement.spec.sample_rate)).round() as u64;
+        *self = Self::open_hls_position(self.source.clone(), Some(position_seconds))?;
+        Ok(())
+    }
+
+    fn skip_frames(&mut self, seconds: f64) -> Result<(), String> {
+        let target_frames = (seconds * f64::from(self.spec.sample_rate)).round() as u64;
         let mut skipped_frames = 0_u64;
         while skipped_frames < target_frames {
-            let channels = replacement.spec.channels;
-            let Some(samples) = replacement.decode_next()? else {
+            let channels = self.spec.channels;
+            let Some(samples) = self.decode_next()? else {
                 break;
             };
             let frames = samples.len() / channels;
             let remaining = target_frames.saturating_sub(skipped_frames) as usize;
             if remaining < frames {
-                replacement.scratch.drain(..remaining * channels);
-                replacement.scratch_pending = true;
+                self.scratch.drain(..remaining * channels);
+                self.scratch_pending = true;
                 break;
             }
             skipped_frames = skipped_frames.saturating_add(frames as u64);
         }
-        *self = replacement;
         Ok(())
     }
 }
@@ -239,42 +260,46 @@ fn file_path(source: &str) -> String {
 struct HlsSource {
     client: Client,
     resources: VecDeque<Url>,
-    current: Option<Response>,
+    current: Option<Cursor<Vec<u8>>>,
     position: u64,
     duration_seconds: f64,
 }
 
 impl HlsSource {
-    fn open(url: &str) -> io::Result<Self> {
+    fn open_at(url: &str, position_seconds: f64) -> io::Result<(Self, f64)> {
         let client = http_client()?;
         let playlist_url = Url::parse(url).map_err(io_other)?;
-        let playlist = client
-            .get(playlist_url.clone())
-            .send()
-            .and_then(|response| response.error_for_status())
-            .and_then(Response::text)
-            .map_err(io_other)?;
-        let (resources, duration_seconds) = parse_hls_playlist(&playlist_url, &playlist)?;
-        Ok(Self {
-            client,
-            resources,
-            current: None,
-            position: 0,
-            duration_seconds,
-        })
+        let (_, _, playlist_bytes) = get_bytes_with_retry(&client, playlist_url.as_str(), None)?;
+        let playlist = String::from_utf8(playlist_bytes).map_err(io_other)?;
+        let playlist = parse_hls_playlist(&playlist_url, &playlist)?;
+        let (segment_index, segment_start) = playlist.segment_at(position_seconds);
+        let resources = std::iter::once(playlist.initialization)
+            .chain(
+                playlist
+                    .segments
+                    .into_iter()
+                    .skip(segment_index)
+                    .map(|segment| segment.url),
+            )
+            .collect();
+        Ok((
+            Self {
+                client,
+                resources,
+                current: None,
+                position: 0,
+                duration_seconds: playlist.duration_seconds,
+            },
+            segment_start,
+        ))
     }
 
     fn open_next_resource(&mut self) -> io::Result<bool> {
         let Some(url) = self.resources.pop_front() else {
             return Ok(false);
         };
-        self.current = Some(
-            self.client
-                .get(url)
-                .send()
-                .and_then(|response| response.error_for_status())
-                .map_err(io_other)?,
-        );
+        let (_, _, bytes) = get_bytes_with_retry(&self.client, url.as_str(), None)?;
+        self.current = Some(Cursor::new(bytes));
         Ok(true)
     }
 }
@@ -325,10 +350,36 @@ impl MediaSource for HlsSource {
     }
 }
 
-fn parse_hls_playlist(base: &Url, playlist: &str) -> io::Result<(VecDeque<Url>, f64)> {
+struct HlsSegment {
+    url: Url,
+    duration_seconds: f64,
+}
+
+struct HlsPlaylist {
+    initialization: Url,
+    segments: Vec<HlsSegment>,
+    duration_seconds: f64,
+}
+
+impl HlsPlaylist {
+    fn segment_at(&self, position_seconds: f64) -> (usize, f64) {
+        let target = position_seconds.max(0.0);
+        let mut start = 0.0;
+        for (index, segment) in self.segments.iter().enumerate() {
+            if target < start + segment.duration_seconds || index + 1 == self.segments.len() {
+                return (index, start);
+            }
+            start += segment.duration_seconds;
+        }
+        (0, 0.0)
+    }
+}
+
+fn parse_hls_playlist(base: &Url, playlist: &str) -> io::Result<HlsPlaylist> {
     let mut initialization = None;
-    let mut segments = VecDeque::new();
+    let mut segments = Vec::new();
     let mut duration_seconds = 0.0;
+    let mut next_duration = None;
     for line in playlist
         .lines()
         .map(str::trim)
@@ -340,13 +391,25 @@ fn parse_hls_playlist(base: &Url, playlist: &str) -> io::Result<(VecDeque<Url>, 
             })?;
             initialization = Some(base.join(uri).map_err(io_other)?);
         } else if let Some(duration) = line.strip_prefix("#EXTINF:") {
-            duration_seconds += duration
-                .split_once(',')
-                .map_or(duration, |(duration, _)| duration)
-                .parse::<f64>()
-                .map_err(io_other)?;
+            next_duration = Some(
+                duration
+                    .split_once(',')
+                    .map_or(duration, |(duration, _)| duration)
+                    .parse::<f64>()
+                    .map_err(io_other)?,
+            );
         } else if !line.starts_with('#') {
-            segments.push_back(base.join(line).map_err(io_other)?);
+            let segment_duration = next_duration.take().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HLS segment duration is missing",
+                )
+            })?;
+            duration_seconds += segment_duration;
+            segments.push(HlsSegment {
+                url: base.join(line).map_err(io_other)?,
+                duration_seconds: segment_duration,
+            });
         }
     }
     let initialization = initialization.ok_or_else(|| {
@@ -361,8 +424,11 @@ fn parse_hls_playlist(base: &Url, playlist: &str) -> io::Result<(VecDeque<Url>, 
             "HLS playlist contains no media segments",
         ));
     }
-    segments.push_front(initialization);
-    Ok((segments, duration_seconds))
+    Ok(HlsPlaylist {
+        initialization,
+        segments,
+        duration_seconds,
+    })
 }
 
 fn quoted_attribute<'a>(attributes: &'a str, name: &str) -> Option<&'a str> {
@@ -383,15 +449,8 @@ struct HttpRangeSource {
 impl HttpRangeSource {
     fn open(url: &str) -> io::Result<Self> {
         let client = http_client()?;
-        let response = client
-            .get(url)
-            .header(RANGE, format!("bytes=0-{}", HTTP_CACHE_BYTES - 1))
-            .send()
-            .and_then(|response| response.error_for_status())
-            .map_err(io_other)?;
-        let status = response.status();
-        let headers = response.headers().clone();
-        let bytes = response.bytes().map_err(io_other)?.to_vec();
+        let range = format!("bytes=0-{}", HTTP_INITIAL_CACHE_BYTES - 1);
+        let (status, headers, bytes) = get_bytes_with_retry(&client, url, Some(&range))?;
         let length = if status == StatusCode::PARTIAL_CONTENT {
             content_range_length(headers.get(CONTENT_RANGE))
         } else {
@@ -418,19 +477,17 @@ impl HttpRangeSource {
             self.cache.clear();
             return Ok(());
         }
+        let cache_bytes = if self.position < HTTP_STARTUP_WINDOW_BYTES {
+            HTTP_INITIAL_CACHE_BYTES
+        } else {
+            HTTP_CACHE_BYTES
+        };
         let end = self
             .position
-            .saturating_add(HTTP_CACHE_BYTES - 1)
+            .saturating_add(cache_bytes - 1)
             .min(self.length - 1);
-        let response = self
-            .client
-            .get(&self.url)
-            .header(RANGE, format!("bytes={}-{}", self.position, end))
-            .send()
-            .and_then(|response| response.error_for_status())
-            .map_err(io_other)?;
-        let status = response.status();
-        let bytes = response.bytes().map_err(io_other)?.to_vec();
+        let range = format!("bytes={}-{}", self.position, end);
+        let (status, _, bytes) = get_bytes_with_retry(&self.client, &self.url, Some(&range))?;
         self.cache_start = if status == StatusCode::PARTIAL_CONTENT {
             self.position
         } else {
@@ -448,10 +505,47 @@ impl HttpRangeSource {
 
 fn http_client() -> io::Result<Client> {
     Client::builder()
-        .connect_timeout(Duration::from_secs(5))
-        .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(20))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
         .build()
         .map_err(io_other)
+}
+
+fn get_bytes_with_retry(
+    client: &Client,
+    url: &str,
+    range: Option<&str>,
+) -> io::Result<(StatusCode, reqwest::header::HeaderMap, Vec<u8>)> {
+    let mut last_error = None;
+    for attempt in 0..HTTP_ATTEMPTS {
+        let mut request = client.get(url);
+        if let Some(range) = range {
+            request = request.header(RANGE, range);
+        }
+        match request
+            .send()
+            .and_then(|response| response.error_for_status())
+        {
+            Ok(response) => {
+                let status = response.status();
+                let headers = response.headers().clone();
+                match response.bytes() {
+                    Ok(bytes) => return Ok((status, headers, bytes.to_vec())),
+                    Err(error) => last_error = Some(error.to_string()),
+                }
+            }
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if attempt + 1 < HTTP_ATTEMPTS {
+            thread::sleep(Duration::from_millis(100 * (1_u64 << attempt)));
+        }
+    }
+    Err(io::Error::other(format!(
+        "Network audio request failed after {HTTP_ATTEMPTS} attempts: {}",
+        last_error.unwrap_or_else(|| "unknown error".to_owned())
+    )))
 }
 
 impl Read for HttpRangeSource {
@@ -548,11 +642,18 @@ mod tests {
     fn resolves_hls_initialization_and_media_resources() {
         let base = Url::parse("http://127.0.0.1/tracks/1/playlist.m3u8").unwrap();
         let playlist = "#EXTM3U\n#EXT-X-MAP:URI=\"dash/init\"\n#EXTINF:4.5,\ndash/1\n#EXTINF:2.0,\nhttps://audio.test/2\n";
-        let (resources, duration) = parse_hls_playlist(&base, playlist).unwrap();
-        assert_eq!(duration, 6.5);
-        assert_eq!(resources[0].as_str(), "http://127.0.0.1/tracks/1/dash/init");
-        assert_eq!(resources[1].as_str(), "http://127.0.0.1/tracks/1/dash/1");
-        assert_eq!(resources[2].as_str(), "https://audio.test/2");
+        let parsed = parse_hls_playlist(&base, playlist).unwrap();
+        assert_eq!(parsed.duration_seconds, 6.5);
+        assert_eq!(
+            parsed.initialization.as_str(),
+            "http://127.0.0.1/tracks/1/dash/init"
+        );
+        assert_eq!(
+            parsed.segments[0].url.as_str(),
+            "http://127.0.0.1/tracks/1/dash/1"
+        );
+        assert_eq!(parsed.segments[1].url.as_str(), "https://audio.test/2");
+        assert_eq!(parsed.segment_at(5.0), (1, 4.5));
     }
 
     #[test]

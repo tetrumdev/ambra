@@ -5,6 +5,7 @@ import type {
   QueueEntry,
   QueueHistoryEntry,
   QueueItem,
+  QueueId,
   Track,
 } from "../types/music";
 import { contextEntriesFrom, contextEntry, shuffledContextEntries } from "../utils/queueModel";
@@ -18,6 +19,7 @@ import {
   advanceQueue,
   completeQueueTrack,
   jumpQueue,
+  removeQueueEntries,
   rewindQueue,
   type QueueState,
 } from "../utils/queueNavigation";
@@ -41,6 +43,10 @@ export type QueueController = {
   completeCurrent: () => QueueItem | undefined;
   previous: () => QueueItem | undefined;
   jumpTo: (queueId: number) => QueueItem | undefined;
+  removeEntries: (queueIds: QueueId[]) => {
+    currentRemoved: boolean;
+    item: QueueItem | undefined;
+  };
   peekNext: () => QueueItem | undefined;
 };
 
@@ -209,6 +215,15 @@ export function useQueue(
     return transition.item;
   }, [commitState]);
 
+  const removeEntries = useCallback((queueIds: QueueId[]) => {
+    const transition = removeQueueEntries(stateRef.current, new Set(queueIds));
+    if (transition.state !== stateRef.current) commitState(transition.state);
+    return {
+      currentRemoved: transition.currentRemoved,
+      item: transition.item,
+    };
+  }, [commitState]);
+
   const peekNext = useCallback(
     () => stateRef.current.upcoming[0],
     [],
@@ -241,6 +256,7 @@ export function useQueue(
     completeCurrent,
     previous,
     jumpTo,
+    removeEntries,
     peekNext,
   };
 }

@@ -1,4 +1,5 @@
 mod api;
+mod artwork_quality;
 mod models;
 mod providers;
 

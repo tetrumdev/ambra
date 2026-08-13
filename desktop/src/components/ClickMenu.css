@@ -1,7 +1,7 @@
 #preventClickCover {
     width: 100vw;
     height: 100vh;
-    position: absolute;
+    position: fixed;
     left: 0;
     top: 0;
     background-color: transparent;
@@ -9,12 +9,10 @@
 }
 
 #clickMenu {
-    width: 100px;
-    height: 100px;
     border: 1px solid #2f2f2f;
     border-radius: 15px;
     z-index: 20;
-    position: absolute;
+    position: fixed;
     color: white;
     display: grid;
     width: 180px;
@@ -24,7 +22,24 @@
     backdrop-filter: blur(20px);
 }
 
+#deleteMenu,
+#searchMenu {
+    box-sizing: border-box;
+    width: 180px;
+    height: 55px;
+    border: 1px solid #2f2f2f;
+    border-radius: 15px;
+    z-index: 20;
+    position: fixed;
+    color: white;
+    display: grid;
+    overflow: hidden;
+    background: none;
+    backdrop-filter: blur(20px);
+}
+
 .menuItem {
+    box-sizing: border-box;
     width: 100%;
     align-content: center;
     padding-left: 15px;

@@ -11,11 +11,12 @@ use qbz_models::{Album, Artist, Quality, Track, UserSession};
 use qbz_qobuz::QobuzClient;
 use tokio::sync::Mutex;
 
+use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
 use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
 };
 
-const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(5 * 60);
+const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(30 * 60);
 const OAUTH_REDIRECT_URL: &str = "http://127.0.0.1:8788/qobuz";
 
 pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -81,7 +82,7 @@ impl QobuzProvider {
         println!("Qobuz logged in as {}", session.display_name);
         Ok(Some(Self {
             client: Arc::new(client),
-            preferred_quality: configured_quality(),
+            preferred_quality: Quality::UltraHiRes,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
             albums: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
@@ -107,7 +108,11 @@ impl QobuzProvider {
         Ok(track_ids)
     }
 
-    pub async fn search_track_ids(&self, query: &str, limit: u32) -> ProviderResult<Vec<String>> {
+    pub async fn search_tracks(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> ProviderResult<Vec<TrackMetadata>> {
         Ok(self
             .client
             .search_tracks(query, limit, 0, None)
@@ -115,8 +120,23 @@ impl QobuzProvider {
             .items
             .into_iter()
             .filter(|track| track.streamable)
-            .map(|track| track.id.to_string())
+            .map(map_search_track)
             .collect())
+    }
+
+    pub async fn exact_album_artwork_by_upc(&self, upc: &str) -> ProviderResult<Option<String>> {
+        let albums = self.client.search_albums(upc, 10, 0, None).await?;
+        Ok(albums
+            .items
+            .into_iter()
+            .find(|album| {
+                album
+                    .upc
+                    .as_deref()
+                    .is_some_and(|candidate| same_release_upc(upc, candidate))
+            })
+            .and_then(|album| album.image.best().cloned())
+            .and_then(|url| qobuz_max_artwork_url(&url)))
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
@@ -192,6 +212,79 @@ impl QobuzProvider {
             .await
             .insert(album_id.to_owned(), album.clone());
         Ok(album)
+    }
+}
+
+fn map_search_track(track: Track) -> TrackMetadata {
+    let track_id = track.id.to_string();
+    let primary_artist = track
+        .performer
+        .as_ref()
+        .map(artist_metadata)
+        .unwrap_or_else(unknown_artist);
+    let artists = vec![primary_artist.clone()];
+    let album = track.album.as_ref().map(|summary| AlbumMetadata {
+        provider_id: summary.id.clone(),
+        title: summary.title.clone(),
+        version: None,
+        artists: artists.clone(),
+        cover_url: summary.image.best().cloned(),
+        release_date: None,
+        label: summary.label.as_ref().map(|label| label.name.clone()),
+        genres: summary
+            .genre
+            .as_ref()
+            .map(|genre| vec![genre.name.clone()])
+            .unwrap_or_default(),
+        upc: None,
+    });
+    let quality = match (track.maximum_bit_depth, track.maximum_sampling_rate) {
+        (Some(depth), Some(rate)) => stream_quality_label(
+            if depth > 16 {
+                if normalize_sampling_rate(rate).is_some_and(|rate| rate > 96.0) {
+                    Quality::UltraHiRes.id()
+                } else {
+                    Quality::HiRes.id()
+                }
+            } else {
+                Quality::Lossless.id()
+            },
+            rate,
+            Some(depth),
+        ),
+        _ => {
+            if track.hires {
+                Quality::HiRes.label().to_owned()
+            } else {
+                Quality::Lossless.label().to_owned()
+            }
+        }
+    };
+
+    TrackMetadata {
+        id: format!("qobuz:{track_id}"),
+        provider: MusicProvider::Qobuz,
+        provider_track_id: track_id.clone(),
+        title: track.title,
+        version: track.version,
+        primary_artist,
+        artists,
+        album,
+        duration_seconds: u64::from(track.duration),
+        track_number: nonzero(track.track_number),
+        disc_number: track.media_number.and_then(nonzero),
+        explicit: track.parental_warning,
+        isrc: track.isrc,
+        copyright: track.copyright,
+        quality: Some(quality),
+        maximum_sampling_rate_khz: track
+            .maximum_sampling_rate
+            .and_then(normalize_sampling_rate),
+        maximum_bit_depth: track.maximum_bit_depth,
+        playback: PlaybackMetadata {
+            kind: PlaybackKind::Direct,
+            url: format!("/api/providers/qobuz/tracks/{track_id}/stream"),
+        },
     }
 }
 
@@ -352,20 +445,6 @@ fn nonzero(value: u32) -> Option<u32> {
 
 fn nonempty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
-}
-
-fn configured_quality() -> Quality {
-    match env::var("AMBRA_QOBUZ_QUALITY")
-        .unwrap_or_else(|_| "27".to_owned())
-        .trim()
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "5" | "mp3" => Quality::Mp3,
-        "6" | "lossless" | "cd" => Quality::Lossless,
-        "7" | "hires" | "hi-res" => Quality::HiRes,
-        _ => Quality::UltraHiRes,
-    }
 }
 
 async fn interactive_login(client: &QobuzClient) -> ProviderResult<UserSession> {

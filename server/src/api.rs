@@ -1,4 +1,10 @@
-use std::{collections::HashSet, env, fs, io, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    env, fs, io,
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -14,13 +20,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
+    artwork_quality::{
+        ArtworkCandidate, dominant_colors, highest_resolution, image_dimensions, normalized_upc,
+        qobuz_max_artwork_url, trusted_artwork_url,
+    },
     models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
     providers::qobuz::QobuzProvider,
     providers::spotify::SpotifyProvider,
@@ -29,6 +40,10 @@ use crate::{
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
 const SEARCH_RESULT_LIMIT: u32 = 25;
+const SEARCH_CACHE_LIMIT: usize = 100;
+const SEARCH_METADATA_TIMEOUT: Duration = Duration::from_secs(6);
+const MEDIA_CACHE_LIMIT_BYTES: usize = 128 * 1024 * 1024;
+const UPSTREAM_ATTEMPTS: usize = 3;
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -39,6 +54,48 @@ struct AppState {
     spotify: Option<SpotifyProvider>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
+    search_cache: Arc<RwLock<HashMap<SearchCacheKey, Vec<TrackMetadata>>>>,
+    media_cache: Arc<RwLock<MediaCache>>,
+    media_fetches: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    artwork_quality_cache: Arc<RwLock<HashMap<String, ArtworkCandidate>>>,
+    artwork_dimensions_cache: Arc<RwLock<HashMap<String, (u32, u32)>>>,
+    artwork_palette_cache: Arc<RwLock<HashMap<String, Vec<String>>>>,
+}
+
+#[derive(Default)]
+struct MediaCache {
+    entries: HashMap<String, Bytes>,
+    order: VecDeque<String>,
+    size_bytes: usize,
+}
+
+impl MediaCache {
+    fn get(&self, key: &str) -> Option<Bytes> {
+        self.entries.get(key).cloned()
+    }
+
+    fn insert(&mut self, key: String, bytes: Bytes) {
+        if bytes.len() > MEDIA_CACHE_LIMIT_BYTES || self.entries.contains_key(&key) {
+            return;
+        }
+        while self.size_bytes.saturating_add(bytes.len()) > MEDIA_CACHE_LIMIT_BYTES {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            if let Some(removed) = self.entries.remove(&oldest) {
+                self.size_bytes = self.size_bytes.saturating_sub(removed.len());
+            }
+        }
+        self.size_bytes = self.size_bytes.saturating_add(bytes.len());
+        self.order.push_back(key.clone());
+        self.entries.insert(key, bytes);
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SearchCacheKey {
+    provider: MusicProvider,
+    query: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -68,9 +125,19 @@ pub async fn serve() -> ServerResult<()> {
         qobuz,
         spotify,
         http_client: reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(3))
+            .timeout(Duration::from_secs(20))
+            .pool_idle_timeout(Duration::from_secs(90))
+            .pool_max_idle_per_host(16)
+            .tcp_keepalive(Duration::from_secs(30))
             .build()?,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
+        search_cache: Arc::new(RwLock::new(HashMap::new())),
+        media_cache: Arc::new(RwLock::new(MediaCache::default())),
+        media_fetches: Arc::new(Mutex::new(HashMap::new())),
+        artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
+        artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
+        artwork_palette_cache: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let cors = CorsLayer::new()
@@ -83,7 +150,9 @@ pub async fn serve() -> ServerResult<()> {
     let app = Router::new()
         .route("/api/health", get(health))
         .route("/api/library", get(library))
+        .route("/api/library/tracks", post(add_track))
         .route("/api/search/tracks", get(search_tracks))
+        .route("/api/quality/artwork", post(resolve_artwork_quality))
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
         .route("/api/library/qobuz-albums", post(add_qobuz_album))
@@ -123,6 +192,182 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ArtworkQualityRequest {
+    source_provider: MusicProvider,
+    album_id: String,
+    upc: Option<String>,
+    cover_url: String,
+}
+
+async fn resolve_artwork_quality(
+    State(state): State<AppState>,
+    Json(request): Json<ArtworkQualityRequest>,
+) -> Result<Json<ArtworkCandidate>, ApiError> {
+    let provider = provider_slug(request.source_provider);
+    if !trusted_artwork_url(provider, &request.cover_url) {
+        return Err(ApiError::bad_request(
+            "Artwork URL does not belong to the selected provider",
+        ));
+    }
+
+    let upc = if request.upc.as_deref().is_some_and(|upc| !upc.is_empty()) {
+        request.upc.clone()
+    } else if request.source_provider == MusicProvider::Tidal {
+        state
+            .tidal
+            .album_upc(&request.album_id)
+            .await
+            .map_err(ApiError::upstream)?
+    } else {
+        None
+    };
+
+    let cache_key = format!(
+        "{provider}:{}:{}",
+        request.album_id,
+        upc.as_deref().and_then(normalized_upc).unwrap_or_default()
+    );
+    if let Some(cached) = state
+        .artwork_quality_cache
+        .read()
+        .await
+        .get(&cache_key)
+        .cloned()
+    {
+        return Ok(Json(cached));
+    }
+
+    let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
+        qobuz_max_artwork_url(&request.cover_url)
+    } else if let (Some(qobuz), Some(upc)) = (state.qobuz.as_ref(), upc.as_deref()) {
+        qobuz
+            .exact_album_artwork_by_upc(upc)
+            .await
+            .map_err(ApiError::upstream)?
+    } else {
+        None
+    };
+
+    let palette_url = request.cover_url.clone();
+    let source_dimensions = cached_artwork_dimensions(&state, &request.cover_url)
+        .await
+        .ok_or_else(|| ApiError::upstream("Could not inspect source artwork dimensions"))?;
+    let source = ArtworkCandidate {
+        provider: provider.to_owned(),
+        url: request.cover_url,
+        width: source_dimensions.0,
+        height: source_dimensions.1,
+        colors: Vec::new(),
+    };
+    let qobuz = if let Some(url) = qobuz_url.filter(|url| url != &source.url) {
+        let (width, height) = cached_artwork_dimensions(&state, &url)
+            .await
+            .ok_or_else(|| ApiError::upstream("Could not inspect Qobuz artwork dimensions"))?;
+        Some(ArtworkCandidate {
+            provider: "qobuz".to_owned(),
+            url,
+            width,
+            height,
+            colors: Vec::new(),
+        })
+    } else {
+        None
+    };
+    let mut best = highest_resolution(source, qobuz);
+    best.colors = cached_artwork_palette(&state, &palette_url)
+        .await
+        .unwrap_or_default();
+
+    if best.colors.len() == 3 {
+        state
+            .artwork_quality_cache
+            .write()
+            .await
+            .insert(cache_key, best.clone());
+    }
+    Ok(Json(best))
+}
+
+async fn cached_artwork_palette(state: &AppState, url: &str) -> Option<Vec<String>> {
+    if let Some(cached) = state.artwork_palette_cache.read().await.get(url).cloned() {
+        return Some(cached);
+    }
+
+    const MAX_ARTWORK_BYTES: u64 = 16 * 1024 * 1024;
+    let response = state.http_client.get(url).send().await.ok()?;
+    if !response.status().is_success()
+        || response
+            .content_length()
+            .is_some_and(|size| size > MAX_ARTWORK_BYTES)
+    {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    if bytes.len() as u64 > MAX_ARTWORK_BYTES {
+        return None;
+    }
+
+    let colors = dominant_colors(&bytes)?;
+    state
+        .artwork_palette_cache
+        .write()
+        .await
+        .insert(url.to_owned(), colors.clone());
+    Some(colors)
+}
+
+async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, u32)> {
+    if let Some(cached) = state
+        .artwork_dimensions_cache
+        .read()
+        .await
+        .get(url)
+        .copied()
+    {
+        return Some(cached);
+    }
+
+    const IMAGE_HEADER_LIMIT: usize = 256 * 1024;
+    let dimensions = async {
+        let mut response = state
+            .http_client
+            .get(url)
+            .header(RANGE, format!("bytes=0-{}", IMAGE_HEADER_LIMIT - 1))
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+
+        let mut header = Vec::with_capacity(64 * 1024);
+        while header.len() < IMAGE_HEADER_LIMIT {
+            let Some(chunk) = response.chunk().await.ok()? else {
+                break;
+            };
+            let remaining = IMAGE_HEADER_LIMIT - header.len();
+            header.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+            if image_dimensions(&header).is_some() {
+                break;
+            }
+        }
+        image_dimensions(&header)
+    }
+    .await;
+
+    if let Some(dimensions) = dimensions {
+        state
+            .artwork_dimensions_cache
+            .write()
+            .await
+            .insert(url.to_owned(), dimensions);
+        return Some(dimensions);
+    }
+    None
+}
+
 async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>, ApiError> {
     let entries = state.library_entries.read().await.clone();
     let available_entries = entries
@@ -130,7 +375,6 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
     let tracks = load_tracks(&state, &available_entries).await?;
-    warm_playback_sources(state.clone(), available_entries);
 
     Ok(Json(LibraryResponse { tracks }))
 }
@@ -155,75 +399,90 @@ async fn search_tracks(
         ));
     }
 
-    let provider_track_ids = match request.provider {
+    let cache_key = SearchCacheKey {
+        provider: request.provider,
+        query: query.to_lowercase(),
+    };
+    if let Some(tracks) = state.search_cache.read().await.get(&cache_key).cloned() {
+        return Ok(Json(LibraryResponse { tracks }));
+    }
+
+    let tracks = match request.provider {
         MusicProvider::Tidal => state
             .tidal
-            .search_track_ids(query, SEARCH_RESULT_LIMIT)
+            .search_tracks(query, SEARCH_RESULT_LIMIT)
             .await
             .map_err(ApiError::upstream)?,
         MusicProvider::Qobuz => qobuz_provider(&state)?
-            .search_track_ids(query, SEARCH_RESULT_LIMIT)
+            .search_tracks(query, SEARCH_RESULT_LIMIT)
             .await
             .map_err(ApiError::upstream)?,
-        MusicProvider::Spotify => spotify_provider(&state)?
-            .search_track_ids(query, SEARCH_RESULT_LIMIT as usize)
-            .await
-            .map_err(ApiError::upstream)?,
+        MusicProvider::Spotify => {
+            let provider_track_ids = spotify_provider(&state)?
+                .search_track_ids(query, SEARCH_RESULT_LIMIT as usize)
+                .await
+                .map_err(ApiError::upstream)?;
+            let entries = provider_track_ids
+                .into_iter()
+                .map(|provider_track_id| LibraryEntry {
+                    provider: request.provider,
+                    provider_track_id,
+                })
+                .collect::<Vec<_>>();
+            load_search_tracks(&state, &entries).await
+        }
         MusicProvider::YoutubeMusic => {
             return Err(ApiError::bad_request(
                 "YouTube Music search is not implemented",
             ));
         }
     };
-    let entries = provider_track_ids
-        .into_iter()
-        .map(|provider_track_id| LibraryEntry {
-            provider: request.provider,
-            provider_track_id,
-        })
-        .collect::<Vec<_>>();
-    let tracks = load_search_tracks(&state, &entries).await;
+    let mut search_cache = state.search_cache.write().await;
+    if !search_cache.contains_key(&cache_key) && search_cache.len() >= SEARCH_CACHE_LIMIT {
+        if let Some(oldest_key) = search_cache.keys().next().cloned() {
+            search_cache.remove(&oldest_key);
+        }
+    }
+    search_cache.insert(cache_key, tracks.clone());
 
     Ok(Json(LibraryResponse { tracks }))
-}
-
-fn warm_playback_sources(state: AppState, entries: Vec<LibraryEntry>) {
-    tokio::spawn(async move {
-        stream::iter(entries)
-            .for_each_concurrent(4, |entry| {
-                let state = state.clone();
-                async move {
-                    let result = match entry.provider {
-                        MusicProvider::Tidal => state
-                            .tidal
-                            .playback_source(&entry.provider_track_id)
-                            .await
-                            .map(|_| ()),
-                        MusicProvider::Qobuz => match state.qobuz.as_ref() {
-                            Some(provider) => provider
-                                .playback_source(&entry.provider_track_id)
-                                .await
-                                .map(|_| ()),
-                            None => Ok(()),
-                        },
-                        _ => Ok(()),
-                    };
-                    if let Err(error) = result {
-                        eprintln!(
-                            "Could not warm {} track {}: {error}",
-                            provider_name(entry.provider),
-                            entry.provider_track_id
-                        );
-                    }
-                }
-            })
-            .await;
-    });
 }
 
 #[derive(Deserialize)]
 struct AddAlbumRequest {
     url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddTrackRequest {
+    provider: MusicProvider,
+    provider_track_id: String,
+}
+
+async fn add_track(
+    State(state): State<AppState>,
+    Json(request): Json<AddTrackRequest>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    if !provider_is_configured(&state, request.provider) {
+        return Err(ApiError::bad_request("Music provider is not configured"));
+    }
+
+    let entry = LibraryEntry {
+        provider: request.provider,
+        provider_track_id: request.provider_track_id,
+    };
+    let tracks = load_tracks(&state, std::slice::from_ref(&entry)).await?;
+
+    let mut library_entries = state.library_entries.write().await;
+    if !library_entries.contains(&entry) {
+        library_entries.push(entry);
+        if let Err(error) = save_library_entries(&library_entries) {
+            eprintln!("Could not persist the streaming library cache: {error}");
+        }
+    }
+
+    Ok(Json(LibraryResponse { tracks }))
 }
 
 async fn add_album(
@@ -334,19 +593,20 @@ async fn load_tracks(
 }
 
 async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<TrackMetadata> {
-    stream::iter(entries.iter().cloned())
-        .map(|entry| {
+    let mut tracks = stream::iter(entries.iter().cloned().enumerate())
+        .map(|(index, entry)| {
             let state = state.clone();
             async move {
-                let result = load_track(&state, &entry).await;
-                (entry, result)
+                let result =
+                    tokio::time::timeout(SEARCH_METADATA_TIMEOUT, load_track(&state, &entry)).await;
+                (index, entry, result)
             }
         })
-        .buffered(4)
-        .filter_map(|(entry, result)| async move {
+        .buffer_unordered(SEARCH_RESULT_LIMIT as usize)
+        .filter_map(|(index, entry, result)| async move {
             match result {
-                Ok(track) => Some(track),
-                Err(error) => {
+                Ok(Ok(track)) => Some((index, track)),
+                Ok(Err(error)) => {
                     eprintln!(
                         "Could not load {} search result {}: {error}",
                         provider_name(entry.provider),
@@ -354,10 +614,20 @@ async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<T
                     );
                     None
                 }
+                Err(_) => {
+                    eprintln!(
+                        "Timed out loading {} search result {}",
+                        provider_name(entry.provider),
+                        entry.provider_track_id
+                    );
+                    None
+                }
             }
         })
-        .collect()
-        .await
+        .collect::<Vec<_>>()
+        .await;
+    tracks.sort_by_key(|(index, _)| *index);
+    tracks.into_iter().map(|(_, track)| track).collect()
 }
 
 async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<TrackMetadata> {
@@ -553,7 +823,7 @@ async fn stream_track(
                 .await
                 .map_err(ApiError::upstream)?;
             match source {
-                PlaybackSource::Direct { url, mime_type, .. } => {
+                PlaybackSource::Direct { url, mime_type } => {
                     proxy_direct_stream(&state.http_client, &url, &mime_type, &headers).await
                 }
                 PlaybackSource::Dash { .. } => Err(ApiError::not_found(format!(
@@ -805,13 +1075,7 @@ async fn dash_initialization(
         )));
     };
 
-    proxy_direct_stream(
-        &state.http_client,
-        &initialization_url,
-        &mime_type,
-        &HeaderMap::new(),
-    )
-    .await
+    cached_media_response(&state, &initialization_url, &mime_type).await
 }
 
 async fn dash_segment(
@@ -847,13 +1111,20 @@ async fn dash_segment(
     }
 
     let segment_url = media_url_template.replace("$Number$", &segment_number.to_string());
-    proxy_direct_stream(
-        &state.http_client,
-        &segment_url,
-        &mime_type,
-        &HeaderMap::new(),
-    )
-    .await
+    let response = cached_media_response(&state, &segment_url, &mime_type).await?;
+
+    let next_number = segment_number.saturating_add(1);
+    let has_next = segment_count
+        .map(|count| next_number < start_number.saturating_add(count))
+        .unwrap_or(true);
+    if has_next {
+        let state = state.clone();
+        let next_url = media_url_template.replace("$Number$", &next_number.to_string());
+        tokio::spawn(async move {
+            let _ = cached_media_bytes(&state, &next_url).await;
+        });
+    }
+    Ok(response)
 }
 
 fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
@@ -900,6 +1171,15 @@ fn provider_name(provider: MusicProvider) -> &'static str {
     }
 }
 
+fn provider_slug(provider: MusicProvider) -> &'static str {
+    match provider {
+        MusicProvider::Tidal => "tidal",
+        MusicProvider::Qobuz => "qobuz",
+        MusicProvider::Spotify => "spotify",
+        MusicProvider::YoutubeMusic => "youtubeMusic",
+    }
+}
+
 async fn proxy_direct_stream(
     client: &reqwest::Client,
     url: &str,
@@ -939,6 +1219,79 @@ async fn proxy_direct_stream(
     }
 
     Ok(response)
+}
+
+async fn cached_media_response(
+    state: &AppState,
+    url: &str,
+    fallback_mime_type: &str,
+) -> Result<Response, ApiError> {
+    let bytes = cached_media_bytes(state, url).await?;
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, fallback_mime_type)
+        .header(CONTENT_LENGTH, bytes.len())
+        .header(CACHE_CONTROL, "private, max-age=3600")
+        .body(Body::from(bytes))
+        .map_err(ApiError::internal)
+}
+
+async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiError> {
+    if let Some(bytes) = state.media_cache.read().await.get(url) {
+        return Ok(bytes);
+    }
+
+    let fetch_lock = {
+        let mut fetches = state.media_fetches.lock().await;
+        fetches
+            .entry(url.to_owned())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    };
+    let fetch_guard = fetch_lock.lock().await;
+    if let Some(bytes) = state.media_cache.read().await.get(url) {
+        return Ok(bytes);
+    }
+
+    let result = download_media_bytes(&state.http_client, url).await;
+    if let Ok(bytes) = &result {
+        state
+            .media_cache
+            .write()
+            .await
+            .insert(url.to_owned(), bytes.clone());
+    }
+    drop(fetch_guard);
+    state.media_fetches.lock().await.remove(url);
+
+    let bytes = result?;
+    if let Some(cached) = state.media_cache.read().await.get(url) {
+        return Ok(cached);
+    }
+    Ok(bytes)
+}
+
+async fn download_media_bytes(client: &reqwest::Client, url: &str) -> Result<Bytes, ApiError> {
+    let mut last_error = None;
+    for attempt in 0..UPSTREAM_ATTEMPTS {
+        match client.get(url).send().await {
+            Ok(response) => match response.error_for_status() {
+                Ok(response) => match response.bytes().await {
+                    Ok(bytes) => return Ok(bytes),
+                    Err(error) => last_error = Some(error.to_string()),
+                },
+                Err(error) => last_error = Some(error.to_string()),
+            },
+            Err(error) => last_error = Some(error.to_string()),
+        }
+        if attempt + 1 < UPSTREAM_ATTEMPTS {
+            tokio::time::sleep(Duration::from_millis(100 * (1_u64 << attempt))).await;
+        }
+    }
+    Err(ApiError::upstream(io::Error::other(format!(
+        "Media request failed after {UPSTREAM_ATTEMPTS} attempts: {}",
+        last_error.unwrap_or_else(|| "unknown error".to_owned())
+    ))))
 }
 
 fn copy_header(source: &HeaderMap, destination: &mut HeaderMap, name: axum::http::HeaderName) {

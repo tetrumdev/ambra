@@ -1,6 +1,7 @@
-import type { Track } from "../types/music";
+import type { GlobalTrackId, Track } from "../types/music";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
+const REMOVED_LIBRARY_TRACKS_KEY = "ambra.removed-library-tracks.v1";
 
 type CachedTrack = Omit<Track, "globalId"> & {
   globalId?: string;
@@ -88,6 +89,48 @@ export function saveCachedServerTracks(tracks: Track[]) {
     localStorage.setItem(
       STREAMING_LIBRARY_CACHE_KEY,
       JSON.stringify(tracks.filter((track) => track.provider !== "local")),
+    );
+  } catch {
+    // A storage quota or privacy setting should not prevent library playback.
+  }
+}
+
+export function parseRemovedLibraryTrackIds(
+  value: string | null,
+): GlobalTrackId[] {
+  if (value === null) return [];
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+
+    return [...new Set(parsed.filter((trackId) => typeof trackId === "string"))];
+  } catch {
+    return [];
+  }
+}
+
+export function loadRemovedLibraryTrackIds(): Set<GlobalTrackId> {
+  if (typeof localStorage === "undefined") return new Set();
+
+  try {
+    return new Set(
+      parseRemovedLibraryTrackIds(
+        localStorage.getItem(REMOVED_LIBRARY_TRACKS_KEY),
+      ),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+export function saveRemovedLibraryTrackIds(trackIds: Set<GlobalTrackId>) {
+  if (typeof localStorage === "undefined") return;
+
+  try {
+    localStorage.setItem(
+      REMOVED_LIBRARY_TRACKS_KEY,
+      JSON.stringify([...trackIds]),
     );
   } catch {
     // A storage quota or privacy setting should not prevent library playback.

@@ -18,7 +18,7 @@
     left: 0;
     width: 100%; /* Full 14px hitbox */
     min-height: 36px;
-    /*cursor: default;*/
+    cursor: default;
     touch-action: none;
     will-change: transform;
 }
@@ -36,8 +36,4 @@
 .appScrollbarThumb:hover::before,
 .appScrollbarThumb[data-dragging="true"]::before {
     background: rgb(255 255 255 / 55%);
-}
-
-.appScrollbarThumb[data-dragging="true"] {
-    cursor: grabbing;
 }

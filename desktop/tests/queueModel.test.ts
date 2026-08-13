@@ -9,6 +9,7 @@ import {
   advanceQueue,
   completeQueueTrack,
   jumpQueue,
+  removeQueueEntries,
   rewindQueue,
 } from "../src/utils/queueNavigation";
 import {
@@ -186,5 +187,40 @@ describe("queue model", () => {
     expect(jumped.state.upcoming.map((entry) => entry.track.globalId)).toEqual([
       "d",
     ]);
+  });
+
+  test("removing queue entries promotes the first remaining upcoming item", () => {
+    const first = item("a", 1);
+    const second = item("b", 2);
+    const third = item("c", 3);
+    const fourth = item("d", 4);
+    const initial = {
+      history: [],
+      current: first,
+      upcoming: [second, third, fourth],
+    };
+
+    const removed = removeQueueEntries(initial, new Set([1, 3]));
+
+    expect(removed.currentRemoved).toBe(true);
+    expect(removed.item?.track.globalId).toBe("b");
+    expect(removed.state.current?.track.globalId).toBe("b");
+    expect(removed.state.upcoming.map((entry) => entry.track.globalId)).toEqual([
+      "d",
+    ]);
+    expect(removed.state.history).toEqual([]);
+  });
+
+  test("removing upcoming entries leaves the current item untouched", () => {
+    const first = item("a", 1);
+    const second = item("b", 2);
+    const third = item("c", 3);
+    const initial = { history: [], current: first, upcoming: [second, third] };
+
+    const removed = removeQueueEntries(initial, new Set([2]));
+
+    expect(removed.currentRemoved).toBe(false);
+    expect(removed.state.current).toBe(first);
+    expect(removed.state.upcoming).toEqual([third]);
   });
 });

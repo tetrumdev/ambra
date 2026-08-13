@@ -40,6 +40,13 @@
     font-size: 0.8rem;
 }
 
+.queueSelectionDeleteButton {
+    position: absolute;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+}
+
 .queueSection::after {
     content: "";
     flex: 1;
@@ -51,11 +58,13 @@
     margin: 0;
     background-color: black;
     padding-left: 15px;
-    height: 90px;
+    height: 76px;
     border-bottom: 1px solid #535353;
     display: grid;
     align-content: center;
-    grid-template-columns: 75px 300px 200px auto 100px;
+    grid-template-columns:
+        60px minmax(100px, 1fr)
+        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     gap: 10px;
     text-align: left;
     font-family: inherit;
@@ -67,6 +76,12 @@
     background-color: #151515;
 }
 
+.queueItem[data-selected="true"],
+.queueItem[data-selected="true"]:hover {
+    background-color: #c88816;
+    color: black;
+}
+
 #currentQueueTrack,
 #upcomingQueueTracks {
     display: flex;
@@ -74,13 +89,17 @@
 }
 
 #queueList .coverImgContainer {
-    width: 60px;
-    height: 60px;
+    width: 54px;
+    height: 54px;
     grid-column: 1;
     align-self: center;
-    transition-duration: 0.25s;
-    border-radius: 7px;
+    align-content: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 6px;
     overflow: hidden;
+    display: grid;
+    place-items: center;
 }
 
 #queueList .coverImg {
@@ -89,8 +108,36 @@
     object-fit: cover;
 }
 
-#queueList .trackName {
+#queueList .queueTrackInfo {
     grid-column: 2;
-    font-weight: 600;
     align-self: center;
+    display: grid;
+    grid-template-rows: 24px 24px;
+    align-items: center;
+    justify-items: left;
+}
+
+.queueTrackInfo .trackName {
+    grid-column: 1;
+    grid-row: 1;
+    font-weight: 600;
+    margin: 0;
+    text-align: left;
+}
+
+.queueTrackInfo .artistName {
+    grid-column: 1;
+    grid-row: 2;
+    text-align: left;
+    /*align-self: center;*/
+}
+
+.queueSelectionIndicator {
+    grid-column: 5;
+    width: 20px;
+    height: 20px;
+    align-self: center;
+    justify-self: center;
+    user-select: none;
+    -webkit-user-drag: none;
 }

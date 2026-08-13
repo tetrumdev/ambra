@@ -1,4 +1,4 @@
-export type AppScreen = "bigscreen" | "library" | "queue";
+export type AppScreen = "bigscreen" | "library" | "search" | "queue";
 
 export type AppPreferences = {
   version: 2;
@@ -30,7 +30,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isAppScreen(value: unknown): value is AppScreen {
-  return value === "bigscreen" || value === "library" || value === "queue";
+  return (
+    value === "bigscreen" ||
+    value === "library" ||
+    value === "search" ||
+    value === "queue"
+  );
 }
 
 function migratePreferences(value: unknown): AppPreferences {
