@@ -50,28 +50,47 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ## Additional Info
 
-### Qobuz setup
+### Streaming service login
+
+Start the server normally:
+
+```sh
+cd server
+cargo run
+```
+
+On the first start, Ambra checks Tidal, Qobuz, and Spotify for a working saved
+login. It asks whether to log in to each missing service. Answer `y` to start
+that service's login flow, or press Enter to skip it. Tidal and Qobuz print a
+login URL and ask for the callback URL. Spotify opens its login page in the
+browser. Saved services are reused automatically on later starts, and the
+questions are shown only during the first setup.
+
+To choose a service skipped during first setup, stop the server and run:
+
+```sh
+cd server
+cargo run -- reset-logins
+cargo run
+```
+
+Resetting login setup does not delete existing sessions. The next normal start
+asks only about services that are not logged in.
+
+Tidal stores its session in `server/.tidal-session.json`. Qobuz stores its
+session in `server/.qobuz-session.json`. Spotify stores its login under
+`server/.spotify-cache`. These paths are ignored by Git.
+
+### Qobuz details
 
 Ambra reuses the Qobuz API implementation from
 [`qbz`](https://github.com/vicrodh/qbz), pinned to its 2.0.2 source revision.
 Qobuz credentials remain in the Rust server and are never returned to the
 desktop.
 
-For first login, start the server with the terminal OAuth flow:
-
-```sh
-cd server
-AMBRA_QOBUZ_INTERACTIVE_LOGIN=1 cargo run
-```
-
-Open the printed Qobuz URL, complete login, then paste the callback URL back
-into the terminal. Ambra stores the resulting session in
-`server/.qobuz-session.json` with private file permissions. Later starts use
-that session automatically. A pre-existing token can instead be supplied with
-`AMBRA_QOBUZ_USER_AUTH_TOKEN`.
-
-`AMBRA_QOBUZ_QUALITY` selects the preferred format (`5`, `6`, `7`, or `27`);
-default is `27` with qbz's automatic fallback to available lower qualities.
+A pre-existing token can instead be supplied with
+`AMBRA_QOBUZ_USER_AUTH_TOKEN`. Qobuz uses its highest available quality with
+automatic fallback to lower qualities.
 Paste either a Tidal or Qobuz album URL into the desktop's library form.
 
 Streaming metadata uses one provider-neutral contract: provider IDs, title and
@@ -81,16 +100,12 @@ copyright, delivered quality, maximum sample rate/bit depth, and a server-owned
 playback descriptor. Spotify and YouTube Music adapters can populate the same
 contract later without changing player components.
 
-### Spotify setup
+### Spotify details
 
-Spotify playback uses librespot and requires Spotify Premium. Start server once with browser login enabled:
-
-```sh
-cd server
-AMBRA_SPOTIFY_INTERACTIVE_LOGIN=1 cargo run
-```
-
-Login is cached under `server/.spotify-cache`. Later starts reuse cached credentials. Headless alternatives: set `AMBRA_SPOTIFY_ACCESS_TOKEN`, or set both `AMBRA_SPOTIFY_USERNAME` and `AMBRA_SPOTIFY_PASSWORD`. Optional `AMBRA_SPOTIFY_QUALITY` values: `96`, `160`, or `320` (default).
+Spotify playback uses librespot and requires Spotify Premium. Headless
+alternatives: set `AMBRA_SPOTIFY_ACCESS_TOKEN`, or set both
+`AMBRA_SPOTIFY_USERNAME` and `AMBRA_SPOTIFY_PASSWORD`. Optional
+`AMBRA_SPOTIFY_QUALITY` values: `96`, `160`, or `320` (default).
 
 ### AI Usage
 

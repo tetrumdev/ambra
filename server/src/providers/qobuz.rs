@@ -47,9 +47,8 @@ struct CachedPlaybackSource {
 
 impl QobuzProvider {
     /// Qobuz stays optional: an absent login must not prevent Tidal/local startup.
-    /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or the
-    /// opt-in terminal OAuth flow (AMBRA_QOBUZ_INTERACTIVE_LOGIN=1).
-    pub async fn authenticate_if_configured() -> ProviderResult<Option<Self>> {
+    /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or terminal OAuth.
+    pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
         let saved_session = if session_path().is_file() {
             Some(load_session()?)
         } else {
@@ -58,7 +57,7 @@ impl QobuzProvider {
         let environment_token = env::var("AMBRA_QOBUZ_USER_AUTH_TOKEN")
             .ok()
             .filter(|token| !token.trim().is_empty());
-        let interactive = env_flag("AMBRA_QOBUZ_INTERACTIVE_LOGIN");
+        let interactive = interactive || env_flag("AMBRA_QOBUZ_INTERACTIVE_LOGIN");
 
         if saved_session.is_none() && environment_token.is_none() && !interactive {
             return Ok(None);
@@ -69,10 +68,12 @@ impl QobuzProvider {
 
         let session = if let Some(token) = environment_token {
             client.login_with_token(token.trim()).await?
+        } else if interactive {
+            interactive_login(&client).await?
         } else if let Some(session) = saved_session {
             client.login_with_token(&session.user_auth_token).await?
         } else {
-            interactive_login(&client).await?
+            return Ok(None);
         };
         save_session(&session)?;
 
