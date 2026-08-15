@@ -32,6 +32,7 @@ use crate::{
         ArtworkCandidate, dominant_colors, highest_resolution, image_dimensions, normalized_upc,
         qobuz_max_artwork_url, trusted_artwork_url,
     },
+    login_setup,
     models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
     providers::qobuz::QobuzProvider,
     providers::spotify::SpotifyProvider,
@@ -49,7 +50,7 @@ type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send +
 
 #[derive(Clone)]
 struct AppState {
-    tidal: TidalProvider,
+    tidal: Option<TidalProvider>,
     qobuz: Option<QobuzProvider>,
     spotify: Option<SpotifyProvider>,
     http_client: reqwest::Client,
@@ -106,22 +107,19 @@ struct LibraryEntry {
 }
 
 pub async fn serve() -> ServerResult<()> {
-    let qobuz = match QobuzProvider::authenticate_if_configured().await {
-        Ok(provider) => provider,
-        Err(error) => {
-            eprintln!("Qobuz disabled because login failed: {error}");
-            None
-        }
-    };
-    let spotify = match SpotifyProvider::authenticate_if_configured().await {
-        Ok(provider) => provider,
-        Err(error) => {
-            eprintln!("Spotify disabled because login failed: {error}");
-            None
-        }
-    };
+    let offer_logins = login_setup::setup_needed();
+    let tidal = authenticate_tidal(offer_logins).await?;
+    let qobuz = authenticate_qobuz(offer_logins).await?;
+    let spotify = authenticate_spotify(offer_logins).await?;
+    if offer_logins {
+        login_setup::finish_setup()?;
+        println!(
+            "Login choices saved. To choose skipped services later, run `cargo run -- reset-logins`, then `cargo run`."
+        );
+    }
+
     let state = AppState {
-        tidal: TidalProvider::authenticate().await?,
+        tidal,
         qobuz,
         spotify,
         http_client: reqwest::Client::builder()
@@ -192,6 +190,51 @@ pub async fn serve() -> ServerResult<()> {
     Ok(())
 }
 
+async fn authenticate_tidal(offer_login: bool) -> ServerResult<Option<TidalProvider>> {
+    match TidalProvider::authenticate_if_configured(false).await {
+        Ok(Some(provider)) => return Ok(Some(provider)),
+        Ok(None) => {}
+        Err(error) => eprintln!("Tidal saved login failed: {error}"),
+    }
+    if offer_login && login_setup::ask_to_log_in("Tidal")? {
+        match TidalProvider::authenticate_if_configured(true).await {
+            Ok(provider) => return Ok(provider),
+            Err(error) => eprintln!("Tidal disabled because login failed: {error}"),
+        }
+    }
+    Ok(None)
+}
+
+async fn authenticate_qobuz(offer_login: bool) -> ServerResult<Option<QobuzProvider>> {
+    match QobuzProvider::authenticate_if_configured(false).await {
+        Ok(Some(provider)) => return Ok(Some(provider)),
+        Ok(None) => {}
+        Err(error) => eprintln!("Qobuz saved login failed: {error}"),
+    }
+    if offer_login && login_setup::ask_to_log_in("Qobuz")? {
+        match QobuzProvider::authenticate_if_configured(true).await {
+            Ok(provider) => return Ok(provider),
+            Err(error) => eprintln!("Qobuz disabled because login failed: {error}"),
+        }
+    }
+    Ok(None)
+}
+
+async fn authenticate_spotify(offer_login: bool) -> ServerResult<Option<SpotifyProvider>> {
+    match SpotifyProvider::authenticate_if_configured(false).await {
+        Ok(Some(provider)) => return Ok(Some(provider)),
+        Ok(None) => {}
+        Err(error) => eprintln!("Spotify saved login failed: {error}"),
+    }
+    if offer_login && login_setup::ask_to_log_in("Spotify")? {
+        match SpotifyProvider::authenticate_if_configured(true).await {
+            Ok(provider) => return Ok(provider),
+            Err(error) => eprintln!("Spotify disabled because login failed: {error}"),
+        }
+    }
+    Ok(None)
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
@@ -219,8 +262,7 @@ async fn resolve_artwork_quality(
     let upc = if request.upc.as_deref().is_some_and(|upc| !upc.is_empty()) {
         request.upc.clone()
     } else if request.source_provider == MusicProvider::Tidal {
-        state
-            .tidal
+        tidal_provider(&state)?
             .album_upc(&request.album_id)
             .await
             .map_err(ApiError::upstream)?
@@ -412,8 +454,7 @@ async fn search_tracks(
     }
 
     let tracks = match request.provider {
-        MusicProvider::Tidal => state
-            .tidal
+        MusicProvider::Tidal => tidal_provider(&state)?
             .search_tracks(query, SEARCH_RESULT_LIMIT)
             .await
             .map_err(ApiError::upstream)?,
@@ -481,20 +522,17 @@ async fn track_playback(
         .duration_seconds
         .filter(|duration| (1..=86_400).contains(duration))
     {
-        state
-            .tidal
+        tidal_provider(&state)?
             .playback_source_with_duration(&track_id, duration_seconds)
             .await
             .map_err(ApiError::upstream)?;
     } else {
-        state
-            .tidal
+        tidal_provider(&state)?
             .playback_source(&track_id)
             .await
             .map_err(ApiError::upstream)?;
     }
-    let (playback, quality, maximum_sampling_rate_khz, maximum_bit_depth) = state
-        .tidal
+    let (playback, quality, maximum_sampling_rate_khz, maximum_bit_depth) = tidal_provider(&state)?
         .playback_metadata(&track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -595,8 +633,7 @@ async fn import_album(
     album_id: String,
 ) -> Result<Json<LibraryResponse>, ApiError> {
     let track_ids = match provider {
-        MusicProvider::Tidal => state
-            .tidal
+        MusicProvider::Tidal => tidal_provider(state)?
             .album_track_ids(&album_id)
             .await
             .map_err(ApiError::upstream)?,
@@ -691,7 +728,14 @@ async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<T
 
 async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<TrackMetadata> {
     match entry.provider {
-        MusicProvider::Tidal => state.tidal.track_metadata(&entry.provider_track_id).await,
+        MusicProvider::Tidal => {
+            state
+                .tidal
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Tidal login is not configured"))?
+                .track_metadata(&entry.provider_track_id)
+                .await
+        }
         MusicProvider::Qobuz => {
             state
                 .qobuz
@@ -876,8 +920,7 @@ async fn stream_track(
 ) -> Result<Response, ApiError> {
     match provider.as_str() {
         "tidal" => {
-            let source = state
-                .tidal
+            let source = tidal_provider(&state)?
                 .playback_source(&track_id)
                 .await
                 .map_err(ApiError::upstream)?;
@@ -998,8 +1041,7 @@ async fn dash_manifest(
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
 
-    let source = state
-        .tidal
+    let source = tidal_provider(&state)?
         .playback_source(&track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -1047,8 +1089,7 @@ async fn hls_manifest(
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
 
-    let source = state
-        .tidal
+    let source = tidal_provider(&state)?
         .playback_source(&track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -1118,8 +1159,7 @@ async fn dash_initialization(
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
 
-    let source = state
-        .tidal
+    let source = tidal_provider(&state)?
         .playback_source(&track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -1143,8 +1183,7 @@ async fn dash_segment(
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
 
-    let source = state
-        .tidal
+    let source = tidal_provider(&state)?
         .playback_source(&track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -1196,10 +1235,18 @@ fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
     }
 }
 
+fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
+    state.tidal.as_ref().ok_or_else(|| {
+        ApiError::service_unavailable(
+            "Tidal login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
+        )
+    })
+}
+
 fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
     state.qobuz.as_ref().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Qobuz login is not configured. Set AMBRA_QOBUZ_USER_AUTH_TOKEN, or restart with AMBRA_QOBUZ_INTERACTIVE_LOGIN=1",
+            "Qobuz login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
         )
     })
 }
@@ -1207,14 +1254,14 @@ fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
 fn spotify_provider(state: &AppState) -> Result<&SpotifyProvider, ApiError> {
     state.spotify.as_ref().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Spotify login is not configured. Set AMBRA_SPOTIFY_ACCESS_TOKEN, or restart with AMBRA_SPOTIFY_INTERACTIVE_LOGIN=1",
+            "Spotify login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
         )
     })
 }
 
 fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
     match provider {
-        MusicProvider::Tidal => true,
+        MusicProvider::Tidal => state.tidal.is_some(),
         MusicProvider::Qobuz => state.qobuz.is_some(),
         MusicProvider::Spotify => state.spotify.is_some(),
         MusicProvider::YoutubeMusic => false,

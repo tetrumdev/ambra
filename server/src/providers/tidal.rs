@@ -95,13 +95,15 @@ struct MaximumPlaybackInfo {
 }
 
 impl TidalProvider {
-    pub async fn authenticate() -> ProviderResult<Self> {
-        let client = authenticated_client().await?;
+    pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
+        let Some(client) = authenticated_client(interactive).await? else {
+            return Ok(None);
+        };
 
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
-        Ok(Self {
+        Ok(Some(Self {
             client: Arc::new(Mutex::new(client)),
             http_client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
@@ -113,7 +115,7 @@ impl TidalProvider {
             maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
-        })
+        }))
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
@@ -862,10 +864,13 @@ fn normalize_dash_url(url: &str) -> String {
     url.replace("&amp;", "&")
 }
 
-async fn authenticated_client() -> ProviderResult<TidalClient> {
+async fn authenticated_client(interactive: bool) -> ProviderResult<Option<TidalClient>> {
     if let Some(client) = restore_session().await? {
         println!("Using saved Tidal session");
-        return Ok(client);
+        return Ok(Some(client));
+    }
+    if !interactive {
+        return Ok(None);
     }
 
     let auth = TidalAuth::with_pkce();
@@ -889,7 +894,7 @@ async fn authenticated_client() -> ProviderResult<TidalClient> {
         .unwrap_or("unknown user");
     println!("Logged in as {username}");
 
-    Ok(client)
+    Ok(Some(client))
 }
 
 async fn restore_session() -> ProviderResult<Option<TidalClient>> {
