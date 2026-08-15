@@ -31,5 +31,6 @@ dist-ssr
 /server/.spotify-cache/
 /server/.spotify-metadata-cache.json
 /server/.streaming-library.json
+/server/.login-setup-complete
 /.vite/
 /src-tauri/

@@ -93,7 +93,7 @@ impl SpotifyQuality {
 
 impl SpotifyProvider {
     /// Spotify stays optional so an absent login never prevents other providers from starting.
-    pub async fn authenticate_if_configured() -> ProviderResult<Option<Self>> {
+    pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
         let cache_root = spotify_cache_path();
         let audio_cache_path = cache_root.join("audio");
         let cache = Cache::new(
@@ -107,7 +107,7 @@ impl SpotifyProvider {
         let environment_access_token = nonempty_env("AMBRA_SPOTIFY_ACCESS_TOKEN");
         let environment_username = nonempty_env("AMBRA_SPOTIFY_USERNAME");
         let environment_password = nonempty_env("AMBRA_SPOTIFY_PASSWORD");
-        let interactive = env_flag("AMBRA_SPOTIFY_INTERACTIVE_LOGIN");
+        let interactive = interactive || env_flag("AMBRA_SPOTIFY_INTERACTIVE_LOGIN");
         let cached_credentials = cache.credentials();
 
         if environment_access_token.is_none()
@@ -125,10 +125,12 @@ impl SpotifyProvider {
             (environment_username, environment_password)
         {
             Credentials::with_password(username, password)
+        } else if interactive {
+            interactive_credentials(&session_config).await?
         } else if let Some(credentials) = cached_credentials {
             credentials
         } else {
-            interactive_credentials(&session_config).await?
+            return Ok(None);
         };
 
         let session = Session::new(session_config, Some(cache));
