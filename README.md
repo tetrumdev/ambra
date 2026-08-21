@@ -11,14 +11,12 @@ The <i><b>perfect</b></i> music player built with performance in mind.
   - [x] Tidal
   - [x] Qobuz
   - [x] Spotify
-  - [ ] Youtube Music
   - [ ] Local Files
 - [ ] Finish UI
 - [ ] Add download support
   - [ ] Tidal
   - [ ] Qobuz
   - [ ] Spotify
-  - [ ] Youtube Music
 - [ ] Playback Sync
 - [ ] Spotify Connect with all services
 - [ ] Equalizer with CamillaDSP
@@ -32,11 +30,13 @@ The <i><b>perfect</b></i> music player built with performance in mind.
   - [ ] P2P Sync
 - [ ] Stats
 - [ ] Visualizer
-- [ ] Add additional streaming support
+- [ ] Add additional streaming and downloading support
+  - [ ] Youtube Music
   - [ ] Jellyfin
   - [ ] Navidrome
   - [ ] Deezer
   - [ ] Pandora
+  - [ ] Youtube Music
 
 ## Tech Stack
 
