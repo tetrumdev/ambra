@@ -7,7 +7,7 @@ The <i><b>perfect</b></i> music player built with performance in mind.
 ## To-Do
 
 - [x] Create Functional UI
-- [ ] Add streaming support
+- [x] Add streaming support
   - [x] Tidal
   - [x] Qobuz
   - [x] Spotify
