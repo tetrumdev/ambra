@@ -23,6 +23,7 @@ import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
+  catalogTracks: Track[];
   isLoading: boolean;
   error: string | null;
   isAddingAlbum: boolean;
@@ -32,8 +33,7 @@ type MusicLibrary = {
     provider: SearchProvider,
     providerTrackId: string,
   ) => Promise<boolean>;
-  deleteTrack: (trackId: GlobalTrackId) => void;
-  deleteTracks: (trackIds: GlobalTrackId[]) => void;
+  removeTracks: (trackIds: GlobalTrackId[]) => void;
 };
 
 function playableLocalCover(cover: string | null) {
@@ -95,15 +95,16 @@ export function useMusicLibrary(): MusicLibrary {
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
+  const catalogTracks = useMemo(() => [...serverTracks, ...localTracks], [serverTracks, localTracks]);
   const tracks = useMemo(
     () =>
-      [...serverTracks, ...localTracks]
+      catalogTracks
         .filter((track) => !removedTrackIds.has(track.globalId))
         .map((track, index) => ({
           ...track,
           libraryId: index + 1,
         })),
-    [localTracks, removedTrackIds, serverTracks],
+    [catalogTracks, removedTrackIds],
   );
   const isLoading = isLocalLoading && isServerLoading;
 
@@ -218,40 +219,30 @@ export function useMusicLibrary(): MusicLibrary {
     [],
   );
 
-  const deleteTrack = useCallback((trackId: GlobalTrackId) => {
-    setRemovedTrackIds((currentTrackIds) => {
-      if (currentTrackIds.has(trackId)) return currentTrackIds;
-
-      const nextTrackIds = new Set(currentTrackIds);
-      nextTrackIds.add(trackId);
-      return nextTrackIds;
-    });
-  }, []);
-
-  const deleteTracks = useCallback((trackIds: GlobalTrackId[]) => {
-    const deletedTrackIds = new Set(trackIds);
-    if (deletedTrackIds.size === 0) return;
+  const removeTracks = useCallback((trackIds: GlobalTrackId[]) => {
+    const idsToRemove = new Set(trackIds);
+    if (idsToRemove.size === 0) return;
 
     setRemovedTrackIds((currentTrackIds) => {
-      if ([...deletedTrackIds].every((trackId) => currentTrackIds.has(trackId))) {
+      if ([...idsToRemove].every((trackId) => currentTrackIds.has(trackId))) {
         return currentTrackIds;
       }
 
       const nextTrackIds = new Set(currentTrackIds);
-      for (const trackId of deletedTrackIds) nextTrackIds.add(trackId);
+      for (const trackId of idsToRemove) nextTrackIds.add(trackId);
       return nextTrackIds;
     });
   }, []);
 
   return {
     tracks,
+    catalogTracks,
     isLoading,
     error,
     isAddingAlbum,
     addAlbumError,
     addAlbum,
     addTrack,
-    deleteTrack,
-    deleteTracks,
+    removeTracks,
   };
 }

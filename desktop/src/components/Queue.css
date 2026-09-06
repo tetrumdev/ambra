@@ -78,8 +78,7 @@
 
 .queueItem[data-selected="true"],
 .queueItem[data-selected="true"]:hover {
-    background-color: #c88816;
-    color: black;
+    background-color: #352000;
 }
 
 #currentQueueTrack,

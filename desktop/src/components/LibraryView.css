@@ -31,7 +31,7 @@
     height: auto;
     padding-left: 30px;
     display: block;
-    padding-bottom: 40px;
+    padding-bottom: 0;
 }
 
 .libraryTitle {
@@ -104,13 +104,13 @@
         transparent 100%
     );
     color: #b6b6b6;
-    padding-top: 30px;
+    padding-top: 45px;
     padding-bottom: 50px;
     z-index: 8;
 }
 
 .trackColumn {
-    grid-column: 1;
+    grid-column: 2;
 }
 
 .artistColumn {
@@ -165,7 +165,7 @@
 
 .libraryItem[data-selected="true"],
 .libraryItem[data-selected="true"]:hover {
-    background-color: #603c01;
+    background-color: #352000;
 }
 
 .libraryItem[data-selecting="true"] .coverPlayBtn {
@@ -182,7 +182,7 @@
 .selectionDeleteButton {
     grid-column: 4 / 7;
     justify-self: end;
-    position: relative;
+    position: fixed;
     z-index: 1;
     min-width: 160px;
     height: 34px;
@@ -283,7 +283,7 @@
     text-decoration: none;
 }
 
-.libraryItemMenuContainer {
+.trackCollectionMenuTrigger {
     grid-column: 6;
     margin: 0;
     padding: 0;
@@ -298,17 +298,22 @@
     border-left: 1px solid transparent;
 }
 
-.libraryItemMenuContainer:hover {
+.trackCollectionMenuTrigger:hover {
     background-color: black;
     border-left: 1px solid #535353;
 }
 
-.libraryItem[data-selecting="true"] .libraryItemMenuContainer:hover {
+.libraryItem[data-menu-open="true"] .trackCollectionMenuTrigger {
+    background-color: black;
+    border-left: 1px solid #535353;
+}
+
+.libraryItem[data-selecting="true"] .trackCollectionMenuTrigger:hover {
     background-color: transparent;
     border-left: 1px solid transparent;
 }
 
-.libraryItemMenuContainer img {
+.trackCollectionMenuTrigger img {
     display: block;
     height: 15px;
     object-fit: cover;
@@ -318,7 +323,7 @@
     -webkit-user-drag: none;
 }
 
-.libraryItemMenuContainer .selectionIndicator {
+.trackCollectionMenuTrigger .selectionIndicator {
     width: 20px;
     height: 20px;
     object-fit: contain;
