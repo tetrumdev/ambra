@@ -22,13 +22,16 @@ export function libraryQueueContext(tracks: LibraryTrack[]): QueueContext {
 }
 
 export function searchQueueContext(tracks: Track[], id: string): QueueContext {
+  return collectionQueueContext(tracks, { kind: "search", id });
+}
+
+export function collectionQueueContext(tracks: Track[], source: QueueContext["source"]): QueueContext {
   return {
-    source: { kind: "search", id },
+    source,
     entries: tracks.map((track, index) => ({
       track,
       source: {
-        kind: "search",
-        id,
+        ...source,
         entryId: index + 1,
       },
       shufflePackageId: null,

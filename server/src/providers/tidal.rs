@@ -27,7 +27,8 @@ use tidlers::{
 use tokio::sync::Mutex;
 
 use crate::models::{
-    AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
+    AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
+    TrackMetadata, search_next_offset,
 };
 
 const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -280,11 +281,87 @@ impl TidalProvider {
         Ok((!album.upc.is_empty()).then_some(album.upc))
     }
 
+    pub async fn search_catalog(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> ProviderResult<crate::models::CatalogSearchPage> {
+        use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
+        let client = self.client.lock().await.clone();
+        let response = client
+            .search(SearchConfig {
+                query: query.to_owned(),
+                types: vec![SearchType::Tracks, SearchType::Artists, SearchType::Albums],
+                include_contributors: false,
+                include_user_playlists: false,
+                supports_user_data: false,
+                include_did_you_mean: true,
+                limit,
+                offset: 0,
+            })
+            .await?;
+        Ok(CatalogSearchPage {
+            tracks: response
+                .tracks
+                .into_iter()
+                .flat_map(|section| section.items)
+                .filter(|track| {
+                    track.allow_streaming.unwrap_or(true) && track.stream_ready.unwrap_or(true)
+                })
+                .map(search_track_metadata)
+                .collect(),
+            artists: response
+                .artists
+                .into_iter()
+                .flat_map(|section| section.items)
+                .map(|artist| CatalogArtist {
+                    id: format!("tidal:{}", artist.id),
+                    provider: MusicProvider::Tidal,
+                    name: artist.name,
+                    image_url: artist
+                        .picture
+                        .filter(|picture| !picture.is_empty())
+                        .map(|picture| uuid_to_url_with_size(&picture, 320)),
+                })
+                .collect(),
+            albums: response
+                .albums
+                .into_iter()
+                .flat_map(|section| section.items)
+                .filter(|album| {
+                    album.allow_streaming.unwrap_or(true) && album.stream_ready.unwrap_or(true)
+                })
+                .map(|album| CatalogAlbum {
+                    id: format!("tidal:{}", album.id),
+                    provider: MusicProvider::Tidal,
+                    title: album.title,
+                    artist: album
+                        .artists
+                        .into_iter()
+                        .filter_map(|artist| artist.name)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    image_url: album
+                        .cover
+                        .filter(|cover| !cover.is_empty())
+                        .map(|cover| uuid_to_url_with_size(&cover, 320)),
+                    upc: album.upc,
+                    release_date: album.release_date,
+                    version: album.version,
+                    explicit: album.explicit,
+                    maximum_bit_depth: None,
+                    maximum_sampling_rate_khz: None,
+                })
+                .collect(),
+        })
+    }
+
     pub async fn search_tracks(
         &self,
         query: &str,
         limit: u32,
-    ) -> ProviderResult<Vec<TrackMetadata>> {
+        offset: u32,
+    ) -> ProviderResult<SearchPage> {
         let client = self.client.lock().await.clone();
         let results = client
             .search(SearchConfig {
@@ -294,18 +371,30 @@ impl TidalProvider {
                 supports_user_data: false,
                 types: vec![SearchType::Tracks],
                 limit,
+                offset,
                 ..Default::default()
             })
             .await?;
 
-        Ok(results
-            .tracks
+        let Some(section) = results.tracks else {
+            return Ok(SearchPage {
+                tracks: Vec::new(),
+                next_offset: None,
+            });
+        };
+        let next_offset =
+            search_next_offset(offset, section.items.len(), section.total_number_of_items);
+        let tracks = section
+            .items
             .into_iter()
-            .flat_map(|section| section.items)
             .filter(|track| track.allow_streaming.unwrap_or(true))
             .filter(|track| track.stream_ready.unwrap_or(true))
             .map(search_track_metadata)
-            .collect())
+            .collect();
+        Ok(SearchPage {
+            tracks,
+            next_offset,
+        })
     }
 
     pub async fn playback_metadata(

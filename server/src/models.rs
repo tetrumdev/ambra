@@ -6,7 +6,6 @@ pub enum MusicProvider {
     Tidal,
     Qobuz,
     Spotify,
-    YoutubeMusic,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -80,6 +79,19 @@ pub struct TrackMetadata {
     pub playback: PlaybackMetadata,
 }
 
+/// Pagination is measured before availability filtering, so a short playable page is not exhaustion.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPage {
+    pub tracks: Vec<TrackMetadata>,
+    pub next_offset: Option<u32>,
+}
+
+pub fn search_next_offset(offset: u32, raw_count: usize, total: u32) -> Option<u32> {
+    let next = offset.saturating_add(raw_count as u32);
+    (raw_count > 0 && next < total && next > offset).then_some(next)
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryResponse {
@@ -135,4 +147,51 @@ mod tests {
         assert_eq!(json["maximumSamplingRateKHz"], 192.0);
         assert_eq!(json["playback"]["kind"], "direct");
     }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::search_next_offset;
+    #[test]
+    fn pagination_uses_raw_count_and_total() {
+        assert_eq!(search_next_offset(0, 20, 100), Some(20));
+        assert_eq!(search_next_offset(20, 7, 100), Some(27));
+        assert_eq!(search_next_offset(20, 0, 100), None);
+        assert_eq!(search_next_offset(80, 20, 100), None);
+        assert_eq!(search_next_offset(u32::MAX, 20, u32::MAX), None);
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogArtist {
+    pub id: String,
+    pub provider: MusicProvider,
+    pub name: String,
+    pub image_url: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogAlbum {
+    pub id: String,
+    pub provider: MusicProvider,
+    pub title: String,
+    pub artist: String,
+    pub image_url: Option<String>,
+    pub upc: Option<String>,
+    pub release_date: Option<String>,
+    pub version: Option<String>,
+    pub explicit: Option<bool>,
+    pub maximum_bit_depth: Option<u32>,
+    #[serde(rename = "maximumSamplingRateKHz")]
+    pub maximum_sampling_rate_khz: Option<f64>,
+}
+
+#[derive(Clone, Debug, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogSearchPage {
+    pub tracks: Vec<TrackMetadata>,
+    pub artists: Vec<CatalogArtist>,
+    pub albums: Vec<CatalogAlbum>,
 }

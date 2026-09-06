@@ -13,7 +13,8 @@ use tokio::sync::Mutex;
 
 use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
 use crate::models::{
-    AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
+    AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
+    TrackMetadata, search_next_offset,
 };
 
 const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -109,20 +110,87 @@ impl QobuzProvider {
         Ok(track_ids)
     }
 
+    pub async fn search_catalog(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> ProviderResult<crate::models::CatalogSearchPage> {
+        use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
+        let response = self.client.catalog_search(query, limit, 0).await?;
+        if !response.get("tracks").is_some()
+            && !response.get("artists").is_some()
+            && !response.get("albums").is_some()
+        {
+            return Err(io::Error::other("Qobuz catalog search did not return a catalog").into());
+        }
+        let items = |section: &str| {
+            response
+                .get(section)
+                .and_then(|v| v.get("items"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([]))
+        };
+        let tracks: Vec<Track> = serde_json::from_value(items("tracks"))?;
+        let artists: Vec<Artist> = serde_json::from_value(items("artists"))?;
+        let albums: Vec<Album> = serde_json::from_value(items("albums"))?;
+        Ok(CatalogSearchPage {
+            tracks: tracks
+                .into_iter()
+                .filter(|track| track.streamable)
+                .map(map_search_track)
+                .collect(),
+            artists: artists
+                .into_iter()
+                .map(|artist| CatalogArtist {
+                    id: format!("qobuz:{}", artist.id),
+                    provider: MusicProvider::Qobuz,
+                    name: artist.name,
+                    image_url: artist.image.and_then(|image| image.best().cloned()),
+                })
+                .collect(),
+            albums: albums
+                .into_iter()
+                .filter(|album| album.streamable != Some(false))
+                .map(|album| CatalogAlbum {
+                    id: format!("qobuz:{}", album.id),
+                    provider: MusicProvider::Qobuz,
+                    title: album.title,
+                    artist: album.artist.name,
+                    image_url: album.image.best().cloned(),
+                    upc: album.upc,
+                    release_date: album.release_date_original,
+                    version: album.version,
+                    explicit: album.parental_warning,
+                    maximum_bit_depth: album.maximum_bit_depth,
+                    maximum_sampling_rate_khz: album
+                        .maximum_sampling_rate
+                        .and_then(normalize_sampling_rate),
+                })
+                .collect(),
+        })
+    }
+
     pub async fn search_tracks(
         &self,
         query: &str,
         limit: u32,
-    ) -> ProviderResult<Vec<TrackMetadata>> {
-        Ok(self
+        offset: u32,
+    ) -> ProviderResult<SearchPage> {
+        let page = self
             .client
-            .search_tracks(query, limit, 0, None)
-            .await?
+            .search_tracks(query, limit, offset, None)
+            .await?;
+        let next_offset = search_next_offset(offset, page.items.len(), page.total);
+        let tracks = page
             .items
             .into_iter()
             .filter(|track| track.streamable)
             .map(map_search_track)
-            .collect())
+            .collect();
+        Ok(SearchPage {
+            tracks,
+            next_offset,
+        })
     }
 
     pub async fn exact_album_artwork_by_upc(&self, upc: &str) -> ProviderResult<Option<String>> {
@@ -601,5 +669,56 @@ mod tests {
             stream_quality_label(27, 192.0, Some(24)),
             "FLAC 24-bit/192 kHz"
         );
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use qbz_qobuz::QobuzClient;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn qobuz_client_negotiates_and_decodes_gzip() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = socket.read(&mut chunk).await.unwrap();
+                assert!(count > 0 && request.len() < 8192);
+                request.extend_from_slice(&chunk[..count]);
+            }
+            let request = String::from_utf8(request).unwrap().to_lowercase();
+            assert!(
+                request
+                    .lines()
+                    .any(|line| line.starts_with("accept-encoding:") && line.contains("gzip"))
+            );
+            let body: &[u8] = &[
+                31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 171, 86, 202, 207, 86, 178, 42, 41, 42, 77, 173,
+                5, 0, 144, 95, 212, 167, 11, 0, 0, 0,
+            ];
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            socket.write_all(body).await.unwrap();
+        });
+        let client = QobuzClient::new().unwrap();
+        let response: serde_json::Value = client
+            .get_http()
+            .get(format!("http://{address}/search"))
+            .timeout(std::time::Duration::from_secs(2))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(response["ok"], true);
+        server.await.unwrap();
     }
 }

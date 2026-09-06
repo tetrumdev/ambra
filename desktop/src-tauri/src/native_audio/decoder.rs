@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{self, Cursor, Read, Seek, SeekFrom},
     path::Path,
+    sync::OnceLock,
     thread,
     time::Duration,
 };
@@ -24,7 +25,7 @@ use symphonia::core::{
 
 use super::StreamSpec;
 
-const HTTP_INITIAL_CACHE_BYTES: u64 = 512 * 1024;
+const HTTP_INITIAL_CACHE_BYTES: u64 = 128 * 1024;
 const HTTP_STARTUP_WINDOW_BYTES: u64 = 1024 * 1024;
 const HTTP_CACHE_BYTES: u64 = 4 * 1024 * 1024;
 const HTTP_ATTEMPTS: usize = 3;
@@ -504,13 +505,17 @@ impl HttpRangeSource {
 }
 
 fn http_client() -> io::Result<Client> {
-    Client::builder()
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    CLIENT.get_or_init(|| Client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(20))
         .pool_idle_timeout(Duration::from_secs(90))
         .tcp_keepalive(Duration::from_secs(30))
         .build()
-        .map_err(io_other)
+        .map_err(|error| error.to_string()))
+        .as_ref()
+        .cloned()
+        .map_err(|error| io::Error::other(error.clone()))
 }
 
 fn get_bytes_with_retry(

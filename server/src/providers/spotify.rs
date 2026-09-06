@@ -158,7 +158,12 @@ impl SpotifyProvider {
             .collect::<ProviderResult<Vec<_>>>()
     }
 
-    pub async fn search_track_ids(&self, query: &str, limit: usize) -> ProviderResult<Vec<String>> {
+    pub async fn search_track_ids(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> ProviderResult<Vec<String>> {
         let search_query = query
             .split_whitespace()
             .map(urlencoding::encode)
@@ -184,13 +189,10 @@ impl SpotifyProvider {
                 && !track_ids.iter().any(|existing| existing == track_id)
             {
                 track_ids.push(track_id.to_owned());
-                if track_ids.len() == limit {
-                    break;
-                }
             }
         }
 
-        Ok(track_ids)
+        Ok(track_ids.into_iter().skip(offset).take(limit).collect())
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {

@@ -26,7 +26,7 @@ describe("preferences", () => {
 
   test("saves and restores the active search", () => {
     const preferences: AppPreferences = {
-      version: 3,
+      version: 4,
       ui: { screen: "search" },
       search: { query: "Blackest Eyes", provider: "qobuz" },
       playback: { trackId: null, positionSeconds: 0 },
@@ -48,10 +48,28 @@ describe("preferences", () => {
     );
 
     expect(loadPreferences()).toEqual({
-      version: 3,
+      version: 4,
       ui: { screen: "library" },
-      search: { query: "", provider: "tidal" },
+      search: { query: "", provider: "all" },
       playback: { trackId: "tidal:123", positionSeconds: 12 },
     });
   });
+
+  test("moves existing searches to all services", () => {
+    localStorage.setItem(
+      "ambra.preferences",
+      JSON.stringify({
+        version: 3,
+        ui: { screen: "search" },
+        search: { query: "Deadman Karnivool", provider: "tidal" },
+        playback: { trackId: null, positionSeconds: 0 },
+      }),
+    );
+
+    expect(loadPreferences().search).toEqual({
+      query: "Deadman Karnivool",
+      provider: "all",
+    });
+  });
+
 });
