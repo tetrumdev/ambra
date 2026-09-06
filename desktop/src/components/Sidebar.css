@@ -20,6 +20,20 @@
     align-self: center;
     justify-self: center;
     margin-top: 70px;
+    grid-row: 1;
+}
+
+#libraryContainer {
+    grid-row: 2;
+    /*display: flex;*/
+    font-family: "Stack Sans Text";
+    padding-left: 30px;
+    padding-top: 20px;
+}
+
+#createPlaylistBtn {
+    height: 20px;
+    font-family: "Stack Sans Text";
 }
 
 @media screen and (width <= 1250px) {
@@ -28,5 +42,8 @@
     }
     #sidebarMain {
         border: none;
+    }
+    #libraryContainer {
+        display: none;
     }
 }

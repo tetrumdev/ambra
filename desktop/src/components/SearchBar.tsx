@@ -3,6 +3,7 @@ import { useRef, useState, type KeyboardEvent } from "react";
 import type { SearchProvider } from "../api/server";
 
 const providerOptions: Array<{ value: SearchProvider; label: string }> = [
+  { value: "all", label: "All services" },
   { value: "tidal", label: "Tidal" },
   { value: "qobuz", label: "Qobuz" },
   { value: "spotify", label: "Spotify" },
@@ -13,6 +14,7 @@ type SearchBarProps = {
   provider: SearchProvider;
   onQueryChange: (query: string) => void;
   onProviderChange: (provider: SearchProvider) => void;
+  onConfirm: () => void;
 };
 
 export function SearchBar({
@@ -20,6 +22,7 @@ export function SearchBar({
   provider,
   onQueryChange,
   onProviderChange,
+  onConfirm,
 }: SearchBarProps) {
   const [menuIsOpen, setMenuIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -97,7 +100,14 @@ export function SearchBar({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === "Escape") {
+          if (event.nativeEvent.isComposing) return;
+          if (event.key === "Enter") {
+            event.preventDefault();
+            onConfirm();
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            event.stopPropagation();
             event.currentTarget.blur();
           }
         }}

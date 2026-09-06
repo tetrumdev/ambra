@@ -3,7 +3,7 @@ import type { SearchProvider } from "../api/server";
 export type AppScreen = "bigscreen" | "library" | "search" | "queue";
 
 export type AppPreferences = {
-  version: 3;
+  version: 4;
   ui: {
     screen: AppScreen;
   };
@@ -21,13 +21,13 @@ const preferencesKey = "ambra.preferences";
 const legacyScreenKey = "ambra.current-screen";
 
 export const defaultPreferences: AppPreferences = {
-  version: 3,
+  version: 4,
   ui: {
     screen: "library",
   },
   search: {
     query: "",
-    provider: "tidal",
+    provider: "all",
   },
   playback: {
     trackId: null,
@@ -49,7 +49,12 @@ function isAppScreen(value: unknown): value is AppScreen {
 }
 
 function isSearchProvider(value: unknown): value is SearchProvider {
-  return value === "tidal" || value === "qobuz" || value === "spotify";
+  return (
+    value === "all" ||
+    value === "tidal" ||
+    value === "qobuz" ||
+    value === "spotify"
+  );
 }
 
 function migratePreferences(value: unknown): AppPreferences {
@@ -63,7 +68,7 @@ function migratePreferences(value: unknown): AppPreferences {
   switch (value.version) {
     case 1:
       return {
-        version: 3,
+        version: 4,
         ui: { screen: screen === "search" ? "library" : screen },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
@@ -82,13 +87,37 @@ function migratePreferences(value: unknown): AppPreferences {
           : 0;
 
       return {
-        version: 3,
+        version: 4,
         ui: { screen: screen === "search" ? "library" : screen },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
     }
     case 3: {
+      const search = isRecord(value.search) ? value.search : {};
+      const query = typeof search.query === "string" ? search.query : "";
+      const playback = isRecord(value.playback) ? value.playback : {};
+      const trackId =
+        typeof playback.trackId === "string" && playback.trackId.length > 0
+          ? playback.trackId
+          : null;
+      const positionSeconds =
+        typeof playback.positionSeconds === "number" &&
+        Number.isFinite(playback.positionSeconds) &&
+        playback.positionSeconds >= 0
+          ? playback.positionSeconds
+          : 0;
+
+      return {
+        version: 4,
+        ui: {
+          screen: screen === "search" && !query.trim() ? "library" : screen,
+        },
+        search: { query, provider: "all" },
+        playback: { trackId, positionSeconds },
+      };
+    }
+    case 4: {
       const search = isRecord(value.search) ? value.search : {};
       const query = typeof search.query === "string" ? search.query : "";
       const provider = isSearchProvider(search.provider)
@@ -107,7 +136,7 @@ function migratePreferences(value: unknown): AppPreferences {
           : 0;
 
       return {
-        version: 3,
+        version: 4,
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
         },

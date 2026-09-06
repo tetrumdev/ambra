@@ -15,6 +15,9 @@ librespot-metadata = "0.8.0"
 librespot-oauth = "0.8.0"
 qbz-models = { git = "https://github.com/vicrodh/qbz.git", rev = "93ae499f38835dc7c110ebaa07a49da5c714f1f9" }
 qbz-qobuz = { git = "https://github.com/vicrodh/qbz.git", rev = "93ae499f38835dc7c110ebaa07a49da5c714f1f9" }
+# Unify gzip into QBZ's reqwest 0.12 client; its defaults omit response compression.
+# Keep this separate from Ambra's reqwest 0.13 streaming client.
+qobuz-http = { package = "reqwest", version = "0.12", default-features = false, features = ["gzip"] }
 quick-xml = "0.41.0"
 reqwest = { version = "0.13.4", features = ["json", "query", "stream"] }
 serde = { version = "1", features = ["derive"] }

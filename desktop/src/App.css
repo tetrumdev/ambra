@@ -53,6 +53,14 @@
     display: none;
 }
 
+button:not(:disabled),
+[role="button"],
+a[href],
+select,
+summary {
+    cursor: pointer;
+}
+
 :root[data-bigscreen-idle="true"],
 :root[data-bigscreen-idle="true"] * {
     cursor: none !important;

@@ -1,150 +1,317 @@
-#searchResults {
-    display: grid;
-    grid-template-rows: 150px;
-    gap: 15px;
-    align-items: center;
-    justify-content: center;
-    justify-items: center;
+/* Search keeps one shared card scale as the leading category changes. */
+.searchView {
+    --search-gap: 14px;
+    --search-border: #363636;
 }
-
-#firstResult {
-    border: 1px solid #535353;
-    border-radius: 25px;
-    width: 700px;
-    height: 150px;
-    align-self: center;
-    grid-row: 1;
-    cursor: pointer;
-}
-
-#firstResult:hover {
-    background-color: #151515;
-}
-
-#firstResult > .searchResult {
-    display: grid;
-    grid-template-columns: 150px 1fr 40px;
-    /*gap: 10px;*/
-    align-items: center;
-    justify-items: center;
+.searchView .searchResultsHeader {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    box-sizing: border-box;
     width: 100%;
-    height: 100%;
+    padding: 24px max(24px, calc((100% - 940px) / 2)) 24px;
+    background: linear-gradient(#000 90%, rgb(0 0 0 / 0));
 }
-
-#firstResult .searchResultArtwork {
-    grid-column: 1;
-    width: 124px;
-    height: 124px;
-    min-width: 124px;
-    min-height: 124px;
+.searchResultsHeader .libraryTitle {
+    margin: 0 0 10px;
+    font-size: 3rem;
+    line-height: 1.15;
+}
+.searchResultsHeader .searchQuery {
     padding: 0;
-    margin: 0;
-    overflow: hidden;
-    border: 0;
-    border-radius: 14px;
-    background: transparent;
-    cursor: pointer;
+    max-width: calc(100% - 360px);
+    overflow-wrap: anywhere;
+    font-size: 0.9rem;
 }
-
-#firstResult .searchResultCover {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    user-select: none;
-    -webkit-user-drag: none;
+.searchResultsHeader .searchStatus {
+    padding: 0;
+    font-size: 0.75rem;
 }
-
-#firstResult .searchResultInfo {
+.searchSectionLayout {
     display: grid;
-    grid-template-rows: 40px 20px 20px;
-    grid-template-columns: 300px 200px;
-    row-gap: 5px;
-    grid-column: 2;
-    justify-self: left;
-    height: 100%;
-    align-content: center;
-    align-items: center;
-    padding-left: 10px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    gap: 28px 20px;
+    width: min(940px, calc(100% - 48px));
+    margin: 12px auto 0;
+    padding-bottom: 32px;
 }
-
-#firstResult .searchResultName {
-    grid-column: 1;
+.searchSectionLayout section {
+    min-width: 0;
+}
+.searchEntitySections {
+    display: contents;
+}
+.searchSectionLayout h2 {
+    margin: 0 0 14px;
+    font-size: 1.05rem;
     font-weight: 600;
-    font-size: 1.5rem;
-    grid-row: 1;
+    line-height: 1.3;
 }
-
-#firstResult .searchResultArtist {
-    font-size: 1rem;
-    grid-row: 2;
-    grid-column: 1;
+.searchSectionEmpty,
+.searchEntityEmpty {
+    margin: 0;
+    padding: 20px 0;
+    color: #999;
+    font-size: 0.85rem;
 }
-
-#firstResult .searchResultAlbum {
-    grid-row: 3;
-    grid-column: 1;
-}
-
-#firstResult .searchResultDuration {
-    grid-row: 3;
-    grid-column: 2;
-    justify-self: right;
-    padding-right: 30px;
-    font-size: 1.2rem;
-}
-
-#firstResult .searchResultQuality {
-    grid-row: 1;
-    grid-column: 2;
-    justify-self: right;
-    padding-right: 30px;
-}
-
-.searchResultMenuButton {
-    background: none;
-    border: none;
-    overflow: hidden;
-    height: 100%;
-    width: 100%;
-}
-
-.searchResultMenuButton img {
-    height: 20px;
-}
-
+#searchResults,
 #searchResultGrid {
     display: grid;
-    overflow: hidden;
-    grid-template-columns: 1fr 1fr;
+    gap: var(--search-gap);
+    min-width: 0;
 }
-
-#searchResultGrid .searchResultArtwork {
-    grid-column: 1;
-    width: 70px;
-    height: 70px;
-    min-width: 70px;
-    min-height: 70px;
+#searchResultGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.searchResult {
+    --art-size: 68px;
+    display: grid;
+    grid-template-columns: var(--art-size) minmax(0, 1fr) 32px;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    min-height: 110px;
+    box-sizing: border-box;
+    padding: 14px;
+    border: 1px solid var(--search-border);
+    border-radius: 16px;
+    background: #080808;
+    overflow: hidden;
+    cursor: pointer;
+    transition:
+        background-color 120ms,
+        border-color 120ms;
+}
+.searchResult:hover {
+    background: #141414;
+    border-color: #606060;
+}
+.searchResultArtwork {
+    display: block;
+    width: var(--art-size);
+    height: var(--art-size);
     padding: 0;
-    margin: 0;
     overflow: hidden;
     border: 0;
-    border-radius: 14px;
-    background: transparent;
+    border-radius: 10px;
+    background: #202020;
     cursor: pointer;
 }
-
-#searchResultGrid .searchResultCover {
+.searchResultCover {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    -webkit-user-drag: none;
+}
+.searchResultInfo {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+.searchResultName,
+.searchResultArtist,
+.searchResultAlbum {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.searchResultName {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.searchResultArtist {
+    font-size: 0.82rem;
+    color: #ddd;
+}
+.searchResultAlbum {
+    font-size: 0.8rem;
+    color: #aaa;
+}
+.searchResultMeta {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
+    margin-top: 3px;
+    font-size: 0.7rem;
+    color: #a9a9a9;
+}
+.searchResultQuality {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.searchResultDuration {
+    flex-shrink: 0;
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+}
+.searchResultMenuButton {
+    width: 32px;
+    height: 40px;
+    padding: 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    opacity: 0.7;
+    cursor: pointer;
+}
+.searchResultMenuButton:hover {
+    opacity: 1;
+    background: #252525;
+}
+.searchResultMenuButton img {
+    display: block;
+    width: 16px;
+    height: 16px;
+    -webkit-user-drag: none;
+}
+.searchResultArtwork:focus-visible,
+.searchResultMenuButton:focus-visible,
+.searchLoadMore:focus-visible {
+    outline: 2px solid #ccc;
+    outline-offset: 3px;
+}
+.searchTrackSection[data-primary="true"] #firstResult .searchResult {
+    --art-size: 112px;
+    min-height: 148px;
+    padding: 18px;
+    gap: 18px;
+    border-color: #505050;
+}
+.searchTrackSection[data-primary="true"] #firstResult .searchResultName {
+    font-size: 1.35rem;
+}
+.searchTrackSection[data-primary="false"] #searchResultGrid {
+    grid-template-columns: minmax(0, 1fr);
+}
+.searchEntity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+    box-sizing: border-box;
+    min-height: 96px;
+    padding: 14px;
+    margin-bottom: var(--search-gap);
+    border: 1px solid var(--search-border);
+    border-radius: 16px;
+    background: #080808;
+}
+.searchEntity:last-child {
+    margin-bottom: 0;
+}
+.searchEntityImage {
+    flex: 0 0 64px;
+    height: 64px;
+    overflow: hidden;
+    border-radius: 10px;
+    background: #242424;
+    display: grid;
+    place-items: center;
+}
+.searchArtist .searchEntityImage {
+    border-radius: 50%;
+}
+.searchEntityImage img {
     display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
-    user-select: none;
-    -webkit-user-drag: none;
 }
-
-#searchResultGrid > .searchResult {
-    width: 80%;
-    align-self: center;
-    justify-self: center;
+.searchEntityInfo {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+.searchEntityInfo > * {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.searchEntityInfo strong {
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+}
+.searchEntityInfo span {
+    color: #ccc;
+    font-size: 0.82rem;
+}
+.searchEntityInfo small {
+    color: #999;
+    font-size: 0.72rem;
+}
+.searchSectionLayout section[data-primary="true"]:not(.searchTrackSection) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--search-gap);
+}
+.searchSectionLayout section[data-primary="true"] > h2,
+.searchSectionLayout section[data-primary="true"] > .searchEntity:first-of-type,
+.searchSectionLayout section[data-primary="true"] > .searchEntityEmpty {
+    grid-column: 1 / -1;
+}
+.searchSectionLayout section[data-primary="true"] > h2 {
+    margin-bottom: 0;
+}
+.searchSectionLayout section[data-primary="true"] .searchEntity {
+    margin: 0;
+}
+.searchSectionLayout section[data-primary="true"] .searchEntity:first-of-type {
+    min-height: 148px;
+    padding: 18px;
+    gap: 18px;
+    border-color: #505050;
+}
+.searchSectionLayout
+    section[data-primary="true"]
+    .searchEntity:first-of-type
+    .searchEntityImage {
+    flex-basis: 112px;
+    height: 112px;
+}
+.searchSectionLayout
+    section[data-primary="true"]
+    .searchEntity:first-of-type
+    strong {
+    font-size: 1.35rem;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow-wrap: anywhere;
+}
+.searchLoadMore {
+    display: block;
+    margin: 12px auto;
+    padding: 10px 20px;
+    color: #ddd;
+    background: #151515;
+    border: 1px solid #535353;
+    border-radius: 12px;
+    cursor: pointer;
+}
+.searchLoadMore:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+@media screen and (width < 760px) {
+    .searchSectionLayout {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    #searchResultGrid,
+    .searchSectionLayout section[data-primary="true"]:not(.searchTrackSection) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+    .searchResultsHeader .searchQuery {
+        max-width: 100%;
+    }
+    .searchView .searchResultsHeader {
+        padding-top: 78px;
+    }
 }
