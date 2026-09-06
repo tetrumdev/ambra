@@ -1,9 +1,4 @@
-export type MusicProvider =
-  | "local"
-  | "tidal"
-  | "qobuz"
-  | "spotify"
-  | "youtubeMusic";
+export type MusicProvider = "local" | "tidal" | "qobuz" | "spotify";
 
 export type TrackArtist = {
   providerId: string;
@@ -52,6 +47,12 @@ export type Track = {
 
 export type LibraryTrack = Track & {
   libraryId: LibraryTrackId;
+};
+
+export type Playlist = {
+  id: string;
+  name: string;
+  trackIds: GlobalTrackId[];
 };
 
 export type QueueSource = {

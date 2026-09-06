@@ -20,7 +20,7 @@ use output::{AudioOutput, PlatformOutput};
 
 const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
 const LOCAL_MAX_BUFFER_MILLISECONDS: usize = 750;
-const NETWORK_PREBUFFER_MILLISECONDS: usize = 1_500;
+const NETWORK_PREBUFFER_MILLISECONDS: usize = 500;
 const NETWORK_PRELOAD_MILLISECONDS: usize = 6_000;
 const NETWORK_MAX_BUFFER_MILLISECONDS: usize = 12_000;
 const STREAM_RECOVERY_ATTEMPTS: usize = 2;
@@ -615,7 +615,7 @@ impl PlaybackWorker {
         self.pcm.clear();
         self.desired_playing = autoplay;
         self.decoder_ended = false;
-        self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
+        self.next_source = None;
         self.ready_next = None;
         self.position_base = position_seconds;
         self.rendered_frames = 0;
@@ -627,6 +627,8 @@ impl PlaybackWorker {
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         self.install_prepared(prepared)?;
+        // Prioritize the selected song's initial download over preloading the next.
+        self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
         let selected_device_id = self.selected_device_id.as_deref();
 
         self.output = autoplay
@@ -1176,7 +1178,7 @@ mod tests {
         assert_eq!(max_buffer_samples(spec, false), 72_000);
         assert_eq!(
             prebuffer_samples(spec, Some("https://audio.test/track.flac"), false),
-            144_000
+            48_000
         );
         assert_eq!(max_buffer_samples(spec, true), 1_152_000);
     }

@@ -2,8 +2,8 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     env, fs, io,
     path::PathBuf,
-    sync::Arc,
-    time::Duration,
+    sync::{Arc, Weak},
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -33,14 +33,15 @@ use crate::{
         qobuz_max_artwork_url, trusted_artwork_url,
     },
     login_setup,
-    models::{HealthResponse, LibraryResponse, MusicProvider, TrackMetadata},
+    models::{HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata},
     providers::qobuz::QobuzProvider,
     providers::spotify::SpotifyProvider,
     providers::tidal::{PlaybackSource, TidalProvider},
 };
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
-const SEARCH_RESULT_LIMIT: u32 = 25;
+const DEFAULT_SEARCH_PAGE_SIZE: u32 = 10;
+const MAX_SEARCH_PAGE_SIZE: u32 = 50;
 const SEARCH_CACHE_LIMIT: usize = 100;
 const SEARCH_METADATA_TIMEOUT: Duration = Duration::from_secs(6);
 const MEDIA_CACHE_LIMIT_BYTES: usize = 128 * 1024 * 1024;
@@ -55,7 +56,10 @@ struct AppState {
     spotify: Option<SpotifyProvider>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
-    search_cache: Arc<RwLock<HashMap<SearchCacheKey, Vec<TrackMetadata>>>>,
+    search_cache: Arc<RwLock<HashMap<SearchCacheKey, CachedSearchPage>>>,
+    catalog_cache:
+        Arc<RwLock<HashMap<SearchCacheKey, (Instant, crate::models::CatalogSearchPage)>>>,
+    search_fetches: Arc<Mutex<HashMap<SearchCacheKey, Weak<Mutex<()>>>>>,
     media_cache: Arc<RwLock<MediaCache>>,
     media_fetches: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     artwork_quality_cache: Arc<RwLock<HashMap<String, ArtworkCandidate>>>,
@@ -97,6 +101,14 @@ impl MediaCache {
 struct SearchCacheKey {
     provider: MusicProvider,
     query: String,
+    offset: u32,
+    limit: u32,
+}
+
+#[derive(Clone)]
+struct CachedSearchPage {
+    page: SearchPage,
+    cached_at: Instant,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -118,19 +130,22 @@ pub async fn serve() -> ServerResult<()> {
         );
     }
 
+    let http_client = reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(3))
+        .timeout(Duration::from_secs(20))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .pool_max_idle_per_host(16)
+        .tcp_keepalive(Duration::from_secs(30))
+        .build()?;
     let state = AppState {
         tidal,
         qobuz,
         spotify,
-        http_client: reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(3))
-            .timeout(Duration::from_secs(20))
-            .pool_idle_timeout(Duration::from_secs(90))
-            .pool_max_idle_per_host(16)
-            .tcp_keepalive(Duration::from_secs(30))
-            .build()?,
+        http_client,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
+        catalog_cache: Arc::new(RwLock::new(HashMap::new())),
+        search_fetches: Arc::new(Mutex::new(HashMap::new())),
         media_cache: Arc::new(RwLock::new(MediaCache::default())),
         media_fetches: Arc::new(Mutex::new(HashMap::new())),
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -150,6 +165,8 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/library", get(library))
         .route("/api/library/tracks", post(add_track))
         .route("/api/search/tracks", get(search_tracks))
+        .route("/api/search/providers", get(search_providers))
+        .route("/api/search/catalog", get(search_catalog))
         .route(
             "/api/providers/{provider}/tracks/{track_id}/playback",
             get(track_playback),
@@ -429,68 +446,241 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
 struct SearchTracksRequest {
     provider: MusicProvider,
     query: String,
+    #[serde(default)]
+    offset: u32,
+    limit: Option<u32>,
 }
 
-async fn search_tracks(
+async fn search_request_lock(
+    requests: &Mutex<HashMap<SearchCacheKey, Weak<Mutex<()>>>>,
+    key: &SearchCacheKey,
+) -> Arc<Mutex<()>> {
+    let mut requests = requests.lock().await;
+    requests.retain(|_, value| value.strong_count() > 0);
+    if let Some(request) = requests.get(key).and_then(Weak::upgrade) {
+        return request;
+    }
+    let request = Arc::new(Mutex::new(()));
+    requests.insert(key.clone(), Arc::downgrade(&request));
+    request
+}
+
+async fn search_providers(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let providers = [
+        MusicProvider::Tidal,
+        MusicProvider::Qobuz,
+        MusicProvider::Spotify,
+    ]
+    .into_iter()
+    .filter(|provider| provider_is_configured(&state, *provider))
+    .collect::<Vec<_>>();
+    Json(serde_json::json!({ "providers": providers }))
+}
+
+async fn search_catalog(
     State(state): State<AppState>,
     Query(request): Query<SearchTracksRequest>,
-) -> Result<Json<LibraryResponse>, ApiError> {
+) -> Result<Json<crate::models::CatalogSearchPage>, ApiError> {
+    use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
     let query = request.query.trim();
     if query.is_empty() {
-        return Ok(Json(LibraryResponse { tracks: Vec::new() }));
+        return Ok(Json(CatalogSearchPage::default()));
     }
     if query.chars().count() > 200 {
         return Err(ApiError::bad_request(
             "Search query cannot exceed 200 characters",
         ));
     }
+    if !provider_is_configured(&state, request.provider) {
+        return Err(ApiError::bad_request("Music provider is not configured"));
+    }
+    let limit = request.limit.unwrap_or(20).clamp(1, 20);
+    let key = SearchCacheKey {
+        provider: request.provider,
+        query: format!("catalog:{}", query.to_lowercase()),
+        offset: 0,
+        limit,
+    };
+    let request_lock = search_request_lock(&state.search_fetches, &key).await;
+    let _guard = request_lock.lock().await;
+    if let Some((when, page)) = state.catalog_cache.read().await.get(&key) {
+        if when.elapsed() < Duration::from_secs(300) {
+            return Ok(Json(page.clone()));
+        }
+    }
+    let fetch = async {
+        match request.provider {
+            MusicProvider::Tidal => tidal_provider(&state)?
+                .search_catalog(query, limit)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Qobuz => qobuz_provider(&state)?
+                .search_catalog(query, limit)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Spotify => {
+                // Librespot exposes track search. Reuse returned metadata for entity cards
+                // instead of introducing a separate Spotify developer-app requirement.
+                let ids = spotify_provider(&state)?
+                    .search_track_ids(query, limit as usize, 0)
+                    .await
+                    .map_err(ApiError::upstream)?;
+                let entries = ids
+                    .into_iter()
+                    .map(|provider_track_id| LibraryEntry {
+                        provider: MusicProvider::Spotify,
+                        provider_track_id,
+                    })
+                    .collect::<Vec<_>>();
+                let tracks = load_search_tracks(&state, &entries).await;
+                let artists = tracks
+                    .iter()
+                    .flat_map(|track| &track.artists)
+                    .map(|artist| CatalogArtist {
+                        id: format!("spotify:{}", artist.provider_id),
+                        provider: MusicProvider::Spotify,
+                        name: artist.name.clone(),
+                        image_url: artist.image_url.clone(),
+                    })
+                    .collect();
+                let albums = tracks
+                    .iter()
+                    .filter_map(|track| track.album.as_ref())
+                    .map(|album| CatalogAlbum {
+                        id: format!("spotify:{}", album.provider_id),
+                        provider: MusicProvider::Spotify,
+                        title: album.title.clone(),
+                        artist: album
+                            .artists
+                            .iter()
+                            .map(|artist| artist.name.clone())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        image_url: album.cover_url.clone(),
+                        upc: album.upc.clone(),
+                        release_date: album.release_date.clone(),
+                        version: album.version.clone(),
+                        explicit: None,
+                        maximum_bit_depth: None,
+                        maximum_sampling_rate_khz: None,
+                    })
+                    .collect();
+                Ok(CatalogSearchPage {
+                    tracks,
+                    artists,
+                    albums,
+                })
+            }
+        }
+    };
+    let page = tokio::time::timeout(Duration::from_secs(7), fetch)
+        .await
+        .map_err(|_| ApiError::upstream(io::Error::other("Catalog search timed out")))??;
+    let mut cache = state.catalog_cache.write().await;
+    if cache.len() >= SEARCH_CACHE_LIMIT {
+        if let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, (when, _))| when)
+            .map(|(key, _)| key.clone())
+        {
+            cache.remove(&oldest);
+        }
+    }
+    cache.insert(key, (Instant::now(), page.clone()));
+    Ok(Json(page))
+}
 
+async fn search_tracks(
+    State(state): State<AppState>,
+    Query(request): Query<SearchTracksRequest>,
+) -> Result<Json<SearchPage>, ApiError> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Ok(Json(SearchPage {
+            tracks: Vec::new(),
+            next_offset: None,
+        }));
+    }
+    if query.chars().count() > 200 {
+        return Err(ApiError::bad_request(
+            "Search query cannot exceed 200 characters",
+        ));
+    }
+    if !provider_is_configured(&state, request.provider) {
+        return Err(ApiError::bad_request("Music provider is not configured"));
+    }
+    let limit = request
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_PAGE_SIZE)
+        .clamp(1, MAX_SEARCH_PAGE_SIZE);
     let cache_key = SearchCacheKey {
         provider: request.provider,
         query: query.to_lowercase(),
+        offset: request.offset,
+        limit,
     };
-    if let Some(tracks) = state.search_cache.read().await.get(&cache_key).cloned() {
-        return Ok(Json(LibraryResponse { tracks }));
+    // Coalesce identical concurrent searches without binding one caller's cancellation
+    // to another. Weak entries disappear once no active/waiting request needs the key.
+    let request_lock = search_request_lock(&state.search_fetches, &cache_key).await;
+    let _request_guard = request_lock.lock().await;
+    if let Some(cached) = state.search_cache.read().await.get(&cache_key).cloned() {
+        if cached.cached_at.elapsed() < Duration::from_secs(5 * 60) {
+            return Ok(Json(cached.page));
+        }
     }
-
-    let tracks = match request.provider {
-        MusicProvider::Tidal => tidal_provider(&state)?
-            .search_tracks(query, SEARCH_RESULT_LIMIT)
-            .await
-            .map_err(ApiError::upstream)?,
-        MusicProvider::Qobuz => qobuz_provider(&state)?
-            .search_tracks(query, SEARCH_RESULT_LIMIT)
-            .await
-            .map_err(ApiError::upstream)?,
-        MusicProvider::Spotify => {
-            let provider_track_ids = spotify_provider(&state)?
-                .search_track_ids(query, SEARCH_RESULT_LIMIT as usize)
+    let fetch = async {
+        match request.provider {
+            MusicProvider::Tidal => tidal_provider(&state)?
+                .search_tracks(query, limit, request.offset)
                 .await
-                .map_err(ApiError::upstream)?;
-            let entries = provider_track_ids
-                .into_iter()
-                .map(|provider_track_id| LibraryEntry {
-                    provider: request.provider,
-                    provider_track_id,
+                .map_err(ApiError::upstream),
+            MusicProvider::Qobuz => qobuz_provider(&state)?
+                .search_tracks(query, limit, request.offset)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Spotify => {
+                let mut ids = spotify_provider(&state)?
+                    .search_track_ids(query, limit as usize + 1, request.offset as usize)
+                    .await
+                    .map_err(ApiError::upstream)?;
+                let next_offset =
+                    (ids.len() > limit as usize).then_some(request.offset.saturating_add(limit));
+                ids.truncate(limit as usize);
+                let entries = ids
+                    .into_iter()
+                    .map(|provider_track_id| LibraryEntry {
+                        provider: request.provider,
+                        provider_track_id,
+                    })
+                    .collect::<Vec<_>>();
+                Ok(SearchPage {
+                    tracks: load_search_tracks(&state, &entries).await,
+                    next_offset,
                 })
-                .collect::<Vec<_>>();
-            load_search_tracks(&state, &entries).await
-        }
-        MusicProvider::YoutubeMusic => {
-            return Err(ApiError::bad_request(
-                "YouTube Music search is not implemented",
-            ));
+            }
         }
     };
-    let mut search_cache = state.search_cache.write().await;
-    if !search_cache.contains_key(&cache_key) && search_cache.len() >= SEARCH_CACHE_LIMIT {
-        if let Some(oldest_key) = search_cache.keys().next().cloned() {
-            search_cache.remove(&oldest_key);
+    let page = tokio::time::timeout(Duration::from_secs(7), fetch)
+        .await
+        .map_err(|_| ApiError::upstream(io::Error::other("Search timed out")))??;
+    let mut cache = state.search_cache.write().await;
+    if !cache.contains_key(&cache_key) && cache.len() >= SEARCH_CACHE_LIMIT {
+        if let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, cached)| cached.cached_at)
+            .map(|(key, _)| key.clone())
+        {
+            cache.remove(&oldest);
         }
     }
-    search_cache.insert(cache_key, tracks.clone());
-
-    Ok(Json(LibraryResponse { tracks }))
+    cache.insert(
+        cache_key,
+        CachedSearchPage {
+            page: page.clone(),
+            cached_at: Instant::now(),
+        },
+    );
+    Ok(Json(page))
 }
 
 #[derive(Serialize)]
@@ -645,7 +835,6 @@ async fn import_album(
             .album_track_ids(&album_id)
             .await
             .map_err(ApiError::upstream)?,
-        _ => return Err(ApiError::bad_request("Music provider is not implemented")),
     };
 
     if track_ids.is_empty() {
@@ -698,7 +887,7 @@ async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<T
                 (index, entry, result)
             }
         })
-        .buffer_unordered(SEARCH_RESULT_LIMIT as usize)
+        .buffer_unordered(8)
         .filter_map(|(index, entry, result)| async move {
             match result {
                 Ok(Ok(track)) => Some((index, track)),
@@ -752,7 +941,6 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
                 .track_metadata(&entry.provider_track_id)
                 .await
         }
-        _ => Err(io::Error::other("Music provider is not implemented").into()),
     }
 }
 
@@ -1264,7 +1452,6 @@ fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
         MusicProvider::Tidal => state.tidal.is_some(),
         MusicProvider::Qobuz => state.qobuz.is_some(),
         MusicProvider::Spotify => state.spotify.is_some(),
-        MusicProvider::YoutubeMusic => false,
     }
 }
 
@@ -1273,7 +1460,6 @@ fn provider_name(provider: MusicProvider) -> &'static str {
         MusicProvider::Tidal => "Tidal",
         MusicProvider::Qobuz => "Qobuz",
         MusicProvider::Spotify => "Spotify",
-        MusicProvider::YoutubeMusic => "YouTube Music",
     }
 }
 
@@ -1282,7 +1468,6 @@ fn provider_slug(provider: MusicProvider) -> &'static str {
         MusicProvider::Tidal => "tidal",
         MusicProvider::Qobuz => "qobuz",
         MusicProvider::Spotify => "spotify",
-        MusicProvider::YoutubeMusic => "youtubeMusic",
     }
 }
 
@@ -1634,5 +1819,43 @@ mod tests {
         assert!(playlist.contains("#EXTINF:3.993832,\ndash/1"));
         assert!(playlist.contains("#EXTINF:3.993832,\ndash/2"));
         assert!(playlist.ends_with("#EXT-X-ENDLIST\n"));
+    }
+}
+
+#[cfg(test)]
+mod search_coalescing_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn identical_searches_share_a_lock_but_other_queries_do_not() {
+        let requests = Mutex::new(HashMap::new());
+        let key = SearchCacheKey {
+            provider: MusicProvider::Qobuz,
+            query: "deadman".into(),
+            offset: 0,
+            limit: 20,
+        };
+        let first = search_request_lock(&requests, &key).await;
+        let second = search_request_lock(&requests, &key).await;
+        assert!(Arc::ptr_eq(&first, &second));
+        let other = search_request_lock(
+            &requests,
+            &SearchCacheKey {
+                offset: 20,
+                ..key.clone()
+            },
+        )
+        .await;
+        assert!(!Arc::ptr_eq(&first, &other));
+        let guard = first.lock().await;
+        assert!(second.try_lock().is_err());
+        assert!(other.try_lock().is_ok());
+        drop(guard);
+        assert!(second.try_lock().is_ok());
+        drop(first);
+        drop(second);
+        drop(other);
+        let _next = search_request_lock(&requests, &key).await;
+        assert_eq!(requests.lock().await.len(), 1);
     }
 }

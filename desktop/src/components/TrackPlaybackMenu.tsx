@@ -1,21 +1,19 @@
-import "./ClickMenu.css";
+import "./TrackMenus.css";
 import type { GlobalTrackId } from "../types/music";
 
-type ClickMenu = "clickMenuOn" | "clickMenuOff";
-
-type ClickMenuProps = {
-  hideClickMenu: () => void;
+type TrackPlaybackMenuProps = {
+  onClose: () => void;
   xPos: number;
   yPos: number;
   trackId: GlobalTrackId | null;
-  playTrack: (trackId: GlobalTrackId) => void;
+  playTrack?: (trackId: GlobalTrackId) => void;
   playStandalone: (trackId: GlobalTrackId) => void;
   addToQueue: (trackId: GlobalTrackId) => void;
   playNext: (trackId: GlobalTrackId) => void;
 };
 
-export function ClickMenu({
-  hideClickMenu,
+export function TrackPlaybackMenu({
+  onClose,
   xPos,
   yPos,
   trackId,
@@ -23,12 +21,13 @@ export function ClickMenu({
   playStandalone,
   addToQueue,
   playNext,
-}: ClickMenuProps) {
+}: TrackPlaybackMenuProps) {
   return (
-    <div id="preventClickCover" onClick={hideClickMenu}>
+    <div id="trackMenuBackdrop" onClick={onClose}>
       <div
-        id="clickMenu"
+        id="trackPlaybackMenu"
         style={{
+          height: playTrack ? 220 : 165,
           left: xPos,
           top: yPos,
           transform: `translate(
@@ -46,7 +45,7 @@ export function ClickMenu({
         >
           Standalone Play
         </div>
-        <div
+        {playTrack && <div
           id="normalPlay"
           className="menuItem"
           onClick={() => {
@@ -54,7 +53,7 @@ export function ClickMenu({
           }}
         >
           Play from Here
-        </div>
+        </div>}
         <div
           id="addToQueue"
           className="menuItem"

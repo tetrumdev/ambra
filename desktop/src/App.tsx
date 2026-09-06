@@ -6,12 +6,11 @@ import { LibraryView } from "./components/LibraryView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
-// import { ClickMenu } from "./components/ClickMenu";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
-
+import { PlaylistView } from "./components/PlaylistView";
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
@@ -26,27 +25,37 @@ import {
   type AppScreen,
 } from "./utils/preferences";
 import type { GlobalTrackId, Track } from "./types/music";
-import type { SearchProvider } from "./api/server";
+import { resolveTrackPlayback, type SearchProvider } from "./api/server";
 import {
+  collectionQueueContext,
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
 
+import { playlistTracks } from "./utils/playlists";
+
+import { usePlaylists } from "./hooks/usePlaylists";
+
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
+  const playlistStore = usePlaylists();
+  const playlists = playlistStore.playlists;
+  const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
+    null,
+  );
   const searchQuery = preferences.search.query;
   const searchProvider = preferences.search.provider;
   const library = useMusicLibrary();
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
-      library.tracks.map((track) => [track.globalId, track]),
+      [...playlistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
     );
     for (const track of search.knownTracks) {
       tracksById.set(track.globalId, track);
     }
     return [...tracksById.values()];
-  }, [library.tracks, search.knownTracks]);
+  }, [playlistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
@@ -82,6 +91,9 @@ function App() {
   const queueReturnScreenRef = useRef<"library" | "search">(
     screen === "search" ? "search" : "library",
   );
+  const bigscreenReturnScreenRef =
+    useRef<Exclude<AppScreen, "bigscreen">>("library");
+  if (screen !== "bigscreen") bigscreenReturnScreenRef.current = screen;
   if (screen === "library" || screen === "search") {
     queueReturnScreenRef.current = screen;
   }
@@ -89,6 +101,43 @@ function App() {
   latestSessionRef.current = { preferences, player };
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
+
+  function createPlaylist() {
+    playlistStore.create();
+  }
+
+  const playlistOptions = {
+    playlists,
+    onAdd: async (playlistId: string, trackId: string) => {
+      const track = availableTracks.find(track => track.globalId === trackId);
+      return track ? playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
+    },
+    onCreate: async (name: string, trackId: string) => {
+      const track = availableTracks.find(track => track.globalId === trackId);
+      return track ? playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
+    },
+  };
+
+  const selectedPlaylist = playlists.find((playlist) => {
+    return playlist.id === selectedPlaylistId;
+  });
+  const collectionTracks = selectedPlaylist
+    ? playlistTracks(selectedPlaylist, availableTracks)
+    : library.tracks;
+  const activeCollectionContext = selectedPlaylist
+    ? collectionQueueContext(collectionTracks, {
+        kind: "playlist",
+        id: selectedPlaylist.id,
+      })
+    : queueContext;
+
+  const removeFromCollection = (trackIds: GlobalTrackId[]) => {
+    if (selectedPlaylist) {
+      playlistStore.removeTracks(selectedPlaylist.id, trackIds);
+    } else {
+      library.removeTracks(trackIds);
+    }
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -179,28 +228,39 @@ function App() {
       event.preventDefault();
     };
 
+    const disableNativeDrag = (event: DragEvent) => {
+      event.preventDefault();
+    };
+
     window.addEventListener("contextmenu", disableContextMenu, true);
+    window.addEventListener("dragstart", disableNativeDrag, true);
     return () => {
       window.removeEventListener("contextmenu", disableContextMenu, true);
+      window.removeEventListener("dragstart", disableNativeDrag, true);
     };
   }, []);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (event.code !== "Escape") return;
-
+      // Let the search field and its service menu handle their own Escape.
+      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop"))
+        return;
       event.preventDefault();
       event.stopPropagation();
-
-      if (event.target instanceof HTMLInputElement && event.target.id === "input") {
-        event.target.blur();
-        return;
-      }
 
       if (event.repeat) return;
       setPreferences((current) => ({
         ...current,
-        ui: { ...current.ui, screen: queueReturnScreenRef.current },
+        ui: {
+          ...current.ui,
+          screen:
+            current.ui.screen === "bigscreen"
+              ? bigscreenReturnScreenRef.current
+              : current.ui.screen === "queue"
+                ? queueReturnScreenRef.current
+                : "library",
+        },
       }));
 
       if (f11FullscreenRef.current) {
@@ -220,6 +280,46 @@ function App() {
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "KeyF") return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest("#searchBar")
+      ) {
+        return;
+      }
+
+      if (event.repeat) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+
+      setPreferences((current) => {
+        if (current.ui.screen !== "bigscreen") {
+          bigscreenReturnScreenRef.current = current.ui.screen;
+        }
+
+        return {
+          ...current,
+          ui: {
+            ...current.ui,
+            screen:
+              current.ui.screen === "bigscreen"
+                ? bigscreenReturnScreenRef.current
+                : "bigscreen",
+          },
+        };
+      });
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
     };
   }, []);
 
@@ -331,8 +431,8 @@ function App() {
     }));
   };
 
-  const playFromLibrary = (trackId: GlobalTrackId) => {
-    queue.playFromContext(queueContext, trackId);
+  const playFromCollection = (trackId: GlobalTrackId) => {
+    queue.playFromContext(activeCollectionContext, trackId);
     player.playTrack(trackId);
   };
 
@@ -357,12 +457,6 @@ function App() {
       search.results,
       `search:${searchProvider}:${searchQuery.trim()}`,
     );
-
-  const playFromSearch = async (trackId: GlobalTrackId) => {
-    const { context, track } = await resolvedSearchContext(trackId);
-    queue.playFromContext(context, trackId);
-    player.playTrack(trackId, track);
-  };
 
   const playStandaloneFromSearch = async (trackId: GlobalTrackId) => {
     const { context, track } = await resolvedSearchContext(trackId);
@@ -442,11 +536,29 @@ function App() {
 
   const closeCurrentScreen = () => {
     changeScreen(
-      screen === "queue" ? queueReturnScreenRef.current : "library",
+      screen === "bigscreen"
+        ? bigscreenReturnScreenRef.current
+        : screen === "queue"
+          ? queueReturnScreenRef.current
+          : "library",
     );
   };
 
   const openQueue = () => changeScreen("queue");
+
+  const collectionViewProps = {
+    tracks: collectionTracks,
+    playlistOptions,
+    playTrack: playFromCollection,
+    playStandalone: (trackId: GlobalTrackId) =>
+      playStandalone(activeCollectionContext, trackId),
+    addToQueue: (trackId: GlobalTrackId) =>
+      addToQueue(activeCollectionContext, trackId),
+    playNext: (trackId: GlobalTrackId) =>
+      playNext(activeCollectionContext, trackId),
+    removeTracks: removeFromCollection,
+    registerScrollElement: setActiveScrollElement,
+  };
 
   return (
     <>
@@ -457,15 +569,17 @@ function App() {
       />
 
       {player.currentTrack && (
-        <BackgroundArtwork
-          track={player.currentTrack}
-          active={isBigscreen}
-        />
+        <>
+          <BackgroundArtwork track={player.currentTrack} active={isBigscreen} />
+          <AlbumArtwork
+            key={player.currentTrack.globalId}
+            track={player.currentTrack}
+            active={isBigscreen}
+          />
+        </>
       )}
 
-      {isBigscreen ? (
-        <AlbumArtwork track={player.currentTrack!} />
-      ) : isQueueView ? (
+      {isBigscreen ? null : isQueueView ? (
         <main id="queue">
           <Queue
             currentEntry={queue.currentEntry}
@@ -482,16 +596,36 @@ function App() {
             provider={searchProvider}
             onQueryChange={changeSearchQuery}
             onProviderChange={changeSearchProvider}
+            onConfirm={() =>
+              changeScreen(searchQuery.trim() ? "search" : "library")
+            }
           />
-          <Sidebar />
+          {playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+          <Sidebar
+            onOpenLibrary={() => {
+              setSelectedPlaylistId(null);
+              changeScreen("library");
+            }}
+            onCreatePlaylist={createPlaylist}
+            playlists={playlists}
+            onSelectPlaylist={(id) => {
+              setSelectedPlaylistId(id);
+              changeScreen("library");
+            }}
+          />
           {isSearchView ? (
             <SearchView
+              playlistOptions={playlistOptions}
               query={searchQuery}
               provider={searchProvider}
               tracks={search.results}
+              candidates={search.candidates}
               isSearching={search.isSearching}
+              artists={search.artists}
+              albums={search.albums}
+              canRetry={search.canRetry}
+              retry={search.retry}
               error={search.error}
-              playTrack={playFromSearch}
               playStandalone={playStandaloneFromSearch}
               addToQueue={addToQueueFromSearch}
               playNext={playNextFromSearch}
@@ -510,19 +644,14 @@ function App() {
               }}
               registerScrollElement={setActiveScrollElement}
             />
-          ) : (
-            <LibraryView
-              tracks={library.tracks}
-              playTrack={playFromLibrary}
-              playStandalone={(trackId) =>
-                playStandalone(queueContext, trackId)
-              }
-              addToQueue={(trackId) => addToQueue(queueContext, trackId)}
-              playNext={(trackId) => playNext(queueContext, trackId)}
-              deleteTrack={library.deleteTrack}
-              deleteTracks={library.deleteTracks}
-              registerScrollElement={setActiveScrollElement}
+          ) : selectedPlaylist ? (
+            <PlaylistView
+              key={selectedPlaylist.id}
+              playlist={selectedPlaylist}
+              {...collectionViewProps}
             />
+          ) : (
+            <LibraryView key="library" {...collectionViewProps} />
           )}
         </main>
       )}

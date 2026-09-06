@@ -1,17 +1,23 @@
+import { categoryOrder } from "../utils/catalogRanking";
 import { useState } from "react";
-import type { SearchProvider } from "../api/server";
+import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
-import { ClickMenu } from "./ClickMenu";
-import { SearchMenu } from "./SearchMenu";
+import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
+import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import "./SearchView.css";
 
 type SearchViewProps = {
+  playlistOptions: PlaylistMenuOptions;
   query: string;
   provider: SearchProvider;
   tracks: Track[];
+  candidates: Track[];
+  artists: CatalogArtist[];
+  albums: CatalogAlbum[];
   isSearching: boolean;
   error: string | null;
-  playTrack: (trackId: GlobalTrackId) => void;
+  canRetry: boolean;
+  retry: () => void;
   playStandalone: (trackId: GlobalTrackId) => void;
   addToQueue: (trackId: GlobalTrackId) => void;
   playNext: (trackId: GlobalTrackId) => void;
@@ -20,7 +26,7 @@ type SearchViewProps = {
 };
 
 type OpenMenu = {
-  kind: "actions" | "library";
+  kind: "playback" | "collection";
   trackId: GlobalTrackId;
   x: number;
   y: number;
@@ -31,17 +37,31 @@ type SearchResultProps = {
   variant: "featured" | "grid";
   playTrack: (trackId: GlobalTrackId) => void;
   openActions: (event: React.MouseEvent, trackId: GlobalTrackId) => void;
-  openLibraryMenu: (
+  openCollectionMenu: (
     event: React.MouseEvent<HTMLButtonElement>,
     trackId: GlobalTrackId,
   ) => void;
 };
 
 const providerNames: Record<SearchProvider, string> = {
+  all: "connected services",
   tidal: "Tidal",
   qobuz: "Qobuz",
   spotify: "Spotify",
 };
+
+function trackProviderName(provider: Track["provider"]) {
+  switch (provider) {
+    case "qobuz":
+      return "Qobuz";
+    case "tidal":
+      return "Tidal";
+    case "spotify":
+      return "Spotify";
+    default:
+      return "Local";
+  }
+}
 
 function formatTime(time: number) {
   const totalSeconds = Math.max(0, Math.floor(time));
@@ -59,7 +79,7 @@ function SearchResult({
   variant,
   playTrack,
   openActions,
-  openLibraryMenu,
+  openCollectionMenu,
 }: SearchResultProps) {
   return (
     <div
@@ -94,19 +114,22 @@ function SearchResult({
         <div className="searchResultName">{track.name}</div>
         <div className="searchResultArtist">By {track.artist}</div>
         <div className="searchResultAlbum">On {track.album}</div>
-        <div className="searchResultDuration">
-          {formatTime(track.durationSeconds)}
+        <div className="searchResultMeta">
+          <span className="searchResultQuality">
+            {trackProviderName(track.provider)}
+            {track.quality ? ` · ${track.quality}` : ""}
+          </span>
+          <span className="searchResultDuration">
+            {formatTime(track.durationSeconds)}
+          </span>
         </div>
-        {track.quality && (
-          <div className="searchResultQuality">{track.quality}</div>
-        )}
       </div>
 
       <button
         className="searchResultMenuButton"
         type="button"
         aria-label={`More options for ${track.name}`}
-        onClick={(event) => openLibraryMenu(event, track.globalId)}
+        onClick={(event) => openCollectionMenu(event, track.globalId)}
       >
         <img src="/menu.svg" alt="" />
       </button>
@@ -118,34 +141,38 @@ export function SearchView({
   query,
   provider,
   tracks,
+  candidates,
+  artists,
+  albums,
   isSearching,
   error,
-  playTrack,
+  canRetry,
+  retry,
   playStandalone,
   addToQueue,
   playNext,
   addToLibrary,
+  playlistOptions,
   registerScrollElement,
 }: SearchViewProps) {
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
-  const [featuredTrack, ...remainingTracks] = tracks;
-
-  let status = `${tracks.length} ${tracks.length === 1 ? "track" : "tracks"} from ${providerNames[provider]}`;
-  if (isSearching) status = `Searching ${providerNames[provider]}…`;
-  else if (error) status = error;
-  else if (tracks.length === 0) status = "No songs found";
+  const [featuredTrack, ...remainingTracks] = tracks.slice(0, 5);
+  const order = categoryOrder(query, tracks, artists, albums, candidates);
+  const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
+  const count = Math.min(tracks.length, 5) + Math.min(artists.length, 5) + Math.min(albums.length, 5);
+  const status = isSearching ? `Searching ${providerNames[provider]}…` : error ?? `${count} results from ${providerNames[provider]}`;
 
   function openActions(event: React.MouseEvent, trackId: GlobalTrackId) {
     event.preventDefault();
     setOpenMenu({
-      kind: "actions",
+      kind: "playback",
       trackId,
       x: event.clientX,
       y: event.clientY,
     });
   }
 
-  function openLibraryMenu(
+  function openCollectionMenu(
     event: React.MouseEvent<HTMLButtonElement>,
     trackId: GlobalTrackId,
   ) {
@@ -154,13 +181,13 @@ export function SearchView({
 
     const triggerRect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 180;
-    const menuHeight = 55;
+    const menuHeight = 110;
     const gap = 4;
     const fitsBelow =
       triggerRect.bottom + gap + menuHeight <= window.innerHeight;
 
     setOpenMenu({
-      kind: "library",
+      kind: "collection",
       trackId,
       x: triggerRect.right - menuWidth,
       y: fitsBelow
@@ -171,25 +198,25 @@ export function SearchView({
 
   return (
     <div className="searchView smoothScroll" ref={registerScrollElement}>
-      {openMenu?.kind === "actions" && (
-        <ClickMenu
-          hideClickMenu={() => setOpenMenu(null)}
+      {openMenu?.kind === "playback" && (
+        <TrackPlaybackMenu
+          onClose={() => setOpenMenu(null)}
           xPos={openMenu.x}
           yPos={openMenu.y}
           trackId={openMenu.trackId}
-          playTrack={playTrack}
           playStandalone={playStandalone}
           addToQueue={addToQueue}
           playNext={playNext}
         />
       )}
-      {openMenu?.kind === "library" && (
-        <SearchMenu
-          hideSearchMenu={() => setOpenMenu(null)}
+      {openMenu?.kind === "collection" && (
+        <TrackCollectionMenu
+          trackId={openMenu.trackId}
+          playlistOptions={playlistOptions}
+          onClose={() => setOpenMenu(null)}
           xPos={openMenu.x}
           yPos={openMenu.y}
-          trackId={openMenu.trackId}
-          addToLibrary={addToLibrary}
+          actions={[{ label: "Add to Library", onSelect: () => addToLibrary(openMenu.trackId) }]}
         />
       )}
 
@@ -205,15 +232,21 @@ export function SearchView({
         </p>
       </div>
 
+      {error && isSearching && <p className="searchStatus" role="alert">{error}</p>}
+      {canRetry && <button className="searchLoadMore" type="button" onClick={retry} disabled={isSearching}>Retry unavailable services</button>}
+      <div className="searchSectionLayout">
+      <section className="searchTrackSection" data-primary={order[0] === "tracks"} style={sectionStyle("tracks")} aria-labelledby="searchTracksHeading">
+      <h2 id="searchTracksHeading" className="searchSectionTitle">Tracks</h2>
+      {!featuredTrack && <p className="searchSectionEmpty">{isSearching ? "Searching tracks…" : "No tracks found"}</p>}
       {featuredTrack && (
         <div id="searchResults">
           <div id="firstResult">
             <SearchResult
               track={featuredTrack}
               variant="featured"
-              playTrack={playTrack}
+              playTrack={playStandalone}
               openActions={openActions}
-              openLibraryMenu={openLibraryMenu}
+              openCollectionMenu={openCollectionMenu}
             />
           </div>
 
@@ -224,15 +257,35 @@ export function SearchView({
                   key={track.globalId}
                   track={track}
                   variant="grid"
-                  playTrack={playTrack}
+                  playTrack={playStandalone}
                   openActions={openActions}
-                  openLibraryMenu={openLibraryMenu}
+                  openCollectionMenu={openCollectionMenu}
                 />
               ))}
             </div>
           )}
         </div>
       )}
+      </section>
+      <div className="searchEntitySections">
+        <section data-primary={order[0] === "artists"} style={sectionStyle("artists")} aria-labelledby="searchArtistsHeading">
+          <h2 id="searchArtistsHeading">Artists</h2>
+          {!artists.length && <p className="searchEntityEmpty">{isSearching ? "Searching artists…" : "No artists found"}</p>}
+          {artists.slice(0, 5).map(artist => <div className="searchEntity searchArtist" key={artist.id}>
+            <div className="searchEntityImage">{artist.imageUrl ? <img src={artist.imageUrl} alt="" loading="lazy" /> : <span>{artist.name.slice(0, 1)}</span>}</div>
+            <div className="searchEntityInfo"><strong>{artist.name}</strong><small>{providerNames[artist.provider]}</small></div>
+          </div>)}
+        </section>
+        <section data-primary={order[0] === "albums"} style={sectionStyle("albums")} aria-labelledby="searchAlbumsHeading">
+          <h2 id="searchAlbumsHeading">Albums</h2>
+          {!albums.length && <p className="searchEntityEmpty">{isSearching ? "Searching albums…" : "No albums found"}</p>}
+          {albums.slice(0, 5).map(album => <div className="searchEntity searchAlbum" key={album.id}>
+            <div className="searchEntityImage">{album.imageUrl ? <img src={album.imageUrl} alt="" loading="lazy" /> : <span>♫</span>}</div>
+            <div className="searchEntityInfo"><strong title={[album.title, album.version].filter(Boolean).join(" · ")}>{album.title}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}</strong><span>{album.artist}</span><small>{providerNames[album.provider]}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small></div>
+          </div>)}
+        </section>
+      </div>
+      </div>
     </div>
   );
 }

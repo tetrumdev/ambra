@@ -1,245 +1,133 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  resolveTrackPlayback,
-  searchServerTracks,
-  type SearchProvider,
-} from "../api/server";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, type SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
+import { groupSearchResults } from "../utils/searchRanking";
+import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
 
-type TrackSearch = {
-  results: Track[];
-  knownTracks: Track[];
-  isSearching: boolean;
-  error: string | null;
-  resolveTrack: (trackId: GlobalTrackId) => Promise<Track | undefined>;
-};
+const empty: SearchSnapshot = { results: [], candidates: [], artists: [], albums: [], isSearching: false, hasMore: false, error: null, canRetry: false };
+const resolvedTracks = new Map<string, { track: Track; expires: number }>();
 
-const searchResultsCache = new Map<string, Track[]>();
-const searchRequests = new Map<string, Promise<Track[]>>();
-const resolvedTracks = new Map<GlobalTrackId, Track>();
-const playbackRequests = new Map<GlobalTrackId, Promise<Track>>();
-const MAX_CACHED_SEARCHES = 100;
-const PREWARMED_TIDAL_RESULTS = 25;
-
-function cacheSearchResults(cacheKey: string, tracks: Track[]) {
-  if (
-    !searchResultsCache.has(cacheKey) &&
-    searchResultsCache.size >= MAX_CACHED_SEARCHES
-  ) {
-    const oldestKey = searchResultsCache.keys().next().value;
-    if (oldestKey !== undefined) searchResultsCache.delete(oldestKey);
-  }
-  searchResultsCache.set(cacheKey, tracks);
+function cachedTrack(track: Track) {
+  const cached = resolvedTracks.get(track.globalId);
+  if (cached && cached.expires > Date.now()) return cached.track;
+  resolvedTracks.delete(track.globalId);
+  return track;
 }
 
-function mergeTrack(tracks: Track[], replacement: Track) {
-  return tracks.map((track) =>
-    track.globalId === replacement.globalId ? replacement : track,
-  );
+async function resolvePlayback(track: Track, signal?: AbortSignal) {
+  const cached = cachedTrack(track);
+  if (cached !== track) return cached;
+  const resolved = await resolveTrackPlayback(track, signal);
+  if (signal?.aborted) return track;
+  resolvedTracks.delete(track.globalId);
+  resolvedTracks.set(track.globalId, { track: resolved, expires: Date.now() + 5 * 60_000 });
+  if (resolvedTracks.size > 100) resolvedTracks.delete(resolvedTracks.keys().next().value!);
+  return resolved;
 }
 
-function rememberResolvedTrack(track: Track) {
-  resolvedTracks.set(track.globalId, track);
-  for (const [cacheKey, tracks] of searchResultsCache) {
-    if (tracks.some((candidate) => candidate.globalId === track.globalId)) {
-      searchResultsCache.set(cacheKey, mergeTrack(tracks, track));
-    }
-  }
-}
-
-function resolvePlayback(track: Track) {
-  const resolved = resolvedTracks.get(track.globalId);
-  if (resolved) return Promise.resolve(resolved);
-  const pending = playbackRequests.get(track.globalId);
-  if (pending) return pending;
-
-  const request = resolveTrackPlayback(track)
-    .then((resolvedTrack) => {
-      rememberResolvedTrack(resolvedTrack);
-      return resolvedTrack;
-    })
-    .catch((reason: unknown) => {
-      playbackRequests.delete(track.globalId);
-      throw reason;
-    });
-  playbackRequests.set(track.globalId, request);
-  return request;
-}
-
-function searchText(track: Track) {
-  return `${track.name} ${track.artist} ${track.album}`.toLocaleLowerCase();
-}
-
-function cachedPreview(provider: SearchProvider, query: string) {
-  const normalizedQuery = query.toLocaleLowerCase();
-  const providerPrefix = `${provider}:`;
-  let closestQuery = "";
-  let closestResults: Track[] = [];
-
-  for (const [cacheKey, tracks] of searchResultsCache) {
-    if (!cacheKey.startsWith(providerPrefix)) continue;
-    const cachedQuery = cacheKey.slice(providerPrefix.length);
-    if (
-      normalizedQuery.startsWith(cachedQuery) &&
-      cachedQuery.length > closestQuery.length
-    ) {
-      closestQuery = cachedQuery;
-      closestResults = tracks;
-    }
-  }
-
-  return closestResults.filter((track) =>
-    searchText(track).includes(normalizedQuery),
-  );
-}
-
-function requestSearch(
-  query: string,
-  provider: SearchProvider,
-  signal: AbortSignal,
-) {
-  const cacheKey = `${provider}:${query.toLocaleLowerCase()}`;
-  const pending = searchRequests.get(cacheKey);
-  if (pending) return pending;
-
-  const request = searchServerTracks(query, provider, signal)
-    .then((tracks) => {
-      const resolved = tracks.map(
-        (track) => resolvedTracks.get(track.globalId) ?? track,
-      );
-      cacheSearchResults(cacheKey, resolved);
-      return resolved;
-    })
-    .finally(() => searchRequests.delete(cacheKey));
-  searchRequests.set(cacheKey, request);
-  return request;
-}
-
-export function useTrackSearch(
-  query: string,
-  provider: SearchProvider,
-): TrackSearch {
-  const [results, setResults] = useState<Track[]>([]);
+export function useTrackSearch(query: string, provider: SearchProvider) {
+  const [snapshot, setSnapshot] = useState<SearchSnapshot>(empty);
   const [knownTracks, setKnownTracks] = useState<Track[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const sessionRef = useRef<SearchSession | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
-  const applyResolvedTrack = useCallback((track: Track) => {
-    setResults((current) => mergeTrack(current, track));
-    setKnownTracks((current) => {
-      const existing = current.some(
-        (candidate) => candidate.globalId === track.globalId,
-      );
-      return existing ? mergeTrack(current, track) : [...current, track];
+  const remember = useCallback((tracks: Track[]) => {
+    setKnownTracks(current => {
+      const byId = new Map(current.map(track => [track.globalId, track]));
+      for (const track of tracks) byId.set(track.globalId, track);
+      return [...byId.values()];
     });
   }, []);
 
-  const resolveTrack = useCallback(
-    async (trackId: GlobalTrackId) => {
-      const track =
-        results.find((candidate) => candidate.globalId === trackId) ??
-        knownTracks.find((candidate) => candidate.globalId === trackId);
-      if (!track) return undefined;
-      try {
-        const resolved = await resolvePlayback(track);
-        applyResolvedTrack(resolved);
-        return resolved;
-      } catch (reason) {
-        console.warn("Could not prewarm Tidal playback metadata:", reason);
-        return track;
-      }
-    },
-    [applyResolvedTrack, knownTracks, results],
-  );
+  const resolveTrack = useCallback(async (trackId: GlobalTrackId) => {
+    const track = snapshot.candidates.find(track => track.globalId === trackId) ?? knownTracks.find(track => track.globalId === trackId);
+    if (!track) return undefined;
+    try {
+      const resolved = await resolvePlayback(track);
+      sessionRef.current?.replaceTrack(resolved);
+      remember([resolved]);
+      return resolved;
+    } catch (error) {
+      console.warn("Could not resolve playback metadata:", error);
+      return track;
+    }
+  }, [knownTracks, remember, snapshot.candidates]);
 
   useEffect(() => {
     const trimmedQuery = query.trim();
-    if (!trimmedQuery) {
-      setResults([]);
-      setIsSearching(false);
-      setError(null);
-      return;
-    }
+    const controller = new AbortController();
+    let session: SearchSession | null = null;
+    sessionRef.current = null;
+    setSnapshot(trimmedQuery ? { ...empty, isSearching: true } : empty);
+    if (!trimmedQuery) return;
 
-    let cancelled = false;
-    const prewarm = async (tracks: Track[]) => {
-      const tidalTracks = tracks
-        .filter((track) => track.provider === "tidal")
-        .slice(0, PREWARMED_TIDAL_RESULTS);
-      for (let index = 0; index < tidalTracks.length; index += 2) {
-        if (cancelled) break;
-        const batch = tidalTracks.slice(index, index + 2);
-        await Promise.allSettled(
-          batch.map(async (track) => {
-            const resolved = await resolvePlayback(track);
-            if (!cancelled) applyResolvedTrack(resolved);
-          }),
-        );
+    // Enrich a bounded set of leading recording groups, including hidden TIDAL alternatives.
+    const warmed = new Set<string>();
+    const queue: Track[] = [];
+    let active = 0;
+    const drain = () => {
+      while (active < 2 && queue.length && !controller.signal.aborted) {
+        const track = queue.shift()!;
+        active++;
+        void resolvePlayback(track, controller.signal).then(resolved => {
+          if (!controller.signal.aborted) session?.replaceTrack(resolved);
+        }).catch(() => {}).finally(() => { active--; drain(); });
       }
     };
-
-    const cacheKey = `${provider}:${trimmedQuery.toLocaleLowerCase()}`;
-    const cachedResults = searchResultsCache.get(cacheKey);
-    if (cachedResults) {
-      setResults(cachedResults);
-      setKnownTracks((current) => {
-        const tracksById = new Map(
-          current.map((track) => [track.globalId, track]),
-        );
-        for (const track of cachedResults) {
-          tracksById.set(track.globalId, track);
+    const onUpdate = (next: SearchSnapshot) => {
+      if (controller.signal.aborted) return;
+      setSnapshot(next);
+      remember(next.candidates);
+      if (!next.isSearching && warmed.size < 5) {
+        const leaders = new Set(next.results.slice(0, 5).map(track => track.globalId));
+        const alternatives = groupSearchResults(next.candidates, trimmedQuery)
+          .filter(group => leaders.has(group.track.globalId)).flatMap(group => group.alternatives);
+        for (const track of alternatives) {
+          if (warmed.size >= 5) break;
+          if (track.provider !== "tidal" || warmed.has(track.globalId)) continue;
+          warmed.add(track.globalId);
+          queue.push(track);
         }
-        return [...tracksById.values()];
-      });
-      setIsSearching(false);
-      setError(null);
-      void prewarm(cachedResults);
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    const controller = new AbortController();
-    setResults((current) => {
-      const matchingCurrent = current.filter((track) =>
-        searchText(track).includes(trimmedQuery.toLocaleLowerCase()),
-      );
-      return matchingCurrent.length > 0
-        ? matchingCurrent
-        : cachedPreview(provider, trimmedQuery);
-    });
-    setIsSearching(true);
-    setError(null);
-
-    const timer = window.setTimeout(() => {
-      void requestSearch(trimmedQuery, provider, controller.signal)
-        .then((tracks) => {
-          if (cancelled) return;
-          setResults(tracks);
-          setKnownTracks((current) => {
-            const tracksById = new Map(
-              current.map((track) => [track.globalId, track]),
-            );
-            for (const track of tracks) tracksById.set(track.globalId, track);
-            return [...tracksById.values()];
-          });
-
-          void prewarm(tracks);
-        })
-        .catch((reason: unknown) => {
-          if (!cancelled && !controller.signal.aborted) setError(String(reason));
-        })
-        .finally(() => {
-          if (!cancelled) setIsSearching(false);
-        });
-    }, 100);
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      window.clearTimeout(timer);
+        drain();
+      }
     };
-  }, [applyResolvedTrack, provider, query]);
+    const timer = window.setTimeout(() => {
+      const discoveryTimeout = window.setTimeout(() => controller.abort(), 8000);
+      void configuredSearchProviders(controller.signal).then(providers => {
+        window.clearTimeout(discoveryTimeout);
+        if (controller.signal.aborted) return;
+        const selected = provider === "all" ? providers : providers.filter(value => value === provider);
+        session = new SearchSession({
+          query: trimmedQuery, providers: selected, combined: provider === "all", onUpdate,
+          fetchPage: async (...args) => {
+            const page = await searchServerCatalog(args[0], args[1], args[2]);
+            return { ...page, tracks: page.tracks.map(cachedTrack) };
+          },
+        });
+        sessionRef.current = session;
+        return session.loadMore();
+      }).catch(error => {
+        // A cleanup abort must not publish into a newer query.
+        if (sessionRef.current === session && !disposed) {
+          setSnapshot({ ...empty, error: controller.signal.aborted ? "Loading music services timed out." : String(error), canRetry: true });
+        }
+      }).finally(() => window.clearTimeout(discoveryTimeout));
+    }, 150);
+    let disposed = false;
+    return () => {
+      disposed = true;
+      window.clearTimeout(timer);
+      controller.abort();
+      session?.cancel();
+      if (sessionRef.current === session) sessionRef.current = null;
+    };
+  }, [query, provider, attempt, remember]);
 
-  return { results, knownTracks, isSearching, error, resolveTrack };
+  const loadMore = useCallback(() => { void sessionRef.current?.loadMore(); }, []);
+  const retry = useCallback(() => {
+    if (sessionRef.current) void sessionRef.current.retry();
+    else setAttempt(value => value + 1);
+  }, []);
+
+  return { ...snapshot, knownTracks, resolveTrack, loadMore, retry };
 }

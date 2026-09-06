@@ -13,16 +13,23 @@ type BackgroundArtworkProps = ArtworkProps & {
   active: boolean;
 };
 
-export function AlbumArtwork({ track }: ArtworkProps) {
+export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   const [cover, setCover] = useState(track.cover);
 
   useEffect(() => {
     let cancelled = false;
     setCover(track.cover);
 
-    void highestQualityArtwork(track).then((artwork) => {
+    void highestQualityArtwork(track).then(async (artwork) => {
       if (!cancelled && artwork !== null) {
-        setCover(artwork.url);
+        const image = new Image();
+        image.src = artwork.url;
+        try {
+          await image.decode();
+          if (!cancelled) setCover(artwork.url);
+        } catch {
+          // Keep the already displayed cover if the larger image fails.
+        }
       }
     });
 
@@ -39,7 +46,7 @@ export function AlbumArtwork({ track }: ArtworkProps) {
   ]);
 
   return (
-    <div id="albumCover">
+    <div id="albumCover" data-active={active} aria-hidden={!active}>
       <img
         src={cover}
         alt=""
@@ -47,7 +54,6 @@ export function AlbumArtwork({ track }: ArtworkProps) {
         className="albumCoverContrast"
       />
       <img
-        key={track.audio}
         src={cover}
         alt={`${track.album} album cover`}
         id="albumCoverImg"
