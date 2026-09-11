@@ -73,6 +73,7 @@ pub struct NativeAudioDevice {
 }
 
 enum WorkerCommand {
+    Warm { source: String },
     Load {
         source: String,
         next_source: Option<String>,
@@ -144,6 +145,17 @@ pub async fn load_native_audio(
         reply,
     })
     .await
+}
+
+#[tauri::command]
+pub fn warm_native_audio(
+    player: State<'_, NativeAudioPlayer>,
+    source: String,
+) -> Result<(), String> {
+    player
+        .command_tx
+        .send(WorkerCommand::Warm { source })
+        .map_err(|_| "The native audio worker stopped".to_owned())
 }
 
 #[tauri::command]
@@ -312,6 +324,7 @@ struct PlaybackWorker {
     spec: Option<StreamSpec>,
     next_source: Option<QueuedSource>,
     ready_next: Option<(String, PreparedSource)>,
+    warm_source: Option<QueuedSource>,
     desired_playing: bool,
     decoder_ended: bool,
     position_base: f64,
@@ -389,12 +402,16 @@ impl Drop for DecoderStream {
 
 impl QueuedSource {
     fn prepare(source: String) -> Result<Self, String> {
+        Self::prepare_with_buffer(source, true)
+    }
+
+    fn prepare_with_buffer(source: String, preload: bool) -> Result<Self, String> {
         let (sender, receiver) = bounded(1);
         let decoder_source = source.clone();
         thread::Builder::new()
             .name("ambra-audio-preload".to_owned())
             .spawn(move || {
-                let _ = sender.send(prepare_source(decoder_source, true));
+                let _ = sender.send(prepare_source(decoder_source, preload));
             })
             .map_err(|error| format!("Could not start native audio preloading: {error}"))?;
         Ok(Self { source, receiver })
@@ -412,6 +429,7 @@ impl PlaybackWorker {
             spec: None,
             next_source: None,
             ready_next: None,
+            warm_source: None,
             desired_playing: false,
             decoder_ended: false,
             position_base: 0.0,
@@ -463,6 +481,24 @@ impl PlaybackWorker {
 
     fn handle_command(&mut self, command: WorkerCommand) -> bool {
         match command {
+            WorkerCommand::Warm { source } => {
+                let already_preparing = self.current_source.as_ref() == Some(&source)
+                    || self
+                        .next_source
+                        .as_ref()
+                        .is_some_and(|queued| queued.source == source)
+                    || self
+                        .ready_next
+                        .as_ref()
+                        .is_some_and(|(ready, _)| ready == &source)
+                    || self
+                        .warm_source
+                        .as_ref()
+                        .is_some_and(|warm| warm.source == source || warm.receiver.is_empty());
+                if !already_preparing {
+                    self.warm_source = QueuedSource::prepare_with_buffer(source, false).ok();
+                }
+            }
             WorkerCommand::Load {
                 source,
                 next_source,
@@ -607,10 +643,26 @@ impl PlaybackWorker {
         position_seconds: f64,
         autoplay: bool,
     ) -> Result<(), String> {
-        if let Some(output) = self.output.as_mut() {
+        let previous_spec = self.spec;
+        let mut previous_output = self.output.take();
+        if let Some(output) = previous_output.as_mut() {
             output.reset()?;
         }
-        self.output = None;
+        let prepared_next = if position_seconds == 0.0 {
+            self.ready_next
+                .take()
+                .filter(|(ready_source, _)| ready_source == &source)
+                .map(|(_, prepared)| prepared)
+                .or_else(|| {
+                    self.next_source
+                        .take()
+                        .filter(|queued| queued.source == source)
+                        .and_then(|queued| queued.receiver.try_recv().ok())
+                        .and_then(Result::ok)
+                })
+        } else {
+            None
+        };
         self.decoder = None;
         self.pcm.clear();
         self.desired_playing = autoplay;
@@ -623,7 +675,25 @@ impl PlaybackWorker {
         self.rendering = false;
         self.set_buffering(Some(source.clone()), position_seconds, 0.0);
 
-        let prepared = prepare_source_at(source.clone(), position_seconds)?;
+        // Reuse an in-flight hover preparation as well as completed queue audio.
+        let warmed = if prepared_next.is_none()
+            && position_seconds == 0.0
+            && self
+                .warm_source
+                .as_ref()
+                .is_some_and(|warm| warm.source == source)
+        {
+            self.warm_source
+                .take()
+                .and_then(|warm| warm.receiver.recv().ok())
+                .and_then(Result::ok)
+        } else {
+            None
+        };
+        let prepared = match prepared_next.or(warmed) {
+            Some(prepared) => prepared,
+            None => prepare_source_at(source.clone(), position_seconds)?,
+        };
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         self.install_prepared(prepared)?;
@@ -631,11 +701,18 @@ impl PlaybackWorker {
         self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
         let selected_device_id = self.selected_device_id.as_deref();
 
-        self.output = autoplay
-            .then(|| {
-                PlatformOutput::open_device_with_mode(spec, selected_device_id, self.exclusive_mode)
-            })
-            .transpose()?;
+        if autoplay && previous_spec == Some(spec) {
+            self.output = previous_output.take();
+        }
+        // Release incompatible output formats before opening the replacement.
+        drop(previous_output);
+        if autoplay && self.output.is_none() {
+            self.output = Some(PlatformOutput::open_device_with_mode(
+                spec,
+                selected_device_id,
+                self.exclusive_mode,
+            )?);
+        }
 
         update_status(&self.status, |status| {
             status.current_source = Some(source);
@@ -1086,10 +1163,7 @@ fn prepare_source_with_buffer(
     preload: bool,
 ) -> Result<PreparedSource, String> {
     let network_source = is_network_source(&source);
-    let mut decoder = DecodedSource::open(source)?;
-    if position_seconds > 0.0 {
-        decoder.seek(position_seconds)?;
-    }
+    let mut decoder = DecodedSource::open_at(source, position_seconds)?;
     let spec = decoder.spec();
     let max_buffer_samples = max_buffer_samples(spec, network_source);
     let prebuffer_samples = prebuffer_samples_for_kind(spec, network_source, preload);
@@ -1156,6 +1230,45 @@ fn lock_status(status: &Arc<Mutex<PlaybackStatus>>) -> std::sync::MutexGuard<'_,
 #[cfg(test)]
 mod tests {
     use super::{StreamSpec, max_buffer_samples, prebuffer_samples, valid_position};
+
+    #[test]
+    fn selecting_prepared_audio_does_not_reopen_its_source() {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("ambra-prepared-{}.wav", std::process::id()));
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&40u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&176400u32.to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes());
+        wav.extend_from_slice(&[0; 4]);
+        let source = path.to_string_lossy().into_owned();
+        for warm in [false, true] {
+            std::fs::write(&path, &wav).unwrap();
+            let prepared = prepare_source(source.clone(), false).unwrap();
+            std::fs::remove_file(&path).unwrap();
+            let (_tx, rx) = unbounded();
+            let mut worker = PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
+            if warm {
+                let (sender, receiver) = bounded(1);
+                sender.send(Ok(prepared)).unwrap();
+                worker.warm_source = Some(QueuedSource {
+                    source: source.clone(),
+                    receiver,
+                });
+            } else {
+                worker.ready_next = Some((source.clone(), prepared));
+            }
+            worker.load(source.clone(), None, 0.0, false).unwrap();
+            assert_eq!(worker.pcm.len(), 2);
+        }
+    }
 
     #[test]
     fn rejects_non_finite_seek_positions() {

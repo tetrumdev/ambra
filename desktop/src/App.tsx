@@ -2,7 +2,7 @@ import "./App.css";
 
 //Components
 import { AppChrome } from "./components/AppChrome";
-import { LibraryView } from "./components/LibraryView";
+import { LibraryView, type LibrarySection } from "./components/LibraryView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
@@ -25,7 +25,7 @@ import {
   type AppScreen,
 } from "./utils/preferences";
 import type { GlobalTrackId, Track } from "./types/music";
-import { resolveTrackPlayback, type SearchProvider } from "./api/server";
+import { resolveTrackPlayback } from "./api/server";
 import {
   collectionQueueContext,
   libraryQueueContext,
@@ -43,8 +43,10 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
+  const [librarySection, setLibrarySection] =
+    useState<LibrarySection>("overview");
   const searchQuery = preferences.search.query;
-  const searchProvider = preferences.search.provider;
+  const searchProvider = "all";
   const library = useMusicLibrary();
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
@@ -232,19 +234,37 @@ function App() {
       event.preventDefault();
     };
 
+    const resetHorizontalScroll = () => {
+      document.scrollingElement?.scrollTo({ left: 0 });
+      for (const element of document.querySelectorAll<HTMLElement>(
+        "#library, #search, #queue, .libraryView, .searchView, #queueList",
+      )) {
+        if (element.scrollLeft !== 0) element.scrollLeft = 0;
+      }
+    };
+
+    const preventHorizontalScroll = () => resetHorizontalScroll();
+    const keepDragVertical = (event: PointerEvent) => {
+      if (event.buttons !== 0) resetHorizontalScroll();
+    };
+
     window.addEventListener("contextmenu", disableContextMenu, true);
     window.addEventListener("dragstart", disableNativeDrag, true);
+    window.addEventListener("scroll", preventHorizontalScroll, true);
+    window.addEventListener("pointermove", keepDragVertical, true);
     return () => {
       window.removeEventListener("contextmenu", disableContextMenu, true);
       window.removeEventListener("dragstart", disableNativeDrag, true);
+      window.removeEventListener("scroll", preventHorizontalScroll, true);
+      window.removeEventListener("pointermove", keepDragVertical, true);
     };
   }, []);
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (event.code !== "Escape") return;
-      // Let the search field and its service menu handle their own Escape.
-      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop"))
+      // Let search, menus, and playlist dialogs handle their own Escape.
+      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop, dialog[open]"))
         return;
       event.preventDefault();
       event.stopPropagation();
@@ -421,19 +441,14 @@ function App() {
     }));
   };
 
-  const changeSearchProvider = (provider: SearchProvider) => {
-    setPreferences((current) => ({
-      ...current,
-      search: {
-        ...current.search,
-        provider,
-      },
-    }));
-  };
-
   const playFromCollection = (trackId: GlobalTrackId) => {
     queue.playFromContext(activeCollectionContext, trackId);
     player.playTrack(trackId);
+  };
+
+  const shuffleCollection = () => {
+    const first = queue.shuffleContext(activeCollectionContext);
+    if (first) player.playTrack(first.track.globalId);
   };
 
   const resolvedSearchContext = async (trackId: GlobalTrackId) => {
@@ -557,6 +572,7 @@ function App() {
     playNext: (trackId: GlobalTrackId) =>
       playNext(activeCollectionContext, trackId),
     removeTracks: removeFromCollection,
+    shuffleCollection,
     registerScrollElement: setActiveScrollElement,
   };
 
@@ -593,20 +609,32 @@ function App() {
         <main id={isSearchView ? "search" : "library"}>
           <SearchBar
             query={searchQuery}
-            provider={searchProvider}
             onQueryChange={changeSearchQuery}
-            onProviderChange={changeSearchProvider}
             onConfirm={() =>
               changeScreen(searchQuery.trim() ? "search" : "library")
             }
           />
           {playlistStore.error && <p role="alert">{playlistStore.error}</p>}
           <Sidebar
+            activeLibrarySection={!isSearchView && !selectedPlaylist ? librarySection : null}
+            activePlaylistId={!isSearchView ? selectedPlaylist?.id ?? null : null}
+            onOpenLibrarySection={(section) => {
+              setSelectedPlaylistId(null);
+              setLibrarySection(section);
+              changeScreen("library");
+            }}
             onOpenLibrary={() => {
               setSelectedPlaylistId(null);
+              setLibrarySection("overview");
               changeScreen("library");
             }}
             onCreatePlaylist={createPlaylist}
+            onRenamePlaylist={playlistStore.rename}
+            onDeletePlaylist={(id) => {
+              if (!playlistStore.deletePlaylist(id)) return false;
+              if (selectedPlaylistId === id) setSelectedPlaylistId(null);
+              return true;
+            }}
             playlists={playlists}
             onSelectPlaylist={(id) => {
               setSelectedPlaylistId(id);
@@ -651,7 +679,12 @@ function App() {
               {...collectionViewProps}
             />
           ) : (
-            <LibraryView key="library" {...collectionViewProps} />
+            <LibraryView
+              key={`library:${librarySection}`}
+              {...collectionViewProps}
+              section={librarySection}
+              onSectionChange={setLibrarySection}
+            />
           )}
         </main>
       )}

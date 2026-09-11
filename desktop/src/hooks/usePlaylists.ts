@@ -43,6 +43,14 @@ export function usePlaylists() {
     tracks: snapshot.tracks,
     error,
     create,
+    rename: (id: string, name: string) => Boolean(name.trim()) && current.current.playlists.some(playlist => playlist.id === id) && commit({
+      ...current.current,
+      playlists: current.current.playlists.map(playlist => playlist.id === id ? { ...playlist, name: name.trim() } : playlist),
+    }),
+    deletePlaylist: (id: string) => current.current.playlists.some(playlist => playlist.id === id) && commit({
+      ...current.current,
+      playlists: current.current.playlists.filter(playlist => playlist.id !== id),
+    }),
     addTrack: (id: string, track: Track) => current.current.playlists.some(playlist => playlist.id === id) && commit(addPlaylistTrack(current.current, id, track)),
     removeTracks: (id: string, ids: string[]) => commit({ ...current.current, playlists: removePlaylistTracks(current.current.playlists, id, ids) }),
   };

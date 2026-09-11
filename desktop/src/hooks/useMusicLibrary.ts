@@ -20,6 +20,7 @@ import {
   saveRemovedLibraryTrackIds,
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
+import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks } from "../utils/libraryOrder";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
@@ -83,6 +84,11 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
 }
 
 export function useMusicLibrary(): MusicLibrary {
+  const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
+  useEffect(() => {
+    try { localStorage.setItem("ambra.library-order.v1", JSON.stringify(libraryOrder)); }
+    catch (error) { console.warn("Could not save library ordering:", error); }
+  }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
   const [serverTracks, setServerTracks] = useState<Track[]>(
     loadCachedServerTracks,
@@ -98,13 +104,13 @@ export function useMusicLibrary(): MusicLibrary {
   const catalogTracks = useMemo(() => [...serverTracks, ...localTracks], [serverTracks, localTracks]);
   const tracks = useMemo(
     () =>
-      catalogTracks
+      orderLibraryTracks(catalogTracks, libraryOrder)
         .filter((track) => !removedTrackIds.has(track.globalId))
         .map((track, index) => ({
           ...track,
           libraryId: index + 1,
         })),
-    [catalogTracks, removedTrackIds],
+    [catalogTracks, libraryOrder, removedTrackIds],
   );
   const isLoading = isLocalLoading && isServerLoading;
 
@@ -186,6 +192,7 @@ export function useMusicLibrary(): MusicLibrary {
       setServerTracks((currentTracks) =>
         moveAlbumToEndInOrder(currentTracks, albumTracks),
       );
+      setLibraryOrder(current => appendLibraryOrder(catalogTracks, current, moveAlbumToEndInOrder([], albumTracks).map(track => track.globalId)));
       return true;
     } catch (reason) {
       setAddAlbumError(String(reason));
@@ -193,13 +200,15 @@ export function useMusicLibrary(): MusicLibrary {
     } finally {
       setIsAddingAlbum(false);
     }
-  }, []);
+  }, [catalogTracks]);
 
   const addTrack = useCallback(
     async (provider: SearchProvider, providerTrackId: string) => {
       try {
         const [track] = await addServerTrack(provider, providerTrackId);
         if (!track) return false;
+        const restoring = removedTrackIds.has(track.globalId);
+        const alreadyKnown = catalogTracks.some(item => item.globalId === track.globalId);
 
         setRemovedTrackIds((currentTrackIds) => {
           if (!currentTrackIds.has(track.globalId)) return currentTrackIds;
@@ -208,15 +217,18 @@ export function useMusicLibrary(): MusicLibrary {
           return nextTrackIds;
         });
         setServerTracks((currentTracks) =>
-          appendUniqueTracks(currentTracks, [track]),
+          restoring ? moveAlbumToEndInOrder(currentTracks, [track]) : appendUniqueTracks(currentTracks, [track]),
         );
+        if (restoring || !alreadyKnown) {
+          setLibraryOrder(current => appendLibraryOrder(catalogTracks, current, [track.globalId]));
+        }
         return true;
       } catch (reason) {
         console.error("Could not add track to library:", reason);
         return false;
       }
     },
-    [],
+    [catalogTracks, removedTrackIds],
   );
 
   const removeTracks = useCallback((trackIds: GlobalTrackId[]) => {

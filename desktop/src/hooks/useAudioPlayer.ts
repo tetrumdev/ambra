@@ -6,7 +6,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
-import { MediaPlayer, type MediaPlayerClass } from "dashjs";
+import type { MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Deck, Track } from "../types/music";
@@ -82,6 +82,7 @@ export function useAudioPlayer(
   const secondAudioRef = useRef<HTMLAudioElement>(null);
   const tracksRef = useRef<Track[]>(tracks);
   const activeDeckRef = useRef<Deck>(0);
+  const deckGenerationsRef = useRef<[number, number]>([0, 0]);
   const currentTrackIdRef = useRef<string | null>(null);
   const currentTimeRef = useRef(0);
   const isPlayingRef = useRef(false);
@@ -138,6 +139,7 @@ export function useAudioPlayer(
 
   const releaseDeck = useCallback(
     (deck: Deck) => {
+      deckGenerationsRef.current[deck]++;
       if (pendingPlaybackDeckRef.current === deck) {
         pendingPlaybackDeckRef.current = null;
       }
@@ -190,9 +192,13 @@ export function useAudioPlayer(
       deckPlaybackKindsRef.current[deck] = track.playbackKind;
 
       if (track.playbackKind === "dash") {
-        const dashPlayer = MediaPlayer().create();
-        dashPlayersRef.current[deck] = dashPlayer;
-        dashPlayer.initialize(audio, track.audio, false);
+        const generation = deckGenerationsRef.current[deck];
+        void import("dashjs").then(({ MediaPlayer }) => {
+          if (deckGenerationsRef.current[deck] !== generation) return;
+          const dashPlayer = MediaPlayer().create();
+          dashPlayersRef.current[deck] = dashPlayer;
+          dashPlayer.initialize(audio, track.audio, false);
+        }).catch(error => console.error("Could not load browser DASH playback:", error));
       } else {
         audio.src = track.audio;
         audio.load();

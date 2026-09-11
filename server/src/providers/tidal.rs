@@ -3,10 +3,11 @@ use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
+use crate::media_cache::MediaCache;
 use base64::{Engine, engine::general_purpose};
 use quick_xml::{Reader, events::Event};
 use serde::Deserialize;
@@ -24,7 +25,7 @@ use tidlers::{
     requests::RequestClientError,
     resources::uuid_to_url_with_size,
 };
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
@@ -38,9 +39,11 @@ pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + 
 
 #[derive(Clone)]
 pub struct TidalProvider {
+    pub(crate) media_cache: Arc<RwLock<MediaCache>>,
     client: Arc<Mutex<TidalClient>>,
     http_client: reqwest::Client,
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
+    playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     maximum_playback_cache: Arc<Mutex<HashMap<String, CachedMaximumPlayback>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
@@ -62,7 +65,7 @@ pub enum PlaybackSource {
         segment_duration: u32,
         start_number: u32,
         segment_count: Option<u32>,
-        track_duration_seconds: u64,
+        track_duration_seconds: f64,
     },
 }
 
@@ -105,6 +108,7 @@ impl TidalProvider {
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
         Ok(Some(Self {
+            media_cache: Arc::new(RwLock::new(MediaCache::default())),
             client: Arc::new(Mutex::new(client)),
             http_client: reqwest::Client::builder()
                 .connect_timeout(Duration::from_secs(3))
@@ -113,6 +117,7 @@ impl TidalProvider {
                 .tcp_keepalive(Duration::from_secs(30))
                 .build()?,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
+            playback_fetches: Arc::new(Mutex::new(HashMap::new())),
             maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
@@ -441,6 +446,17 @@ impl TidalProvider {
             }
         }
 
+        let known_duration = self
+            .track_metadata_cache
+            .lock()
+            .await
+            .get(track_id)
+            .map(|track| track.duration_seconds)
+            .filter(|duration| *duration > 0);
+        if let Some(duration) = known_duration {
+            return self.playback_source_with_duration(track_id, duration).await;
+        }
+
         let client = {
             let mut client = self.client.lock().await;
             if client.refresh_access_token(false).await? {
@@ -471,6 +487,21 @@ impl TidalProvider {
     ) -> ProviderResult<PlaybackSource> {
         validate_track_id(track_id)?;
 
+        // Search warming and a play click can resolve the same song concurrently.
+        // Share its work without blocking resolutions for other songs.
+        let fetch_lock = {
+            let mut fetches = self.playback_fetches.lock().await;
+            fetches.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = fetches.get(track_id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                fetches.insert(track_id.to_owned(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        let _guard = fetch_lock.lock().await;
+
         {
             let cache = self.playback_sources.lock().await;
             if let Some(cached) = cache.get(track_id)
@@ -494,7 +525,13 @@ impl TidalProvider {
                 }
             }
             MaximumPlaybackManifest::Dash(manifest) => {
-                playback_source_from_dash(&self.http_client, manifest, duration_seconds).await?
+                playback_source_from_dash(
+                    &self.http_client,
+                    &self.media_cache,
+                    manifest,
+                    duration_seconds,
+                )
+                .await?
             }
         };
         self.playback_sources.lock().await.insert(
@@ -826,6 +863,7 @@ fn is_unauthorized(error: &TidalError) -> bool {
 
 async fn playback_source_from_dash(
     http_client: &reqwest::Client,
+    media_cache: &RwLock<MediaCache>,
     manifest: DashManifest,
     track_duration_seconds: u64,
 ) -> ProviderResult<PlaybackSource> {
@@ -838,21 +876,31 @@ async fn playback_source_from_dash(
     let timescale = manifest.timescale.unwrap_or(1);
     let start_number = manifest.start_number.unwrap_or(1);
     let normalized_media_template = normalize_dash_url(media_url_template);
-    let segment_duration = match manifest.duration {
-        Some(duration) if duration > 0 => duration,
-        _ => {
-            infer_segment_duration(
-                http_client,
-                &normalized_media_template,
-                start_number,
-                timescale,
-            )
-            .await?
-        }
+    let initialization_url = normalize_dash_url(initialization_url);
+    let timing = async {
+        Ok::<u32, Box<dyn std::error::Error + Send + Sync>>(match manifest.duration {
+            Some(duration) if duration > 0 => duration,
+            _ => {
+                infer_segment_duration(
+                    http_client,
+                    media_cache,
+                    &normalized_media_template,
+                    start_number,
+                    timescale,
+                )
+                .await?
+            }
+        })
     };
+    let (segment_duration, initialization) = tokio::try_join!(
+        timing,
+        download_dash_fragment(http_client, media_cache, &initialization_url)
+    )?;
+    let track_duration_seconds =
+        movie_duration_seconds(&initialization).unwrap_or(track_duration_seconds as f64);
 
     Ok(PlaybackSource::Dash {
-        initialization_url: normalize_dash_url(initialization_url),
+        initialization_url,
         media_url_template: normalized_media_template,
         mime_type: manifest.mime_type.clone(),
         codecs: manifest.codecs.clone(),
@@ -867,6 +915,7 @@ async fn playback_source_from_dash(
 
 async fn infer_segment_duration(
     client: &reqwest::Client,
+    media_cache: &RwLock<MediaCache>,
     media_url_template: &str,
     start_number: u32,
     timescale: u32,
@@ -877,8 +926,8 @@ async fn infer_segment_duration(
     let first_url = media_url_template.replace("$Number$", &start_number.to_string());
     let next_url = media_url_template.replace("$Number$", &next_number.to_string());
     let (first, next) = tokio::try_join!(
-        download_dash_fragment(client, &first_url),
-        download_dash_fragment(client, &next_url)
+        download_dash_fragment(client, media_cache, &first_url),
+        download_dash_fragment(client, media_cache, &next_url)
     )?;
     let first_time = base_media_decode_time(&first)
         .ok_or_else(|| io::Error::other("First DASH fragment has no tfdt timestamp"))?;
@@ -897,7 +946,14 @@ async fn infer_segment_duration(
     Ok(duration)
 }
 
-async fn download_dash_fragment(client: &reqwest::Client, url: &str) -> ProviderResult<Vec<u8>> {
+async fn download_dash_fragment(
+    client: &reqwest::Client,
+    media_cache: &RwLock<MediaCache>,
+    url: &str,
+) -> ProviderResult<bytes::Bytes> {
+    if let Some(bytes) = media_cache.read().await.get(url) {
+        return Ok(bytes);
+    }
     let response = client.get(url).send().await?;
     if !response.status().is_success() {
         return Err(io::Error::other(format!(
@@ -906,7 +962,12 @@ async fn download_dash_fragment(client: &reqwest::Client, url: &str) -> Provider
         ))
         .into());
     }
-    Ok(response.bytes().await?.to_vec())
+    let bytes = response.bytes().await?;
+    media_cache
+        .write()
+        .await
+        .insert(url.to_owned(), bytes.clone());
+    Ok(bytes)
 }
 
 fn base_media_decode_time(fragment: &[u8]) -> Option<u64> {
@@ -934,19 +995,64 @@ fn base_media_decode_time(fragment: &[u8]) -> Option<u64> {
 fn dash_segment_count(
     timescale: u32,
     segment_duration: u32,
-    track_duration_seconds: u64,
+    track_duration_seconds: f64,
 ) -> Option<u32> {
-    let timescale = u64::from(timescale);
-    let segment_duration = u64::from(segment_duration);
-    if timescale == 0 || segment_duration == 0 {
+    if timescale == 0
+        || segment_duration == 0
+        || !track_duration_seconds.is_finite()
+        || track_duration_seconds <= 0.0
+    {
         return None;
     }
+    let count =
+        (track_duration_seconds * f64::from(timescale) / f64::from(segment_duration) - 1e-9).ceil();
+    (count >= 1.0 && count <= u32::MAX as f64).then_some(count as u32)
+}
 
-    let track_duration = track_duration_seconds.checked_mul(timescale)?;
-    let count = track_duration
-        .checked_add(segment_duration - 1)?
-        .checked_div(segment_duration)?;
-    count.try_into().ok()
+// Movie fragment duration (mehd) is authoritative for fragmented MP4;
+// catalog durations can refer to a different edit or include rounded seconds.
+fn movie_duration_seconds(initialization: &[u8]) -> Option<f64> {
+    fn atom<'a>(mut bytes: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
+        while bytes.len() >= 8 {
+            let size = u32::from_be_bytes(bytes[..4].try_into().ok()?);
+            let (length, header) = match size {
+                0 => (bytes.len(), 8),
+                1 => (
+                    usize::try_from(u64::from_be_bytes(bytes.get(8..16)?.try_into().ok()?)).ok()?,
+                    16,
+                ),
+                _ => (size as usize, 8),
+            };
+            if length < header || length > bytes.len() {
+                return None;
+            }
+            let payload = &bytes[header..length];
+            if &bytes[4..8] == kind {
+                return Some(payload);
+            }
+            bytes = &bytes[length..];
+        }
+        None
+    }
+    let moov = atom(initialization, b"moov")?;
+    let mvhd = atom(moov, b"mvhd")?;
+    let offset = match *mvhd.first()? {
+        0 => 12,
+        1 => 20,
+        _ => return None,
+    };
+    let scale = u32::from_be_bytes(mvhd.get(offset..offset + 4)?.try_into().ok()?);
+    if scale == 0 {
+        return None;
+    }
+    let mehd = atom(atom(moov, b"mvex")?, b"mehd")?;
+    let ticks = match *mehd.first()? {
+        0 => u64::from(u32::from_be_bytes(mehd.get(4..8)?.try_into().ok()?)),
+        1 => u64::from_be_bytes(mehd.get(4..12)?.try_into().ok()?),
+        _ => return None,
+    };
+    let seconds = ticks as f64 / f64::from(scale);
+    (seconds > 0.0 && seconds <= 86_400.0).then_some(seconds)
 }
 
 fn normalize_dash_url(url: &str) -> String {
@@ -1103,9 +1209,76 @@ fn validate_album_id(album_id: &str) -> ProviderResult<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        MaximumPlaybackManifest, base_media_decode_time, dash_segment_count, normalize_dash_url,
-        parse_dash_manifest, tidal_stream_quality_label,
+        MaximumPlaybackManifest, base_media_decode_time, dash_segment_count,
+        movie_duration_seconds, normalize_dash_url, parse_dash_manifest,
+        tidal_stream_quality_label,
     };
+
+    #[tokio::test]
+    async fn timing_downloads_run_together_and_warm_playback_cache() {
+        use crate::media_cache::MediaCache;
+        use axum::{Router, http::Uri};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tokio::sync::RwLock;
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().fallback({
+            let requests = requests.clone();
+            let active = active.clone();
+            let peak = peak.clone();
+            move |uri: Uri| {
+                let requests = requests.clone();
+                let active = active.clone();
+                let peak = peak.clone();
+                async move {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    let concurrent = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    peak.fetch_max(concurrent, Ordering::SeqCst);
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    let mut fragment = vec![0, 0, 0, 16, b't', b'f', b'd', b't', 0, 0, 0, 0];
+                    fragment.extend_from_slice(
+                        &if uri.path() == "/2" { 176_128u32 } else { 0u32 }.to_be_bytes(),
+                    );
+                    fragment
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let xml = format!(
+            r#"<MPD><Period><AdaptationSet mimeType="audio/mp4"><Representation codecs="flac"><SegmentTemplate timescale="44100" initialization="{base}/init" media="{base}/$Number$" /></Representation></AdaptationSet></Period></MPD>"#
+        );
+        let (manifest, _, _) = parse_dash_manifest(&xml).unwrap();
+        let client = reqwest::Client::new();
+        let cache = RwLock::new(MediaCache::default());
+        let source = super::playback_source_from_dash(&client, &cache, manifest, 8)
+            .await
+            .unwrap();
+        assert!(matches!(
+            source,
+            super::PlaybackSource::Dash {
+                segment_duration: 176_128,
+                ..
+            }
+        ));
+        for path in ["init", "1", "2"] {
+            let url = format!("{base}/{path}");
+            assert!(cache.read().await.get(&url).is_some());
+            super::download_dash_fragment(&client, &cache, &url)
+                .await
+                .unwrap();
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert_eq!(peak.load(Ordering::SeqCst), 3);
+        server.abort();
+    }
 
     #[test]
     fn reads_exact_hi_res_quality_from_tidal_manifest() {
@@ -1140,7 +1313,37 @@ mod tests {
 
     #[test]
     fn calculates_dash_segment_count_from_track_duration() {
-        assert_eq!(dash_segment_count(1_000, 4_000, 230), Some(58));
+        assert_eq!(dash_segment_count(1_000, 4_000, 230.0), Some(58));
+    }
+
+    #[test]
+    fn uses_fragmented_movie_duration_instead_of_rounded_catalog_duration() {
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+        for version in [0, 1] {
+            let mut mvhd = vec![0; if version == 0 { 12 } else { 20 }];
+            mvhd[0] = version;
+            mvhd.extend_from_slice(&44_100u32.to_be_bytes());
+            let mut mehd = vec![version, 0, 0, 0];
+            if version == 0 {
+                mehd.extend_from_slice(&10_329_396u32.to_be_bytes());
+            } else {
+                mehd.extend_from_slice(&10_329_396u64.to_be_bytes());
+            }
+            let mut moov = atom(b"mvhd", &mvhd);
+            moov.extend(atom(b"mvex", &atom(b"mehd", &mehd)));
+            let initialization = atom(b"moov", &moov);
+            let duration = movie_duration_seconds(&initialization).unwrap();
+            assert_eq!(dash_segment_count(44_100, 176_128, duration), Some(59));
+            assert_eq!(dash_segment_count(44_100, 176_128, 237.0), Some(60));
+            for end in 0..initialization.len() {
+                assert_eq!(movie_duration_seconds(&initialization[..end]), None);
+            }
+        }
     }
 
     #[test]
