@@ -1,6 +1,7 @@
 import "./TrackMenus.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
+import { isUnmodifiedKey } from "../utils/keyboard";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -64,7 +65,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   const width = choosingPlaylist ? 260 : 180;
   return (
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
-      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); }
+      if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
       <div ref={panel} id="trackCollectionMenu" style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>

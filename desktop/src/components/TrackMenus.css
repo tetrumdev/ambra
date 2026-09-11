@@ -8,19 +8,7 @@
     z-index: 11;
 }
 
-#trackPlaybackMenu {
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    z-index: 20;
-    position: fixed;
-    color: white;
-    display: grid;
-    width: 180px;
-    overflow: hidden;
-    background: none;
-    backdrop-filter: blur(20px);
-}
-
+#trackPlaybackMenu,
 #trackCollectionMenu {
     box-sizing: border-box;
     width: 180px;
@@ -29,20 +17,29 @@
     z-index: 20;
     position: fixed;
     color: white;
-    display: grid;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     background: none;
     backdrop-filter: blur(20px);
 }
 
 .menuItem {
+    appearance: none;
     box-sizing: border-box;
     width: 100%;
-    align-content: center;
-    padding-left: 15px;
-    font-size: 0.9rem;
-    background-color: rgba(29, 29, 29, 0.7);
     height: 45px;
+    min-height: 45px;
+    margin: 0;
+    padding: 0 15px;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    font-size: 0.9rem;
+    font-weight: 400;
+    line-height: 1.2;
+    text-align: left;
+    background-color: rgba(29, 29, 29, 0.7);
     display: grid;
     grid-template-columns: 1fr;
     align-items: center;
@@ -53,9 +50,14 @@
     grid-template-columns: 18px 1fr;
 }
 
-.menuItem:hover {
+.menuItem:hover,
+.menuItem:focus-visible {
     background-color: rgba(42, 42, 42, 0.7);
     cursor: pointer;
+}
+
+.menuItem:focus-visible {
+    outline: none;
 }
 
 .menuIcon {
@@ -68,20 +70,9 @@
 
 #trackCollectionMenu {
     overflow-y: auto;
-    display: flex;
-    flex-direction: column;
 }
 #trackCollectionMenu > * {
     flex-shrink: 0;
-}
-#trackCollectionMenu button {
-    color: inherit;
-    font: inherit;
-    border: 0;
-    text-align: left;
-}
-#trackCollectionMenu .menuItem {
-    min-height: 45px;
 }
 #trackCollectionMenu button:disabled {
     opacity: 0.5;

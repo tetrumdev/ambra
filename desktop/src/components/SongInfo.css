@@ -39,7 +39,8 @@
 }
 
 #bottomInfoBar:not([data-variant="compact"]) #songName {
-    width: calc(100% + 100px + clamp(160px, 27.5vw, 350px) - 100px);
+    /* Stop 24px before the 152px-wide control group centered in the window. */
+    width: max(0px, calc(50vw - 130px));
 }
 
 #songName {
