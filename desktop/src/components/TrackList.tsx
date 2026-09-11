@@ -1,4 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { nativeAudioSource } from "../utils/nativeAudioSource";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
@@ -61,6 +63,21 @@ export function TrackList({
     [tracks],
   );
   const selection = useRangeSelection(trackIds);
+  const firstTrack = tracks[0];
+  useEffect(() => {
+    if (!isTauri() || !firstTrack) return;
+    void invoke("warm_native_audio", { source: nativeAudioSource(firstTrack) })
+      .catch(() => {});
+  }, [firstTrack]);
+  const hoveredTrack = tracks.find(track => track.globalId === hoveredTrackId);
+  useEffect(() => {
+    if (!isTauri() || !hoveredTrack) return;
+    const timer = window.setTimeout(() => {
+      void invoke("warm_native_audio", { source: nativeAudioSource(hoveredTrack) })
+        .catch(() => {});
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [hoveredTrack]);
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();
@@ -118,18 +135,13 @@ export function TrackList({
 
     const triggerRect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 180;
-    const menuHeight = 55 * (Number(Boolean(removeTracks)) + Number(Boolean(addToLibrary)) + Number(Boolean(playlistOptions)));
     const gap = 4;
-    const fitsBelow =
-      triggerRect.bottom + gap + menuHeight <= window.innerHeight;
 
     setOpenMenu({
       kind: "collection",
       trackId,
       x: triggerRect.right - menuWidth,
-      y: fitsBelow
-        ? triggerRect.bottom + gap
-        : triggerRect.top - menuHeight - gap,
+      y: triggerRect.bottom + gap,
     });
   }
 
@@ -233,6 +245,7 @@ export function TrackList({
             className="trackCollectionMenuTrigger"
             onClick={(event) => showCollectionMenu(event, track.globalId)}
             data-collection-menu-trigger
+            data-collection-menu-open={openMenu?.trackId === track.globalId && openMenu.kind === "collection" ? "true" : undefined}
           >
             <img
               src={

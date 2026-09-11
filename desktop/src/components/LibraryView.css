@@ -12,6 +12,9 @@
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
+    min-width: 0;
+    overscroll-behavior-x: none;
+    touch-action: pan-y;
     height: 100vh;
     font-size: 0.9rem;
     font-weight: 300;
@@ -27,11 +30,46 @@
 }
 
 .libraryHeader {
+    box-sizing: border-box;
     width: 100%;
     height: auto;
     padding-left: 30px;
     display: block;
     padding-bottom: 0;
+}
+
+.libraryOverview {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 20px;
+    padding: 16px 30px 30px;
+}
+
+.libraryOverviewCard {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+    min-width: 0;
+    padding: 30px;
+    border: 1px solid #535353;
+    border-radius: 18px;
+    background: #090909;
+    color: white;
+    font: inherit;
+    text-align: left;
+}
+
+.libraryOverviewCard:first-child { grid-column: 1 / -1; }
+.libraryOverviewCard:hover { background: #151515; }
+.libraryOverviewTitle { font-size: 1.5rem; font-weight: 600; }
+.libraryOverviewCount { font-size: 3rem; line-height: 1.2; }
+.libraryOverviewDetail { color: #a3a2a3; padding-right: 24px; }
+.libraryOverviewArrow { position: absolute; bottom: 30px; right: 30px; font-size: 1.5rem; }
+
+@media (width < 700px) {
+    .libraryOverview { grid-template-columns: minmax(0, 1fr); }
 }
 
 .libraryTitle {
@@ -41,10 +79,139 @@
     margin-bottom: 30px;
 }
 
+.librarySections {
+    display: flex;
+    gap: 24px;
+    margin: 0 0 0 4px;
+}
+
+.librarySectionButton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #a3a2a3;
+    font: inherit;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+.librarySectionButton:hover,
+.librarySectionButton[aria-current="page"] {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 5px;
+}
+
+.libraryEntityGrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 28px 20px;
+    padding: 44px 30px 30px;
+}
+
+.libraryEntityCard {
+    min-width: 0;
+}
+
+.libraryEntityCard h2,
+.libraryEntityCard p {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.libraryEntityCard h2 {
+    margin: 12px 0 5px;
+    font-size: 1rem;
+}
+
+.libraryEntityCard p {
+    margin: 0;
+    color: #a3a2a3;
+    font-size: 0.8rem;
+}
+
+.libraryEntityCard .artistPortrait .searchEntityImage,
+.libraryAlbumCover {
+    display: grid;
+    width: 100%;
+    aspect-ratio: 1;
+    place-items: center;
+    overflow: hidden;
+    background: #242424;
+    object-fit: cover;
+}
+
+.libraryEntityCard .artistPortrait .searchEntityImage {
+    height: auto;
+    border-radius: 50%;
+    font-size: 3rem;
+}
+
+.libraryEntityCard .artistPortrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.libraryEntityCard .artistPortrait {
+    width: 100%;
+}
+
+.libraryEntityCard .artistImageCredit {
+    max-width: 100%;
+}
+
+.libraryAlbumCover {
+    border-radius: 8px;
+}
+
+.libraryPlayActions {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    margin-top: 35px;
+}
+
+.libraryPlayBtn {
+    display: inline-flex;
+    align-items: center;
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 10px 20px;
+    gap: 10px;
+    background-color: white;
+    border: 1px solid transparent;
+    border-radius: 100px;
+    color: black;
+}
+
+.libraryPlayBtn img {
+    width: 14px;
+    filter: invert(1);
+}
+
+.libraryShuffleBtn {
+    display: inline-flex;
+    align-items: center;
+    font-size: 1rem;
+    font-weight: 600;
+    padding: 10px 20px;
+    gap: 10px;
+    background-color: transparent;
+    border: 1px solid white;
+    border-radius: 100px;
+    color: white;
+}
+
+.libraryShuffleBtn img {
+    width: 18px;
+}
+
 .libraryInfo {
     display: flex;
     gap: 15px;
-    margin: 0;
+    margin-top: 20px;
     top: 0;
     font-size: 0.8rem;
     padding-left: 4px;
@@ -133,7 +300,7 @@
 }
 
 .columnInfo + .libraryItem {
-    border-top: 1px solid #535454;
+    border-top: 1px solid #535353;
 }
 
 .libraryItem {
@@ -141,7 +308,7 @@
     background-color: black;
     padding-left: 15px;
     height: 76px;
-    border-bottom: 1px solid #535454;
+    border-bottom: 1px solid #535353;
     display: grid;
     align-items: center;
     box-sizing: border-box;
@@ -303,14 +470,9 @@
     border-left: 1px solid #535353;
 }
 
-.libraryItem[data-menu-open="true"] .trackCollectionMenuTrigger {
+.trackCollectionMenuTrigger[data-collection-menu-open="true"] {
     background-color: black;
     border-left: 1px solid #535353;
-}
-
-.libraryItem[data-selecting="true"] .trackCollectionMenuTrigger:hover {
-    background-color: transparent;
-    border-left: 1px solid transparent;
 }
 
 .trackCollectionMenuTrigger img {

@@ -10,13 +10,12 @@
 
 #trackPlaybackMenu {
     border: 1px solid #2f2f2f;
-    border-radius: 15px;
+    border-radius: 12px;
     z-index: 20;
     position: fixed;
     color: white;
     display: grid;
     width: 180px;
-    height: 220px;
     overflow: hidden;
     background: none;
     backdrop-filter: blur(20px);
@@ -25,9 +24,8 @@
 #trackCollectionMenu {
     box-sizing: border-box;
     width: 180px;
-    height: 55px;
     border: 1px solid #2f2f2f;
-    border-radius: 15px;
+    border-radius: 12px;
     z-index: 20;
     position: fixed;
     color: white;
@@ -44,6 +42,15 @@
     padding-left: 15px;
     font-size: 0.9rem;
     background-color: rgba(29, 29, 29, 0.7);
+    height: 45px;
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: center;
+    gap: 10px;
+}
+
+.menuItem:has(> .menuIcon) {
+    grid-template-columns: 18px 1fr;
 }
 
 .menuItem:hover {
@@ -51,12 +58,59 @@
     cursor: pointer;
 }
 
-#trackCollectionMenu { overflow-y: auto; }
-#trackCollectionMenu button { color: inherit; font: inherit; border: 0; text-align: left; }
-#trackCollectionMenu .menuItem { min-height: 55px; }
-#trackCollectionMenu button:disabled { opacity: 0.5; cursor: default; }
-.playlistMenuList { overflow-y: auto; min-height: 55px; }
-.playlistMenuList p { padding: 0 15px; font-size: 0.85rem; }
-.playlistMenuCreate { display: grid; gap: 8px; padding: 10px; background: #1d1d1d; }
-.playlistMenuCreate input { min-width: 0; padding: 6px; color: white; background: #292929; border: 1px solid #535353; }
-.playlistMenuCreate button { padding: 6px; background: #353535; cursor: pointer; }
+.menuIcon {
+    max-width: 18px;
+    max-height: 15px;
+    object-fit: contain;
+    flex-shrink: 0;
+    grid-column: 1;
+}
+
+#trackCollectionMenu {
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+#trackCollectionMenu > * {
+    flex-shrink: 0;
+}
+#trackCollectionMenu button {
+    color: inherit;
+    font: inherit;
+    border: 0;
+    text-align: left;
+}
+#trackCollectionMenu .menuItem {
+    min-height: 45px;
+}
+#trackCollectionMenu button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+.playlistMenuList {
+    overflow-y: auto;
+    min-height: 45px;
+    max-height: min(240px, 40vh);
+}
+.playlistMenuList p {
+    padding: 0 15px;
+    font-size: 0.85rem;
+}
+.playlistMenuCreate {
+    display: grid;
+    gap: 8px;
+    padding: 10px;
+    background: #1d1d1d;
+}
+.playlistMenuCreate input {
+    min-width: 0;
+    padding: 6px;
+    color: white;
+    background: #292929;
+    border: 1px solid #535353;
+}
+.playlistMenuCreate button {
+    padding: 6px;
+    background: #353535;
+    cursor: pointer;
+}

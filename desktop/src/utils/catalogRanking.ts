@@ -128,5 +128,10 @@ export function categoryOrder(query: string, tracks: { name: string; artist: str
     artists: artistMatch * 10 + Math.min(20, support.artists),
     albums: albumMatch * 10 + Math.min(20, support.albums),
   };
+  // A leading exact song match must not lose to namesake artists merely
+  // because they contribute more unrelated songs further down the results.
+  if (leadingSong(query, tracks) && support.tracks > 0 && support.tracks >= support.albums && trackMatch >= artistMatch && trackMatch >= albumMatch) {
+    scores.tracks = Math.max(scores.tracks, scores.artists, scores.albums);
+  }
   return (["tracks", "artists", "albums"] as SearchCategory[]).sort((a, b) => scores[b] - scores[a]);
 }

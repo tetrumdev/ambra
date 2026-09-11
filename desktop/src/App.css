@@ -1,3 +1,9 @@
+*,
+*::before,
+*::after {
+    outline: none !important;
+}
+
 :root {
     font-family: "Source Serif 4", Inter, Avenir, Helvetica, Arial, sans-serif;
     font-size: 16px;
@@ -23,6 +29,14 @@
     --scrollbar-column-width: 14px;
     --library-titlebar-height: 30px;
     --content-top-spacer: 50px;
+}
+
+body,
+#root {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow-x: hidden;
 }
 
 :root[data-platform="windows"] {
@@ -95,7 +109,7 @@ summary {
     box-sizing: border-box;
     background: black;
     text-align: left;
-    grid-template-columns: 230px 1fr;
+    grid-template-columns: 230px minmax(0, 1fr);
     width: 100%;
     height: 100%;
     display: grid;
@@ -107,7 +121,7 @@ summary {
 @media screen and (width <= 1250px) {
     #library,
     #search {
-        grid-template-columns: 0 1fr;
+        grid-template-columns: 0 minmax(0, 1fr);
     }
 }
 

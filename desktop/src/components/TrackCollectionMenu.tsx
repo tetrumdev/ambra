@@ -1,5 +1,5 @@
 import "./TrackMenus.css";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
 
 export type PlaylistMenuOptions = {
@@ -41,14 +41,32 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     }
   }
   const panel = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: xPos, top: yPos });
+  useLayoutEffect(() => {
+    const element = panel.current;
+    if (!element) return;
+    const reposition = () => {
+      const { width, height } = element.getBoundingClientRect();
+      const left = Math.max(4, Math.min(xPos, window.innerWidth - width - 4));
+      const top = Math.max(4, Math.min(yPos, window.innerHeight - height - 4));
+      setPosition(current => current.left === left && current.top === top ? current : { left, top });
+    };
+    reposition();
+    const observer = new ResizeObserver(reposition);
+    observer.observe(element);
+    window.addEventListener("resize", reposition);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", reposition);
+    };
+  }, [xPos, yPos]);
   useEffect(() => { panel.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, [choosingPlaylist]);
   const width = choosingPlaylist ? 260 : 180;
-  const height = choosingPlaylist ? 240 : (actions.length + Number(Boolean(playlistOptions))) * 55;
   return (
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
       if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" style={{ left: Math.max(4, Math.min(xPos, window.innerWidth - width - 4)), top: Math.max(4, Math.min(yPos, window.innerHeight - height - 4)), width, height, gridTemplateRows: choosingPlaylist ? "55px minmax(55px, 1fr) auto" : undefined, maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
+      <div ref={panel} id="trackCollectionMenu" style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(false)}>← Back</button>
           <div className="playlistMenuList">

@@ -315,3 +315,7 @@
         padding-top: 78px;
     }
 }
+.artistPortrait { position: relative; flex: 0 0 64px; width: 64px; }
+.artistPortrait .searchEntityImage { width: 100%; }
+.searchSectionLayout section[data-primary="true"] .searchEntity:first-of-type .artistPortrait { flex-basis: 112px; width: 112px; }
+.artistImageCredit { display: block; max-width: 120px; margin-top: 4px; font-size: 9px; color: #999; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
