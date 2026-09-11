@@ -31,6 +31,11 @@ describe("catalog search", () => {
  });
 });
 
+test("Airbag song leads despite strong namesake band results", () => {
+ const song = {name: "Airbag (Remastered)", artist: "Radiohead", album: "OK Computer", provider: "qobuz"};
+ const others = ["Por Mil Noches", "Nunca Lo Olvides", "Broken"].map(name => ({name, artist: "Airbag", album: "Other", provider: "qobuz"}));
+ expect(categoryOrder("airbag", [song, ...others], [artist("radiohead", "Radiohead"), artist("airbag", "Airbag")], [], [song, ...others])[0]).toBe("tracks");
+});
 test("artist intent leads when tracks corroborate the name", () => {
  expect(categoryOrder("oceansize", [{name: "Music For A Nurse", artist: "Oceansize", album: "Everyone Into Position"}], [artist("1", "Oceansize")], [album("2", {title: "Oceansize", artist: "Oh Wonder"})])[0]).toBe("artists");
 });

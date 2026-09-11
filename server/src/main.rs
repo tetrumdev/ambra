@@ -1,6 +1,7 @@
 mod api;
 mod artwork_quality;
 mod login_setup;
+mod media_cache;
 mod models;
 mod providers;
 

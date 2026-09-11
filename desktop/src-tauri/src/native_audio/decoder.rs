@@ -3,9 +3,9 @@ use std::{
     fs::File,
     io::{self, Cursor, Read, Seek, SeekFrom},
     path::Path,
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use reqwest::{
@@ -30,6 +30,34 @@ const HTTP_STARTUP_WINDOW_BYTES: u64 = 1024 * 1024;
 const HTTP_CACHE_BYTES: u64 = 4 * 1024 * 1024;
 const HTTP_ATTEMPTS: usize = 3;
 
+struct CachedHttpRange {
+    url: String,
+    range: String,
+    headers: reqwest::header::HeaderMap,
+    bytes: Vec<u8>,
+    saved_at: Instant,
+}
+
+fn http_range_cache() -> &'static Mutex<VecDeque<CachedHttpRange>> {
+    static CACHE: OnceLock<Mutex<VecDeque<CachedHttpRange>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(VecDeque::new()))
+}
+
+fn cacheable_audio_range(range: Option<&str>) -> bool {
+    let Some((start, end)) = range
+        .and_then(|value| value.strip_prefix("bytes="))
+        .and_then(|value| value.split_once('-'))
+    else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) else {
+        return false;
+    };
+    end.checked_sub(start).is_some_and(|length| {
+        length < HTTP_INITIAL_CACHE_BYTES && (start < HTTP_STARTUP_WINDOW_BYTES || length < 4096)
+    })
+}
+
 pub struct DecodedSource {
     source: String,
     format: Box<dyn FormatReader>,
@@ -44,6 +72,18 @@ pub struct DecodedSource {
 impl DecodedSource {
     pub fn open(source: String) -> Result<Self, String> {
         Self::open_hls_position(source, None)
+    }
+
+    pub fn open_at(source: String, position_seconds: f64) -> Result<Self, String> {
+        if position_seconds > 0.0 && is_http_source(&source) && source_path(&source).ends_with(".m3u8")
+        {
+            return Self::open_hls_position(source, Some(position_seconds));
+        }
+        let mut decoder = Self::open(source)?;
+        if position_seconds > 0.0 {
+            decoder.seek(position_seconds)?;
+        }
+        Ok(decoder)
     }
 
     fn open_hls_position(
@@ -125,8 +165,10 @@ impl DecodedSource {
                     .map(|frames| frames as f64 / f64::from(sample_rate))
             })
             .filter(|duration| *duration > 0.0)
-            .or(duration_hint)
             .unwrap_or(0.0);
+        // A fragmented MP4 reader may report only the first loaded fragment.
+        // The VOD playlist describes the complete track, including when seeking.
+        let duration_seconds = duration_hint.unwrap_or(duration_seconds);
 
         let mut decoded = Self {
             source,
@@ -445,6 +487,7 @@ struct HttpRangeSource {
     length: u64,
     cache_start: u64,
     cache: Vec<u8>,
+    initial_cache: Vec<u8>,
 }
 
 impl HttpRangeSource {
@@ -469,6 +512,7 @@ impl HttpRangeSource {
             position: 0,
             length,
             cache_start: 0,
+            initial_cache: bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec(),
             cache: bytes,
         })
     }
@@ -476,6 +520,13 @@ impl HttpRangeSource {
     fn refill(&mut self) -> io::Result<()> {
         if self.position >= self.length {
             self.cache.clear();
+            return Ok(());
+        }
+        // Metadata probes may seek to the tail and then back to the audio header.
+        // Keep that small opening range instead of downloading it twice.
+        if self.position < self.initial_cache.len() as u64 {
+            self.cache_start = 0;
+            self.cache.clone_from(&self.initial_cache);
             return Ok(());
         }
         let cache_bytes = if self.position < HTTP_STARTUP_WINDOW_BYTES {
@@ -523,6 +574,27 @@ fn get_bytes_with_retry(
     url: &str,
     range: Option<&str>,
 ) -> io::Result<(StatusCode, reqwest::header::HeaderMap, Vec<u8>)> {
+    let cacheable = cacheable_audio_range(range);
+    if cacheable {
+        if let Ok(mut cache) = http_range_cache().lock() {
+            cache.retain(|entry| entry.saved_at.elapsed() < Duration::from_secs(120));
+            if let Some(index) = cache
+                .iter()
+                .position(|entry| entry.url == url && Some(entry.range.as_str()) == range)
+            {
+                let entry = cache.remove(index).unwrap();
+                let result = (
+                    StatusCode::PARTIAL_CONTENT,
+                    entry.headers.clone(),
+                    entry.bytes.clone(),
+                );
+                cache.push_back(entry);
+                return Ok(result);
+            }
+        }
+    }
+    #[cfg(test)]
+    let started = std::time::Instant::now();
     let mut last_error = None;
     for attempt in 0..HTTP_ATTEMPTS {
         let mut request = client.get(url);
@@ -537,7 +609,38 @@ fn get_bytes_with_retry(
                 let status = response.status();
                 let headers = response.headers().clone();
                 match response.bytes() {
-                    Ok(bytes) => return Ok((status, headers, bytes.to_vec())),
+                    Ok(bytes) => {
+                        if cacheable
+                            && status == StatusCode::PARTIAL_CONTENT
+                            && bytes.len() <= HTTP_INITIAL_CACHE_BYTES as usize
+                        {
+                            if let Ok(mut cache) = http_range_cache().lock() {
+                                cache.retain(|entry| {
+                                    !(entry.url == url && Some(entry.range.as_str()) == range)
+                                });
+                                while cache.len() >= 64 {
+                                    cache.pop_front();
+                                }
+                                cache.push_back(CachedHttpRange {
+                                    url: url.to_owned(),
+                                    range: range.unwrap().to_owned(),
+                                    headers: headers.clone(),
+                                    bytes: bytes.to_vec(),
+                                    saved_at: Instant::now(),
+                                });
+                            }
+                        }
+                        #[cfg(test)]
+                        if std::env::var_os("AMBRA_PROBE_TIMING").is_some() {
+                            println!(
+                                "Audio fetch {}: {} bytes in {:?}",
+                                range.unwrap_or("resource"),
+                                bytes.len(),
+                                started.elapsed()
+                            );
+                        }
+                        return Ok((status, headers, bytes.to_vec()));
+                    }
                     Err(error) => last_error = Some(error.to_string()),
                 }
             }
@@ -659,6 +762,147 @@ mod tests {
         );
         assert_eq!(parsed.segments[1].url.as_str(), "https://audio.test/2");
         assert_eq!(parsed.segment_at(5.0), (1, 4.5));
+    }
+
+    #[test]
+    fn metadata_tail_probe_does_not_discard_initial_audio_bytes() {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut source = super::HttpRangeSource {
+            client: super::http_client().unwrap(),
+            url: "http://127.0.0.1:0/must-not-fetch".into(),
+            position: 1000,
+            length: 1004,
+            cache_start: 1000,
+            cache: vec![9; 4],
+            initial_cache: vec![1, 2, 3, 4],
+        };
+        let mut bytes = [0; 4];
+        source.read_exact(&mut bytes).unwrap();
+        assert_eq!(bytes, [9; 4]);
+        source.seek(SeekFrom::Start(0)).unwrap();
+        source.read_exact(&mut bytes).unwrap();
+        assert_eq!(bytes, [1, 2, 3, 4]);
+    }
+
+    #[test]
+    #[ignore = "requires a running server and AMBRA_PROBE_SOURCE; decodes without audio output"]
+    fn measures_network_decode_startup() {
+        let source = std::env::var("AMBRA_PROBE_SOURCE").expect("set AMBRA_PROBE_SOURCE");
+        let position = std::env::var("AMBRA_PROBE_POSITION")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(0.0);
+        let started = std::time::Instant::now();
+        let mut decoder = DecodedSource::open_at(source, position).unwrap();
+        let spec = decoder.spec();
+        let target = spec.sample_rate as usize * spec.channels / 2;
+        let mut samples = 0;
+        while samples < target {
+            let Some(block) = decoder.decode_next().unwrap() else {
+                break;
+            };
+            samples += block.len();
+        }
+        assert!(
+            samples >= target,
+            "expected at least half a second of audio"
+        );
+        println!(
+            "Half-second prebuffer ready in {:?}; track duration {:.3}s; {} Hz / {} channels",
+            started.elapsed(),
+            decoder.duration_seconds(),
+            spec.sample_rate,
+            spec.channels
+        );
+        let replay_started = std::time::Instant::now();
+        let mut replay =
+            DecodedSource::open_at(std::env::var("AMBRA_PROBE_SOURCE").unwrap(), position).unwrap();
+        let mut replay_samples = 0;
+        while replay_samples < target {
+            let Some(block) = replay.decode_next().unwrap() else {
+                break;
+            };
+            replay_samples += block.len();
+        }
+        assert!(replay_samples >= target);
+        println!(
+            "Replay half-second prebuffer ready in {:?}",
+            replay_started.elapsed()
+        );
+    }
+
+    #[test]
+    fn restored_hls_starts_at_target_segment_and_preserves_remaining_samples() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+            sync::{
+                Arc,
+                atomic::{AtomicBool, Ordering},
+            },
+            thread,
+            time::{Duration, Instant},
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let source = format!("http://{}/playlist.m3u8", listener.local_addr().unwrap());
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stop = stopped.clone();
+        let server = thread::spawn(move || {
+            let mut paths = Vec::new();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !stop.load(Ordering::SeqCst) && Instant::now() < deadline {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = [0; 4096];
+                let count = stream.read(&mut request).unwrap();
+                let request = String::from_utf8_lossy(&request[..count]);
+                let path = request.split_whitespace().nth(1).unwrap().to_owned();
+                let playlist = format!(
+                    "#EXTM3U\n#EXT-X-MAP:URI=\"init\"\n#EXTINF:{0},\nfirst\n#EXTINF:{0},\nsecond\n#EXTINF:{1},\nthird\n#EXT-X-ENDLIST\n",
+                    179712.0 / 44100.0,
+                    12.0 - 2.0 * 179712.0 / 44100.0
+                );
+                let bytes: &[u8] = match path.as_str() {
+                    "/playlist.m3u8" => playlist.as_bytes(),
+                    "/init" => include_bytes!("../../tests/fixtures/hls/init.mp4"),
+                    "/second" => include_bytes!("../../tests/fixtures/hls/second.m4s"),
+                    "/third" => include_bytes!("../../tests/fixtures/hls/third.m4s"),
+                    _ => b"",
+                };
+                paths.push(path);
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                )
+                .unwrap();
+                stream.write_all(bytes).unwrap();
+            }
+            paths
+        });
+        let decoded = (|| {
+            let mut decoder = DecodedSource::open_at(source, 5.0)?;
+            let mut samples = 0;
+            while let Some(block) = decoder.decode_next()? {
+                samples += block.len();
+            }
+            Ok::<_, String>((samples, decoder.duration_seconds()))
+        })();
+        stopped.store(true, Ordering::SeqCst);
+        let paths = server.join().unwrap();
+        let (samples, duration) = decoded.unwrap();
+        assert_eq!(paths, ["/playlist.m3u8", "/init", "/second", "/third"]);
+        assert_eq!(samples, 7 * 44100 * 2);
+        assert!(
+            (duration - 12.0).abs() < 0.001,
+            "decoded duration: {duration}"
+        );
     }
 
     #[test]

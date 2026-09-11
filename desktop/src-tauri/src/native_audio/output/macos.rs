@@ -373,15 +373,18 @@ mod tests {
     #[test]
     #[ignore = "requires a macOS audio output device"]
     fn opens_and_services_the_default_shared_device() {
+        let started = std::time::Instant::now();
         let spec = StreamSpec {
             sample_rate: 44_100,
             channels: 2,
             bits_per_sample: 16,
         };
         let mut output = PlatformOutput::open_device_with_mode(spec, None, false).unwrap();
+        println!("Shared audio output opened in {:?}", started.elapsed());
         let silence = vec![0.0; 441 * spec.channels];
 
         output.start().unwrap();
+        println!("Shared audio output started in {:?}", started.elapsed());
         assert_eq!(output.write(&silence, &[]).unwrap(), 441);
         output.reset().unwrap();
     }

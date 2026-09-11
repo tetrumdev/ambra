@@ -1,5 +1,6 @@
 import { categoryOrder } from "../utils/catalogRanking";
 import { useState } from "react";
+import { ArtistPortrait } from "./ArtistPortrait";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
@@ -181,18 +182,13 @@ export function SearchView({
 
     const triggerRect = event.currentTarget.getBoundingClientRect();
     const menuWidth = 180;
-    const menuHeight = 110;
     const gap = 4;
-    const fitsBelow =
-      triggerRect.bottom + gap + menuHeight <= window.innerHeight;
 
     setOpenMenu({
       kind: "collection",
       trackId,
       x: triggerRect.right - menuWidth,
-      y: fitsBelow
-        ? triggerRect.bottom + gap
-        : triggerRect.top - menuHeight - gap,
+      y: triggerRect.bottom + gap,
     });
   }
 
@@ -272,7 +268,7 @@ export function SearchView({
           <h2 id="searchArtistsHeading">Artists</h2>
           {!artists.length && <p className="searchEntityEmpty">{isSearching ? "Searching artists…" : "No artists found"}</p>}
           {artists.slice(0, 5).map(artist => <div className="searchEntity searchArtist" key={artist.id}>
-            <div className="searchEntityImage">{artist.imageUrl ? <img src={artist.imageUrl} alt="" loading="lazy" /> : <span>{artist.name.slice(0, 1)}</span>}</div>
+            <ArtistPortrait key={artist.id} name={artist.name} fallback={artist.imageUrl} />
             <div className="searchEntityInfo"><strong>{artist.name}</strong><small>{providerNames[artist.provider]}</small></div>
           </div>)}
         </section>
