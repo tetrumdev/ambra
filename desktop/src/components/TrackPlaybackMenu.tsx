@@ -27,7 +27,6 @@ export function TrackPlaybackMenu({
       <div
         id="trackPlaybackMenu"
         style={{
-          height: playTrack ? 220 : 165,
           left: xPos,
           top: yPos,
           transform: `translate(
@@ -43,26 +42,21 @@ export function TrackPlaybackMenu({
             if (trackId !== null) playStandalone(trackId);
           }}
         >
+          <img id="menuPlayIcon" className="menuIcon" src="/Play.svg" />
           Standalone Play
         </div>
-        {playTrack && <div
-          id="normalPlay"
-          className="menuItem"
-          onClick={() => {
-            if (trackId !== null) playTrack(trackId);
-          }}
-        >
-          Play from Here
-        </div>}
-        <div
-          id="addToQueue"
-          className="menuItem"
-          onClick={() => {
-            if (trackId !== null) addToQueue(trackId);
-          }}
-        >
-          Add to Queue
-        </div>
+        {playTrack && (
+          <div
+            id="normalPlay"
+            className="menuItem"
+            onClick={() => {
+              if (trackId !== null) playTrack(trackId);
+            }}
+          >
+            <img id="menuPlayFromIcon" className="menuIcon" src="/skip.svg" />
+            Play from Here
+          </div>
+        )}
         <div
           id="playNext"
           className="menuItem"
@@ -70,7 +64,22 @@ export function TrackPlaybackMenu({
             if (trackId !== null) playNext(trackId);
           }}
         >
+          <img id="menuPlayNextIcon" className="menuIcon" src="/playNext.svg" />
           Play Next
+        </div>
+        <div
+          id="addToQueue"
+          className="menuItem"
+          onClick={() => {
+            if (trackId !== null) addToQueue(trackId);
+          }}
+        >
+          <img
+            id="menuAddToQueueIcon"
+            className="menuIcon"
+            src="/addToQueue.svg"
+          />
+          Add to Queue
         </div>
       </div>
     </div>

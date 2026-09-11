@@ -20,6 +20,7 @@ use walkdir::WalkDir;
 
 mod media_controls;
 mod native_audio;
+mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -586,7 +587,7 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             media_controls::setup(app)?;
@@ -597,6 +598,7 @@ pub fn run() {
             load_cached_music,
             scan_music,
             native_audio::load_native_audio,
+            native_audio::warm_native_audio,
             native_audio::queue_native_audio,
             native_audio::play_native_audio,
             native_audio::pause_native_audio,

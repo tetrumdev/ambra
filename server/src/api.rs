@@ -1,5 +1,6 @@
+use crate::media_cache::MediaCache;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     env, fs, io,
     path::PathBuf,
     sync::{Arc, Weak},
@@ -44,7 +45,6 @@ const DEFAULT_SEARCH_PAGE_SIZE: u32 = 10;
 const MAX_SEARCH_PAGE_SIZE: u32 = 50;
 const SEARCH_CACHE_LIMIT: usize = 100;
 const SEARCH_METADATA_TIMEOUT: Duration = Duration::from_secs(6);
-const MEDIA_CACHE_LIMIT_BYTES: usize = 128 * 1024 * 1024;
 const UPSTREAM_ATTEMPTS: usize = 3;
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
@@ -61,40 +61,10 @@ struct AppState {
         Arc<RwLock<HashMap<SearchCacheKey, (Instant, crate::models::CatalogSearchPage)>>>,
     search_fetches: Arc<Mutex<HashMap<SearchCacheKey, Weak<Mutex<()>>>>>,
     media_cache: Arc<RwLock<MediaCache>>,
-    media_fetches: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
+    media_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     artwork_quality_cache: Arc<RwLock<HashMap<String, ArtworkCandidate>>>,
     artwork_dimensions_cache: Arc<RwLock<HashMap<String, (u32, u32)>>>,
     artwork_palette_cache: Arc<RwLock<HashMap<String, Vec<String>>>>,
-}
-
-#[derive(Default)]
-struct MediaCache {
-    entries: HashMap<String, Bytes>,
-    order: VecDeque<String>,
-    size_bytes: usize,
-}
-
-impl MediaCache {
-    fn get(&self, key: &str) -> Option<Bytes> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: String, bytes: Bytes) {
-        if bytes.len() > MEDIA_CACHE_LIMIT_BYTES || self.entries.contains_key(&key) {
-            return;
-        }
-        while self.size_bytes.saturating_add(bytes.len()) > MEDIA_CACHE_LIMIT_BYTES {
-            let Some(oldest) = self.order.pop_front() else {
-                break;
-            };
-            if let Some(removed) = self.entries.remove(&oldest) {
-                self.size_bytes = self.size_bytes.saturating_sub(removed.len());
-            }
-        }
-        self.size_bytes = self.size_bytes.saturating_add(bytes.len());
-        self.order.push_back(key.clone());
-        self.entries.insert(key, bytes);
-    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -137,6 +107,10 @@ pub async fn serve() -> ServerResult<()> {
         .pool_max_idle_per_host(16)
         .tcp_keepalive(Duration::from_secs(30))
         .build()?;
+    let media_cache = tidal
+        .as_ref()
+        .map(|provider| provider.media_cache.clone())
+        .unwrap_or_else(|| Arc::new(RwLock::new(MediaCache::default())));
     let state = AppState {
         tidal,
         qobuz,
@@ -146,7 +120,7 @@ pub async fn serve() -> ServerResult<()> {
         search_cache: Arc::new(RwLock::new(HashMap::new())),
         catalog_cache: Arc::new(RwLock::new(HashMap::new())),
         search_fetches: Arc::new(Mutex::new(HashMap::new())),
-        media_cache: Arc::new(RwLock::new(MediaCache::default())),
+        media_cache,
         media_fetches: Arc::new(Mutex::new(HashMap::new())),
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -167,6 +141,10 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/search/tracks", get(search_tracks))
         .route("/api/search/providers", get(search_providers))
         .route("/api/search/catalog", get(search_catalog))
+        .route(
+            "/api/providers/{provider}/tracks/{track_id}/metadata",
+            get(track_metadata),
+        )
         .route(
             "/api/providers/{provider}/tracks/{track_id}/playback",
             get(track_playback),
@@ -696,6 +674,35 @@ struct TrackPlaybackResponse {
 #[serde(rename_all = "camelCase")]
 struct TrackPlaybackRequest {
     duration_seconds: Option<u64>,
+}
+
+async fn track_metadata(
+    State(state): State<AppState>,
+    Path((provider, track_id)): Path<(String, String)>,
+) -> Result<Json<TrackMetadata>, ApiError> {
+    let provider = match provider.as_str() {
+        "tidal" => MusicProvider::Tidal,
+        "qobuz" => MusicProvider::Qobuz,
+        "spotify" => MusicProvider::Spotify,
+        _ => {
+            return Err(ApiError::not_found(format!(
+                "Music provider '{provider}' is not configured"
+            )));
+        }
+    };
+    if !provider_is_configured(&state, provider) {
+        return Err(ApiError::bad_request("Music provider is not configured"));
+    }
+    let track = load_track(
+        &state,
+        &LibraryEntry {
+            provider,
+            provider_track_id: track_id,
+        },
+    )
+    .await
+    .map_err(ApiError::upstream)?;
+    Ok(Json(track))
 }
 
 async fn track_playback(
@@ -1318,7 +1325,7 @@ fn hls_playlist_body(
     segment_duration: u32,
     start_number: u32,
     segment_count: u32,
-    track_duration_seconds: u64,
+    track_duration_seconds: f64,
 ) -> Result<String, ApiError> {
     if timescale == 0 || segment_duration == 0 || segment_count == 0 {
         return Err(ApiError::internal("Invalid segmented audio timing"));
@@ -1326,7 +1333,7 @@ fn hls_playlist_body(
 
     let nominal_duration = f64::from(segment_duration) / f64::from(timescale);
     let target_duration = nominal_duration.ceil().max(1.0) as u64;
-    let mut remaining = track_duration_seconds as f64;
+    let mut remaining = track_duration_seconds;
     let mut playlist = format!(
         "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{target_duration}\n#EXT-X-MEDIA-SEQUENCE:{start_number}\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"dash/init\"\n"
     );
@@ -1534,12 +1541,16 @@ async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiErr
 
     let fetch_lock = {
         let mut fetches = state.media_fetches.lock().await;
-        fetches
-            .entry(url.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
+        fetches.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = fetches.get(url).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(Mutex::new(()));
+            fetches.insert(url.to_owned(), Arc::downgrade(&lock));
+            lock
+        }
     };
-    let fetch_guard = fetch_lock.lock().await;
+    let _fetch_guard = fetch_lock.lock().await;
     if let Some(bytes) = state.media_cache.read().await.get(url) {
         return Ok(bytes);
     }
@@ -1552,9 +1563,6 @@ async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiErr
             .await
             .insert(url.to_owned(), bytes.clone());
     }
-    drop(fetch_guard);
-    state.media_fetches.lock().await.remove(url);
-
     let bytes = result?;
     if let Some(cached) = state.media_cache.read().await.get(url) {
         return Ok(cached);
@@ -1813,12 +1821,22 @@ mod tests {
 
     #[test]
     fn creates_native_hls_playlist_from_dash_timing() {
-        let playlist = hls_playlist_body(44_100, 176_128, 1, 2, 8).unwrap();
+        let playlist = hls_playlist_body(44_100, 176_128, 1, 2, 8.0).unwrap();
 
         assert!(playlist.contains("#EXT-X-MAP:URI=\"dash/init\""));
         assert!(playlist.contains("#EXTINF:3.993832,\ndash/1"));
         assert!(playlist.contains("#EXTINF:3.993832,\ndash/2"));
         assert!(playlist.ends_with("#EXT-X-ENDLIST\n"));
+    }
+
+    #[test]
+    fn ends_playlist_at_short_final_audio_fragment() {
+        let playlist = hls_playlist_body(44_100, 176_128, 1, 59, 10_329_396.0 / 44_100.0).unwrap();
+        let final_duration = (10_329_396.0 - 58.0 * 176_128.0) / 44_100.0;
+        assert!(playlist.ends_with(&format!(
+            "#EXTINF:{final_duration:.6},\ndash/59\n#EXT-X-ENDLIST\n"
+        )));
+        assert!(!playlist.contains("dash/60"));
     }
 }
 

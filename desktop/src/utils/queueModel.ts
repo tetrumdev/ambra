@@ -56,9 +56,41 @@ export function contextEntriesFrom(
   return startIndex < 0 ? [] : context.entries.slice(startIndex);
 }
 
+export function secureRandom(): number {
+  const cryptoObj =
+    typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (!cryptoObj?.getRandomValues) return Math.random();
+  const buffer = new Uint32Array(2);
+  cryptoObj.getRandomValues(buffer);
+  const hi = buffer[0] >>> 11;
+  const lo = buffer[1];
+  return (hi * 0x100000000 + lo) / 0x20000000000000;
+}
+
+export function secureRandomInt(bound: number): number {
+  if (!Number.isInteger(bound) || bound <= 0) {
+    throw new RangeError("bound must be a positive integer");
+  }
+  if (bound === 1) return 0;
+  const cryptoObj =
+    typeof globalThis !== "undefined" ? globalThis.crypto : undefined;
+  if (!cryptoObj?.getRandomValues) {
+    return Math.floor(Math.random() * bound);
+  }
+  const range = 0x100000000;
+  const limit = Math.floor(range / bound) * bound;
+  const buffer = new Uint32Array(1);
+  let value: number;
+  do {
+    cryptoObj.getRandomValues(buffer);
+    value = buffer[0];
+  } while (value >= limit);
+  return value % bound;
+}
+
 export function shuffledContextEntries(
   entries: QueueItem[],
-  random: () => number = Math.random,
+  random: () => number = secureRandom,
 ) {
   const units: QueueItem[][] = [];
   const packages = new Map<string, QueueItem[]>();
@@ -82,7 +114,10 @@ export function shuffledContextEntries(
   }
 
   for (let index = units.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(random() * (index + 1));
+    const swapIndex =
+      random === secureRandom
+        ? secureRandomInt(index + 1)
+        : Math.floor(random() * (index + 1));
     [units[index], units[swapIndex]] = [units[swapIndex], units[index]];
   }
 
