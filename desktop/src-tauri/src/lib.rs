@@ -18,6 +18,7 @@ use std::{
 use tauri::Manager;
 use walkdir::WalkDir;
 
+mod keyboard;
 mod media_controls;
 mod native_audio;
 mod window_bounds;
@@ -597,6 +598,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_cached_music,
             scan_music,
+            keyboard::native_function_modifier_pressed,
             native_audio::load_native_audio,
             native_audio::warm_native_audio,
             native_audio::queue_native_audio,

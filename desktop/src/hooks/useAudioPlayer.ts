@@ -17,6 +17,7 @@ import {
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
+import { isUnmodifiedKey } from "../utils/keyboard";
 
 export type AudioDeckController = {
   firstAudioRef: RefObject<HTMLAudioElement | null>;
@@ -718,7 +719,7 @@ export function useAudioPlayer(
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "Space") return;
+      if (!isUnmodifiedKey(event, "Space")) return;
 
       const target = event.target;
       if (

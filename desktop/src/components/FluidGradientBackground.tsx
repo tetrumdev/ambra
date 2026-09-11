@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type FluidGradientBackgroundProps = {
   colors: string[];
@@ -152,6 +152,7 @@ export function FluidGradientBackground({
   const animationFrameRef = useRef(0);
   const activeRef = useRef(active);
   const reducedMotionRef = useRef(false);
+  const [contextVersion, setContextVersion] = useState(0);
 
   useEffect(() => {
     const now = performance.now();
@@ -173,6 +174,28 @@ export function FluidGradientBackground({
       animationFrameRef.current = requestAnimationFrame(drawRef.current);
     }
   }, [active]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      drawRef.current = null;
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = 0;
+    };
+    const handleContextRestored = () => {
+      setContextVersion((version) => version + 1);
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+    return () => {
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -238,8 +261,8 @@ export function FluidGradientBackground({
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
-        gl.viewport(0, 0, width, height);
       }
+      gl.viewport(0, 0, width, height);
       const transition = transitionRef.current;
       const progress = easedProgress(
         (now - transition.startedAt) / COLOR_TRANSITION_MS,
@@ -267,7 +290,7 @@ export function FluidGradientBackground({
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);
     };
-  }, []);
+  }, [contextVersion]);
 
   return (
     <canvas
