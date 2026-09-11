@@ -1,4 +1,5 @@
 import "./SearchBar.css";
+import { isUnmodifiedKey } from "../utils/keyboard";
 
 type SearchBarProps = {
   query: string;
@@ -16,11 +17,11 @@ export function SearchBar({ query, onQueryChange, onConfirm }: SearchBarProps) {
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
-          if (event.key === "Enter") {
+          if (isUnmodifiedKey(event, "Enter")) {
             event.preventDefault();
             onConfirm();
             event.currentTarget.blur();
-          } else if (event.key === "Escape") {
+          } else if (isUnmodifiedKey(event, "Escape")) {
             event.preventDefault();
             event.stopPropagation();
             event.currentTarget.blur();

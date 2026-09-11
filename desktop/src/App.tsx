@@ -16,8 +16,8 @@ import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   loadPreferences,
@@ -31,6 +31,7 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
+import { isUnmodifiedKey } from "./utils/keyboard";
 
 import { playlistTracks } from "./utils/playlists";
 
@@ -89,7 +90,6 @@ function App() {
     : player.currentTime;
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const f11FullscreenRef = useRef(false);
-  const fullscreenFocusTimersRef = useRef<number[]>([]);
   const queueReturnScreenRef = useRef<"library" | "search">(
     screen === "search" ? "search" : "library",
   );
@@ -104,8 +104,8 @@ function App() {
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
 
-  function createPlaylist() {
-    playlistStore.create();
+  function createPlaylist(name: string) {
+    return playlistStore.create(name);
   }
 
   const playlistOptions = {
@@ -116,7 +116,7 @@ function App() {
     },
     onCreate: async (name: string, trackId: string) => {
       const track = availableTracks.find(track => track.globalId === trackId);
-      return track ? playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
+      return track ? Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000)))) : false;
     },
   };
 
@@ -182,7 +182,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
-      if (event.key !== "F11" || event.repeat) return;
+      if (!isUnmodifiedKey(event, "F11") || event.repeat) return;
 
       event.preventDefault();
 
@@ -193,23 +193,6 @@ function App() {
         await appWindow.setFullscreen(nextFullscreen);
         f11FullscreenRef.current = nextFullscreen;
         setIsFullscreen(nextFullscreen);
-
-        for (const timer of fullscreenFocusTimersRef.current) {
-          window.clearTimeout(timer);
-        }
-        fullscreenFocusTimersRef.current = [0, 250, 700].map((delay) =>
-          window.setTimeout(() => {
-            void appWindow
-              .setFocus()
-              .then(() => getCurrentWebview().setFocus())
-              .catch((error) => {
-                console.error(
-                  "Could not restore focus after fullscreen transition:",
-                  error,
-                );
-              });
-          }, delay),
-        );
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -219,9 +202,6 @@ function App() {
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
-      for (const timer of fullscreenFocusTimersRef.current) {
-        window.clearTimeout(timer);
-      }
     };
   }, []);
 
@@ -262,7 +242,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
-      if (event.code !== "Escape") return;
+      if (!isUnmodifiedKey(event, "Escape")) return;
       // Let search, menus, and playlist dialogs handle their own Escape.
       if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop, dialog[open]"))
         return;
@@ -305,7 +285,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== "KeyF") return;
+      if (!isUnmodifiedKey(event, "KeyF")) return;
       if (
         event.target instanceof Element &&
         event.target.closest("#searchBar")
@@ -315,24 +295,35 @@ function App() {
 
       if (event.repeat) return;
 
-      event.preventDefault();
-      event.stopPropagation();
+      const toggleBigscreen = () => {
+        setPreferences((current) => {
+          if (current.ui.screen !== "bigscreen") {
+            bigscreenReturnScreenRef.current = current.ui.screen;
+          }
 
-      setPreferences((current) => {
-        if (current.ui.screen !== "bigscreen") {
-          bigscreenReturnScreenRef.current = current.ui.screen;
-        }
+          return {
+            ...current,
+            ui: {
+              ...current.ui,
+              screen:
+                current.ui.screen === "bigscreen"
+                  ? bigscreenReturnScreenRef.current
+                  : "bigscreen",
+            },
+          };
+        });
+      };
 
-        return {
-          ...current,
-          ui: {
-            ...current.ui,
-            screen:
-              current.ui.screen === "bigscreen"
-                ? bigscreenReturnScreenRef.current
-                : "bigscreen",
-          },
-        };
+      if (!isTauri()) {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleBigscreen();
+        return;
+      }
+
+      void invoke<boolean>("native_function_modifier_pressed").then((functionPressed) => {
+        if (functionPressed) return;
+        toggleBigscreen();
       });
     };
 

@@ -31,11 +31,11 @@ export function usePlaylists() {
   }
 
   function create(name = "New Playlist", track?: Track) {
-    if (!name.trim()) return false;
+    if (!name.trim()) return null;
     const playlist = { id: crypto.randomUUID(), name: name.trim(), trackIds: [] as string[] };
     let next = { ...current.current, playlists: [...current.current.playlists, playlist] };
     if (track) next = addPlaylistTrack(next, playlist.id, track);
-    return commit(next);
+    return commit(next) ? playlist.id : null;
   }
 
   return {
