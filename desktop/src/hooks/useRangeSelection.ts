@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { isUnmodifiedKey } from "../utils/keyboard";
 
 type SelectionState<Id> = {
   selectedIds: Set<Id>;
@@ -43,7 +44,7 @@ export function useRangeSelection<Id>(ids: readonly Id[]) {
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.code === "Escape") clear();
+      if (isUnmodifiedKey(event, "Escape")) clear();
     };
 
     window.addEventListener("keydown", handleKeyDown, true);

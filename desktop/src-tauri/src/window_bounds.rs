@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, sync::mpsc, time::Duration};
-use tauri::{LogicalSize, Manager, PhysicalPosition, Window, WindowEvent};
+use tauri::{LogicalSize, Manager, PhysicalPosition, Webview, Window, WindowEvent};
 
 #[derive(Serialize, Deserialize)]
 struct Bounds {
@@ -45,7 +45,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .on_webview_ready(|webview| {
             let window = webview.window();
             if window.label() == "main" {
-                if let Err(error) = setup(window.clone()) {
+                if let Err(error) = setup(window.clone(), webview.clone()) {
                     eprintln!("Could not restore window bounds: {error}");
                 }
             }
@@ -53,7 +53,7 @@ pub fn init() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-fn setup(window: Window) -> Result<(), Box<dyn std::error::Error>> {
+fn setup(window: Window, webview: Webview) -> Result<(), Box<dyn std::error::Error>> {
     let path = window
         .app_handle()
         .path()
@@ -91,12 +91,25 @@ fn setup(window: Window) -> Result<(), Box<dyn std::error::Error>> {
     // Rebuilds can terminate the process without a normal exit event.
     // Persist after movement settles instead of relying on shutdown alone.
     let (sender, receiver) = mpsc::channel();
+    let initial_fullscreen = window.is_fullscreen()?;
     let worker_window = window.clone();
+    let worker_webview = webview.clone();
     std::thread::Builder::new()
         .name("ambra-window-bounds".into())
         .spawn(move || {
+            let mut last_fullscreen = initial_fullscreen;
             while receiver.recv().is_ok() {
                 while receiver.recv_timeout(Duration::from_millis(300)).is_ok() {}
+                match worker_window.is_fullscreen() {
+                    Ok(fullscreen) if fullscreen != last_fullscreen => {
+                        last_fullscreen = fullscreen;
+                        if let Err(error) = worker_webview.set_focus() {
+                            eprintln!("Could not restore webview focus: {error}");
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Could not read fullscreen state: {error}"),
+                }
                 if let Err(error) = save(&worker_window) {
                     eprintln!("Could not save window bounds: {error}");
                 }
