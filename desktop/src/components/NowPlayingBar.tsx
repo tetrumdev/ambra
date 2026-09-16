@@ -6,6 +6,7 @@ import { PlaybackProgress } from "./PlaybackProgress";
 import { PlayerControls } from "./PlayerControls";
 import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
+import { TrackArtwork } from "./TrackArtwork";
 
 type PlayerBarVariant = "expanded" | "compact";
 
@@ -51,7 +52,11 @@ export function NowPlayingBar({
           aria-label="Open bigscreen player"
           disabled={isEmpty}
         >
-          <img src={track?.cover ?? "/ambra.png"} alt="" />
+          {track ? (
+            <TrackArtwork track={track} alt="" />
+          ) : (
+            <img src="/ambra.png" alt="" />
+          )}
         </button>
       )}
       <SongInfo track={track} />

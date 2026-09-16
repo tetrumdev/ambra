@@ -1,10 +1,35 @@
 #extraCtrls {
     display: flex;
-    align-content: center;
+    align-items: center;
     justify-content: flex-end;
     gap: 10px;
 }
 
+.volumeControlContainer {
+    position: relative;
+    display: grid;
+    place-items: center;
+}
+
+.devAudioControls {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 10px);
+    z-index: 10;
+    display: none;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.95);
+}
+
+.devAudioControls select {
+    width: 140px;
+}
+
+#volumeBtn,
 #queueBtn {
     display: grid;
     place-items: center;
@@ -18,11 +43,25 @@
     cursor: pointer;
 }
 
+[data-volume-clicked] .devAudioControls {
+    display: flex;
+    position: absolute;
+}
+
+#volumeImg,
 #queueImg {
     display: block;
-    width: 20px;
+
     height: auto;
     object-fit: contain;
+}
+
+#queueImg {
+    width: 20px;
+}
+
+#volumeImg {
+    width: 25px;
 }
 
 .devAudioModeToggle {

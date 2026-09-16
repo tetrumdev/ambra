@@ -1,7 +1,9 @@
 .libraryTitlebar {
+    --titlebar-content-left: 0px;
     height: var(--library-titlebar-height);
     padding-left: 80px;
     width: 100%;
+    box-sizing: border-box;
     display: flex;
     position: absolute;
     left: 0;
@@ -13,7 +15,26 @@
     z-index: 50;
     background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(10px);
+}
+
+.libraryTitlebar[data-content-layout="library"] {
+    --titlebar-content-left: 230px;
+}
+
+.libraryTitlebar::after {
+    content: "";
+    position: absolute;
+    left: var(--titlebar-content-left);
+    right: var(--scrollbar-column-width);
+    bottom: 0;
     border-bottom: 1px solid #535353;
+    pointer-events: none;
+}
+
+@media screen and (width <= 1250px) {
+    .libraryTitlebar[data-content-layout="library"] {
+        --titlebar-content-left: 0px;
+    }
 }
 
 .bigscreenTitlebar {
