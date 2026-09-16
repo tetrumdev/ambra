@@ -18,12 +18,42 @@ use std::{
 use tauri::Manager;
 use walkdir::WalkDir;
 
+#[cfg(not(debug_assertions))]
+use tauri_plugin_shell::{
+    ShellExt,
+    process::{CommandChild, CommandEvent},
+};
+
 mod keyboard;
 mod media_controls;
 mod native_audio;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(not(debug_assertions))]
+struct ServerSidecar(std::sync::Mutex<Option<CommandChild>>);
+
+#[cfg(not(debug_assertions))]
+impl Drop for ServerSidecar {
+    fn drop(&mut self) {
+        if let Ok(child) = self.0.get_mut()
+            && let Some(child) = child.take()
+        {
+            let _ = child.kill();
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn stop_server_sidecar(app: &tauri::AppHandle) {
+    if let Some(state) = app.try_state::<ServerSidecar>()
+        && let Ok(mut child) = state.0.lock()
+        && let Some(child) = child.take()
+    {
+        let _ = child.kill();
+    }
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -520,6 +550,18 @@ fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
 }
 
 #[tauri::command]
+fn local_music_directory(app: tauri::AppHandle) -> Result<String, String> {
+    let music_directory = app
+        .path()
+        .audio_dir()
+        .map_err(|error| format!("Could not locate the Music directory: {error}"))?
+        .join("Ambra");
+    std::fs::create_dir_all(&music_directory)
+        .map_err(|error| format!("Could not create {}: {error}", music_directory.display()))?;
+    Ok(music_directory.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
     let music_directory: PathBuf = app
         .path()
@@ -587,16 +629,48 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             media_controls::setup(app)?;
             native_audio::setup(app);
+            #[cfg(not(debug_assertions))]
+            {
+                let data_directory = app.path().app_data_dir()?;
+                std::fs::create_dir_all(&data_directory)?;
+                let command = app
+                    .shell()
+                    .sidecar("ambra-server")?
+                    .env("AMBRA_DATA_DIR", &data_directory);
+                let (mut events, child) = command.spawn()?;
+                app.manage(ServerSidecar(std::sync::Mutex::new(Some(child))));
+                tauri::async_runtime::spawn(async move {
+                    while let Some(event) = events.recv().await {
+                        match event {
+                            CommandEvent::Stdout(line) => {
+                                eprintln!("Ambra server: {}", String::from_utf8_lossy(&line));
+                            }
+                            CommandEvent::Stderr(line) => {
+                                eprintln!("Ambra server error: {}", String::from_utf8_lossy(&line));
+                            }
+                            CommandEvent::Error(error) => {
+                                eprintln!("Ambra server process error: {error}");
+                            }
+                            CommandEvent::Terminated(status) => {
+                                eprintln!("Ambra server stopped: {status:?}");
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             load_cached_music,
+            local_music_directory,
             scan_music,
             keyboard::native_function_modifier_pressed,
             native_audio::load_native_audio,
@@ -616,8 +690,15 @@ pub fn run() {
             media_controls::set_native_media_playback,
             media_controls::set_native_media_commands_enabled
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        #[cfg(not(debug_assertions))]
+        if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            stop_server_sidecar(app_handle);
+        }
+    });
 }
 
 #[cfg(test)]

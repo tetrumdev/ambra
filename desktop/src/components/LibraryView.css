@@ -30,12 +30,215 @@
 }
 
 .libraryHeader {
+    position: relative;
     box-sizing: border-box;
     width: 100%;
     height: auto;
     padding-left: 30px;
+    padding-right: 78px;
     display: block;
     padding-bottom: 0;
+}
+
+.librarySourcesTrigger {
+    position: absolute;
+    top: 8px;
+    right: 30px;
+    display: grid;
+    width: 34px;
+    height: 34px;
+    padding: 0 0 2px;
+    place-items: center;
+    border: 1px solid #535353;
+    border-radius: 50%;
+    background: rgba(9, 9, 9, 0.82);
+    color: white;
+    font: 300 24px/1 "Stack Sans Text", sans-serif;
+    cursor: pointer;
+}
+
+.librarySourcesTrigger:hover,
+.librarySourcesTrigger:focus-visible {
+    border-color: #888;
+    background: #1b1b1b;
+    outline: none;
+}
+
+.librarySourcesDialog {
+    box-sizing: border-box;
+    width: min(560px, calc(100vw - 32px));
+    max-height: min(720px, calc(100vh - 48px));
+    padding: 0;
+    overflow: auto;
+    border: 1px solid #535353;
+    border-radius: 18px;
+    background: rgba(18, 18, 18, 0.88);
+    color: white;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(18px);
+    font-family: "Stack Sans Text", Inter, sans-serif;
+}
+
+.librarySourcesDialog::backdrop {
+    background: rgba(0, 0, 0, 0.58);
+    backdrop-filter: blur(3px);
+}
+
+.librarySourcesPanel {
+    padding: 24px;
+}
+
+.librarySourcesHeading,
+.librarySourceRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.librarySourcesHeading {
+    align-items: flex-start;
+    padding-bottom: 20px;
+}
+
+.librarySourcesHeading h2,
+.librarySourceRow h3 {
+    margin: 0;
+}
+
+.librarySourcesHeading h2 {
+    font-family: "Source Serif 4", serif;
+    font-size: 1.8rem;
+    font-weight: 500;
+}
+
+.librarySourcesHeading p,
+.librarySourceRow p,
+.libraryCallbackForm p {
+    margin: 5px 0 0;
+    color: #aaa;
+    font-size: 0.8rem;
+    line-height: 1.45;
+}
+
+.librarySourcesClose {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #aaa;
+    font: 300 25px/1 sans-serif;
+    cursor: pointer;
+}
+
+.librarySourcesClose:hover {
+    color: white;
+}
+
+.librarySourceRow {
+    min-height: 60px;
+    padding: 14px 0;
+    border-top: 1px solid #3d3d3d;
+}
+
+.librarySourceRow > div:first-child {
+    min-width: 0;
+}
+
+.librarySourceRow h3 {
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+.librarySourceActions {
+    display: flex;
+    flex: none;
+    gap: 8px;
+}
+
+.librarySourceRow button,
+.libraryCallbackForm button {
+    min-width: 86px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid #666;
+    border-radius: 999px;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+}
+
+.librarySourceRow button:hover:not(:disabled),
+.libraryCallbackForm button:hover:not(:disabled) {
+    border-color: white;
+    background: white;
+    color: black;
+}
+
+.librarySourceRow button:disabled,
+.libraryCallbackForm button:disabled {
+    color: #777;
+    cursor: default;
+}
+
+.libraryServiceButton {
+    flex: none;
+}
+
+.libraryCallbackForm {
+    padding: 18px;
+    border: 1px solid #535353;
+    border-radius: 12px;
+    background: #090909;
+}
+
+.libraryCallbackForm label {
+    display: block;
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.libraryCallbackForm > div {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.libraryCallbackForm input {
+    box-sizing: border-box;
+    min-width: 0;
+    height: 36px;
+    flex: 1;
+    padding: 0 12px;
+    border: 1px solid #535353;
+    border-radius: 999px;
+    outline: none;
+    background: #181818;
+    color: white;
+    font: inherit;
+    font-size: 0.8rem;
+}
+
+.libraryCallbackForm input:focus {
+    border-color: #999;
+}
+
+.librarySourcesMessage,
+.librarySourcesError {
+    margin: 16px 0 0;
+    font-size: 0.8rem;
+}
+
+.librarySourcesMessage {
+    color: #b9d7b9;
+}
+
+.librarySourcesError {
+    color: #ffb4b4;
+    overflow-wrap: anywhere;
 }
 
 .libraryOverview {

@@ -52,30 +52,19 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ### Streaming service login
 
-Start the server normally:
+Packaged desktop builds start the bundled server automatically. During
+development, start it separately:
 
 ```sh
 cd server
 cargo run
 ```
 
-On the first start, Ambra checks Tidal, Qobuz, and Spotify for a working saved
-login. It asks whether to log in to each missing service. Answer `y` to start
-that service's login flow, or press Enter to skip it. Tidal and Qobuz print a
-login URL and ask for the callback URL. Spotify opens its login page in the
-browser. Saved services are reused automatically on later starts, and the
-questions are shown only during the first setup.
-
-To choose a service skipped during first setup, stop the server and run:
-
-```sh
-cd server
-cargo run -- reset-logins
-cargo run
-```
-
-Resetting login setup does not delete existing sessions. The next normal start
-asks only about services that are not logged in.
+Ambra restores working saved sessions when the server starts. To connect a
+missing service, open **My Library** in the desktop app and choose the `+`
+button in the upper-right corner. Tidal and Qobuz open their login page and ask
+you to paste the resulting callback URL into Ambra. Spotify opens its login
+page and completes its local callback automatically.
 
 Tidal stores its session in `server/.tidal-session.json`. Qobuz stores its
 session in `server/.qobuz-session.json`. Spotify stores its login under

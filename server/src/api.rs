@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     env, fs, io,
     path::PathBuf,
-    sync::{Arc, Weak},
+    sync::{Arc, OnceLock, Weak},
     time::{Duration, Instant},
 };
 
@@ -33,11 +33,10 @@ use crate::{
         ArtworkCandidate, dominant_colors, highest_resolution, image_dimensions, normalized_upc,
         qobuz_max_artwork_url, trusted_artwork_url,
     },
-    login_setup,
     models::{HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata},
-    providers::qobuz::QobuzProvider,
+    providers::qobuz::{QobuzLogin, QobuzProvider},
     providers::spotify::SpotifyProvider,
-    providers::tidal::{PlaybackSource, TidalProvider},
+    providers::tidal::{PlaybackSource, TidalLogin, TidalProvider},
 };
 
 const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
@@ -51,9 +50,11 @@ type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send +
 
 #[derive(Clone)]
 struct AppState {
-    tidal: Option<TidalProvider>,
-    qobuz: Option<QobuzProvider>,
-    spotify: Option<SpotifyProvider>,
+    tidal: Arc<OnceLock<TidalProvider>>,
+    qobuz: Arc<OnceLock<QobuzProvider>>,
+    spotify: Arc<OnceLock<SpotifyProvider>>,
+    pending_tidal_login: Arc<Mutex<Option<TidalLogin>>>,
+    pending_qobuz_login: Arc<Mutex<Option<QobuzLogin>>>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
     search_cache: Arc<RwLock<HashMap<SearchCacheKey, CachedSearchPage>>>,
@@ -89,16 +90,9 @@ struct LibraryEntry {
 }
 
 pub async fn serve() -> ServerResult<()> {
-    let offer_logins = login_setup::setup_needed();
-    let tidal = authenticate_tidal(offer_logins).await?;
-    let qobuz = authenticate_qobuz(offer_logins).await?;
-    let spotify = authenticate_spotify(offer_logins).await?;
-    if offer_logins {
-        login_setup::finish_setup()?;
-        println!(
-            "Login choices saved. To choose skipped services later, run `cargo run -- reset-logins`, then `cargo run`."
-        );
-    }
+    let tidal = authenticate_tidal().await?;
+    let qobuz = authenticate_qobuz().await?;
+    let spotify = authenticate_spotify().await?;
 
     let http_client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -111,10 +105,24 @@ pub async fn serve() -> ServerResult<()> {
         .as_ref()
         .map(|provider| provider.media_cache.clone())
         .unwrap_or_else(|| Arc::new(RwLock::new(MediaCache::default())));
+    let tidal_cell = Arc::new(OnceLock::new());
+    if let Some(provider) = tidal {
+        let _ = tidal_cell.set(provider);
+    }
+    let qobuz_cell = Arc::new(OnceLock::new());
+    if let Some(provider) = qobuz {
+        let _ = qobuz_cell.set(provider);
+    }
+    let spotify_cell = Arc::new(OnceLock::new());
+    if let Some(provider) = spotify {
+        let _ = spotify_cell.set(provider);
+    }
     let state = AppState {
-        tidal,
-        qobuz,
-        spotify,
+        tidal: tidal_cell,
+        qobuz: qobuz_cell,
+        spotify: spotify_cell,
+        pending_tidal_login: Arc::new(Mutex::new(None)),
+        pending_qobuz_login: Arc::new(Mutex::new(None)),
         http_client,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -136,6 +144,9 @@ pub async fn serve() -> ServerResult<()> {
 
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/{provider}/start", post(start_auth))
+        .route("/api/auth/{provider}/complete", post(complete_auth))
         .route("/api/library", get(library))
         .route("/api/library/tracks", post(add_track))
         .route("/api/search/tracks", get(search_tracks))
@@ -185,53 +196,170 @@ pub async fn serve() -> ServerResult<()> {
     Ok(())
 }
 
-async fn authenticate_tidal(offer_login: bool) -> ServerResult<Option<TidalProvider>> {
+async fn authenticate_tidal() -> ServerResult<Option<TidalProvider>> {
     match TidalProvider::authenticate_if_configured(false).await {
         Ok(Some(provider)) => return Ok(Some(provider)),
         Ok(None) => {}
         Err(error) => eprintln!("Tidal saved login failed: {error}"),
     }
-    if offer_login && login_setup::ask_to_log_in("Tidal")? {
-        match TidalProvider::authenticate_if_configured(true).await {
-            Ok(provider) => return Ok(provider),
-            Err(error) => eprintln!("Tidal disabled because login failed: {error}"),
-        }
-    }
     Ok(None)
 }
 
-async fn authenticate_qobuz(offer_login: bool) -> ServerResult<Option<QobuzProvider>> {
+async fn authenticate_qobuz() -> ServerResult<Option<QobuzProvider>> {
     match QobuzProvider::authenticate_if_configured(false).await {
         Ok(Some(provider)) => return Ok(Some(provider)),
         Ok(None) => {}
         Err(error) => eprintln!("Qobuz saved login failed: {error}"),
     }
-    if offer_login && login_setup::ask_to_log_in("Qobuz")? {
-        match QobuzProvider::authenticate_if_configured(true).await {
-            Ok(provider) => return Ok(provider),
-            Err(error) => eprintln!("Qobuz disabled because login failed: {error}"),
-        }
-    }
     Ok(None)
 }
 
-async fn authenticate_spotify(offer_login: bool) -> ServerResult<Option<SpotifyProvider>> {
+async fn authenticate_spotify() -> ServerResult<Option<SpotifyProvider>> {
     match SpotifyProvider::authenticate_if_configured(false).await {
         Ok(Some(provider)) => return Ok(Some(provider)),
         Ok(None) => {}
         Err(error) => eprintln!("Spotify saved login failed: {error}"),
-    }
-    if offer_login && login_setup::ask_to_log_in("Spotify")? {
-        match SpotifyProvider::authenticate_if_configured(true).await {
-            Ok(provider) => return Ok(provider),
-            Err(error) => eprintln!("Spotify disabled because login failed: {error}"),
-        }
     }
     Ok(None)
 }
 
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthStatusResponse {
+    tidal: bool,
+    qobuz: bool,
+    spotify: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthStartResponse {
+    status: &'static str,
+    login_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CompleteAuthRequest {
+    callback_url: String,
+}
+
+async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> {
+    Json(AuthStatusResponse {
+        tidal: state.tidal.get().is_some(),
+        qobuz: state.qobuz.get().is_some(),
+        spotify: state.spotify.get().is_some(),
+    })
+}
+
+async fn start_auth(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+) -> Result<Json<AuthStartResponse>, ApiError> {
+    match provider.as_str() {
+        "tidal" => {
+            if state.tidal.get().is_some() {
+                return Ok(Json(AuthStartResponse {
+                    status: "connected",
+                    login_url: None,
+                }));
+            }
+            let (login, login_url) = TidalProvider::start_login().map_err(ApiError::upstream)?;
+            *state.pending_tidal_login.lock().await = Some(login);
+            Ok(Json(AuthStartResponse {
+                status: "callbackRequired",
+                login_url: Some(login_url),
+            }))
+        }
+        "qobuz" => {
+            if state.qobuz.get().is_some() {
+                return Ok(Json(AuthStartResponse {
+                    status: "connected",
+                    login_url: None,
+                }));
+            }
+            let (login, login_url) = QobuzProvider::start_login()
+                .await
+                .map_err(ApiError::upstream)?;
+            *state.pending_qobuz_login.lock().await = Some(login);
+            Ok(Json(AuthStartResponse {
+                status: "callbackRequired",
+                login_url: Some(login_url),
+            }))
+        }
+        "spotify" => {
+            if state.spotify.get().is_none() {
+                let provider = SpotifyProvider::authenticate_if_configured(true)
+                    .await
+                    .map_err(ApiError::upstream)?
+                    .ok_or_else(|| {
+                        ApiError::service_unavailable("Spotify login did not complete")
+                    })?;
+                let _ = state.spotify.set(provider);
+            }
+            Ok(Json(AuthStartResponse {
+                status: "connected",
+                login_url: None,
+            }))
+        }
+        _ => Err(ApiError::not_found(format!(
+            "Unknown music service '{provider}'"
+        ))),
+    }
+}
+
+async fn complete_auth(
+    State(state): State<AppState>,
+    Path(provider): Path<String>,
+    Json(request): Json<CompleteAuthRequest>,
+) -> Result<Json<AuthStartResponse>, ApiError> {
+    if request.callback_url.trim().is_empty() {
+        return Err(ApiError::bad_request("Paste the full callback URL"));
+    }
+    match provider.as_str() {
+        "tidal" => {
+            let login = state
+                .pending_tidal_login
+                .lock()
+                .await
+                .take()
+                .ok_or_else(|| ApiError::bad_request("Start Tidal sign-in before completing it"))?;
+            let provider = TidalProvider::complete_login(login, &request.callback_url)
+                .await
+                .map_err(ApiError::upstream)?;
+            let _ = state.tidal.set(provider);
+        }
+        "qobuz" => {
+            let login = state
+                .pending_qobuz_login
+                .lock()
+                .await
+                .take()
+                .ok_or_else(|| ApiError::bad_request("Start Qobuz sign-in before completing it"))?;
+            let provider = QobuzProvider::complete_login(login, &request.callback_url)
+                .await
+                .map_err(ApiError::upstream)?;
+            let _ = state.qobuz.set(provider);
+        }
+        "spotify" => {
+            return Err(ApiError::bad_request(
+                "Spotify completes sign-in automatically",
+            ));
+        }
+        _ => {
+            return Err(ApiError::not_found(format!(
+                "Unknown music service '{provider}'"
+            )));
+        }
+    }
+    Ok(Json(AuthStartResponse {
+        status: "connected",
+        login_url: None,
+    }))
 }
 
 #[derive(Deserialize)]
@@ -282,7 +410,7 @@ async fn resolve_artwork_quality(
 
     let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
         qobuz_max_artwork_url(&request.cover_url)
-    } else if let (Some(qobuz), Some(upc)) = (state.qobuz.as_ref(), upc.as_deref()) {
+    } else if let (Some(qobuz), Some(upc)) = (state.qobuz.get(), upc.as_deref()) {
         qobuz
             .exact_album_artwork_by_upc(upc)
             .await
@@ -927,7 +1055,7 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
         MusicProvider::Tidal => {
             state
                 .tidal
-                .as_ref()
+                .get()
                 .ok_or_else(|| io::Error::other("Tidal login is not configured"))?
                 .track_metadata(&entry.provider_track_id)
                 .await
@@ -935,7 +1063,7 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
         MusicProvider::Qobuz => {
             state
                 .qobuz
-                .as_ref()
+                .get()
                 .ok_or_else(|| io::Error::other("Qobuz login is not configured"))?
                 .track_metadata(&entry.provider_track_id)
                 .await
@@ -943,7 +1071,7 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
         MusicProvider::Spotify => {
             state
                 .spotify
-                .as_ref()
+                .get()
                 .ok_or_else(|| io::Error::other("Spotify login is not configured"))?
                 .track_metadata(&entry.provider_track_id)
                 .await
@@ -976,11 +1104,11 @@ fn initial_library_entries() -> Vec<LibraryEntry> {
 }
 
 fn library_entries_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".streaming-library.json")
+    crate::storage::path("streaming-library.json")
 }
 
 fn legacy_library_track_ids_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".library-track-ids.json")
+    crate::storage::path("library-track-ids.json")
 }
 
 fn load_library_entries() -> Vec<LibraryEntry> {
@@ -1431,34 +1559,34 @@ fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
 }
 
 fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
-    state.tidal.as_ref().ok_or_else(|| {
+    state.tidal.get().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Tidal login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
+            "Tidal is not connected. Sign in from the Library services menu.",
         )
     })
 }
 
 fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
-    state.qobuz.as_ref().ok_or_else(|| {
+    state.qobuz.get().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Qobuz login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
+            "Qobuz is not connected. Sign in from the Library services menu.",
         )
     })
 }
 
 fn spotify_provider(state: &AppState) -> Result<&SpotifyProvider, ApiError> {
-    state.spotify.as_ref().ok_or_else(|| {
+    state.spotify.get().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Spotify login is not configured. Run `cargo run -- reset-logins`, then restart with `cargo run`.",
+            "Spotify is not connected. Sign in from the Library services menu.",
         )
     })
 }
 
 fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
     match provider {
-        MusicProvider::Tidal => state.tidal.is_some(),
-        MusicProvider::Qobuz => state.qobuz.is_some(),
-        MusicProvider::Spotify => state.spotify.is_some(),
+        MusicProvider::Tidal => state.tidal.get().is_some(),
+        MusicProvider::Qobuz => state.qobuz.get().is_some(),
+        MusicProvider::Spotify => state.spotify.get().is_some(),
     }
 }
 
