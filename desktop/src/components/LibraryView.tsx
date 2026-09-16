@@ -10,6 +10,7 @@ import {
   TrackCollectionView,
   type TrackCollectionViewProps,
 } from "./TrackCollectionView";
+import { LibrarySourcesDialog } from "./LibrarySourcesDialog";
 
 export type LibrarySection = "overview" | "artists" | "albums" | "tracks";
 
@@ -19,6 +20,8 @@ type LibraryViewProps = Omit<
 > & {
   section: LibrarySection;
   onSectionChange: (section: LibrarySection) => void;
+  onRescanLocalMusic: () => Promise<number>;
+  onServiceConnected: () => void;
 };
 
 export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; label: string }> = [
@@ -70,6 +73,8 @@ function AlbumSection({ albums }: { albums: LibraryAlbum[] }) {
 export function LibraryView({
   section,
   onSectionChange,
+  onRescanLocalMusic,
+  onServiceConnected,
   ...props
 }: LibraryViewProps) {
   const artists = useMemo(() => libraryArtists(props.tracks), [props.tracks]);
@@ -79,7 +84,13 @@ export function LibraryView({
     const counts = { artists: artists.length, albums: albums.length, tracks: props.tracks.length };
     return (
       <div className="libraryView smoothScroll" ref={props.registerScrollElement}>
-        <div className="libraryHeader"><h1 className="libraryTitle">My Library</h1></div>
+        <div className="libraryHeader">
+          <h1 className="libraryTitle">My Library</h1>
+          <LibrarySourcesDialog
+            onRescanLocalMusic={onRescanLocalMusic}
+            onServiceConnected={onServiceConnected}
+          />
+        </div>
         <nav className="libraryOverview" aria-label="Library sections">
           {librarySections.map(({ id, label }) => (
             <button type="button" className="libraryOverviewCard" key={id} onClick={() => onSectionChange(id)}>
@@ -106,6 +117,12 @@ export function LibraryView({
     <TrackCollectionView
       {...props}
       title={librarySections.find(item => item.id === section)!.label}
+      headerContent={
+        <LibrarySourcesDialog
+          onRescanLocalMusic={onRescanLocalMusic}
+          onServiceConnected={onServiceConnected}
+        />
+      }
       removalLabel="Remove from Library"
       showPlaybackActions={section !== "artists"}
       summary={
