@@ -287,7 +287,7 @@ function App() {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (!isUnmodifiedKey(event, "Escape")) return;
       // Let search, menus, and playlist dialogs handle their own Escape.
-      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop, dialog[open]"))
+      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop, [data-click-menu-backdrop], dialog[open]"))
         return;
       event.preventDefault();
       event.stopPropagation();
@@ -487,24 +487,25 @@ function App() {
 
   const resolvedSearchContext = async (trackId: GlobalTrackId) => {
     const track = await search.resolveTrack(trackId);
-    const tracks = track
-      ? search.results.map((candidate) =>
-          candidate.globalId === trackId ? track : candidate,
-        )
-      : search.results;
     return {
       context: searchQueueContext(
-        tracks,
+        search.results,
         `search:${searchProvider}:${searchQuery.trim()}`,
+        track,
       ),
       track,
     };
   };
 
-  const visibleSearchContext = () =>
+  const selectedSearchTrack = (trackId: GlobalTrackId) =>
+    search.candidates.find(track => track.globalId === trackId)
+      ?? search.knownTracks.find(track => track.globalId === trackId);
+
+  const visibleSearchContext = (trackId: GlobalTrackId) =>
     searchQueueContext(
       search.results,
       `search:${searchProvider}:${searchQuery.trim()}`,
+      selectedSearchTrack(trackId),
     );
 
   const playStandaloneFromSearch = async (trackId: GlobalTrackId) => {
@@ -517,7 +518,7 @@ function App() {
 
   const addToQueueFromSearch = async (trackId: GlobalTrackId) => {
     if (queue.currentEntry) {
-      const entry = queueEntryForTrack(visibleSearchContext(), trackId);
+      const entry = queueEntryForTrack(visibleSearchContext(trackId), trackId);
       if (!entry) return;
       queue.addToQueue(entry);
       void search.resolveTrack(trackId);
@@ -532,7 +533,7 @@ function App() {
 
   const playNextFromSearch = async (trackId: GlobalTrackId) => {
     if (queue.currentEntry) {
-      const entry = queueEntryForTrack(visibleSearchContext(), trackId);
+      const entry = queueEntryForTrack(visibleSearchContext(trackId), trackId);
       if (!entry) return;
       queue.playNext(entry);
       void search.resolveTrack(trackId);
@@ -692,9 +693,7 @@ function App() {
               addToQueue={addToQueueFromSearch}
               playNext={playNextFromSearch}
               addToLibrary={(trackId) => {
-                const track = search.results.find(
-                  (candidate) => candidate.globalId === trackId,
-                );
+                const track = selectedSearchTrack(trackId);
                 if (
                   track &&
                   (track.provider === "tidal" ||

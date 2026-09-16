@@ -1,5 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { AudioControlsMenu } from "./AudioControlsMenu";
 import "./ExtraCtrls.css";
 
 type ExtraCtrlsProps = {
@@ -14,7 +15,6 @@ type NativeAudioDevice = {
 
 export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
-  const showGlobalVolumeControl = false;
   const showAudioModeToggle = import.meta.env.DEV && hasNativeAudio;
   const [exclusiveMode, setExclusiveMode] = useState<boolean | null>(null);
   const [isChangingMode, setIsChangingMode] = useState(false);
@@ -22,13 +22,14 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const [selectedDeviceId, setSelectedDeviceId] = useState("");
   const [isLoadingDevices, setIsLoadingDevices] = useState(false);
   const [isChangingDevice, setIsChangingDevice] = useState(false);
-  const [volume, setVolume] = useState<number | null>(null);
+  const [volume, setVolume] = useState(100);
   const pendingVolume = useRef<number | null>(null);
   const isSendingVolume = useRef(false);
-  const [volumeClicked, setVolumeClicked] = useState(false);
+  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const volumeButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (!hasNativeAudio || !showGlobalVolumeControl) return;
+    if (!hasNativeAudio) return;
 
     let disposed = false;
     void invoke<number>("native_audio_volume")
@@ -42,7 +43,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     return () => {
       disposed = true;
     };
-  }, [hasNativeAudio, showGlobalVolumeControl]);
+  }, [hasNativeAudio]);
 
   useEffect(() => {
     if (!showAudioModeToggle) return;
@@ -125,75 +126,88 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     void sendPendingVolume();
   };
 
+  const closeAudioMenu = () => {
+    setAudioMenuOpen(false);
+    volumeButton.current?.focus();
+  };
+
   return (
-    <div
-      id="extraCtrls"
-      data-volume-clicked={volumeClicked ? "" : undefined}
-    >
-      {hasNativeAudio && showGlobalVolumeControl && (
-        <input
-          className="globalVolumeControl"
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          value={volume ?? 100}
-          disabled={volume === null}
-          aria-label="Global volume"
-          title={`${volume?.toFixed(0) ?? "100"}%`}
-          onChange={(event) => changeVolume(Number(event.target.value))}
-        />
-      )}
+    <div id="extraCtrls">
       <div className="volumeControlContainer">
-        {showAudioModeToggle && (
-          <div className="devAudioControls">
-            <select
-              aria-label="Audio output device"
-              value={selectedDeviceId}
-              disabled={isLoadingDevices || isChangingDevice}
-              onChange={(event) => void selectAudioDevice(event.target.value)}
-            >
-              <option value="">
-                {isLoadingDevices ? "Loading devices…" : "System Default"}
-              </option>
-              {audioDevices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.name}
-                  {device.isDefault ? " (Default)" : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              className="devAudioModeToggle"
-              type="button"
-              aria-pressed={exclusiveMode === true}
-              disabled={exclusiveMode === null || isChangingMode}
-              title={
-                exclusiveMode === null
-                  ? "Reading the CoreAudio output mode…"
-                  : exclusiveMode
-                    ? "CoreAudio exclusive mode is on. Click for system output."
-                    : "CoreAudio system output is on. Click for exclusive mode."
-              }
-              onClick={() => void toggleExclusiveMode()}
-            >
-              {exclusiveMode === null
-                ? "…"
-                : exclusiveMode
-                  ? "EXCLUSIVE"
-                  : "SYSTEM OUTPUT"}
-            </button>
-          </div>
+        {hasNativeAudio && audioMenuOpen && (
+          <AudioControlsMenu anchor={volumeButton} onClose={closeAudioMenu}>
+            {showAudioModeToggle && (
+              <>
+                <select
+                  aria-label="Audio output device"
+                  value={selectedDeviceId}
+                  disabled={isLoadingDevices || isChangingDevice}
+                  onChange={(event) =>
+                    void selectAudioDevice(event.target.value)
+                  }
+                >
+                  <option value="">
+                    {isLoadingDevices ? "Loading devices…" : "System Default"}
+                  </option>
+                  {audioDevices.map((device) => (
+                    <option key={device.id} value={device.id}>
+                      {device.name}
+                      {device.isDefault ? " (Default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="devAudioModeToggle"
+                  type="button"
+                  aria-pressed={exclusiveMode === true}
+                  disabled={exclusiveMode === null || isChangingMode}
+                  title={
+                    exclusiveMode === null
+                      ? "Reading the CoreAudio output mode…"
+                      : exclusiveMode
+                        ? "CoreAudio exclusive mode is on. Click for system output."
+                        : "CoreAudio system output is on. Click for exclusive mode."
+                  }
+                  onClick={() => void toggleExclusiveMode()}
+                >
+                  {exclusiveMode === null
+                    ? "…"
+                    : exclusiveMode
+                      ? "EXCLUSIVE"
+                      : "SYSTEM OUTPUT"}
+                </button>
+              </>
+            )}
+            <input
+              className="volumeSlider"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              value={volume}
+              aria-label="Volume"
+              aria-valuetext={`${Math.round(volume)}%`}
+              onChange={(event) => changeVolume(Number(event.target.value))}
+              style={{ "--volume": `${volume}%` } as CSSProperties}
+            />
+          </AudioControlsMenu>
         )}
         <button
+          ref={volumeButton}
           id="volumeBtn"
           type="button"
           aria-label="Volume"
-          aria-expanded={volumeClicked}
-          onClick={() => setVolumeClicked((clicked) => !clicked)}
+          aria-haspopup={hasNativeAudio ? "dialog" : undefined}
+          aria-expanded={hasNativeAudio ? audioMenuOpen : undefined}
+          onClick={() => {
+            if (hasNativeAudio) setAudioMenuOpen((open) => !open);
+          }}
         >
           <img src="/volumeIconHigh.svg" alt="" id="volumeImg" />
         </button>
+        <span className="volumePercentage" aria-live="polite">
+          {Math.round(volume)}%
+        </span>
       </div>
       <button id="queueBtn" type="button" onClick={onOpenQueue}>
         <img src="/queue.svg" alt="Queue" id="queueImg" />

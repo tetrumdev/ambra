@@ -37,7 +37,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": ["icons/ambra_icon.icns"],
+    "icon": [
+      "icons/icon.png",
+      "icons/ambra_icon.icns",
+      "icons/icon.ico"
+    ],
     "macOS": {
       "signingIdentity": "-"
     }

@@ -610,7 +610,13 @@ impl PlaybackWorker {
             WorkerCommand::SetVolume { volume, reply } => {
                 let result = self
                     .gain
-                    .set_volume(volume, self.spec.map(|spec| spec.sample_rate));
+                    .set_volume(volume, self.spec.map(|spec| spec.sample_rate))
+                    .and_then(|()| {
+                        if let Some(output) = self.output.as_mut() {
+                            output.set_gain(self.gain.amplitude())?;
+                        }
+                        Ok(())
+                    });
                 let _ = reply.send(result);
             }
             WorkerCommand::Shutdown => return true,
@@ -936,6 +942,7 @@ impl PlaybackWorker {
             .output
             .as_mut()
             .ok_or_else(|| "The native audio output is unavailable".to_owned())?;
+        output.set_gain(self.gain.amplitude())?;
         if !self.rendering {
             output.start()?;
             self.rendering = true;
@@ -946,8 +953,8 @@ impl PlaybackWorker {
         });
 
         if !self.pcm.is_empty() {
-            let using_gain_buffer =
-                !self.gain.is_unity() || self.gain_buffer_offset < self.gain_buffer.len();
+            let using_gain_buffer = !cfg!(target_os = "macos")
+                && (!self.gain.is_unity() || self.gain_buffer_offset < self.gain_buffer.len());
             let frames = if !using_gain_buffer {
                 let (first, second) = self.pcm.as_slices();
                 output.write(first, second)?
