@@ -15,7 +15,7 @@ type NativeAudioDevice = {
 
 export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
-  const showAudioModeToggle = import.meta.env.DEV && hasNativeAudio;
+  const showAudioModeToggle = hasNativeAudio;
   const [exclusiveMode, setExclusiveMode] = useState<boolean | null>(null);
   const [isChangingMode, setIsChangingMode] = useState(false);
   const [audioDevices, setAudioDevices] = useState<NativeAudioDevice[]>([]);
