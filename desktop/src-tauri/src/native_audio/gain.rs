@@ -55,6 +55,10 @@ impl GainStage {
         self.ramp_frames_remaining == 0 && self.target_amplitude == 1.0
     }
 
+    pub fn amplitude(&self) -> f64 {
+        self.target_amplitude
+    }
+
     pub fn settle(&mut self) {
         self.current_amplitude = self.target_amplitude;
         self.ramp_step = 0.0;
@@ -123,6 +127,16 @@ mod tests {
         assert_eq!(output[2], output[3]);
         assert_eq!(output[4], output[5]);
         assert!((output[4] - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn exposes_the_linear_amplitude_used_by_platform_outputs() {
+        let mut gain = GainStage::default();
+
+        gain.set_volume(50.0, None).unwrap();
+        assert!((gain.amplitude() - 0.5).abs() < 1e-9);
+        gain.set_volume(10.0, None).unwrap();
+        assert!((gain.amplitude() - 0.1).abs() < 1e-9);
     }
 
     #[test]

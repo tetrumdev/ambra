@@ -11,19 +11,30 @@ function deferred<T>() {
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
 describe("independent search sources", () => {
-  test("default timing shows available results promptly and still merges the slower service", async () => {
+  test("default buffer publishes tracks, portraits, and albums together after the slower service", async () => {
     const slow = deferred<SearchPage>();
     const updates: SearchSnapshot[] = [];
-    const session = new SearchSession({ query: "deadman", providers: ["tidal", "qobuz"], combined: true, onUpdate: value => updates.push(value), fetchPage: async (_, provider) => provider === "qobuz" ? slow.promise : { tracks: [track("tidal:1", "tidal")], nextOffset: null } });
+    const session = new SearchSession({ query: "deadman", providers: ["tidal", "qobuz"], combined: true, onUpdate: value => updates.push(value), fetchPage: async (_, provider) => provider === "qobuz" ? slow.promise : {
+      tracks: [track("tidal:1", "tidal")],
+      artists: [{ id: "tidal:artist", provider: "tidal", name: "Karnivool", imageUrl: "tidal-portrait.jpg" }],
+      albums: [{ id: "tidal:album", provider: "tidal", title: "Sound Awake", artist: "Karnivool", imageUrl: "tidal-cover.jpg" }],
+      nextOffset: null,
+    } });
     const pending = session.loadMore();
     try {
-      await new Promise(resolve => setTimeout(resolve, 250));
-      expect(updates[updates.length - 1]?.results[0]?.globalId).toBe("tidal:1");
+      await new Promise(resolve => setTimeout(resolve, 650));
+      expect(updates.every(update => !update.results.length && !update.artists.length && !update.albums.length && !update.candidates.length)).toBe(true);
       expect(updates[updates.length - 1]?.isSearching).toBe(true);
       slow.resolve({ tracks: [track("qobuz:1", "qobuz", { quality: "FLAC", maximumBitDepth: 24 })], nextOffset: null });
       await pending;
       expect(session.snapshot().results[0]?.globalId).toBe("qobuz:1");
       expect(session.snapshot().candidates).toHaveLength(2);
+      const visible = updates.filter(update => update.results.length);
+      expect(visible).toHaveLength(1);
+      expect(visible[0].results[0]?.globalId).toBe("qobuz:1");
+      expect(visible[0].artists).toHaveLength(1);
+      expect(visible[0].albums).toHaveLength(1);
+      expect(visible[0].isSearching).toBe(false);
     } finally {
       session.cancel();
       await pending;
@@ -151,6 +162,46 @@ describe("independent search sources", () => {
     expect(updates[updates.length - 1]?.isSearching).toBe(true);
     session.cancel();
     await pending;
+  });
+
+  test("the overall deadline bounds the buffer and late provider results still merge", async () => {
+    const slow = deferred<SearchPage>();
+    const updates: SearchSnapshot[] = [];
+    const session = new SearchSession({ query: "deadman", providers: ["tidal", "qobuz"], combined: true,
+      initialMergeWindowMs: 1000, initialDeadlineMs: 20,
+      onUpdate: value => updates.push(value),
+      fetchPage: async (_, provider) => provider === "qobuz" ? slow.promise : { tracks: [track("tidal:1", "tidal")], nextOffset: null },
+    });
+    const pending = session.loadMore();
+    try {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(updates[updates.length - 1]?.results[0]?.globalId).toBe("tidal:1");
+      expect(updates[updates.length - 1]?.isSearching).toBe(true);
+      slow.resolve({ tracks: [track("qobuz:1", "qobuz", { quality: "FLAC", maximumBitDepth: 24 })], nextOffset: null });
+      await pending;
+      expect(updates[updates.length - 1]?.results[0]?.globalId).toBe("qobuz:1");
+      expect(updates[updates.length - 1]?.candidates).toHaveLength(2);
+    } finally {
+      session.cancel();
+      await pending;
+    }
+  });
+
+  test("cancelling a buffered search prevents its timers from publishing old results", async () => {
+    const updates: SearchSnapshot[] = [];
+    const session = new SearchSession({ query: "deadman", providers: ["tidal", "qobuz"], combined: true,
+      initialMergeWindowMs: 20, initialDeadlineMs: 30,
+      onUpdate: value => updates.push(value),
+      fetchPage: async (_, provider) => provider === "qobuz" ? new Promise(() => {}) : { tracks: [track("tidal:1", "tidal")], nextOffset: null },
+    });
+    const pending = session.loadMore();
+    await tick();
+    expect(updates[updates.length - 1]?.results).toHaveLength(0);
+    session.cancel();
+    const atCancel = updates.length;
+    await pending;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(updates).toHaveLength(atCancel);
   });
 
 });

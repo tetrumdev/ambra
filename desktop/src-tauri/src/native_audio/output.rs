@@ -40,6 +40,9 @@ pub trait AudioOutput {
     fn start(&mut self) -> Result<(), String>;
     fn pause(&mut self) -> Result<(), String>;
     fn reset(&mut self) -> Result<(), String>;
+    fn set_gain(&mut self, _gain: f64) -> Result<(), String> {
+        Ok(())
+    }
     fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String>;
     fn queued_frames(&mut self) -> Result<usize, String>;
     fn is_drained(&mut self) -> Result<bool, String>;

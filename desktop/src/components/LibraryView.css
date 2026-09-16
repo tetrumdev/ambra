@@ -61,15 +61,35 @@
     text-align: left;
 }
 
-.libraryOverviewCard:first-child { grid-column: 1 / -1; }
-.libraryOverviewCard:hover { background: #151515; }
-.libraryOverviewTitle { font-size: 1.5rem; font-weight: 600; }
-.libraryOverviewCount { font-size: 3rem; line-height: 1.2; }
-.libraryOverviewDetail { color: #a3a2a3; padding-right: 24px; }
-.libraryOverviewArrow { position: absolute; bottom: 30px; right: 30px; font-size: 1.5rem; }
+.libraryOverviewCard:first-child {
+    grid-column: 1 / -1;
+}
+.libraryOverviewCard:hover {
+    background: #151515;
+}
+.libraryOverviewTitle {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+.libraryOverviewCount {
+    font-size: 3rem;
+    line-height: 1.2;
+}
+.libraryOverviewDetail {
+    color: #a3a2a3;
+    padding-right: 24px;
+}
+.libraryOverviewArrow {
+    position: absolute;
+    bottom: 30px;
+    right: 30px;
+    font-size: 1.5rem;
+}
 
 @media (width < 700px) {
-    .libraryOverview { grid-template-columns: minmax(0, 1fr); }
+    .libraryOverview {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 .libraryTitle {

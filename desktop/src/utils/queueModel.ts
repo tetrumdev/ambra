@@ -21,8 +21,15 @@ export function libraryQueueContext(tracks: LibraryTrack[]): QueueContext {
   };
 }
 
-export function searchQueueContext(tracks: Track[], id: string): QueueContext {
-  return collectionQueueContext(tracks, { kind: "search", id });
+export function searchQueueContext(tracks: Track[], id: string, selectedTrack?: Track): QueueContext {
+  // An open result menu can outlive a provider merge. Keep its exact selection
+  // actionable even if another edition now represents the recording on screen.
+  const selectedTracks = selectedTrack
+    ? tracks.some(track => track.globalId === selectedTrack.globalId)
+      ? tracks.map(track => track.globalId === selectedTrack.globalId ? selectedTrack : track)
+      : [...tracks, selectedTrack]
+    : tracks;
+  return collectionQueueContext(selectedTracks, { kind: "search", id });
 }
 
 export function collectionQueueContext(tracks: Track[], source: QueueContext["source"]): QueueContext {
