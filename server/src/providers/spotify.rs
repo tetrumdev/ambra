@@ -107,7 +107,6 @@ impl SpotifyProvider {
         let environment_access_token = nonempty_env("AMBRA_SPOTIFY_ACCESS_TOKEN");
         let environment_username = nonempty_env("AMBRA_SPOTIFY_USERNAME");
         let environment_password = nonempty_env("AMBRA_SPOTIFY_PASSWORD");
-        let interactive = interactive || env_flag("AMBRA_SPOTIFY_INTERACTIVE_LOGIN");
         let cached_credentials = cache.credentials();
 
         if environment_access_token.is_none()
@@ -575,21 +574,12 @@ fn nonempty_env(name: &str) -> Option<String> {
     env::var(name).ok().and_then(|value| nonempty(&value))
 }
 
-fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 fn spotify_cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".spotify-cache")
+    crate::storage::path("spotify-cache")
 }
 
 fn track_metadata_cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".spotify-metadata-cache.json")
+    crate::storage::path("spotify-metadata-cache.json")
 }
 
 fn make_cache_private(path: &Path) -> io::Result<()> {

@@ -24,6 +24,12 @@ jobs:
           workspaces: desktop/src-tauri
       - run: bun install --frozen-lockfile
       - run: bun test
+      - name: Build server sidecar
+        shell: pwsh
+        run: |
+          cargo build --release --manifest-path ../server/Cargo.toml
+          New-Item -ItemType Directory -Force -Path src-tauri/binaries | Out-Null
+          Copy-Item ../server/target/release/ambra-server.exe src-tauri/binaries/ambra-server-x86_64-pc-windows-msvc.exe
       - run: bun run tauri build --bundles nsis
       - uses: actions/upload-artifact@v4
         with:
