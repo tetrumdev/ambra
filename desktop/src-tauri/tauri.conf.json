@@ -38,9 +38,9 @@
     "active": true,
     "targets": "all",
     "icon": [
-      "icons/icon.png",
-      "icons/ambra_icon.icns",
-      "icons/icon.ico"
+      "icons/macIcon.png",
+      "icons/macIcon.icns",
+      "icons/winIcon.ico"
     ],
     "macOS": {
       "signingIdentity": "-"
