@@ -1,32 +1,86 @@
 #extraCtrls {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: flex-end;
     gap: 10px;
 }
 
 .volumeControlContainer {
-    position: relative;
     display: grid;
     place-items: center;
+    grid-template-rows: 35px auto;
+}
+
+.clickMenuBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 11;
+    background: transparent;
 }
 
 .devAudioControls {
-    position: absolute;
-    right: 0;
-    bottom: calc(100% + 10px);
-    z-index: 10;
-    display: none;
+    position: fixed;
+    z-index: 20;
+    box-sizing: border-box;
     flex-direction: column;
+    display: flex;
     gap: 4px;
     padding: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 10px;
-    background: rgba(0, 0, 0, 0.95);
+    border: 1px solid #535353;
+    border-radius: 12px;
+    color: white;
+    background: rgba(0, 0, 0, 0.3);
+    backdrop-filter: blur(5px);
+    -webkit-backdrop-filter: blur(5px);
 }
 
 .devAudioControls select {
     width: 140px;
+}
+
+.volumeSlider {
+    width: 140px;
+    height: 12px;
+    margin: 6px 0 2px;
+    padding: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    outline: none;
+    cursor: pointer;
+}
+
+.volumeSlider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(
+        to right,
+        white 0%,
+        white var(--volume),
+        rgba(214, 214, 214, 0.45) var(--volume),
+        rgba(214, 214, 214, 0.45) 100%
+    );
+}
+
+.volumeSlider::-webkit-slider-thumb {
+    width: 8px;
+    height: 8px;
+    margin-top: -2px;
+    appearance: none;
+    -webkit-appearance: none;
+    border: 0;
+    border-radius: 50%;
+    background: white;
+    /*box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);*/
+}
+
+.volumePercentage {
+    min-width: 35px;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    color: white;
 }
 
 #volumeBtn,
@@ -43,9 +97,8 @@
     cursor: pointer;
 }
 
-[data-volume-clicked] .devAudioControls {
-    display: flex;
-    position: absolute;
+#extraCtrls #queueBtn {
+    align-self: flex-start;
 }
 
 #volumeImg,

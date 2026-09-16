@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { QueueItem, Track } from "../src/types/music";
 import {
+  contextEntry,
   contextEntriesFrom,
   searchQueueContext,
   shuffledContextEntries,
@@ -94,6 +95,27 @@ describe("queue model", () => {
 
     expect(refreshed.current?.track).toBe(resolved);
     expect(refreshQueueTracks(refreshed, [resolved])).toBe(refreshed);
+  });
+
+  test("a search menu selection stays playable after another provider replaces its result", () => {
+    const selected = track("tidal:1");
+    const visible = [track("qobuz:1")];
+    const context = searchQueueContext(visible, "search:all:test", selected);
+
+    expect(contextEntry(context, "tidal:1")?.track).toBe(selected);
+    expect(contextEntry(context, "qobuz:1")?.track).toBe(visible[0]);
+    expect(visible.map(track => track.globalId)).toEqual(["qobuz:1"]);
+  });
+
+  test("resolved search metadata replaces the selection without duplicating its queue entry", () => {
+    const visible = [track("tidal:1"), track("qobuz:2")];
+    const resolved = { ...visible[0], audio: "/resolved.m3u8", playbackKind: "dash" as const };
+    const context = searchQueueContext(visible, "search:all:test", resolved);
+
+    expect(context.entries).toHaveLength(2);
+    expect(contextEntry(context, "tidal:1")?.track).toBe(resolved);
+    expect(context.entries.map(entry => entry.track.globalId)).toEqual(["tidal:1", "qobuz:2"]);
+    expect(visible[0].audio).toBe("tidal:1");
   });
 
   test("normal context playback ignores shuffle packages", () => {

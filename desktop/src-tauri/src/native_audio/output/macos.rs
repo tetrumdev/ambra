@@ -25,6 +25,7 @@ use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed};
 
 const RENDER_BLOCKS: usize = 8;
 const MAX_RENDER_BLOCK_FRAMES: usize = 8_192;
+const GAIN_RAMP_MILLISECONDS: usize = 5;
 
 pub struct PlatformOutput {
     audio_unit: coreaudio::audio_unit::AudioUnit,
@@ -34,6 +35,7 @@ pub struct PlatformOutput {
     pool_rx: Receiver<Vec<i32>>,
     generation: Arc<AtomicU64>,
     queued_samples: Arc<AtomicU64>,
+    gain_bits: Arc<AtomicU64>,
     channels: usize,
     started: bool,
     owns_hog_mode: bool,
@@ -128,6 +130,14 @@ impl AudioOutput for PlatformOutput {
         self.pause()?;
         self.generation.fetch_add(1, Ordering::AcqRel);
         self.queued_samples.store(0, Ordering::Release);
+        Ok(())
+    }
+
+    fn set_gain(&mut self, gain: f64) -> Result<(), String> {
+        if !gain.is_finite() || !(0.0..=1.0).contains(&gain) {
+            return Err("The CoreAudio gain must be between 0 and 1".to_owned());
+        }
+        self.gain_bits.store(gain.to_bits(), Ordering::Release);
         Ok(())
     }
 
@@ -253,6 +263,8 @@ impl PlatformOutput {
         let callback_generation = generation.clone();
         let queued_samples = Arc::new(AtomicU64::new(0));
         let callback_queued_samples = queued_samples.clone();
+        let gain_bits = Arc::new(AtomicU64::new(1.0_f64.to_bits()));
+        let callback_gain_bits = gain_bits.clone();
         for _ in 0..RENDER_BLOCKS {
             let _ = pool_tx.try_send(Vec::with_capacity(MAX_RENDER_BLOCK_FRAMES * spec.channels));
         }
@@ -260,11 +272,22 @@ impl PlatformOutput {
         let mut active_block = Vec::new();
         let mut active_offset = 0;
         let mut active_generation = 0;
+        let mut current_gain = 1.0_f64;
+        let mut target_gain = 1.0_f64;
+        let mut gain_step = 0.0_f64;
+        let mut gain_frames_remaining = 0_usize;
+        let gain_ramp_frames = (spec.sample_rate as usize * GAIN_RAMP_MILLISECONDS / 1_000).max(1);
         type Args = render_callback::Args<data::Interleaved<i32>>;
         audio_unit
             .set_render_callback(move |args: Args| {
                 let output = args.data.buffer;
                 output.fill(0);
+                let requested_gain = f64::from_bits(callback_gain_bits.load(Ordering::Acquire));
+                if requested_gain != target_gain {
+                    target_gain = requested_gain;
+                    gain_step = (target_gain - current_gain) / gain_ramp_frames as f64;
+                    gain_frames_remaining = gain_ramp_frames;
+                }
                 let current_generation = callback_generation.load(Ordering::Acquire);
                 if active_generation != current_generation && !active_block.is_empty() {
                     subtract_queued_samples(
@@ -301,8 +324,21 @@ impl PlatformOutput {
                     }
                     let count =
                         (active_block.len() - active_offset).min(output.len() - output_offset);
-                    output[output_offset..output_offset + count]
-                        .copy_from_slice(&active_block[active_offset..active_offset + count]);
+                    for sample_offset in 0..count {
+                        if sample_offset % channels == 0 && gain_frames_remaining > 0 {
+                            current_gain += gain_step;
+                            gain_frames_remaining -= 1;
+                            if gain_frames_remaining == 0 {
+                                current_gain = target_gain;
+                                gain_step = 0.0;
+                            }
+                        }
+                        let sample = active_block[active_offset + sample_offset] as f64;
+                        output[output_offset + sample_offset] = (sample * current_gain)
+                            .round()
+                            .clamp(i32::MIN as f64, i32::MAX as f64)
+                            as i32;
+                    }
                     subtract_queued_samples(&callback_queued_samples, count);
                     active_offset += count;
                     output_offset += count;
@@ -320,6 +356,7 @@ impl PlatformOutput {
             pool_rx,
             generation,
             queued_samples,
+            gain_bits,
             channels: spec.channels,
             started: false,
             owns_hog_mode,
