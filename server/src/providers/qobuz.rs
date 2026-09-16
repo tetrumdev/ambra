@@ -32,6 +32,10 @@ pub struct QobuzProvider {
     track_metadata_cache_path: Arc<PathBuf>,
 }
 
+pub struct QobuzLogin {
+    client: QobuzClient,
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaybackSource {
     pub url: String,
@@ -48,7 +52,7 @@ struct CachedPlaybackSource {
 
 impl QobuzProvider {
     /// Qobuz stays optional: an absent login must not prevent Tidal/local startup.
-    /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or terminal OAuth.
+    /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or interactive OAuth.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
         let saved_session = if session_path().is_file() {
             Some(load_session()?)
@@ -58,8 +62,6 @@ impl QobuzProvider {
         let environment_token = env::var("AMBRA_QOBUZ_USER_AUTH_TOKEN")
             .ok()
             .filter(|token| !token.trim().is_empty());
-        let interactive = interactive || env_flag("AMBRA_QOBUZ_INTERACTIVE_LOGIN");
-
         if saved_session.is_none() && environment_token.is_none() && !interactive {
             return Ok(None);
         }
@@ -78,18 +80,43 @@ impl QobuzProvider {
         };
         save_session(&session)?;
 
+        println!("Qobuz logged in as {}", session.display_name);
+        Ok(Some(Self::from_client(client)))
+    }
+
+    pub async fn start_login() -> ProviderResult<(QobuzLogin, String)> {
+        let client = QobuzClient::new()?;
+        client.init().await?;
+        let app_id = client.app_id().await?;
+        let login_url = format!(
+            "https://www.qobuz.com/signin/oauth?ext_app_id={app_id}&redirect_url={}",
+            urlencoding::encode(OAUTH_REDIRECT_URL)
+        );
+        Ok((QobuzLogin { client }, login_url))
+    }
+
+    pub async fn complete_login(login: QobuzLogin, callback_url: &str) -> ProviderResult<Self> {
+        let code = oauth_code(callback_url.trim()).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "No Qobuz OAuth code found")
+        })?;
+        let session = login.client.login_with_oauth_code(&code).await?;
+        save_session(&session)?;
+        println!("Qobuz logged in as {}", session.display_name);
+        Ok(Self::from_client(login.client))
+    }
+
+    fn from_client(client: QobuzClient) -> Self {
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
-        println!("Qobuz logged in as {}", session.display_name);
-        Ok(Some(Self {
+        Self {
             client: Arc::new(client),
             preferred_quality: Quality::UltraHiRes,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
             albums: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
-        }))
+        }
     }
 
     pub async fn album_track_ids(&self, album_id: &str) -> ProviderResult<Vec<String>> {
@@ -558,15 +585,6 @@ fn oauth_code(input: &str) -> Option<String> {
     fallback
 }
 
-fn env_flag(name: &str) -> bool {
-    env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
-}
-
 fn validate_track_id(track_id: &str) -> ProviderResult<u64> {
     Ok(track_id.parse::<u64>().map_err(|_| {
         io::Error::new(
@@ -592,7 +610,7 @@ fn validate_album_id(album_id: &str) -> ProviderResult<()> {
 }
 
 fn session_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".qobuz-session.json")
+    crate::storage::path("qobuz-session.json")
 }
 
 fn load_session() -> ProviderResult<UserSession> {
@@ -604,7 +622,7 @@ fn save_session(session: &UserSession) -> ProviderResult<()> {
 }
 
 fn track_metadata_cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".qobuz-metadata-cache.json")
+    crate::storage::path("qobuz-metadata-cache.json")
 }
 
 fn load_track_metadata_cache(path: &Path) -> HashMap<String, TrackMetadata> {

@@ -34,6 +34,8 @@ type MusicLibrary = {
     provider: SearchProvider,
     providerTrackId: string,
   ) => Promise<boolean>;
+  rescanLocalMusic: () => Promise<number>;
+  refreshStreamingMusic: () => Promise<number>;
   removeTracks: (trackIds: GlobalTrackId[]) => void;
 };
 
@@ -246,6 +248,28 @@ export function useMusicLibrary(): MusicLibrary {
     });
   }, []);
 
+  const rescanLocalMusic = useCallback(async () => {
+    if (!isTauri()) return 0;
+    setIsLocalLoading(true);
+    setError(null);
+    try {
+      const loadedTracks = await invoke<ScannedTrack[]>("scan_music");
+      setLocalTracks(loadedTracks.map(localTrack));
+      return loadedTracks.length;
+    } catch (reason) {
+      setError(String(reason));
+      throw reason;
+    } finally {
+      setIsLocalLoading(false);
+    }
+  }, []);
+
+  const refreshStreamingMusic = useCallback(async () => {
+    const loadedTracks = await loadServerTracks();
+    setServerTracks((currentTracks) => appendUniqueTracks(currentTracks, loadedTracks));
+    return loadedTracks.length;
+  }, []);
+
   return {
     tracks,
     catalogTracks,
@@ -255,6 +279,8 @@ export function useMusicLibrary(): MusicLibrary {
     addAlbumError,
     addAlbum,
     addTrack,
+    rescanLocalMusic,
+    refreshStreamingMusic,
     removeTracks,
   };
 }

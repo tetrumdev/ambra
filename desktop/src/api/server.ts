@@ -58,6 +58,52 @@ export type SearchProvider =
 
 export type StreamingProvider = Exclude<SearchProvider, "all">;
 
+export type ServiceAuthStatus = Record<StreamingProvider, boolean>;
+
+export type ServiceAuthStart = {
+  status: "connected" | "callbackRequired";
+  loginUrl: string | null;
+};
+
+async function responseError(response: Response) {
+  const body = await response.text();
+  try {
+    const parsed = JSON.parse(body) as { error?: unknown };
+    if (typeof parsed.error === "string") return parsed.error;
+  } catch {
+    // Preserve non-JSON server errors.
+  }
+  return body || `HTTP ${response.status}`;
+}
+
+export async function serviceAuthStatus(): Promise<ServiceAuthStatus> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/status`);
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json() as Promise<ServiceAuthStatus>;
+}
+
+export async function startServiceAuth(
+  provider: StreamingProvider,
+): Promise<ServiceAuthStart> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/start`, {
+    method: "POST",
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json() as Promise<ServiceAuthStart>;
+}
+
+export async function completeServiceAuth(
+  provider: Exclude<StreamingProvider, "spotify">,
+  callbackUrl: string,
+): Promise<void> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/complete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ callbackUrl }),
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+}
+
 export type CatalogArtist = { id: string; provider: StreamingProvider; name: string; imageUrl: string | null };
 export type CatalogAlbum = { id: string; provider: StreamingProvider; title: string; artist: string; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
 export type SearchPage = {

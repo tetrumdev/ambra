@@ -717,6 +717,11 @@ function App() {
               {...collectionViewProps}
               section={librarySection}
               onSectionChange={setLibrarySection}
+              onRescanLocalMusic={library.rescanLocalMusic}
+              onServiceConnected={() => {
+                search.retry();
+                void library.refreshStreamingMusic();
+              }}
             />
           )}
         </main>

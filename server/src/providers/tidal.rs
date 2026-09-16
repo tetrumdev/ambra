@@ -49,6 +49,10 @@ pub struct TidalProvider {
     track_metadata_cache_path: Arc<PathBuf>,
 }
 
+pub struct TidalLogin {
+    client: TidalClient,
+}
+
 #[derive(Clone, Debug)]
 pub enum PlaybackSource {
     Direct {
@@ -104,10 +108,28 @@ impl TidalProvider {
             return Ok(None);
         };
 
+        Ok(Some(Self::from_client(client)?))
+    }
+
+    pub fn start_login() -> ProviderResult<(TidalLogin, String)> {
+        let auth = TidalAuth::with_pkce();
+        let mut client = TidalClient::new(&auth);
+        let login_url = client.initiate_pkce_login()?.to_string();
+        Ok((TidalLogin { client }, login_url))
+    }
+
+    pub async fn complete_login(mut login: TidalLogin, callback_url: &str) -> ProviderResult<Self> {
+        login.client.finish_pkce_login(callback_url.trim()).await?;
+        login.client.refresh_user_info().await?;
+        save_session(&login.client)?;
+        Ok(Self::from_client(login.client)?)
+    }
+
+    fn from_client(client: TidalClient) -> ProviderResult<Self> {
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
-        Ok(Some(Self {
+        Ok(Self {
             media_cache: Arc::new(RwLock::new(MediaCache::default())),
             client: Arc::new(Mutex::new(client)),
             http_client: reqwest::Client::builder()
@@ -121,7 +143,7 @@ impl TidalProvider {
             maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
-        }))
+        })
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
@@ -1145,11 +1167,11 @@ fn save_session(client: &TidalClient) -> ProviderResult<()> {
 }
 
 fn session_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".tidal-session.json")
+    crate::storage::path("tidal-session.json")
 }
 
 fn track_metadata_cache_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".tidal-metadata-cache.json")
+    crate::storage::path("tidal-metadata-cache.json")
 }
 
 fn load_track_metadata_cache(path: &PathBuf) -> HashMap<String, TrackMetadata> {
