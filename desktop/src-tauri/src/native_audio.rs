@@ -13,9 +13,11 @@ use serde::Serialize;
 use tauri::{App, Manager, State};
 
 mod decoder;
+mod gain;
 mod output;
 
 use decoder::DecodedSource;
+use gain::GainStage;
 use output::{AudioOutput, PlatformOutput};
 
 const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
@@ -27,6 +29,7 @@ const STREAM_RECOVERY_ATTEMPTS: usize = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const PAUSED_DEVICE_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const DECODE_BLOCKS: usize = 8;
+const GAIN_BLOCK_FRAMES: usize = 1_024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StreamSpec {
@@ -107,6 +110,13 @@ enum WorkerCommand {
     },
     SetExclusiveMode {
         enabled: bool,
+        reply: Sender<Result<(), String>>,
+    },
+    GetVolume {
+        reply: Sender<Result<f64, String>>,
+    },
+    SetVolume {
+        volume: f64,
         reply: Sender<Result<(), String>>,
     },
     Shutdown,
@@ -272,6 +282,25 @@ pub async fn set_native_audio_exclusive_mode(
     .await
 }
 
+#[tauri::command]
+pub async fn native_audio_volume(player: State<'_, NativeAudioPlayer>) -> Result<f64, String> {
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::GetVolume { reply }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_native_audio_volume(
+    player: State<'_, NativeAudioPlayer>,
+    volume: f64,
+) -> Result<(), String> {
+    request_async(player.command_tx.clone(), move |reply| {
+        WorkerCommand::SetVolume { volume, reply }
+    })
+    .await
+}
+
 impl Drop for NativeAudioPlayer {
     fn drop(&mut self) {
         let _ = self.command_tx.send(WorkerCommand::Shutdown);
@@ -333,6 +362,9 @@ struct PlaybackWorker {
     rendering: bool,
     selected_device_id: Option<String>,
     exclusive_mode: bool,
+    gain: GainStage,
+    gain_buffer: Vec<f64>,
+    gain_buffer_offset: usize,
 }
 
 struct QueuedSource {
@@ -438,6 +470,9 @@ impl PlaybackWorker {
             rendering: false,
             selected_device_id: None,
             exclusive_mode: false,
+            gain: GainStage::default(),
+            gain_buffer: Vec::new(),
+            gain_buffer_offset: 0,
         }
     }
 
@@ -569,6 +604,15 @@ impl PlaybackWorker {
                 let result = self.set_exclusive_mode(enabled);
                 let _ = reply.send(result);
             }
+            WorkerCommand::GetVolume { reply } => {
+                let _ = reply.send(Ok(self.gain.volume()));
+            }
+            WorkerCommand::SetVolume { volume, reply } => {
+                let result = self
+                    .gain
+                    .set_volume(volume, self.spec.map(|spec| spec.sample_rate));
+                let _ = reply.send(result);
+            }
             WorkerCommand::Shutdown => return true,
         }
         false
@@ -665,6 +709,7 @@ impl PlaybackWorker {
         };
         self.decoder = None;
         self.pcm.clear();
+        self.reset_gain_buffer();
         self.desired_playing = autoplay;
         self.decoder_ended = false;
         self.next_source = None;
@@ -785,6 +830,7 @@ impl PlaybackWorker {
             .ok_or_else(|| "No native audio track is loaded".to_owned())?;
         self.decoder = None;
         self.pcm.clear();
+        self.reset_gain_buffer();
         let prepared = prepare_source_at(source, position_seconds)?;
         self.install_prepared(prepared)?;
         if self.desired_playing && self.output.is_none() {
@@ -821,9 +867,21 @@ impl PlaybackWorker {
         }
 
         if self.rendering && self.pcm.is_empty() && !self.decoder_ended {
-            if let Some(output) = self.output.as_mut() {
-                output.pause()?;
+            let output = self
+                .output
+                .as_mut()
+                .ok_or_else(|| "The native audio output is unavailable".to_owned())?;
+            let queued_frames = output.queued_frames()? as u64;
+            if queued_frames > 0 {
+                let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
+                let current_time =
+                    self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
+                update_status(&self.status, |status| status.current_time = current_time);
+                thread::sleep(Duration::from_millis(1));
+                return Ok(());
             }
+
+            output.pause()?;
             self.rendering = false;
             update_status(&self.status, |status| {
                 status.is_playing = false;
@@ -888,11 +946,36 @@ impl PlaybackWorker {
         });
 
         if !self.pcm.is_empty() {
-            let (first, second) = self.pcm.as_slices();
-            let frames = output.write(first, second)?;
+            let using_gain_buffer =
+                !self.gain.is_unity() || self.gain_buffer_offset < self.gain_buffer.len();
+            let frames = if !using_gain_buffer {
+                let (first, second) = self.pcm.as_slices();
+                output.write(first, second)?
+            } else {
+                if self.gain_buffer_offset >= self.gain_buffer.len() {
+                    self.gain_buffer_offset = 0;
+                    let sample_limit = self
+                        .pcm
+                        .len()
+                        .min(GAIN_BLOCK_FRAMES.saturating_mul(spec.channels));
+                    self.gain.process_interleaved(
+                        self.pcm.iter().take(sample_limit).copied(),
+                        spec.channels,
+                        &mut self.gain_buffer,
+                    );
+                }
+                output.write(&self.gain_buffer[self.gain_buffer_offset..], &[])?
+            };
             if frames > 0 {
                 let consumed_samples = frames * spec.channels;
                 self.pcm.drain(..consumed_samples);
+                if using_gain_buffer {
+                    self.gain_buffer_offset += consumed_samples;
+                    if self.gain_buffer_offset >= self.gain_buffer.len() {
+                        self.gain_buffer.clear();
+                        self.gain_buffer_offset = 0;
+                    }
+                }
                 self.rendered_frames = self.rendered_frames.saturating_add(frames as u64);
                 let queued_frames = output.queued_frames()? as u64;
                 let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
@@ -1056,6 +1139,7 @@ impl PlaybackWorker {
         self.rendering = false;
         self.decoder = None;
         self.pcm.clear();
+        self.reset_gain_buffer();
         self.position_base = position_seconds;
         self.rendered_frames = 0;
         let source = self
@@ -1080,6 +1164,7 @@ impl PlaybackWorker {
         self.output = None;
         self.decoder = None;
         self.pcm.clear();
+        self.reset_gain_buffer();
         self.decoder_ended = false;
         self.rendering = false;
         update_status(&self.status, |status| {
@@ -1105,6 +1190,7 @@ impl PlaybackWorker {
         self.rendering = false;
         self.decoder = None;
         self.pcm.clear();
+        self.reset_gain_buffer();
         self.decoder_ended = false;
         self.set_buffering(Some(source.clone()), position_seconds, status.duration);
 
@@ -1146,6 +1232,12 @@ impl PlaybackWorker {
         Err(format!(
             "{original_error}. Automatic stream recovery also failed: {recovery_error}"
         ))
+    }
+
+    fn reset_gain_buffer(&mut self) {
+        self.gain_buffer.clear();
+        self.gain_buffer_offset = 0;
+        self.gain.settle();
     }
 }
 

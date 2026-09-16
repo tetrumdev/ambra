@@ -6,7 +6,7 @@
     margin: 0;
     z-index: 1;
     grid-column: 1;
-    grid-template-rows: 150px 1fr;
+    grid-template-rows: 140px 1fr;
     align-content: flex-start;
     display: grid;
     z-index: 9;
@@ -16,7 +16,7 @@
     grid-row: 1;
     width: 100%;
     display: flex;
-    justify-content: center;
+    justify-content: left;
     align-items: flex-end;
     /*border-bottom: 1px solid #535353;*/
     margin-top: 35px;
@@ -32,6 +32,7 @@
     width: 140px;
     margin: none;
     align-self: center;
+    margin-left: 30px;
 }
 
 #logoImg {
@@ -75,7 +76,7 @@
 
 .sidebarLibrarySections {
     display: grid;
-    gap: 4px;
+    gap: 1px;
     padding-left: 8px;
     margin: 6px 10px 22px;
     color: white;

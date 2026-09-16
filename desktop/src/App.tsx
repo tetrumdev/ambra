@@ -18,7 +18,7 @@ import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   loadPreferences,
   savePreferences,
@@ -103,6 +103,9 @@ function App() {
   latestSessionRef.current = { preferences, player };
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
+  const scrollPositionsRef = useRef(new Map<string, number>());
+  const registeredScrollElementRef = useRef<HTMLDivElement | null>(null);
+  const restoreScrollFrameRef = useRef<number | null>(null);
 
   function createPlaylist(name: string) {
     return playlistStore.create(name);
@@ -123,6 +126,46 @@ function App() {
   const selectedPlaylist = playlists.find((playlist) => {
     return playlist.id === selectedPlaylistId;
   });
+  const activeViewKey = isQueueView
+    ? "queue"
+    : isSearchView
+      ? "search"
+      : selectedPlaylist
+        ? `playlist:${selectedPlaylist.id}`
+        : `library:${librarySection}`;
+  const registerScrollElement = useCallback(
+    (element: HTMLDivElement | null) => {
+      if (restoreScrollFrameRef.current !== null) {
+        cancelAnimationFrame(restoreScrollFrameRef.current);
+        restoreScrollFrameRef.current = null;
+      }
+
+      if (element === null) {
+        const registeredElement = registeredScrollElementRef.current;
+        if (registeredElement) {
+          scrollPositionsRef.current.set(
+            activeViewKey,
+            registeredElement.scrollTop,
+          );
+          registeredScrollElementRef.current = null;
+        }
+        setActiveScrollElement(null);
+        return;
+      }
+
+      registeredScrollElementRef.current = element;
+      const savedPosition = scrollPositionsRef.current.get(activeViewKey) ?? 0;
+      element.scrollTop = savedPosition;
+      setActiveScrollElement(element);
+      restoreScrollFrameRef.current = requestAnimationFrame(() => {
+        if (registeredScrollElementRef.current === element) {
+          element.scrollTop = savedPosition;
+        }
+        restoreScrollFrameRef.current = null;
+      });
+    },
+    [activeViewKey],
+  );
   const collectionTracks = selectedPlaylist
     ? playlistTracks(selectedPlaylist, availableTracks)
     : library.tracks;
@@ -564,7 +607,7 @@ function App() {
       playNext(activeCollectionContext, trackId),
     removeTracks: removeFromCollection,
     shuffleCollection,
-    registerScrollElement: setActiveScrollElement,
+    registerScrollElement,
   };
 
   return (
@@ -593,7 +636,7 @@ function App() {
             upcomingEntries={queue.upcomingEntries}
             jumpTo={jumpToQueueEntry}
             deleteEntries={deleteQueueEntries}
-            registerScrollElement={setActiveScrollElement}
+            registerScrollElement={registerScrollElement}
           />
         </main>
       ) : (
@@ -661,7 +704,7 @@ function App() {
                   void library.addTrack(track.provider, track.providerTrackId);
                 }
               }}
-              registerScrollElement={setActiveScrollElement}
+              registerScrollElement={registerScrollElement}
             />
           ) : selectedPlaylist ? (
             <PlaylistView
