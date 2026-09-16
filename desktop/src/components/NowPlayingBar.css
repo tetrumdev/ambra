@@ -6,7 +6,7 @@
     height: 150px;
     padding: 0 20px;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
     display: grid;
     grid-template-columns:
         minmax(0, 1fr)

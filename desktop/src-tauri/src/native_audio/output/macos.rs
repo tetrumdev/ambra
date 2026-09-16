@@ -79,11 +79,11 @@ impl AudioOutput for PlatformOutput {
         selected_device_id: Option<&str>,
         exclusive_mode: bool,
     ) -> Result<Self, String> {
-        let device_id = match (exclusive_mode, selected_device_id) {
-            (true, Some(device_id)) => device_id
+        let device_id = match selected_device_id {
+            Some(device_id) => device_id
                 .parse::<AudioDeviceID>()
                 .map_err(|_| "The selected CoreAudio device ID is invalid".to_owned())?,
-            _ => get_default_device_id(false)
+            None => get_default_device_id(false)
                 .ok_or_else(|| "No default CoreAudio output device is available".to_owned())?,
         };
 
@@ -92,7 +92,7 @@ impl AudioOutput for PlatformOutput {
         } else {
             false
         };
-        let follows_system_output = !exclusive_mode;
+        let follows_system_output = !exclusive_mode && selected_device_id.is_none();
         let result = Self::open_configured(
             spec,
             device_id,

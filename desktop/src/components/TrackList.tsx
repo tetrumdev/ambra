@@ -5,6 +5,7 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { TrackArtwork } from "./TrackArtwork";
 
 type OpenMenu =
   | {
@@ -223,8 +224,8 @@ export function TrackList({
                 hoveredTrackId === track.globalId ? "btnEnabled" : "btnDisabled"
               }
             />
-            <img
-              src={track.cover}
+            <TrackArtwork
+              track={track}
               alt={`${track.album} album cover`}
               className="coverImg"
               onClick={() => playTrack(track.globalId)}

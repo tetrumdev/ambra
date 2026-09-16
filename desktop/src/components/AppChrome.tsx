@@ -24,7 +24,11 @@ export function AppChrome({
     <>
       {(currentScreen === "library" || currentScreen === "search") &&
         canDragWindow && (
-          <div className="libraryTitlebar" data-tauri-drag-region />
+          <div
+            className="libraryTitlebar"
+            data-content-layout="library"
+            data-tauri-drag-region
+          />
         )}
 
       {currentScreen === "bigscreen" && (
@@ -41,7 +45,11 @@ export function AppChrome({
       {currentScreen === "queue" && (
         <>
           {canDragWindow && (
-            <div className="libraryTitlebar" data-tauri-drag-region />
+            <div
+              className="libraryTitlebar"
+              data-content-layout="queue"
+              data-tauri-drag-region
+            />
           )}
           <button
             className="xContainer"

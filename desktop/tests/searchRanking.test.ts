@@ -43,6 +43,31 @@ describe("provider-neutral recording ranking", () => {
     const first = track("qobuz:first", "qobuz", { name: "Simple Boy", isrc: "FIRST" });
     expect(deduplicateSearchResults([first, track("qobuz:second", "qobuz")]).map(t => t.globalId)).toEqual([first.globalId, "qobuz:second"]);
   });
+  test("retains Qobuz's original Plug Walk release over later thematic compilations", () => {
+    const recording = { name: "Plug Walk", artist: "Rich the kid", isrc: "USUM71800892", durationSeconds: 174, explicit: true, quality: "FLAC", maximumBitDepth: 16, maximumSamplingRateKHz: 44.1 };
+    const original = track("qobuz:51903642", "qobuz", { ...recording, album: "The World Is Yours" });
+    const compilations = [
+      track("qobuz:49115450", "qobuz", { ...recording, album: "Top 30 US" }),
+      track("qobuz:112197744", "qobuz", { ...recording, album: "Gaming Rap Mix" }),
+    ];
+    const tracks = [original, ...compilations];
+    expect(deduplicateSearchResults(tracks).map(t => t.globalId)).toEqual([original.globalId]);
+    expect(rankSearchResults(tracks, "plug walk").map(t => t.globalId)).toEqual([original.globalId]);
+    expect(groupSearchResults(tracks, "plug walk")[0]?.alternatives).toEqual(tracks);
+    expect(rankSearchResults(tracks, "plug walk gaming rap mix")[0]?.globalId).toBe(compilations[1].globalId);
+  });
+  test("equivalent release selection preserves native rank regardless of provider, title, or catalog ID", () => {
+    for (const provider of ["qobuz", "tidal", "spotify"] as const) {
+      for (const [firstId, laterId] of [["9", "1"], ["1", "9"]]) {
+        const first = track(`${provider}:${firstId}`, provider, { name: "An Arbitrary Song", album: "First Release" });
+        const later = track(`${provider}:${laterId}`, provider, { name: first.name, album: "Another Release" });
+        for (const releases of [[first, later], [later, first]]) {
+          expect(deduplicateSearchResults(releases)).toEqual([releases[0]]);
+          expect(rankSearchResults(releases, first.name)).toEqual([releases[0]]);
+        }
+      }
+    }
+  });
   test("uses native ranks rather than quality to order equally relevant songs", () => {
     const original = track("qobuz:radiohead", "qobuz", { name: "Paranoid Android", artist: "Radiohead" });
     const cover = track("qobuz:cover", "qobuz", { name: "Paranoid Android", artist: "Bear Ghost", isrc: "COVER", maximumBitDepth: 24, quality: "FLAC" });

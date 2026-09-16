@@ -5,7 +5,12 @@ const artist = (id: string, name: string, provider: "qobuz" | "tidal" = "qobuz")
 const album = (id: string, extra: Partial<CatalogAlbum> = {}): CatalogAlbum => ({ id, title: "HEROES & VILLAINS", artist: "Metro Boomin", provider: "qobuz", imageUrl: null, ...extra });
 describe("catalog search", () => {
  test("spacing and punctuation match without artist-specific rules", () => {
-  expect(textRelevance("e w p h", "ewph")).toBe(5);
+  for (const [name, query] of [["e w p h", "ewph"], ["A B C D E", "abcde"], ["X.Y.Z.Q", "xyzq"]]) {
+   expect(textRelevance(name, query)).toBe(5);
+   expect(textRelevance(`Without Direction ${name}`, `without direction ${query}`)).toBe(5);
+   expect(textRelevance(`${name} Another Song`, `${query} another song`)).toBe(5);
+   expect(matchingTrackArtist(`${query} another song`, [{ name: "Another Song", artist: name }])).toBe(name);
+  }
   expect(textRelevance("HEROES & VILLAINS", "heroes and villains")).toBe(5);
   expect(textRelevance("Beyoncé", "beyonce")).toBe(5);
  });
@@ -15,8 +20,11 @@ describe("catalog search", () => {
   expect(rankArtists([artist("1", "Oceansize"), artist("2", "Oceansiz")], "oceansiz")[0].id).toBe("2");
  });
  test("bounded retrieval fallback runs for a missing artist even with track hits", () => {
-  expect(fallbackQuery("ewph", [], true)).toBe("e w p h");
-  expect(fallbackQuery("ewph", [artist("1", "e w p h")], true)).toBeNull();
+  for (const query of ["ewph", "abcde", "xyzq", "abcdefgh"]) {
+   const spaced = [...query].join(" ");
+   expect(fallbackQuery(query, [], true)).toBe(spaced);
+   expect(fallbackQuery(query, [artist("1", spaced)], true)).toBeNull();
+  }
   expect(fallbackQuery("a very long artist query", [], true)).toBeNull();
  });
  test("consolidates album editions before limiting results, retaining named versions", () => {

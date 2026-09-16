@@ -82,7 +82,7 @@ summary {
 
 :root[data-bigscreen-idle="true"] .xContainer,
 :root[data-bigscreen-idle="true"] #queueBtn,
-:root[data-bigscreen-idle="true"] .devAudioModeToggle {
+:root[data-bigscreen-idle="true"] .devAudioControls {
     visibility: hidden;
     pointer-events: none;
 }

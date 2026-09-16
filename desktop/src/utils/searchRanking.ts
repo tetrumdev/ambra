@@ -68,6 +68,8 @@ function requestedEdition(track: Track, query: string) {
 }
 
 function compareEdition(left: Track, right: Track, query: string) {
+  // Keep the first provider-ranked appearance when edition evidence is tied.
+  // Catalog IDs do not indicate which release is the original.
   return requestedEdition(left, query) - requestedEdition(right, query)
     || Number(left.explicit) - Number(right.explicit)
     || Number(compilation(right)) - Number(compilation(left))
@@ -75,8 +77,7 @@ function compareEdition(left: Track, right: Track, query: string) {
     || Number(lossless(left)) - Number(lossless(right))
     || (left.maximumBitDepth ?? (lossless(left) ? 16 : 0)) - (right.maximumBitDepth ?? (lossless(right) ? 16 : 0))
     || (left.maximumSamplingRateKHz ?? (lossless(left) ? 44.1 : 0)) - (right.maximumSamplingRateKHz ?? (lossless(right) ? 44.1 : 0))
-    || Number(remaster(left)) - Number(remaster(right))
-    || right.globalId.localeCompare(left.globalId);
+    || Number(remaster(left)) - Number(remaster(right));
 }
 
 function relevance(track: Track, query: string) {
