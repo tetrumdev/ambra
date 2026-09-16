@@ -34,7 +34,8 @@ type Options = {
   initialDeadlineMs?: number;
 };
 
-// One cursor and failure state per source. No service gates another service's results.
+// Sources keep independent cursors and failures; the first display waits briefly
+// for a combined result set so provider timing doesn't immediately swap cards.
 export class SearchSession {
   private sources = new Map<StreamingProvider, Source>();
   private controller = new AbortController();
@@ -88,7 +89,7 @@ export class SearchSession {
       clearTimeout(this.deadlineTimer);
     }
     if (!this.initialResultsReleased && (next.candidates.length > 0 || next.artists.length > 0 || next.albums.length > 0)) {
-      const delay = this.options.initialMergeWindowMs ?? 120;
+      const delay = this.options.initialMergeWindowMs ?? 1200;
       if (delay === 0) this.initialResultsReleased = true;
       else if (!this.mergeTimer) this.mergeTimer = setTimeout(this.releaseInitialResults, delay);
     }
@@ -108,7 +109,7 @@ export class SearchSession {
     if (this.controller.signal.aborted) return;
     if (!this.started) {
       this.started = true;
-      this.deadlineTimer = setTimeout(this.releaseInitialResults, this.options.initialDeadlineMs ?? 500);
+      this.deadlineTimer = setTimeout(this.releaseInitialResults, this.options.initialDeadlineMs ?? 1800);
     }
     const ready = [...this.sources].filter(([, source]) => source.nextOffset !== null && !source.pending && !source.error);
     for (const [, source] of ready) source.pending = true;

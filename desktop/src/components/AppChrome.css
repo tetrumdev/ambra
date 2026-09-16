@@ -13,7 +13,7 @@
     user-select: none;
     -webkit-user-select: none;
     z-index: 50;
-    background: rgba(0, 0, 0, 0.5);
+    background: rgba(60, 60, 60, 0.5);
     backdrop-filter: blur(10px);
 }
 
@@ -27,7 +27,6 @@
     left: var(--titlebar-content-left);
     right: var(--scrollbar-column-width);
     bottom: 0;
-    border-bottom: 1px solid #535353;
     pointer-events: none;
 }
 
@@ -40,7 +39,7 @@
 .bigscreenTitlebar {
     position: absolute;
     inset: 0 0 auto 0;
-    height: 30px;
+    height: var(--library-titlebar-height);
     z-index: 50;
     user-select: none;
     -webkit-user-select: none;
