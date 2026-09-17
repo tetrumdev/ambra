@@ -370,6 +370,14 @@ struct PlaybackWorker {
 struct QueuedSource {
     source: String,
     receiver: Receiver<Result<PreparedSource, String>>,
+    foreground: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl Drop for QueuedSource {
+    fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
 }
 
 struct PreparedSource {
@@ -440,13 +448,34 @@ impl QueuedSource {
     fn prepare_with_buffer(source: String, preload: bool) -> Result<Self, String> {
         let (sender, receiver) = bounded(1);
         let decoder_source = source.clone();
+        let foreground = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let worker_foreground = foreground.clone();
+        let worker_cancelled = cancelled.clone();
         thread::Builder::new()
             .name("ambra-audio-preload".to_owned())
             .spawn(move || {
-                let _ = sender.send(prepare_source(decoder_source, preload));
+                let _ = sender.send(prepare_source_with_control(
+                    decoder_source,
+                    0.0,
+                    preload,
+                    Some(&worker_foreground),
+                    Some(&worker_cancelled),
+                ));
             })
             .map_err(|error| format!("Could not start native audio preloading: {error}"))?;
-        Ok(Self { source, receiver })
+        Ok(Self {
+            source,
+            receiver,
+            foreground,
+            cancelled,
+        })
+    }
+
+    fn into_foreground(self) -> Option<PreparedSource> {
+        // A click needs the startup buffer, not the entire speculative buffer.
+        self.foreground.store(true, Ordering::Release);
+        self.receiver.recv().ok().and_then(Result::ok)
     }
 }
 
@@ -707,8 +736,7 @@ impl PlaybackWorker {
                     self.next_source
                         .take()
                         .filter(|queued| queued.source == source)
-                        .and_then(|queued| queued.receiver.try_recv().ok())
-                        .and_then(Result::ok)
+                        .and_then(QueuedSource::into_foreground)
                 })
         } else {
             None
@@ -736,11 +764,12 @@ impl PlaybackWorker {
         {
             self.warm_source
                 .take()
-                .and_then(|warm| warm.receiver.recv().ok())
-                .and_then(Result::ok)
+                .and_then(QueuedSource::into_foreground)
         } else {
             None
         };
+        // Drop unrelated hover work when a user selects another song.
+        self.warm_source = None;
         let prepared = match prepared_next.or(warmed) {
             Some(prepared) => prepared,
             None => prepare_source_at(source.clone(), position_seconds)?,
@@ -770,7 +799,7 @@ impl PlaybackWorker {
             status.current_time = position_seconds;
             status.duration = duration;
             status.is_playing = false;
-            status.buffering = false;
+            status.buffering = autoplay;
             status.ended = false;
             status.error = None;
         });
@@ -801,6 +830,7 @@ impl PlaybackWorker {
         }
         self.desired_playing = true;
         update_status(&self.status, |status| {
+            status.buffering = !status.is_playing;
             status.ended = false;
             status.error = None;
         });
@@ -849,7 +879,7 @@ impl PlaybackWorker {
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
             status.is_playing = false;
-            status.buffering = false;
+            status.buffering = self.desired_playing;
             status.ended = false;
             status.error = None;
         });
@@ -897,7 +927,7 @@ impl PlaybackWorker {
         }
 
         if self.pcm.is_empty() && self.decoder_ended {
-            self.poll_next_source()?;
+            self.poll_next_source();
             if let Some((_, prepared)) = self.ready_next.as_ref()
                 && self.spec == Some(prepared.decoder.spec())
             {
@@ -1037,26 +1067,27 @@ impl PlaybackWorker {
         Ok(())
     }
 
-    fn poll_next_source(&mut self) -> Result<(), String> {
+    fn poll_next_source(&mut self) {
         let Some(queued) = self.next_source.as_ref() else {
-            return Ok(());
+            return;
         };
         match queued.receiver.try_recv() {
             Ok(Ok(prepared)) => {
                 let queued = self.next_source.take().expect("queued source disappeared");
-                self.ready_next = Some((queued.source, prepared));
+                self.ready_next = Some((queued.source.clone(), prepared));
             }
             Ok(Err(error)) => {
                 self.next_source = None;
-                return Err(format!("Could not preload the next track: {error}"));
+                // Let normal queue advancement retry this track in the foreground.
+                // Speculative failure must not turn the current song into an error.
+                eprintln!("Could not preload the next track: {error}");
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.next_source = None;
-                return Err("The native audio preloader stopped unexpectedly".to_owned());
+                eprintln!("The native audio preloader stopped unexpectedly");
             }
         }
-        Ok(())
     }
 
     fn advance(&mut self, source: String, prepared: PreparedSource) -> Result<(), String> {
@@ -1248,6 +1279,7 @@ impl PlaybackWorker {
     }
 }
 
+#[cfg(test)]
 fn prepare_source(source: String, preload: bool) -> Result<PreparedSource, String> {
     prepare_source_with_buffer(source, 0.0, preload)
 }
@@ -1261,14 +1293,34 @@ fn prepare_source_with_buffer(
     position_seconds: f64,
     preload: bool,
 ) -> Result<PreparedSource, String> {
+    prepare_source_with_control(source, position_seconds, preload, None, None)
+}
+
+fn prepare_source_with_control(
+    source: String,
+    position_seconds: f64,
+    preload: bool,
+    foreground: Option<&AtomicBool>,
+    cancelled: Option<&AtomicBool>,
+) -> Result<PreparedSource, String> {
+    let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Acquire));
+    if is_cancelled() {
+        return Err("Audio preparation cancelled".to_owned());
+    }
     let network_source = is_network_source(&source);
     let mut decoder = DecodedSource::open_at(source, position_seconds)?;
     let spec = decoder.spec();
     let max_buffer_samples = max_buffer_samples(spec, network_source);
-    let prebuffer_samples = prebuffer_samples_for_kind(spec, network_source, preload);
     let mut pcm = VecDeque::with_capacity(max_buffer_samples);
     let mut decoder_ended = false;
-    while pcm.len() < prebuffer_samples && !decoder_ended {
+    while !decoder_ended {
+        if is_cancelled() {
+            return Err("Audio preparation cancelled".to_owned());
+        }
+        let speculative = preload && !foreground.is_some_and(|flag| flag.load(Ordering::Acquire));
+        if pcm.len() >= prebuffer_samples_for_kind(spec, network_source, speculative) {
+            break;
+        }
         match decoder.decode_next()? {
             Some(samples) => pcm.extend(samples.iter().copied()),
             None => decoder_ended = true,
@@ -1331,6 +1383,37 @@ mod tests {
     use super::{StreamSpec, max_buffer_samples, prebuffer_samples, valid_position};
 
     #[test]
+    fn speculative_failure_does_not_fail_current_playback() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker = PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
+        let (sender, receiver) = bounded(1);
+        sender
+            .send(Err("temporary network outage".to_owned()))
+            .unwrap();
+        worker.next_source = Some(QueuedSource {
+            source: "https://example.test/next.flac".to_owned(),
+            receiver,
+            foreground: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+        worker.poll_next_source();
+        assert!(worker.next_source.is_none());
+        assert!(worker.status.lock().unwrap().error.is_none());
+    }
+
+    #[test]
+    fn discarded_preparation_is_cancelled_before_opening_source() {
+        use super::*;
+        let cancelled = AtomicBool::new(true);
+        let error =
+            prepare_source_with_control("missing.flac".into(), 0.0, true, None, Some(&cancelled))
+                .err()
+                .unwrap();
+        assert_eq!(error, "Audio preparation cancelled");
+    }
+
+    #[test]
     fn selecting_prepared_audio_does_not_reopen_its_source() {
         use super::*;
         let path = std::env::temp_dir().join(format!("ambra-prepared-{}.wav", std::process::id()));
@@ -1348,19 +1431,30 @@ mod tests {
         wav.extend_from_slice(&4u32.to_le_bytes());
         wav.extend_from_slice(&[0; 4]);
         let source = path.to_string_lossy().into_owned();
-        for warm in [false, true] {
+        for mode in 0..3 {
             std::fs::write(&path, &wav).unwrap();
             let prepared = prepare_source(source.clone(), false).unwrap();
             std::fs::remove_file(&path).unwrap();
             let (_tx, rx) = unbounded();
-            let mut worker = PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
-            if warm {
+            let mut worker =
+                PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
+            if mode > 0 {
                 let (sender, receiver) = bounded(1);
-                sender.send(Ok(prepared)).unwrap();
-                worker.warm_source = Some(QueuedSource {
+                thread::spawn(move || {
+                    thread::sleep(Duration::from_millis(25));
+                    sender.send(Ok(prepared)).unwrap();
+                });
+                let queued = Some(QueuedSource {
                     source: source.clone(),
                     receiver,
+                    foreground: Arc::new(AtomicBool::new(false)),
+                    cancelled: Arc::new(AtomicBool::new(false)),
                 });
+                if mode == 1 {
+                    worker.warm_source = queued;
+                } else {
+                    worker.next_source = queued;
+                }
             } else {
                 worker.ready_next = Some((source.clone(), prepared));
             }

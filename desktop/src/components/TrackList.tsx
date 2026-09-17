@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
 import type { GlobalTrackId, Track } from "../types/music";
@@ -55,9 +55,6 @@ export function TrackList({
   addToLibrary,
   playlistOptions,
 }: TrackListProps) {
-  const [hoveredTrackId, setHoveredTrackId] = useState<GlobalTrackId | null>(
-    null,
-  );
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
   const trackIds = useMemo(
     () => tracks.map((track) => track.globalId),
@@ -70,15 +67,8 @@ export function TrackList({
     void invoke("warm_native_audio", { source: nativeAudioSource(firstTrack) })
       .catch(() => {});
   }, [firstTrack]);
-  const hoveredTrack = tracks.find(track => track.globalId === hoveredTrackId);
-  useEffect(() => {
-    if (!isTauri() || !hoveredTrack) return;
-    const timer = window.setTimeout(() => {
-      void invoke("warm_native_audio", { source: nativeAudioSource(hoveredTrack) })
-        .catch(() => {});
-    }, 100);
-    return () => window.clearTimeout(timer);
-  }, [hoveredTrack]);
+  const warmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(warmTimer.current), []);
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();
@@ -100,7 +90,6 @@ export function TrackList({
     if (!removeTracks || selection.selectedIds.size === 0) return;
     removeTracks([...selection.selectedIds]);
     selection.clear();
-    setHoveredTrackId(null);
     setOpenMenu(null);
   }
 
@@ -145,6 +134,30 @@ export function TrackList({
       y: triggerRect.bottom + gap,
     });
   }
+
+  // Stable event entry point lets playback clock updates skip every unchanged row.
+  const actions = useRef<(action: RowAction, event: React.MouseEvent<HTMLDivElement>, index: number) => void>(() => {});
+  actions.current = (action, event, index) => {
+    const track = tracks[index];
+    if (!track) return;
+    switch (action) {
+      case "select": handleTrackClick(event, index); break;
+      case "playback": showPlaybackMenu(event, track.globalId); break;
+      case "context": handleTrackContextMenu(event, index); break;
+      case "collection": showCollectionMenu(event, track.globalId); break;
+      case "play": playTrack(track.globalId); break;
+      case "cancelWarm": clearTimeout(warmTimer.current); break;
+      case "warm":
+        clearTimeout(warmTimer.current);
+        if (isTauri()) warmTimer.current = setTimeout(() => {
+          void invoke("warm_native_audio", { source: nativeAudioSource(track) }).catch(() => {});
+        }, 100);
+        break;
+    }
+  };
+  const onRowAction = useCallback((action: RowAction, event: React.MouseEvent, index: number) => {
+    actions.current(action, event as React.MouseEvent<HTMLDivElement>, index);
+  }, []);
 
   return (
     <>
@@ -196,74 +209,91 @@ export function TrackList({
         )}
       </div>
       {tracks.map((track, index) => (
-        <div
-          className="libraryItem"
-          key={track.globalId}
-          data-selected={
-            selection.selectedIds.has(track.globalId) ? "true" : undefined
-          }
-          data-selecting={selection.isSelecting ? "true" : undefined}
-          data-menu-open={
-            openMenu?.trackId === track.globalId ? "true" : undefined
-          }
-          onClickCapture={(event) => handleTrackClick(event, index)}
-          onClick={(event) => showPlaybackMenu(event, track.globalId)}
-          onContextMenu={(event) => handleTrackContextMenu(event, index)}
-        >
-          <div
-            className="coverImgContainer"
-            onMouseEnter={() => setHoveredTrackId(track.globalId)}
-            onMouseLeave={() => setHoveredTrackId(null)}
-          >
-            <img
-              src="/Play.svg"
-              alt=""
-              aria-hidden="true"
-              className="coverPlayBtn"
-              data-variant={
-                hoveredTrackId === track.globalId ? "btnEnabled" : "btnDisabled"
-              }
-            />
-            <TrackArtwork
-              track={track}
-              alt={`${track.album} album cover`}
-              className="coverImg"
-              onClick={() => playTrack(track.globalId)}
-            />
-          </div>
-          <span className="trackName trackDescriptor" data-playback-menu-trigger>
-            {track.name}
-          </span>
-          <span className="artistName trackDescriptor">{track.artist}</span>
-          <span className="albumName trackDescriptor">{track.album}</span>
-          <span
-            className="trackDuration trackDescriptor"
-            data-playback-menu-trigger
-          >
-            {formatTime(track.durationSeconds)}
-          </span>
-          <div
-            className="trackCollectionMenuTrigger"
-            onClick={(event) => showCollectionMenu(event, track.globalId)}
-            data-collection-menu-trigger
-            data-collection-menu-open={openMenu?.trackId === track.globalId && openMenu.kind === "collection" ? "true" : undefined}
-          >
-            <img
-              src={
-                selection.isSelecting
-                  ? selection.selectedIds.has(track.globalId)
-                    ? "/select.svg"
-                    : "/noSelect.svg"
-                  : "/menu.svg"
-              }
-              alt={selection.isSelecting ? "Selection status" : "Menu"}
-              className={
-                selection.isSelecting ? "selectionIndicator" : undefined
-              }
-            />
-          </div>
-        </div>
+        <TrackRow key={track.globalId} track={track} index={index}
+          selected={selection.selectedIds.has(track.globalId)}
+          selecting={selection.isSelecting}
+          menuOpen={openMenu?.trackId === track.globalId}
+          collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
+          onAction={onRowAction}
+        />
       ))}
     </>
   );
 }
+
+type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
+const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, onAction }: {
+  track: Track;
+  index: number;
+  selected: boolean;
+  selecting: boolean;
+  menuOpen: boolean;
+  collectionMenuOpen: boolean;
+  onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
+}) {
+  return (
+    <div
+      className="libraryItem"
+      data-selected={
+        selected ? "true" : undefined
+      }
+      data-selecting={selecting ? "true" : undefined}
+      data-menu-open={
+        menuOpen ? "true" : undefined
+      }
+      onClickCapture={(event) => onAction("select", event, index)}
+      onClick={(event) => onAction("playback", event, index)}
+      onContextMenu={(event) => onAction("context", event, index)}
+    >
+      <div
+        className="coverImgContainer"
+        onMouseEnter={(event) => onAction("warm", event, index)}
+        onMouseLeave={(event) => onAction("cancelWarm", event, index)}
+      >
+        <img
+          src="/Play.svg"
+          alt=""
+          aria-hidden="true"
+          className="coverPlayBtn"
+        />
+        <TrackArtwork
+          track={track}
+          alt={`${track.album} album cover`}
+          className="coverImg"
+          onClick={(event) => onAction("play", event, index)}
+        />
+      </div>
+      <span className="trackName trackDescriptor" data-playback-menu-trigger>
+        {track.name}
+      </span>
+      <span className="artistName trackDescriptor">{track.artist}</span>
+      <span className="albumName trackDescriptor">{track.album}</span>
+      <span
+        className="trackDuration trackDescriptor"
+        data-playback-menu-trigger
+      >
+        {formatTime(track.durationSeconds)}
+      </span>
+      <div
+        className="trackCollectionMenuTrigger"
+        onClick={(event) => onAction("collection", event, index)}
+        data-collection-menu-trigger
+        data-collection-menu-open={collectionMenuOpen ? "true" : undefined}
+      >
+        <img
+          src={
+            selecting
+              ? selected
+                ? "/select.svg"
+                : "/noSelect.svg"
+              : "/menu.svg"
+          }
+          alt={selecting ? "Selection status" : "Menu"}
+          className={
+            selecting ? "selectionIndicator" : undefined
+          }
+        />
+      </div>
+    </div>
+  );
+});

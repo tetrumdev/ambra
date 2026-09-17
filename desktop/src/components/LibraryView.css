@@ -40,6 +40,122 @@
     padding-bottom: 0;
 }
 
+.playlistView {
+    --playlist-artwork-progress: 0;
+    --playlist-title-progress: 0;
+    --playlist-title-lag: 0;
+    --playlist-actions-progress: 0;
+    --playlist-details-progress: 0;
+    --playlist-sticky-header-height: 60px;
+    --playlist-current-header-height: 165px;
+    --playlist-artwork-size: calc(
+        145px - 18px * var(--playlist-title-progress) - 70px *
+            var(--playlist-details-progress) - 13px *
+            var(--playlist-artwork-progress)
+    );
+    --playlist-title-offset: calc(
+        var(--playlist-artwork-size) + 14px + 6px *
+            (1 - var(--playlist-artwork-progress)) + 15px *
+            var(--playlist-title-lag)
+    );
+}
+
+.playlistHeaderAnchor {
+    height: 63px;
+}
+
+.playlistView .libraryHeader {
+    position: sticky;
+    top: var(--library-titlebar-height);
+    z-index: 9;
+    grid-template-columns: var(--playlist-title-offset) minmax(0, 1fr);
+    align-items: start;
+    display: grid;
+    min-height: var(--playlist-sticky-header-height);
+    padding-top: 0;
+    padding-bottom: 0;
+    background: #000;
+}
+
+.libraryHeaderArtwork {
+    width: var(--playlist-artwork-size);
+    height: var(--playlist-artwork-size);
+    position: absolute;
+    top: 0;
+    left: 30px;
+    min-width: 0;
+    overflow: hidden;
+    margin-top: calc(16px * var(--playlist-title-progress));
+    border-radius: calc(8px - 5px * var(--playlist-title-progress));
+    background: #000;
+}
+
+.playlistArtworkGrid {
+    display: grid;
+    width: 100%;
+    height: 100%;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    background: #000;
+}
+
+.playlistArtworkGrid > img,
+.playlistArtworkGrid > span {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    object-fit: cover;
+}
+
+.libraryHeaderBody {
+    box-sizing: border-box;
+    grid-column: 2;
+    min-width: 0;
+    padding-top: calc(16px * var(--playlist-title-progress));
+    padding-bottom: calc(4px * (1 - var(--playlist-title-progress)));
+}
+
+.playlistView .libraryTitle {
+    margin-top: 0;
+    margin-bottom: calc(8px * (1 - var(--playlist-title-progress)));
+    font-size: calc(4rem - 1.5rem * var(--playlist-title-progress));
+    line-height: 1.08;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transform-origin: left top;
+}
+
+.playlistView .libraryPlayActions {
+    max-height: calc(47px * (1 - var(--playlist-details-progress)));
+    margin-top: calc(6px * (1 - var(--playlist-details-progress)));
+    margin-bottom: calc(4px * (1 - var(--playlist-details-progress)));
+    overflow: hidden;
+    opacity: calc(1 - var(--playlist-actions-progress));
+    pointer-events: auto;
+}
+
+.playlistView[data-playlist-actions-hidden] .libraryPlayActions {
+    pointer-events: none;
+}
+
+.playlistView .libraryInfo {
+    max-height: calc(24px * (1 - var(--playlist-details-progress)));
+    margin-top: calc(4px * (1 - var(--playlist-details-progress)));
+    overflow: hidden;
+    opacity: calc(1 - var(--playlist-actions-progress));
+}
+
+.playlistView .columnInfo {
+    top: calc(
+        var(--library-titlebar-height) + var(--playlist-current-header-height)
+    );
+    padding-top: 10px;
+    padding-bottom: 24px;
+}
+
 .librarySourcesTrigger {
     position: absolute;
     top: 8px;
@@ -53,7 +169,9 @@
     border-radius: 50%;
     background: rgba(9, 9, 9, 0.82);
     color: white;
-    font: 300 24px/1 "Stack Sans Text", sans-serif;
+    font:
+        300 24px/1 "Stack Sans Text",
+        sans-serif;
     cursor: pointer;
 }
 
@@ -529,6 +647,7 @@
 .libraryItem {
     margin: 0;
     background-color: black;
+    cursor: pointer;
     padding-left: 15px;
     height: 76px;
     border-bottom: 1px solid #535353;
@@ -546,7 +665,6 @@
 
 .libraryItem:hover {
     background-color: #151515;
-    cursor: pointer;
 }
 
 .libraryItem[data-menu-open="true"] {
@@ -617,12 +735,12 @@
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.7));
 }
 
-.coverPlayBtn[data-variant="btnEnabled"] {
+.coverImgContainer:hover .coverPlayBtn {
     opacity: 100%;
     transition: 0.25s ease-out;
 }
 
-.coverPlayBtn[data-variant="btnDisabled"] {
+.coverPlayBtn {
     opacity: 0;
     transition: 0.25s ease-in;
 }

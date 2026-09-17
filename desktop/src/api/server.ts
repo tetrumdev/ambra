@@ -6,6 +6,7 @@ import type {
   TrackArtist,
 } from "../types/music";
 import fallbackCover from "../assets/images/fallbackCover.png";
+import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 
 const serverBaseUrl = (
@@ -139,7 +140,41 @@ type TrackPlayback = {
 };
 
 const artworkQualityRequests = new Map<string, Promise<ArtworkQuality | null>>();
-const artworkPaletteVersion = "palette-v4";
+const artworkPaletteVersion = "thumbnail-v1";
+
+function artworkQuery(track: Track) {
+  const url = track.nativeCover;
+  if (track.provider === "local" || !url?.startsWith("https://")) return null;
+  return new URLSearchParams({ provider: track.provider, url }).toString();
+}
+
+export function thumbnailArtwork(track: Track) {
+  const query = artworkQuery(track);
+  return query ? `${serverBaseUrl}/api/artwork/thumbnail?${query}` : track.cover;
+}
+
+const paletteRequests = new Map<string, Promise<string[]>>();
+export function artworkPalette(track: Track): Promise<string[]> {
+  const query = artworkQuery(track);
+  if (!query) return Promise.resolve([]);
+  const cached = paletteRequests.get(query);
+  if (cached) {
+    paletteRequests.delete(query);
+    paletteRequests.set(query, cached);
+    return cached;
+  }
+  const request = fetch(`${serverBaseUrl}/api/artwork/palette?${query}`)
+    .then(async response => {
+      if (!response.ok) throw new Error(`Artwork palette HTTP ${response.status}`);
+      return await response.json() as string[];
+    }).catch(() => {
+      if (paletteRequests.get(query) === request) paletteRequests.delete(query);
+      return [];
+    });
+  paletteRequests.set(query, request);
+  if (paletteRequests.size > 512) paletteRequests.delete(paletteRequests.keys().next().value!);
+  return request;
+}
 
 export function highestQualityArtwork(
   track: Track,
@@ -161,7 +196,11 @@ export function highestQualityArtwork(
     track.nativeCover,
   ].join(":");
   const cached = artworkQualityRequests.get(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    artworkQualityRequests.delete(cacheKey);
+    artworkQualityRequests.set(cacheKey, cached);
+    return cached;
+  }
 
   const request = fetch(`${serverBaseUrl}/api/quality/artwork`, {
     method: "POST",
@@ -180,18 +219,18 @@ export function highestQualityArtwork(
         );
       }
       const artwork = (await response.json()) as ArtworkQuality;
-      if (!Array.isArray(artwork.colors) || artwork.colors.length !== 4) {
-        artworkQualityRequests.delete(cacheKey);
-      }
       return artwork;
     })
     .catch((reason: unknown) => {
-      artworkQualityRequests.delete(cacheKey);
+      if (artworkQualityRequests.get(cacheKey) === request) artworkQualityRequests.delete(cacheKey);
       console.warn("Could not resolve highest-quality album artwork:", reason);
       return null;
     });
 
   artworkQualityRequests.set(cacheKey, request);
+  if (artworkQualityRequests.size > 256) {
+    artworkQualityRequests.delete(artworkQualityRequests.keys().next().value!);
+  }
   return request;
 }
 
@@ -254,8 +293,8 @@ async function responseTracks(response: Response): Promise<Track[]> {
   return library.tracks.map(playableTrack);
 }
 
-export async function loadServerTracks(): Promise<Track[]> {
-  return responseTracks(await fetch(`${serverBaseUrl}/api/library`));
+export async function loadServerTracks(signal?: AbortSignal): Promise<Track[]> {
+  return responseTracks(await fetchWhenServerReady(`${serverBaseUrl}/api/library`, signal));
 }
 
 export async function addServerAlbum(url: string): Promise<Track[]> {

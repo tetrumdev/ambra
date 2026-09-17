@@ -250,18 +250,36 @@ export function FluidGradientBackground({
 
     gl.uniform1f(shaderSeed, seedNumber(initialSeedRef.current) * 1000);
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    reducedMotionRef.current = reducedMotion;
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    reducedMotionRef.current = motionPreference.matches;
     const startedAt = performance.now();
-    const draw = (now: number) => {
-      animationFrameRef.current = 0;
-      const pixelRatio = Math.min(window.devicePixelRatio, 1.5);
-      const width = Math.max(1, Math.round(canvas.clientWidth * pixelRatio));
-      const height = Math.max(1, Math.round(canvas.clientHeight * pixelRatio));
+    // This soft color field has no fine detail. Bound fragment work separately
+    // from display density, and measure layout only when the canvas changes size.
+    let width = 1;
+    let height = 1;
+    const resize = () => {
+      const cssWidth = canvas.clientWidth;
+      const cssHeight = canvas.clientHeight;
+      const scale = Math.min(1, 960 / Math.max(1, cssWidth, cssHeight));
+      width = Math.max(1, Math.round(cssWidth * scale));
+      height = Math.max(1, Math.round(cssHeight * scale));
       if (canvas.width !== width || canvas.height !== height) {
         canvas.width = width;
         canvas.height = height;
       }
+      scheduleDraw();
+    };
+    const scheduleDraw = () => {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = document.hidden ? 0 : requestAnimationFrame(draw);
+    };
+    const motionChanged = () => {
+      reducedMotionRef.current = motionPreference.matches;
+      scheduleDraw();
+    };
+    const draw = (now: number) => {
+      animationFrameRef.current = 0;
+      if (document.hidden || gl.isContextLost()) return;
       gl.viewport(0, 0, width, height);
       const transition = transitionRef.current;
       const progress = easedProgress(
@@ -272,16 +290,23 @@ export function FluidGradientBackground({
         mixPalette(transition.from, transition.to, progress),
       );
       gl.uniform2f(resolution, width, height);
-      gl.uniform1f(time, reducedMotion ? 0 : (now - startedAt) / 1000);
+      gl.uniform1f(time, reducedMotionRef.current ? 0 : (now - startedAt) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (!reducedMotion && activeRef.current) {
+      if (!reducedMotionRef.current && activeRef.current) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };
     drawRef.current = draw;
-    animationFrameRef.current = requestAnimationFrame(draw);
+    const resizeObserver = new ResizeObserver(resize);
+    resizeObserver.observe(canvas);
+    document.addEventListener("visibilitychange", scheduleDraw);
+    motionPreference.addEventListener("change", motionChanged);
+    resize();
 
     return () => {
+      resizeObserver.disconnect();
+      document.removeEventListener("visibilitychange", scheduleDraw);
+      motionPreference.removeEventListener("change", motionChanged);
       drawRef.current = null;
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = 0;

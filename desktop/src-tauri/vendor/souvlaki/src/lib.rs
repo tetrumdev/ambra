@@ -1,4 +1,5 @@
 #![doc = include_str!("../README.md")]
+#![allow(unexpected_cfgs)] // objc 0.2 macros still probe the removed cargo-clippy cfg.
 
 mod config;
 mod platform;

@@ -77,6 +77,8 @@ export function AppScrollbar({ scrollElement }: AppScrollbarProps) {
     const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(scrollElement);
     resizeObserver.observe(rail);
+    const collectionHeader = scrollElement.querySelector(".libraryHeader");
+    if (collectionHeader) resizeObserver.observe(collectionHeader);
 
     const mutationObserver = new MutationObserver(scheduleMeasure);
     mutationObserver.observe(scrollElement, {

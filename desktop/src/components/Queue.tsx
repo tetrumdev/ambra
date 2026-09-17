@@ -1,3 +1,4 @@
+import { TrackArtwork } from "./TrackArtwork";
 import "./Queue.css";
 import { useEffect, useMemo } from "react";
 import { useRangeSelection } from "../hooks/useRangeSelection";
@@ -94,8 +95,9 @@ export function Queue({
             onContextMenu={(event) => selectEntry(event, 0)}
           >
             <div className="coverImgContainer">
-              <img
-                src={currentEntry.track.cover}
+              <TrackArtwork
+                track={currentEntry.track}
+                loading="eager"
                 alt={`${currentEntry.track.album} album cover`}
                 className="coverImg"
               />
@@ -125,8 +127,8 @@ export function Queue({
             onContextMenu={(event) => selectEntry(event, index + 1)}
           >
             <div className="coverImgContainer">
-              <img
-                src={entry.track.cover}
+              <TrackArtwork
+                track={entry.track}
                 alt={`${entry.track.album} album cover`}
                 className="coverImg"
               />

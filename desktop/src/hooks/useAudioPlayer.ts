@@ -6,6 +6,7 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
+import { preloadBigscreenArtwork } from "../utils/artworkImages";
 import type { MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -18,6 +19,7 @@ import {
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
 import { isUnmodifiedKey } from "../utils/keyboard";
+import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 
 export type AudioDeckController = {
   firstAudioRef: RefObject<HTMLAudioElement | null>;
@@ -72,6 +74,7 @@ type NativeAudioStatus = {
   isPlaying: boolean;
   buffering: boolean;
   ended: boolean;
+  error: string | null;
 };
 
 export function useAudioPlayer(
@@ -86,7 +89,8 @@ export function useAudioPlayer(
   const deckGenerationsRef = useRef<[number, number]>([0, 0]);
   const currentTrackIdRef = useRef<string | null>(null);
   const currentTimeRef = useRef(0);
-  const isPlayingRef = useRef(false);
+  const nativePlayIntentRef = useRef(false);
+  const nativeCommandsRef = useRef(new NativePlaybackCommands(invoke));
   const initialPlaybackRef = useRef(initialPlayback);
   const restoreStartedRef = useRef(false);
   const queueNavigationRef = useRef(queueNavigation);
@@ -110,11 +114,22 @@ export function useAudioPlayer(
   tracksRef.current = tracks;
   queueNavigationRef.current = queueNavigation;
   currentTimeRef.current = currentTime;
-  isPlayingRef.current = isPlaying;
   const usesNativeAudio = isTauri();
   const currentTrack = tracks.find(
     (track) => track.globalId === currentTrackId,
   );
+
+  const nextArtworkTrack = queueNavigation.nextTrack;
+  useEffect(() => {
+    if (!nextArtworkTrack) return;
+    void preloadBigscreenArtwork(nextArtworkTrack);
+  }, [
+    nextArtworkTrack?.albumId,
+    nextArtworkTrack?.cover,
+    nextArtworkTrack?.globalId,
+    nextArtworkTrack?.nativeCover,
+    nextArtworkTrack?.provider,
+  ]);
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -167,7 +182,7 @@ export function useAudioPlayer(
     nativeReadyGenerationRef.current = null;
     currentTrackIdRef.current = null;
     currentTimeRef.current = 0;
-    isPlayingRef.current = false;
+    nativePlayIntentRef.current = false;
     pendingRestoreTimeRef.current = null;
     pendingPlaybackDeckRef.current = null;
     releaseDeck(0);
@@ -214,8 +229,9 @@ export function useAudioPlayer(
       const loadGeneration = nativeLoadGenerationRef.current + 1;
       nativeLoadGenerationRef.current = loadGeneration;
       nativeReadyGenerationRef.current = null;
+      nativePlayIntentRef.current = autoplay;
 
-      void invoke("load_native_audio", {
+      void nativeCommandsRef.current.run("load_native_audio", {
         source: nativeAudioSource(track),
         nextSource: nextTrack ? nativeAudioSource(nextTrack) : null,
         positionSeconds,
@@ -226,7 +242,14 @@ export function useAudioPlayer(
           nativeReadyGenerationRef.current = loadGeneration;
           setIsSessionRestored(true);
         })
-        .catch((error) => console.error("Could not load native audio:", error));
+        .catch((error) => {
+          if (nativeLoadGenerationRef.current !== loadGeneration) return;
+          nativeReadyGenerationRef.current = loadGeneration;
+          nativePlayIntentRef.current = false;
+          setIsPlaying(false);
+          setIsSessionRestored(true);
+          console.error("Could not load native audio:", error);
+        });
     },
     [],
   );
@@ -272,7 +295,8 @@ export function useAudioPlayer(
         setCurrentTrackId(targetTrack.globalId);
         setCurrentTime(0);
         setDuration(targetTrack.durationSeconds);
-        setIsPlaying(false);
+        currentTimeRef.current = 0;
+        setIsPlaying(shouldPlay);
         setIsSessionRestored(false);
         loadNativeTrack(targetTrack, 0, shouldPlay);
         return;
@@ -325,7 +349,7 @@ export function useAudioPlayer(
     (time: number) => {
       if (usesNativeAudio) {
         setCurrentTime(time);
-        void invoke("seek_native_audio", { positionSeconds: time }).catch(
+        void nativeCommandsRef.current.run("seek_native_audio", { positionSeconds: time }).catch(
           (error) => console.warn("Could not seek native audio:", error),
         );
         return;
@@ -346,7 +370,9 @@ export function useAudioPlayer(
 
   const playActive = useCallback(() => {
     if (usesNativeAudio) {
-      void invoke("play_native_audio").catch((error) =>
+      nativePlayIntentRef.current = true;
+      setIsPlaying(true);
+      void nativeCommandsRef.current.run("play_native_audio").catch((error) =>
         console.warn("Could not play native audio:", error),
       );
       return;
@@ -356,7 +382,9 @@ export function useAudioPlayer(
 
   const pauseActive = useCallback(() => {
     if (usesNativeAudio) {
-      void invoke("pause_native_audio").catch((error) =>
+      nativePlayIntentRef.current = false;
+      setIsPlaying(false);
+      void nativeCommandsRef.current.run("pause_native_audio").catch((error) =>
         console.warn("Could not pause native audio:", error),
       );
       return;
@@ -372,7 +400,7 @@ export function useAudioPlayer(
 
   const togglePlayback = useCallback(async () => {
     if (usesNativeAudio) {
-      if (isPlayingRef.current) pauseActive();
+      if (nativePlayIntentRef.current) pauseActive();
       else playActive();
       return;
     }
@@ -429,7 +457,7 @@ export function useAudioPlayer(
       }
       const previousIndex = trackPosition(tracksRef.current, previousTrack.globalId);
       if (previousIndex >= 0) {
-        switchToTrack(previousIndex, isPlayingRef.current);
+        switchToTrack(previousIndex, nativePlayIntentRef.current);
       }
       return;
     }
@@ -462,7 +490,7 @@ export function useAudioPlayer(
     if (nextIndex < 0) return;
 
     if (usesNativeAudio) {
-      switchToTrack(nextIndex, isPlayingRef.current);
+      switchToTrack(nextIndex, nativePlayIntentRef.current);
       return;
     }
 
@@ -594,7 +622,7 @@ export function useAudioPlayer(
     const nextTrack = queueNavigationRef.current.peekNext();
     if (usesNativeAudio) {
       if (!isSessionRestored || !nextTrack) return;
-      void invoke("queue_native_audio", {
+      void nativeCommandsRef.current.run("queue_native_audio", {
         source: nativeAudioSource(nextTrack),
       }).catch((error) =>
         console.warn("Could not preload the next native track:", error),
@@ -627,7 +655,11 @@ export function useAudioPlayer(
 
     const poll = async () => {
       const statusGeneration = nativeLoadGenerationRef.current;
-      if (nativeReadyGenerationRef.current !== statusGeneration) {
+      const commandRevision = nativeCommandsRef.current.revision;
+      if (
+        nativeCommandsRef.current.pending > 0 ||
+        nativeReadyGenerationRef.current !== statusGeneration
+      ) {
         timer = setTimeout(poll, 200);
         return;
       }
@@ -637,6 +669,7 @@ export function useAudioPlayer(
         if (disposed) return;
 
         if (
+          !nativeCommandsRef.current.acceptsStatus(commandRevision) ||
           statusGeneration !== nativeLoadGenerationRef.current ||
           nativeReadyGenerationRef.current !== statusGeneration
         ) {
@@ -664,7 +697,7 @@ export function useAudioPlayer(
 
           const followingTrack = queueNavigationRef.current.peekNext();
           if (followingTrack) {
-            void invoke("queue_native_audio", {
+            void nativeCommandsRef.current.run("queue_native_audio", {
               source: nativeAudioSource(followingTrack),
             }).catch((error) =>
               console.warn("Could not preload the next native track:", error),
@@ -674,11 +707,14 @@ export function useAudioPlayer(
 
         setCurrentTime(playback.currentTime);
         if (playback.duration > 0) setDuration(playback.duration);
+        if (playback.ended || playback.error) {
+          nativePlayIntentRef.current = false;
+        }
         // Keep the pause control active through a short rebuffer. The native
         // worker still intends to play and will resume by itself.
-        if (!playback.buffering || playback.isPlaying) {
-          setIsPlaying(playback.isPlaying);
-        }
+        setIsPlaying(
+          playback.isPlaying || (playback.buffering && nativePlayIntentRef.current),
+        );
 
         if (playback.ended && !handledEnd) {
           handledEnd = true;
@@ -891,10 +927,10 @@ export function useAudioPlayer(
 
   const nativePositionSeconds = Math.floor(currentTime);
   useEffect(() => {
-    if (!isTauri() || !currentTrack) return;
+    if (!isTauri()) return;
 
     void invoke("set_native_media_playback", {
-      isPlaying,
+      isPlaying: currentTrack !== undefined && isPlaying,
       positionSeconds: nativePositionSeconds,
     }).catch((error) =>
       console.warn("Could not update native playback state:", error),

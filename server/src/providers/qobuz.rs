@@ -3,7 +3,7 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
@@ -27,6 +27,7 @@ pub struct QobuzProvider {
     client: Arc<QobuzClient>,
     preferred_quality: Quality,
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
+    playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     albums: Arc<Mutex<HashMap<String, Album>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
@@ -113,6 +114,7 @@ impl QobuzProvider {
             client: Arc::new(client),
             preferred_quality: Quality::UltraHiRes,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
+            playback_fetches: Arc::new(Mutex::new(HashMap::new())),
             albums: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
@@ -268,6 +270,21 @@ impl QobuzProvider {
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
         let numeric_track_id = validate_track_id(track_id)?;
 
+        // Coalesce hover/queue warming with an overlapping play click, while
+        // allowing different tracks to resolve independently.
+        let fetch_lock = {
+            let mut fetches = self.playback_fetches.lock().await;
+            fetches.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(lock) = fetches.get(track_id).and_then(Weak::upgrade) {
+                lock
+            } else {
+                let lock = Arc::new(Mutex::new(()));
+                fetches.insert(track_id.to_owned(), Arc::downgrade(&lock));
+                lock
+            }
+        };
+        let _guard = fetch_lock.lock().await;
+
         {
             let cache = self.playback_sources.lock().await;
             if let Some(cached) = cache.get(track_id)
@@ -288,7 +305,18 @@ impl QobuzProvider {
             sampling_rate_khz: normalize_sampling_rate(stream.sampling_rate),
             bit_depth: stream.bit_depth,
         };
-        self.playback_sources.lock().await.insert(
+        let mut cache = self.playback_sources.lock().await;
+        cache.retain(|_, entry| entry.cached_at.elapsed() < PLAYBACK_SOURCE_TTL);
+        if cache.len() >= 256 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.cached_at)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(
             track_id.to_owned(),
             CachedPlaybackSource {
                 source: source.clone(),

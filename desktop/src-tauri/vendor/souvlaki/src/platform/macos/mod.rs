@@ -149,9 +149,17 @@ unsafe fn load_and_set_playback_artwork(url: String, for_counter: usize) {
     }
     let artwork = mp_artwork(image, size);
     if artwork == nil { return; }
-    if GLOBAL_METADATA_COUNTER.load(Ordering::SeqCst) == for_counter {
-        set_playback_artwork(artwork);
-    }
+    // Only image loading belongs on the background queue. Reading and replacing
+    // nowPlayingInfo there can overwrite a newer track or playback rate.
+    // The allocated artwork stays owned until the main queue consumes it.
+    let artwork = artwork as usize;
+    Queue::main().exec_async(move || {
+        let artwork = artwork as id;
+        if GLOBAL_METADATA_COUNTER.load(Ordering::SeqCst) == for_counter {
+            set_playback_artwork(artwork);
+        }
+        let _: () = msg_send!(artwork, release);
+    });
 }
 
 unsafe fn set_playback_artwork(artwork: id) {

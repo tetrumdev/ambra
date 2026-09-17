@@ -1,9 +1,9 @@
 #searchBar {
     position: absolute;
-    right: 5%;
+    right: 3%;
     z-index: 10;
     display: flex;
-    top: 8%;
+    top: 5%;
     overflow: visible;
     border-radius: 100px;
     border: none;

@@ -9,7 +9,7 @@
     grid-template-rows: 140px 1fr;
     align-content: flex-start;
     display: grid;
-    z-index: 9;
+    z-index: 10;
 }
 
 .mainLogoContainer {
