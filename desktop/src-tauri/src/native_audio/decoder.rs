@@ -601,15 +601,12 @@ fn get_bytes_with_retry(
         if let Some(range) = range {
             request = request.header(RANGE, range);
         }
-        match request
-            .send()
-            .and_then(|response| response.error_for_status())
-        {
+        match request.send() {
             Ok(response) => {
                 let status = response.status();
                 let headers = response.headers().clone();
                 match response.bytes() {
-                    Ok(bytes) => {
+                    Ok(bytes) if status.is_success() => {
                         if cacheable
                             && status == StatusCode::PARTIAL_CONTENT
                             && bytes.len() <= HTTP_INITIAL_CACHE_BYTES as usize
@@ -640,6 +637,23 @@ fn get_bytes_with_retry(
                             );
                         }
                         return Ok((status, headers, bytes.to_vec()));
+                    }
+                    Ok(bytes) => {
+                        let server_error = serde_json::from_slice::<serde_json::Value>(&bytes)
+                            .ok()
+                            .and_then(|body| body.get("error")?.as_str().map(str::to_owned));
+                        let message = server_error.as_ref().map_or_else(
+                            || format!("HTTP status {status}"),
+                            |message| format!("HTTP {status}: {message}"),
+                        );
+                        if server_error.is_some()
+                            || !(status.is_server_error()
+                                || status == StatusCode::REQUEST_TIMEOUT
+                                || status == StatusCode::TOO_MANY_REQUESTS)
+                        {
+                            return Err(io::Error::other(message));
+                        }
+                        last_error = Some(message);
                     }
                     Err(error) => last_error = Some(error.to_string()),
                 }
@@ -718,10 +732,18 @@ fn io_other(error: impl std::fmt::Display) -> io::Error {
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, mem::size_of, process, time::SystemTime};
+    use std::{
+        fs,
+        io::{Read, Write},
+        mem::size_of,
+        net::TcpListener,
+        process, thread,
+        time::SystemTime,
+    };
 
     use super::{
-        DecodedSource, content_range_length, file_path, parse_hls_playlist, source_extension,
+        DecodedSource, content_range_length, file_path, get_bytes_with_retry, http_client,
+        parse_hls_playlist, source_extension,
     };
     use reqwest::Url;
     use reqwest::header::HeaderValue;
@@ -744,6 +766,37 @@ mod tests {
     fn parses_http_content_range_lengths() {
         let value = HeaderValue::from_static("bytes 0-0/12345");
         assert_eq!(content_range_length(Some(&value)), Some(12_345));
+    }
+
+    #[test]
+    fn returns_structured_server_errors_without_retrying() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).unwrap();
+            let body = r#"{"error":"Qobuz is not connected"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+
+        let error = get_bytes_with_retry(
+            &http_client().unwrap(),
+            &format!("http://{address}/stream"),
+            None,
+        )
+        .unwrap_err();
+        server.join().unwrap();
+
+        assert_eq!(
+            error.to_string(),
+            "HTTP 503 Service Unavailable: Qobuz is not connected"
+        );
     }
 
     #[test]
@@ -856,6 +909,8 @@ mod tests {
                     thread::sleep(Duration::from_millis(1));
                     continue;
                 };
+                // Accepted sockets can inherit the listener's nonblocking mode on macOS.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();

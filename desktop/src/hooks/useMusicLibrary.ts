@@ -126,6 +126,7 @@ export function useMusicLibrary(): MusicLibrary {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     const loadLocalTracks = async () => {
       if (!isTauri()) return [];
@@ -139,6 +140,7 @@ export function useMusicLibrary(): MusicLibrary {
         console.warn("Could not load cached local library:", reason);
       }
 
+      if (cancelled) return [];
       return invoke<ScannedTrack[]>("scan_music");
     };
 
@@ -153,16 +155,17 @@ export function useMusicLibrary(): MusicLibrary {
         if (!cancelled) setIsLocalLoading(false);
       });
 
-    void loadServerTracks()
+    void loadServerTracks(controller.signal)
       .then((loadedTracks) => {
         if (!cancelled) {
-          setServerTracks((currentTracks) =>
-            appendUniqueTracks(currentTracks, loadedTracks),
-          );
+          // A successful response is authoritative. Keeping cached tracks from
+          // disconnected providers leaves playable-looking rows whose stream
+          // endpoints can only return 503.
+          setServerTracks(loadedTracks);
         }
       })
       .catch((reason: unknown) => {
-        console.warn("Could not load streaming providers:", reason);
+        if (!cancelled) console.warn("Could not load streaming providers:", reason);
       })
       .finally(() => {
         if (!cancelled) setIsServerLoading(false);
@@ -170,6 +173,7 @@ export function useMusicLibrary(): MusicLibrary {
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -266,7 +270,7 @@ export function useMusicLibrary(): MusicLibrary {
 
   const refreshStreamingMusic = useCallback(async () => {
     const loadedTracks = await loadServerTracks();
-    setServerTracks((currentTracks) => appendUniqueTracks(currentTracks, loadedTracks));
+    setServerTracks(loadedTracks);
     return loadedTracks.length;
   }, []);
 

@@ -30,7 +30,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::{
     artwork_quality::{
-        ArtworkCandidate, dominant_colors, highest_resolution, image_dimensions, normalized_upc,
+        ArtworkCandidate, highest_resolution, image_dimensions, normalized_upc,
         qobuz_max_artwork_url, trusted_artwork_url,
     },
     models::{HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata},
@@ -63,9 +63,9 @@ struct AppState {
     search_fetches: Arc<Mutex<HashMap<SearchCacheKey, Weak<Mutex<()>>>>>,
     media_cache: Arc<RwLock<MediaCache>>,
     media_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
-    artwork_quality_cache: Arc<RwLock<HashMap<String, ArtworkCandidate>>>,
-    artwork_dimensions_cache: Arc<RwLock<HashMap<String, (u32, u32)>>>,
-    artwork_palette_cache: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    artwork_quality_cache: Arc<RwLock<HashMap<String, (Instant, ArtworkCandidate)>>>,
+    artwork_dimensions_cache: Arc<RwLock<HashMap<String, (Instant, (u32, u32))>>>,
+    artwork: Arc<crate::artwork_cache::ArtworkCache>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -90,9 +90,11 @@ struct LibraryEntry {
 }
 
 pub async fn serve() -> ServerResult<()> {
-    let tidal = authenticate_tidal().await?;
-    let qobuz = authenticate_qobuz().await?;
-    let spotify = authenticate_spotify().await?;
+    let (tidal, qobuz, spotify) = tokio::try_join!(
+        authenticate_tidal(),
+        authenticate_qobuz(),
+        authenticate_spotify(),
+    )?;
 
     let http_client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -123,6 +125,7 @@ pub async fn serve() -> ServerResult<()> {
         spotify: spotify_cell,
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
+        artwork: Arc::new(crate::artwork_cache::ArtworkCache::new(http_client.clone())),
         http_client,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -132,7 +135,6 @@ pub async fn serve() -> ServerResult<()> {
         media_fetches: Arc::new(Mutex::new(HashMap::new())),
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
-        artwork_palette_cache: Arc::new(RwLock::new(HashMap::new())),
     };
 
     let cors = CorsLayer::new()
@@ -161,6 +163,8 @@ pub async fn serve() -> ServerResult<()> {
             get(track_playback),
         )
         .route("/api/quality/artwork", post(resolve_artwork_quality))
+        .route("/api/artwork/thumbnail", get(artwork_thumbnail))
+        .route("/api/artwork/palette", get(artwork_palette))
         .route("/api/library/albums", post(add_album))
         .route("/api/library/tidal-albums", post(add_tidal_album))
         .route("/api/library/qobuz-albums", post(add_qobuz_album))
@@ -382,6 +386,26 @@ async fn resolve_artwork_quality(
         ));
     }
 
+    let cache_key = format!(
+        "{provider}:{}:{}:{}",
+        request.album_id,
+        request.cover_url,
+        request
+            .upc
+            .as_deref()
+            .and_then(normalized_upc)
+            .unwrap_or_default()
+    );
+    if let Some(cached) = state
+        .artwork_quality_cache
+        .write()
+        .await
+        .get_mut(&cache_key)
+    {
+        cached.0 = Instant::now();
+        return Ok(Json(cached.1.clone()));
+    }
+
     let upc = if request.upc.as_deref().is_some_and(|upc| !upc.is_empty()) {
         request.upc.clone()
     } else if request.source_provider == MusicProvider::Tidal {
@@ -393,35 +417,29 @@ async fn resolve_artwork_quality(
         None
     };
 
-    let cache_key = format!(
-        "{provider}:{}:{}",
-        request.album_id,
-        upc.as_deref().and_then(normalized_upc).unwrap_or_default()
-    );
-    if let Some(cached) = state
-        .artwork_quality_cache
-        .read()
-        .await
-        .get(&cache_key)
-        .cloned()
-    {
-        return Ok(Json(cached));
-    }
-
-    let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
-        qobuz_max_artwork_url(&request.cover_url)
-    } else if let (Some(qobuz), Some(upc)) = (state.qobuz.get(), upc.as_deref()) {
-        qobuz
-            .exact_album_artwork_by_upc(upc)
-            .await
-            .map_err(ApiError::upstream)?
-    } else {
-        None
+    let alternative = async {
+        let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
+            qobuz_max_artwork_url(&request.cover_url)
+        } else if let (Some(qobuz), Some(upc)) = (state.qobuz.get(), upc.as_deref()) {
+            qobuz.exact_album_artwork_by_upc(upc).await.ok().flatten()
+        } else {
+            None
+        };
+        let url = qobuz_url.filter(|url| url != &request.cover_url)?;
+        let (width, height) = cached_artwork_dimensions(&state, &url).await?;
+        Some(ArtworkCandidate {
+            provider: "qobuz".to_owned(),
+            url,
+            width,
+            height,
+            colors: Vec::new(),
+        })
     };
-
-    let palette_url = request.cover_url.clone();
-    let source_dimensions = cached_artwork_dimensions(&state, &request.cover_url)
-        .await
+    let (source_dimensions, qobuz) = tokio::join!(
+        cached_artwork_dimensions(&state, &request.cover_url),
+        alternative,
+    );
+    let source_dimensions = source_dimensions
         .ok_or_else(|| ApiError::upstream("Could not inspect source artwork dimensions"))?;
     let source = ArtworkCandidate {
         provider: provider.to_owned(),
@@ -430,72 +448,62 @@ async fn resolve_artwork_quality(
         height: source_dimensions.1,
         colors: Vec::new(),
     };
-    let qobuz = if let Some(url) = qobuz_url.filter(|url| url != &source.url) {
-        let (width, height) = cached_artwork_dimensions(&state, &url)
-            .await
-            .ok_or_else(|| ApiError::upstream("Could not inspect Qobuz artwork dimensions"))?;
-        Some(ArtworkCandidate {
-            provider: "qobuz".to_owned(),
-            url,
-            width,
-            height,
-            colors: Vec::new(),
-        })
-    } else {
-        None
-    };
-    let mut best = highest_resolution(source, qobuz);
-    best.colors = cached_artwork_palette(&state, &palette_url)
-        .await
-        .unwrap_or_default();
+    let best = highest_resolution(source, qobuz);
 
-    if best.colors.len() == 4 {
-        state
-            .artwork_quality_cache
-            .write()
-            .await
-            .insert(cache_key, best.clone());
+    {
+        let mut cache = state.artwork_quality_cache.write().await;
+        if cache.len() >= 512 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.0)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(cache_key, (Instant::now(), best.clone()));
     }
     Ok(Json(best))
 }
 
-async fn cached_artwork_palette(state: &AppState, url: &str) -> Option<Vec<String>> {
-    if let Some(cached) = state.artwork_palette_cache.read().await.get(url).cloned() {
-        return Some(cached);
-    }
+#[derive(Deserialize)]
+struct ArtworkQuery {
+    provider: String,
+    url: String,
+}
 
-    const MAX_ARTWORK_BYTES: u64 = 16 * 1024 * 1024;
-    let response = state.http_client.get(url).send().await.ok()?;
-    if !response.status().is_success()
-        || response
-            .content_length()
-            .is_some_and(|size| size > MAX_ARTWORK_BYTES)
-    {
-        return None;
-    }
-    let bytes = response.bytes().await.ok()?;
-    if bytes.len() as u64 > MAX_ARTWORK_BYTES {
-        return None;
-    }
-
-    let colors = dominant_colors(&bytes)?;
-    state
-        .artwork_palette_cache
-        .write()
+async fn artwork_thumbnail(
+    State(state): State<AppState>,
+    Query(query): Query<ArtworkQuery>,
+) -> Result<Response, ApiError> {
+    let artwork = state
+        .artwork
+        .get(&query.provider, &query.url)
         .await
-        .insert(url.to_owned(), colors.clone());
-    Some(colors)
+        .map_err(ApiError::upstream)?;
+    Response::builder()
+        .header(CONTENT_TYPE, "image/jpeg")
+        .header(CACHE_CONTROL, "public, max-age=604800")
+        .body(Body::from(artwork.bytes.clone()))
+        .map_err(ApiError::internal)
+}
+
+async fn artwork_palette(
+    State(state): State<AppState>,
+    Query(query): Query<ArtworkQuery>,
+) -> Result<Json<Vec<String>>, ApiError> {
+    let artwork = state
+        .artwork
+        .get(&query.provider, &query.url)
+        .await
+        .map_err(ApiError::upstream)?;
+    Ok(Json(artwork.colors().await))
 }
 
 async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, u32)> {
-    if let Some(cached) = state
-        .artwork_dimensions_cache
-        .read()
-        .await
-        .get(url)
-        .copied()
-    {
-        return Some(cached);
+    if let Some(cached) = state.artwork_dimensions_cache.write().await.get_mut(url) {
+        cached.0 = Instant::now();
+        return Some(cached.1);
     }
 
     const IMAGE_HEADER_LIMIT: usize = 256 * 1024;
@@ -527,11 +535,17 @@ async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, 
     .await;
 
     if let Some(dimensions) = dimensions {
-        state
-            .artwork_dimensions_cache
-            .write()
-            .await
-            .insert(url.to_owned(), dimensions);
+        let mut cache = state.artwork_dimensions_cache.write().await;
+        if cache.len() >= 1024 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, entry)| entry.0)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache.insert(url.to_owned(), (Instant::now(), dimensions));
         return Some(dimensions);
     }
     None
@@ -1663,7 +1677,7 @@ async fn cached_media_response(
 }
 
 async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiError> {
-    if let Some(bytes) = state.media_cache.read().await.get(url) {
+    if let Some(bytes) = state.media_cache.write().await.get(url) {
         return Ok(bytes);
     }
 
@@ -1679,7 +1693,7 @@ async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiErr
         }
     };
     let _fetch_guard = fetch_lock.lock().await;
-    if let Some(bytes) = state.media_cache.read().await.get(url) {
+    if let Some(bytes) = state.media_cache.write().await.get(url) {
         return Ok(bytes);
     }
 
@@ -1692,7 +1706,7 @@ async fn cached_media_bytes(state: &AppState, url: &str) -> Result<Bytes, ApiErr
             .insert(url.to_owned(), bytes.clone());
     }
     let bytes = result?;
-    if let Some(cached) = state.media_cache.read().await.get(url) {
+    if let Some(cached) = state.media_cache.write().await.get(url) {
         return Ok(cached);
     }
     Ok(bytes)

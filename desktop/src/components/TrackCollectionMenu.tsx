@@ -61,13 +61,13 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       window.removeEventListener("resize", reposition);
     };
   }, [xPos, yPos]);
-  useEffect(() => { panel.current?.querySelector<HTMLButtonElement>("button")?.focus(); }, [choosingPlaylist]);
+  useEffect(() => { panel.current?.focus(); }, [choosingPlaylist]);
   const width = choosingPlaylist ? 260 : 180;
   return (
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
+      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(false)}>← Back</button>
           <div className="playlistMenuList">
