@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
-import { highestQualityArtwork } from "../api/server";
+import { highestQualityArtwork, thumbnailArtwork } from "../api/server";
+import { preloadArtwork } from "../utils/artworkImages";
 import fallbackCover from "../assets/images/fallbackCover.png";
 import type { Track } from "../types/music";
 
@@ -7,13 +8,15 @@ type TrackArtworkProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
   track: Track;
 };
 
-export function TrackArtwork({ track, onError, ...imageProps }: TrackArtworkProps) {
-  const [src, setSrc] = useState(track.cover);
+export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArtworkProps) {
+  const thumbnail = thumbnailArtwork(track);
+  const [replacement, setReplacement] = useState<{ key: string; src: string } | null>(null);
+  const src = replacement?.key === thumbnail ? replacement.src : thumbnail;
+  const setSrc = (src: string) => setReplacement({ key: thumbnail, src });
   const trackRef = useRef(track);
 
   useEffect(() => {
     trackRef.current = track;
-    setSrc(track.cover);
   }, [track]);
 
   const resolveBrokenArtwork: ImgHTMLAttributes<HTMLImageElement>["onError"] = (
@@ -22,6 +25,10 @@ export function TrackArtwork({ track, onError, ...imageProps }: TrackArtworkProp
     onError?.(event);
     const failedTrack = trackRef.current;
 
+    if (src === thumbnail && thumbnail !== failedTrack.cover) {
+      setSrc(failedTrack.cover);
+      return;
+    }
     if (src !== failedTrack.cover) {
       setSrc(fallbackCover);
       return;
@@ -29,9 +36,14 @@ export function TrackArtwork({ track, onError, ...imageProps }: TrackArtworkProp
 
     void highestQualityArtwork(failedTrack).then((artwork) => {
       if (trackRef.current !== failedTrack) return;
-      setSrc(artwork?.url ?? fallbackCover);
+      setSrc(artwork?.url && artwork.url !== failedTrack.cover ? artwork.url : fallbackCover);
     });
   };
 
-  return <img {...imageProps} src={src} onError={resolveBrokenArtwork} />;
+  return <img loading="lazy" decoding="async" {...imageProps} src={src}
+    onLoad={(event) => {
+      onLoad?.(event);
+      if (src === thumbnail && thumbnail !== track.cover) void preloadArtwork(src).catch(() => {});
+    }}
+    onError={resolveBrokenArtwork} />;
 }

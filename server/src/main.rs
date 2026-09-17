@@ -5,6 +5,7 @@
 
 mod api;
 mod artwork_quality;
+mod artwork_cache;
 mod media_cache;
 mod models;
 mod providers;

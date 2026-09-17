@@ -9,14 +9,14 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::Deserialize;
-use souvlaki::{
-    MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
-};
+use souvlaki::{MediaControlEvent, MediaControls, MediaMetadata, PlatformConfig};
+#[cfg(not(target_os = "macos"))]
+use souvlaki::{MediaPlayback, MediaPosition};
 use tauri::{App, AppHandle, Emitter, Manager, State, Url};
 
 pub const MEDIA_CONTROL_EVENT: &str = "native-media-control";
@@ -43,6 +43,14 @@ struct PublishedMediaState {
     metadata: Option<PublishedMediaMetadata>,
     is_playing: bool,
     position_seconds: f64,
+    last_playback_publication: Option<PublishedPlayback>,
+}
+
+#[derive(Clone, Copy)]
+struct PublishedPlayback {
+    is_playing: bool,
+    position_seconds: f64,
+    published_at: Instant,
 }
 
 #[derive(Clone)]
@@ -211,17 +219,64 @@ pub fn set_native_media_playback(
     is_playing: bool,
     position_seconds: f64,
 ) -> Result<(), String> {
-    let snapshot = {
+    let (snapshot, should_publish) = {
         let mut published = controls
             .published
             .lock()
             .map_err(|_| "Native media state is unavailable".to_owned())?;
+        let position_seconds = finite_seconds(position_seconds);
+        let published_at = Instant::now();
+        let should_publish = !cfg!(target_os = "macos")
+            || macos_playback_update_requires_publication(
+                published.last_playback_publication,
+                is_playing,
+                position_seconds,
+                published_at,
+            );
         published.is_playing = is_playing;
-        published.position_seconds = finite_seconds(position_seconds);
-        published.clone()
+        published.position_seconds = position_seconds;
+        if should_publish {
+            published.last_playback_publication = Some(PublishedPlayback {
+                is_playing,
+                position_seconds,
+                published_at,
+            });
+        }
+        (published.clone(), should_publish)
     };
 
+    if !should_publish {
+        return Ok(());
+    }
+
     publish_media_state(&app, controls.controls.clone(), snapshot, false)
+}
+
+fn macos_playback_update_requires_publication(
+    previous: Option<PublishedPlayback>,
+    is_playing: bool,
+    position_seconds: f64,
+    published_at: Instant,
+) -> bool {
+    // macOS advances elapsed time from the last position and playback rate.
+    // Publishing ordinary clock ticks creates needless source-change events
+    // for consumers such as notch and menu-bar apps.
+    let Some(previous) = previous else {
+        return true;
+    };
+    if previous.is_playing != is_playing {
+        return true;
+    }
+
+    let expected_position = previous.position_seconds
+        + if is_playing {
+            published_at
+                .saturating_duration_since(previous.published_at)
+                .as_secs_f64()
+        } else {
+            0.0
+        };
+    (position_seconds - expected_position).abs() > 1.5
 }
 
 #[tauri::command]
@@ -266,16 +321,23 @@ fn publish_media_state_on_main_thread(
             .map_err(|error| error.to_string())?;
     }
 
-    let progress = Some(MediaPosition(Duration::from_secs_f64(
-        snapshot.position_seconds,
-    )));
-    controls
-        .set_playback(if snapshot.is_playing {
-            MediaPlayback::Playing { progress }
-        } else {
-            MediaPlayback::Paused { progress }
-        })
-        .map_err(|error| error.to_string())?;
+    #[cfg(not(target_os = "macos"))]
+    {
+        let progress = Some(MediaPosition(Duration::from_secs_f64(
+            snapshot.position_seconds,
+        )));
+        controls
+            .set_playback(if snapshot.is_playing {
+                MediaPlayback::Playing { progress }
+            } else {
+                MediaPlayback::Paused { progress }
+            })
+            .map_err(|error| error.to_string())?;
+    }
+
+    // The macOS publisher below sets the dictionary and playback state
+    // together. Souvlaki's playback setter would publish the same transition
+    // a second time before this richer update.
     publish_macos_media_details(snapshot);
     Ok(())
 }
@@ -373,9 +435,12 @@ fn finite_seconds(seconds: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{finite_duration, finite_seconds, media_control_action};
+    use super::{
+        PublishedPlayback, finite_duration, finite_seconds,
+        macos_playback_update_requires_publication, media_control_action,
+    };
     use souvlaki::MediaControlEvent;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn maps_headphone_navigation_events() {
@@ -396,5 +461,34 @@ mod tests {
         assert_eq!(finite_duration(-1.0), Some(Duration::ZERO));
         assert_eq!(finite_seconds(f64::INFINITY), 0.0);
         assert_eq!(finite_seconds(-1.0), 0.0);
+    }
+
+    #[test]
+    fn publishes_playback_transitions_and_seeks_but_not_clock_ticks() {
+        let started = Instant::now();
+        let playing = PublishedPlayback {
+            is_playing: true,
+            position_seconds: 10.0,
+            published_at: started,
+        };
+
+        assert!(!macos_playback_update_requires_publication(
+            Some(playing),
+            true,
+            20.0,
+            started + Duration::from_secs(10),
+        ));
+        assert!(macos_playback_update_requires_publication(
+            Some(playing),
+            false,
+            20.0,
+            started + Duration::from_secs(10),
+        ));
+        assert!(macos_playback_update_requires_publication(
+            Some(playing),
+            true,
+            45.0,
+            started + Duration::from_secs(10),
+        ));
     }
 }

@@ -1,5 +1,6 @@
 import { categoryOrder } from "../utils/catalogRanking";
 import { useState } from "react";
+import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
@@ -99,9 +100,9 @@ function SearchResult({
           playTrack(track.globalId);
         }}
       >
-        <img
+        <TrackArtwork
           className="searchResultCover"
-          src={track.cover}
+          track={track}
           alt={`${track.album} album cover`}
           width={124}
           height={124}

@@ -973,7 +973,7 @@ async fn download_dash_fragment(
     media_cache: &RwLock<MediaCache>,
     url: &str,
 ) -> ProviderResult<bytes::Bytes> {
-    if let Some(bytes) = media_cache.read().await.get(url) {
+    if let Some(bytes) = media_cache.write().await.get(url) {
         return Ok(bytes);
     }
     let response = client.get(url).send().await?;
@@ -1292,7 +1292,7 @@ mod tests {
         ));
         for path in ["init", "1", "2"] {
             let url = format!("{base}/{path}");
-            assert!(cache.read().await.get(&url).is_some());
+            assert!(cache.write().await.get(&url).is_some());
             super::download_dash_fragment(&client, &cache, &url)
                 .await
                 .unwrap();

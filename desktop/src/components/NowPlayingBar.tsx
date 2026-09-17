@@ -53,7 +53,7 @@ export function NowPlayingBar({
           disabled={isEmpty}
         >
           {track ? (
-            <TrackArtwork track={track} alt="" />
+            <TrackArtwork track={track} alt="" loading="eager" fetchPriority="high" />
           ) : (
             <img src="/ambra.png" alt="" />
           )}

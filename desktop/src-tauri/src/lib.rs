@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)] // objc 0.2 macros still probe the removed cargo-clippy cfg.
+
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use lofty::{
     file::{AudioFile, TaggedFileExt},
@@ -108,7 +110,13 @@ fn save_library_cache(app: &tauri::AppHandle, tracks: &[Track]) -> Result<(), St
 
 #[tauri::command]
 async fn load_cached_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
-    let cache_path = library_cache_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || load_cached_music_blocking(&app))
+        .await
+        .map_err(|error| format!("Could not load the library cache: {error}"))?
+}
+
+fn load_cached_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
+    let cache_path = library_cache_path(app)?;
     let encoded = match fs::read(&cache_path) {
         Ok(encoded) => encoded,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -563,6 +571,12 @@ fn local_music_directory(app: tauri::AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
+    tauri::async_runtime::spawn_blocking(move || scan_music_blocking(&app))
+        .await
+        .map_err(|error| format!("Could not scan the music library: {error}"))?
+}
+
+fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
     let music_directory: PathBuf = app
         .path()
         .audio_dir()
@@ -611,16 +625,14 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
         })
         .collect();
 
-    tracks.sort_by(|left, right| {
-        left.artist
-            .to_lowercase()
-            .cmp(&right.artist.to_lowercase())
-            .then_with(|| left.album.to_lowercase().cmp(&right.album.to_lowercase()))
-            .then_with(|| left.track_number.cmp(&right.track_number))
-            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
-    });
+    tracks.sort_by_cached_key(|track| (
+        track.artist.to_lowercase(),
+        track.album.to_lowercase(),
+        track.track_number,
+        track.name.to_lowercase(),
+    ));
 
-    if let Err(error) = save_library_cache(&app, &tracks) {
+    if let Err(error) = save_library_cache(app, &tracks) {
         eprintln!("{error}");
     }
 
@@ -693,10 +705,10 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app_handle, event| {
+    app.run(|_app_handle, _event| {
         #[cfg(not(debug_assertions))]
-        if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
-            stop_server_sidecar(app_handle);
+        if matches!(_event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+            stop_server_sidecar(_app_handle);
         }
     });
 }
