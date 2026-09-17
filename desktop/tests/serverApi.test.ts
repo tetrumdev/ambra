@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { playableTrack, type RemoteTrack } from "../src/api/server";
+import { artworkPalette, thumbnailArtwork, playableTrack, type RemoteTrack } from "../src/api/server";
 
 const spotifyTrack: RemoteTrack = {
   id: "spotify:4uLU6hMCjMI75M1A2tKUQC",
@@ -66,5 +66,42 @@ describe("playableTrack", () => {
     expect(track.isrc).toBe("GBARL9300135");
     expect(track.quality).toBe("Ogg Vorbis 320 kbps");
     expect(track.audio).toEndWith(spotifyTrack.playback.url);
+  });
+});
+
+describe("shared artwork", () => {
+  test("album tracks share thumbnail identity and local artwork stays local", () => {
+    const track = playableTrack(spotifyTrack);
+    const other = { ...track, globalId: "spotify:other", providerTrackId: "other" };
+    expect(thumbnailArtwork(track)).toBe(thumbnailArtwork(other));
+    const url = new URL(thumbnailArtwork(track));
+    expect(url.pathname).toBe("/api/artwork/thumbnail");
+    expect(url.searchParams.get("url")).toBe(track.nativeCover);
+    expect(thumbnailArtwork({ ...track, provider: "local" })).toBe(track.cover);
+  });
+
+  test("concurrent palettes coalesce without high-quality resolution; failures retry", async () => {
+    const original = globalThis.fetch;
+    const urls: string[] = [];
+    let fail = true;
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      return fail ? new Response("unavailable", { status: 503 })
+        : Response.json(["#112233", "#445566", "#778899", "#abcdef"]);
+    }) as typeof fetch;
+    try {
+      const track = playableTrack(spotifyTrack);
+      const [a, b] = await Promise.all([artworkPalette(track), artworkPalette(track)]);
+      expect(a).toEqual([]);
+      expect(b).toEqual([]);
+      expect(urls.length).toBe(1);
+      fail = false;
+      expect((await artworkPalette(track)).length).toBe(4);
+      await artworkPalette(track);
+      expect(urls.length).toBe(2);
+      expect(urls.every(url => url.includes("/api/artwork/palette?"))).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

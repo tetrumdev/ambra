@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { highestQualityArtwork } from "../api/server";
+import { artworkPalette, thumbnailArtwork } from "../api/server";
+import {
+  cachedBigscreenArtwork,
+  preloadBigscreenArtwork,
+} from "../utils/artworkImages";
+import fallbackCover from "../assets/images/fallbackCover.png";
 import type { Track } from "../types/music";
 import { separateCollapsedPalette } from "../utils/backgroundPalette";
 import { FluidGradientBackground } from "./FluidGradientBackground";
@@ -14,23 +19,16 @@ type BackgroundArtworkProps = ArtworkProps & {
 };
 
 export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
-  const [cover, setCover] = useState(track.cover);
+  const [cover, setCover] = useState<string | null>(() =>
+    cachedBigscreenArtwork(track) ?? thumbnailArtwork(track),
+  );
 
   useEffect(() => {
     let cancelled = false;
-    setCover(track.cover);
+    setCover(cachedBigscreenArtwork(track) ?? thumbnailArtwork(track));
 
-    void highestQualityArtwork(track).then(async (artwork) => {
-      if (!cancelled && artwork !== null) {
-        const image = new Image();
-        image.src = artwork.url;
-        try {
-          await image.decode();
-          if (!cancelled) setCover(artwork.url);
-        } catch {
-          // Keep the already displayed cover if the larger image fails.
-        }
-      }
+    void preloadBigscreenArtwork(track).then((source) => {
+      if (!cancelled && source) setCover(source);
     });
 
     return () => {
@@ -39,7 +37,6 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   }, [
     track.albumId,
     track.cover,
-    track.globalId,
     track.nativeCover,
     track.provider,
     track.upc,
@@ -47,18 +44,24 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
 
   return (
     <div id="albumCover" data-active={active} aria-hidden={!active}>
-      <img
-        src={cover}
-        alt=""
-        aria-hidden="true"
-        className="albumCoverContrast"
-      />
-      <img
-        src={cover}
-        alt={`${track.album} album cover`}
-        id="albumCoverImg"
-        onError={() => setCover(track.cover)}
-      />
+      {cover && (
+        <>
+          <img
+            src={cover}
+            alt=""
+            aria-hidden="true"
+            className="albumCoverContrast"
+          />
+          <img
+            src={cover}
+            alt={`${track.album} album cover`}
+            id="albumCoverImg"
+            onError={() => {
+              if (cover !== fallbackCover) setCover(cover === track.cover ? fallbackCover : track.cover);
+            }}
+          />
+        </>
+      )}
     </div>
   );
 }
@@ -74,9 +77,9 @@ export function BackgroundArtwork({ track, active }: BackgroundArtworkProps) {
   useEffect(() => {
     let cancelled = false;
 
-    void highestQualityArtwork(track).then((artwork) => {
-      if (!cancelled && artwork?.colors?.length === 4) {
-        setColors(separateCollapsedPalette(artwork.colors));
+    void artworkPalette(track).then((palette) => {
+      if (!cancelled && palette.length === 4) {
+        setColors(separateCollapsedPalette(palette));
       }
     });
 
@@ -86,7 +89,6 @@ export function BackgroundArtwork({ track, active }: BackgroundArtworkProps) {
   }, [
     track.albumId,
     track.cover,
-    track.globalId,
     track.nativeCover,
     track.provider,
     track.upc,

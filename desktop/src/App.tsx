@@ -623,7 +623,7 @@ function App() {
         <>
           <BackgroundArtwork track={player.currentTrack} active={isBigscreen} />
           <AlbumArtwork
-            key={player.currentTrack.globalId}
+            key={player.currentTrack.nativeCover ?? player.currentTrack.cover}
             track={player.currentTrack}
             active={isBigscreen}
           />
