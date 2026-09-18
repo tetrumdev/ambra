@@ -75,6 +75,10 @@ summary {
     cursor: pointer;
 }
 
+button img {
+    pointer-events: none;
+}
+
 :root[data-bigscreen-idle="true"],
 :root[data-bigscreen-idle="true"] * {
     cursor: none !important;

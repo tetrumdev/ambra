@@ -19,9 +19,9 @@ export function usePlaylists() {
     if (initial.error) return false;
     try {
       // Save the complete membership + metadata change before confirming it in the UI.
-      savePlaylistSnapshot(next);
-      current.current = next;
-      setSnapshot(next);
+      const saved = savePlaylistSnapshot(next);
+      current.current = saved;
+      setSnapshot(saved);
       setError(null);
       return true;
     } catch {
@@ -52,6 +52,13 @@ export function usePlaylists() {
       playlists: current.current.playlists.filter(playlist => playlist.id !== id),
     }),
     addTrack: (id: string, track: Track) => current.current.playlists.some(playlist => playlist.id === id) && commit(addPlaylistTrack(current.current, id, track)),
+    updateTrack: (track: Track) => {
+      if (!current.current.tracks.some(item => item.globalId === track.globalId)) return false;
+      return commit({
+        ...current.current,
+        tracks: current.current.tracks.map(item => item.globalId === track.globalId ? track : item),
+      });
+    },
     removeTracks: (id: string, ids: string[]) => commit({ ...current.current, playlists: removePlaylistTracks(current.current.playlists, id, ids) }),
   };
 }

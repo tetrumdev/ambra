@@ -5,7 +5,7 @@ import type {
   Track,
   TrackArtist,
 } from "../types/music";
-import fallbackCover from "../assets/images/fallbackCover.png";
+import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 
@@ -246,7 +246,7 @@ export function playableTrack(track: RemoteTrack): Track {
     providerTrackId: track.providerTrackId,
     playbackKind: track.playback.kind,
     audio: `${serverBaseUrl}${track.playback.url}`,
-    cover: track.album?.coverUrl ?? fallbackCover,
+    cover: track.album?.coverUrl ?? whiteArtwork,
     nativeCover: track.album?.coverUrl ?? null,
     name: displayTitle,
     version: track.version,
@@ -340,11 +340,24 @@ export async function searchServerTracks(
   return { tracks: page.tracks.map(playableTrack), nextOffset: page.nextOffset };
 }
 
-export async function resolveTrackPlayback(
+export async function refreshTrackMetadata(
   track: Track,
   signal?: AbortSignal,
 ): Promise<Track> {
-  if (track.provider !== "tidal") return track;
+  if (track.provider === "local") return track;
+
+  const response = await fetch(
+    `${serverBaseUrl}/api/providers/${track.provider}/tracks/${encodeURIComponent(track.providerTrackId)}/metadata`,
+    { signal },
+  );
+  if (!response.ok) throw new Error(await responseError(response));
+  return playableTrack((await response.json()) as RemoteTrack);
+}
+
+export async function resolveTrackPlayback(
+  track: Track,
+  signal?: AbortSignal,
+): Promise<Track> {  if (track.provider !== "tidal") return track;
 
   const parameters = new URLSearchParams({
     durationSeconds: String(track.durationSeconds),

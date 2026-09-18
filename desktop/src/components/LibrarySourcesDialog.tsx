@@ -137,7 +137,6 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
         aria-label="Add music and connect services"
         aria-haspopup="dialog"
         aria-expanded={open}
-        title="Add music and connect services"
         onClick={() => setOpen(true)}
       >
         +

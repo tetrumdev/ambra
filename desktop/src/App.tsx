@@ -14,6 +14,7 @@ import { PlaylistView } from "./components/PlaylistView";
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
+import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -32,6 +33,7 @@ import {
   searchQueueContext,
 } from "./utils/queueModel";
 import { isUnmodifiedKey } from "./utils/keyboard";
+import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 
 import { playlistTracks } from "./utils/playlists";
 
@@ -80,6 +82,32 @@ function App() {
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
   });
+  useStaleTrackRefresh(
+    playlistStore.tracks,
+    library.isServerReachable,
+    playlistStore.updateTrack,
+  );
+
+  useEffect(() => {
+    void cachePlaylistArtwork(playlistStore.tracks);
+  }, [playlistStore.tracks]);
+
+  useEffect(() => {
+    if (library.isServerReachable || library.isLoading) return;
+
+    const retryStreamingMusic = () => {
+      void library.refreshStreamingMusic().catch(() => {});
+    };
+    window.addEventListener("online", retryStreamingMusic);
+    const handleVisibility = () => {
+      if (!document.hidden) retryStreamingMusic();
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("online", retryStreamingMusic);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
   const screen = preferences.ui.screen;
   const isBigscreen =
     screen === "bigscreen" && player.currentTrack !== undefined;
@@ -185,6 +213,11 @@ function App() {
   };
 
   useEffect(() => {
+    if (!isTauri()) {
+      setIsFullscreen(false);
+      return;
+    }
+
     let disposed = false;
     let stopListening: (() => void) | undefined;
     const appWindow = getCurrentWindow();
@@ -228,6 +261,11 @@ function App() {
       if (!isUnmodifiedKey(event, "F11") || event.repeat) return;
 
       event.preventDefault();
+
+      if (!isTauri()) {
+        setIsFullscreen(false);
+        return;
+      }
 
       try {
         const appWindow = getCurrentWindow();
@@ -306,7 +344,7 @@ function App() {
         },
       }));
 
-      if (f11FullscreenRef.current) {
+      if (f11FullscreenRef.current && isTauri()) {
         try {
           const appWindow = getCurrentWindow();
           if (!(await appWindow.isFullscreen())) {
