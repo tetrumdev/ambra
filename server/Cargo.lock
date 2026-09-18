@@ -2096,7 +2096,6 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 [[package]]
 name = "qbz-cmaf"
 version = "2.0.2"
-source = "git+https://github.com/vicrodh/qbz.git?rev=93ae499f38835dc7c110ebaa07a49da5c714f1f9#93ae499f38835dc7c110ebaa07a49da5c714f1f9"
 dependencies = [
  "aes",
  "base64",
@@ -2112,7 +2111,6 @@ dependencies = [
 [[package]]
 name = "qbz-models"
 version = "2.0.2"
-source = "git+https://github.com/vicrodh/qbz.git?rev=93ae499f38835dc7c110ebaa07a49da5c714f1f9#93ae499f38835dc7c110ebaa07a49da5c714f1f9"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2127,7 +2125,6 @@ dependencies = [
 [[package]]
 name = "qbz-qobuz"
 version = "2.0.2"
-source = "git+https://github.com/vicrodh/qbz.git?rev=93ae499f38835dc7c110ebaa07a49da5c714f1f9#93ae499f38835dc7c110ebaa07a49da5c714f1f9"
 dependencies = [
  "anyhow",
  "base64",
