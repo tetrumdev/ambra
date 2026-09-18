@@ -11,6 +11,7 @@ import {
   type TrackCollectionViewProps,
 } from "./TrackCollectionView";
 import { LibrarySourcesDialog } from "./LibrarySourcesDialog";
+import { ArtworkImage } from "./ArtworkImage";
 
 export type LibrarySection = "overview" | "artists" | "albums" | "tracks";
 
@@ -53,7 +54,7 @@ function AlbumSection({ albums }: { albums: LibraryAlbum[] }) {
     <div className="libraryEntityGrid" aria-label="Albums">
       {albums.map((album) => (
         <article className="libraryEntityCard" key={album.id}>
-          <img
+          <ArtworkImage
             className="libraryAlbumCover"
             src={album.cover}
             alt={`${album.name} album cover`}

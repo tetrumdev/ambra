@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import fallbackCover from "../assets/images/fallbackCover.png";
+import { whiteArtwork } from "../utils/artworkPlaceholder";
 import type {
   GlobalTrackId,
   LibraryTrack,
@@ -26,6 +26,7 @@ type MusicLibrary = {
   tracks: LibraryTrack[];
   catalogTracks: Track[];
   isLoading: boolean;
+  isServerReachable: boolean;
   error: string | null;
   isAddingAlbum: boolean;
   addAlbumError: string | null;
@@ -40,7 +41,7 @@ type MusicLibrary = {
 };
 
 function playableLocalCover(cover: string | null) {
-  if (cover === null) return fallbackCover;
+  if (cover === null) return whiteArtwork;
   return cover.startsWith("data:") ? cover : convertFileSrc(cover);
 }
 
@@ -100,6 +101,7 @@ export function useMusicLibrary(): MusicLibrary {
   );
   const [isLocalLoading, setIsLocalLoading] = useState(true);
   const [isServerLoading, setIsServerLoading] = useState(true);
+  const [isServerReachable, setIsServerReachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
@@ -162,10 +164,14 @@ export function useMusicLibrary(): MusicLibrary {
           // disconnected providers leaves playable-looking rows whose stream
           // endpoints can only return 503.
           setServerTracks(loadedTracks);
+          setIsServerReachable(true);
         }
       })
       .catch((reason: unknown) => {
-        if (!cancelled) console.warn("Could not load streaming providers:", reason);
+        if (!cancelled) {
+          setIsServerReachable(false);
+          console.warn("Could not load streaming providers:", reason);
+        }
       })
       .finally(() => {
         if (!cancelled) setIsServerLoading(false);
@@ -269,15 +275,22 @@ export function useMusicLibrary(): MusicLibrary {
   }, []);
 
   const refreshStreamingMusic = useCallback(async () => {
-    const loadedTracks = await loadServerTracks();
-    setServerTracks(loadedTracks);
-    return loadedTracks.length;
+    try {
+      const loadedTracks = await loadServerTracks();
+      setServerTracks(loadedTracks);
+      setIsServerReachable(true);
+      return loadedTracks.length;
+    } catch (reason) {
+      setIsServerReachable(false);
+      throw reason;
+    }
   }, []);
 
   return {
     tracks,
     catalogTracks,
     isLoading,
+    isServerReachable,
     error,
     isAddingAlbum,
     addAlbumError,

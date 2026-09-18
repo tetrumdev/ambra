@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
+import { useEffect, useMemo, useRef, useState, type ImgHTMLAttributes } from "react";
 import { highestQualityArtwork, thumbnailArtwork } from "../api/server";
 import { preloadArtwork } from "../utils/artworkImages";
-import fallbackCover from "../assets/images/fallbackCover.png";
 import type { Track } from "../types/music";
+import { whiteArtwork } from "../utils/artworkPlaceholder";
+import { cachedPlaylistArtwork } from "../utils/playlistArtworkCache";
+import { observeNearbyArtwork } from "../utils/nearbyArtwork";
 
 type TrackArtworkProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
   track: Track;
@@ -10,40 +12,56 @@ type TrackArtworkProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
 
 export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArtworkProps) {
   const thumbnail = thumbnailArtwork(track);
-  const [replacement, setReplacement] = useState<{ key: string; src: string } | null>(null);
-  const src = replacement?.key === thumbnail ? replacement.src : thumbnail;
-  const setSrc = (src: string) => setReplacement({ key: thumbnail, src });
-  const trackRef = useRef(track);
+  const key = `${track.globalId}:${thumbnail}`;
+  const [resolved, setResolved] = useState<{ key: string; src: string } | null>(null);
+  const src = resolved?.key === key ? resolved.src : whiteArtwork;
+  const imageRef = useRef<HTMLImageElement>(null);
+  const [nearby, setNearby] = useState(imageProps.loading === "eager");
+  const candidates = useMemo(
+    () => [...new Set([thumbnail, track.cover].filter(source => source && source !== whiteArtwork))],
+    [thumbnail, track.cover],
+  );
 
   useEffect(() => {
-    trackRef.current = track;
-  }, [track]);
+    const element = imageRef.current;
+    if (!element || nearby) return;
+    return observeNearbyArtwork(element, () => setNearby(true));
+  }, [nearby]);
 
-  const resolveBrokenArtwork: ImgHTMLAttributes<HTMLImageElement>["onError"] = (
-    event,
-  ) => {
-    onError?.(event);
-    const failedTrack = trackRef.current;
+  useEffect(() => {
+    if (!nearby) return;
+    let cancelled = false;
 
-    if (src === thumbnail && thumbnail !== failedTrack.cover) {
-      setSrc(failedTrack.cover);
-      return;
-    }
-    if (src !== failedTrack.cover) {
-      setSrc(fallbackCover);
-      return;
-    }
+    void (async () => {
+      const cached = await cachedPlaylistArtwork(thumbnail);
+      const sources = cached ? [cached, ...candidates] : candidates;
+      for (const candidate of sources) {
+        try {
+          await preloadArtwork(candidate);
+          if (!cancelled) setResolved({ key, src: candidate });
+          return;
+        } catch {
+          // Try the provider's original artwork before resolving a larger copy.
+        }
+      }
 
-    void highestQualityArtwork(failedTrack).then((artwork) => {
-      if (trackRef.current !== failedTrack) return;
-      setSrc(artwork?.url && artwork.url !== failedTrack.cover ? artwork.url : fallbackCover);
-    });
-  };
+      const artwork = await highestQualityArtwork(track);
+      if (!artwork?.url || cancelled) return;
+      try {
+        await preloadArtwork(artwork.url);
+        if (!cancelled) setResolved({ key, src: artwork.url });
+      } catch {
+        // The white placeholder remains visible.
+      }
+    })();
 
-  return <img loading="lazy" decoding="async" {...imageProps} src={src}
-    onLoad={(event) => {
-      onLoad?.(event);
-      if (src === thumbnail && thumbnail !== track.cover) void preloadArtwork(src).catch(() => {});
-    }}
-    onError={resolveBrokenArtwork} />;
+    return () => { cancelled = true; };
+  }, [candidates, key, nearby, thumbnail, track]);
+
+  return <img ref={imageRef} loading="lazy" decoding="async" {...imageProps} src={src}
+    onLoad={onLoad}
+    onError={(event) => {
+      onError?.(event);
+      setResolved({ key, src: whiteArtwork });
+    }} />;
 }

@@ -47,8 +47,9 @@ export function addPlaylistTrack(snapshot: PlaylistSnapshot, playlistId: string,
   };
 }
 
-export function savePlaylistSnapshot(snapshot: PlaylistSnapshot) {
+export function savePlaylistSnapshot(snapshot: PlaylistSnapshot): PlaylistSnapshot {
   const used = new Set(snapshot.playlists.flatMap(playlist => playlist.trackIds));
   const saved = { ...snapshot, tracks: snapshot.tracks.filter(track => used.has(track.globalId)) };
   localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify(saved));
+  return saved;
 }
