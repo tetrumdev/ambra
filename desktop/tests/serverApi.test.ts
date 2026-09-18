@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { artworkPalette, thumbnailArtwork, playableTrack, type RemoteTrack } from "../src/api/server";
+import { artworkPalette, thumbnailArtwork, playableTrack, refreshTrackMetadata, type RemoteTrack } from "../src/api/server";
 
 const spotifyTrack: RemoteTrack = {
   id: "spotify:4uLU6hMCjMI75M1A2tKUQC",
@@ -100,6 +100,43 @@ describe("shared artwork", () => {
       await artworkPalette(track);
       expect(urls.length).toBe(2);
       expect(urls.every(url => url.includes("/api/artwork/palette?"))).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
+describe("refreshTrackMetadata", () => {
+  test("local tracks short-circuit without network use", async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      throw new Error("must not fetch");
+    }) as unknown as typeof fetch;
+    try {
+      const track = { ...playableTrack(spotifyTrack), provider: "local" } as ReturnType<typeof playableTrack>;
+      await expect(refreshTrackMetadata(track)).resolves.toBe(track);
+      expect(calls).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("streaming tracks resolve through the provider metadata endpoint", async () => {
+    const original = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      return Response.json({ ...spotifyTrack, title: "Refreshed Title" });
+    }) as unknown as typeof fetch;
+    try {
+      const track = playableTrack(spotifyTrack);
+      const refreshed = await refreshTrackMetadata(track);
+      expect(refreshed.name).toBe("Refreshed Title");
+      expect(refreshed.globalId).toBe(track.globalId);
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain(`/api/providers/spotify/tracks/${spotifyTrack.providerTrackId}/metadata`);
     } finally {
       globalThis.fetch = original;
     }

@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    future::Future,
     io::{self, Write},
     path::PathBuf,
     sync::{Arc, Weak},
@@ -144,6 +145,27 @@ impl TidalProvider {
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
+    }
+
+    async fn refreshed_client(
+        &self,
+        rejected_token: Option<String>,
+    ) -> ProviderResult<TidalClient> {
+        let mut client = self.client.lock().await;
+        // Another search or playback request may already have refreshed this token.
+        let force = rejected_token.is_some() && rejected_token == client.session.auth.access_token;
+        if client.refresh_access_token(force).await? {
+            save_session(&client)?;
+        }
+        Ok(client.clone())
+    }
+
+    async fn authenticated_request<T, F, Fut>(&self, request: F) -> ProviderResult<T>
+    where
+        F: Fn(TidalClient) -> Fut,
+        Fut: Future<Output = Result<T, TidalError>>,
+    {
+        request_with_refreshed_session(|token| self.refreshed_client(token), request).await
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
@@ -314,17 +336,20 @@ impl TidalProvider {
         limit: u32,
     ) -> ProviderResult<crate::models::CatalogSearchPage> {
         use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
-        let client = self.client.lock().await.clone();
-        let response = client
-            .search(SearchConfig {
-                query: query.to_owned(),
-                types: vec![SearchType::Tracks, SearchType::Artists, SearchType::Albums],
-                include_contributors: false,
-                include_user_playlists: false,
-                supports_user_data: false,
-                include_did_you_mean: true,
-                limit,
-                offset: 0,
+        let response = self
+            .authenticated_request(|client| async move {
+                client
+                    .search(SearchConfig {
+                        query: query.to_owned(),
+                        types: vec![SearchType::Tracks, SearchType::Artists, SearchType::Albums],
+                        include_contributors: false,
+                        include_user_playlists: false,
+                        supports_user_data: false,
+                        include_did_you_mean: true,
+                        limit,
+                        offset: 0,
+                    })
+                    .await
             })
             .await?;
         Ok(CatalogSearchPage {
@@ -389,17 +414,20 @@ impl TidalProvider {
         limit: u32,
         offset: u32,
     ) -> ProviderResult<SearchPage> {
-        let client = self.client.lock().await.clone();
-        let results = client
-            .search(SearchConfig {
-                query: query.to_owned(),
-                include_contributors: false,
-                include_user_playlists: false,
-                supports_user_data: false,
-                types: vec![SearchType::Tracks],
-                limit,
-                offset,
-                ..Default::default()
+        let results = self
+            .authenticated_request(|client| async move {
+                client
+                    .search(SearchConfig {
+                        query: query.to_owned(),
+                        include_contributors: false,
+                        include_user_playlists: false,
+                        supports_user_data: false,
+                        types: vec![SearchType::Tracks],
+                        limit,
+                        offset,
+                        ..Default::default()
+                    })
+                    .await
             })
             .await?;
 
@@ -883,6 +911,29 @@ fn is_unauthorized(error: &TidalError) -> bool {
     )
 }
 
+// Refresh before taking a request snapshot, then retry a rejected token once.
+// Keep the network request outside the session lock so searches can run together.
+async fn request_with_refreshed_session<T, C, CFut, F, Fut>(
+    get_client: C,
+    request: F,
+) -> ProviderResult<T>
+where
+    C: Fn(Option<String>) -> CFut,
+    CFut: Future<Output = ProviderResult<TidalClient>>,
+    F: Fn(TidalClient) -> Fut,
+    Fut: Future<Output = Result<T, TidalError>>,
+{
+    let client = get_client(None).await?;
+    let token = client.session.auth.access_token.clone();
+    match request(client).await {
+        Err(error) if is_unauthorized(&error) => {
+            let client = get_client(token).await?;
+            Ok(request(client).await?)
+        }
+        result => Ok(result?),
+    }
+}
+
 async fn playback_source_from_dash(
     http_client: &reqwest::Client,
     media_cache: &RwLock<MediaCache>,
@@ -1235,6 +1286,121 @@ mod tests {
         movie_duration_seconds, normalize_dash_url, parse_dash_manifest,
         tidal_stream_quality_label,
     };
+
+    #[tokio::test]
+    async fn search_session_refreshes_before_request_and_retries_rejected_token_once() {
+        use super::{
+            RequestClientError, TidalAuth, TidalClient, TidalError, request_with_refreshed_session,
+        };
+        use std::sync::Mutex;
+
+        // The acquisition callback represents the persisted, refreshed session.
+        let refreshes = Mutex::new(Vec::new());
+        let requests = Mutex::new(Vec::new());
+        let result = request_with_refreshed_session(
+            |rejected| {
+                let token = if rejected.is_some() {
+                    "replacement"
+                } else {
+                    "unexpired"
+                };
+                refreshes.lock().unwrap().push(rejected);
+                std::future::ready(Ok(TidalClient::new(&TidalAuth::with_access_token(
+                    token.into(),
+                ))))
+            },
+            |client| {
+                let token = client.session.auth.access_token.unwrap();
+                requests.lock().unwrap().push(token.clone());
+                std::future::ready(if token == "unexpired" {
+                    Err(TidalError::RequestClient(RequestClientError::Unauthorized))
+                } else {
+                    Ok("search results")
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, "search results");
+        assert_eq!(
+            *refreshes.lock().unwrap(),
+            vec![None, Some("unexpired".into())]
+        );
+        assert_eq!(*requests.lock().unwrap(), vec!["unexpired", "replacement"]);
+    }
+
+    #[tokio::test]
+    async fn search_session_does_not_loop_or_refresh_on_unrelated_errors() {
+        use super::{
+            RequestClientError, TidalAuth, TidalClient, TidalError, request_with_refreshed_session,
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for unauthorized in [true, false] {
+            let acquisitions = AtomicUsize::new(0);
+            let requests = AtomicUsize::new(0);
+            let result: super::ProviderResult<()> = request_with_refreshed_session(
+                |_| {
+                    acquisitions.fetch_add(1, Ordering::SeqCst);
+                    std::future::ready(Ok(TidalClient::new(&TidalAuth::with_access_token(
+                        "token".into(),
+                    ))))
+                },
+                |_| {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    std::future::ready(Err(TidalError::RequestClient(if unauthorized {
+                        RequestClientError::Unauthorized
+                    } else {
+                        RequestClientError::Timeout
+                    })))
+                },
+            )
+            .await;
+            assert!(result.is_err());
+            let expected = if unauthorized { 2 } else { 1 };
+            assert_eq!(requests.load(Ordering::SeqCst), expected);
+            assert_eq!(acquisitions.load(Ordering::SeqCst), expected);
+        }
+    }
+
+    #[tokio::test]
+    async fn search_session_stops_when_refresh_fails() {
+        use super::request_with_refreshed_session;
+
+        let result: super::ProviderResult<()> = request_with_refreshed_session(
+            |_| std::future::ready(Err(std::io::Error::other("refresh failed").into())),
+            |_| async { panic!("must not search with stale credentials") },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "refresh failed");
+    }
+
+    #[tokio::test]
+    async fn concurrent_rejection_reuses_an_already_refreshed_session() {
+        use super::{TidalAuth, TidalClient, TidalProvider};
+
+        let mut auth = TidalAuth::with_access_token("replacement".into());
+        auth.refresh_token = Some("unused-refresh-token".into());
+        auth.last_refresh_time = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs(),
+        );
+        auth.refresh_expiry = Some(3600);
+        let provider = TidalProvider::from_client(TidalClient::new(&auth)).unwrap();
+        // If this forces another refresh, it will attempt a real request with
+        // invalid credentials and fail instead of returning the current token.
+        let client = provider
+            .refreshed_client(Some("old-token".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            client.session.auth.access_token.as_deref(),
+            Some("replacement")
+        );
+    }
 
     #[tokio::test]
     async fn timing_downloads_run_together_and_warm_playback_cache() {

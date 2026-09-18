@@ -4,9 +4,10 @@ import {
   cachedBigscreenArtwork,
   preloadBigscreenArtwork,
 } from "../utils/artworkImages";
-import fallbackCover from "../assets/images/fallbackCover.png";
 import type { Track } from "../types/music";
 import { separateCollapsedPalette } from "../utils/backgroundPalette";
+import { whiteArtwork } from "../utils/artworkPlaceholder";
+import { cachedPlaylistArtwork } from "../utils/playlistArtworkCache";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
 
@@ -19,13 +20,17 @@ type BackgroundArtworkProps = ArtworkProps & {
 };
 
 export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
-  const [cover, setCover] = useState<string | null>(() =>
-    cachedBigscreenArtwork(track) ?? thumbnailArtwork(track),
+  const [cover, setCover] = useState<string>(() =>
+    cachedBigscreenArtwork(track) ?? whiteArtwork,
   );
 
   useEffect(() => {
     let cancelled = false;
-    setCover(cachedBigscreenArtwork(track) ?? thumbnailArtwork(track));
+    setCover(cachedBigscreenArtwork(track) ?? whiteArtwork);
+
+    void cachedPlaylistArtwork(thumbnailArtwork(track)).then((source) => {
+      if (!cancelled && source) setCover(source);
+    });
 
     void preloadBigscreenArtwork(track).then((source) => {
       if (!cancelled && source) setCover(source);
@@ -44,24 +49,20 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
 
   return (
     <div id="albumCover" data-active={active} aria-hidden={!active}>
-      {cover && (
-        <>
-          <img
-            src={cover}
-            alt=""
-            aria-hidden="true"
-            className="albumCoverContrast"
-          />
-          <img
-            src={cover}
-            alt={`${track.album} album cover`}
-            id="albumCoverImg"
-            onError={() => {
-              if (cover !== fallbackCover) setCover(cover === track.cover ? fallbackCover : track.cover);
-            }}
-          />
-        </>
-      )}
+      <>
+        <img
+          src={cover}
+          alt=""
+          aria-hidden="true"
+          className="albumCoverContrast"
+        />
+        <img
+          src={cover}
+          alt={`${track.album} album cover`}
+          id="albumCoverImg"
+          onError={() => setCover(whiteArtwork)}
+        />
+      </>
     </div>
   );
 }

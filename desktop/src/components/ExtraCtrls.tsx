@@ -161,7 +161,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                   type="button"
                   aria-pressed={exclusiveMode === true}
                   disabled={exclusiveMode === null || isChangingMode}
-                  title={
+                  aria-label={
                     exclusiveMode === null
                       ? "Reading the CoreAudio output mode…"
                       : exclusiveMode

@@ -36,11 +36,12 @@ test("persists removals while preserving songs referenced by other playlists", (
     setItem: (key: string, value: string) => { expect(key).toBe(PLAYLIST_STORAGE_KEY); saved = value; },
   } });
   try {
-    savePlaylistSnapshot(updated);
+    const savedSnapshot = savePlaylistSnapshot(updated);
     const restored = parsePlaylistSnapshot(saved);
     expect(restored.playlists[0].trackIds).toEqual([]);
     expect(restored.playlists[1].trackIds).toEqual([song.globalId]);
     expect(restored.tracks).toEqual([song]);
+    expect(savedSnapshot).toEqual(restored);
   } finally {
     if (descriptor) Object.defineProperty(globalThis, "localStorage", descriptor);
     else Reflect.deleteProperty(globalThis, "localStorage");

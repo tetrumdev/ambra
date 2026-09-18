@@ -1,342 +1,359 @@
-/* Search keeps one shared card scale as the leading category changes. */
-.searchView {
-    --search-gap: 14px;
-    --search-border: #363636;
+.searchContent {
+    container-type: inline-size;
 }
-.searchView .searchResultsHeader {
-    position: sticky;
-    top: 10px;
-    z-index: 5;
-    box-sizing: border-box;
-    width: 100%;
-    padding: 24px max(24px, calc((100% - 940px) / 2)) 24px;
-    background: linear-gradient(#000 90%, rgb(0 0 0 / 0));
-}
-.searchResultsHeader .libraryTitle {
-    margin: 0 0 10px;
-    font-size: 3rem;
-    line-height: 1.15;
-}
-.searchResultsHeader .searchQuery {
-    padding: 0;
-    max-width: calc(100% - 360px);
+
+.searchResultsHeader .searchQuery,
+.searchError .searchStatus {
     overflow-wrap: anywhere;
-    font-size: 0.9rem;
 }
-.searchResultsHeader .searchStatus {
-    padding: 0;
-    font-size: 0.75rem;
+
+.searchRetryButton {
+    margin-top: 12px;
+    font: inherit;
 }
+
+.searchRetryButton:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
 .searchSectionLayout {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     align-items: start;
-    gap: 28px 20px;
-    width: min(940px, calc(100% - 48px));
-    margin: 12px auto 0;
-    padding-bottom: 32px;
+    gap: 42px 36px;
+    margin: 32px 30px 30px;
 }
+
 .searchSectionLayout section {
     min-width: 0;
 }
-.searchEntitySections {
+
+.searchEntitySections,
+#searchResultGrid,
+#firstResult {
     display: contents;
 }
+
 .searchSectionLayout h2 {
-    margin: 0 0 14px;
-    font-size: 1.05rem;
-    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 0 0 24px;
+    font-size: 1.15rem;
+    font-weight: 400;
     line-height: 1.3;
 }
+
+.searchSectionLayout h2::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid #535353;
+}
+
 .searchSectionEmpty,
-.searchEntityEmpty {
-    margin: 0;
-    padding: 20px 0;
-    color: #999;
-    font-size: 0.85rem;
+.searchEntityEmpty,
+.searchEmptyState {
+    color: #a3a2a3;
 }
-#searchResults,
-#searchResultGrid {
+
+.searchEmptyState {
+    margin: 36px 30px;
+}
+
+#searchResults {
     display: grid;
-    gap: var(--search-gap);
-    min-width: 0;
+    gap: 24px;
 }
-#searchResultGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-.searchResult {
-    --art-size: 68px;
+
+.searchResult,
+.searchEntity {
+    --art-size: 72px;
+    position: relative;
     display: grid;
-    grid-template-columns: var(--art-size) minmax(0, 1fr) 32px;
+    grid-template-columns: var(--art-size) minmax(0, 1fr);
     align-items: center;
-    gap: 12px;
-    min-width: 0;
-    min-height: 110px;
+    gap: 16px;
     box-sizing: border-box;
-    padding: 14px;
-    border: 1px solid var(--search-border);
-    border-radius: 16px;
-    background: #080808;
-    overflow: hidden;
+    min-width: 0;
+    min-height: 90px;
+    padding: 0;
+}
+
+.searchResult {
     cursor: pointer;
-    transition:
-        background-color 120ms,
-        border-color 120ms;
 }
-.searchResult:hover {
-    background: #141414;
-    border-color: #606060;
+
+.searchResult:hover .searchResultName {
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
+
 .searchResultArtwork {
-    display: block;
+    position: relative;
+    display: grid;
+    place-items: center;
     width: var(--art-size);
     height: var(--art-size);
     padding: 0;
     overflow: hidden;
     border: 0;
-    border-radius: 10px;
-    background: #202020;
-    cursor: pointer;
+    border-radius: 7px;
+    background: #fff;
 }
+
+.searchResultCover,
+.searchArtworkPlay {
+    grid-area: 1 / 1;
+}
+
 .searchResultCover {
+    display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
-    display: block;
     -webkit-user-drag: none;
+    transition: filter 0.25s;
 }
-.searchResultInfo {
+
+.searchArtworkPlay {
+    width: 13px;
+    z-index: 1;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+}
+
+.searchResultArtwork:hover .searchArtworkPlay,
+.searchResultArtwork:focus-visible .searchArtworkPlay {
+    opacity: 1;
+}
+
+.searchResultArtwork:hover .searchResultCover,
+.searchResultArtwork:focus-visible .searchResultCover {
+    filter: brightness(50%) blur(3px);
+}
+
+.searchResultInfo,
+.searchEntityInfo {
     display: grid;
-    gap: 4px;
+    gap: 3px;
     min-width: 0;
 }
+
 .searchResultName,
 .searchResultArtist,
-.searchResultAlbum {
+.searchResultAlbum,
+.searchEntityInfo > * {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.searchResultName {
-    font-size: 0.95rem;
+
+.searchResultName,
+.searchEntityInfo strong {
+    font-size: 1rem;
     font-weight: 600;
-    line-height: 1.3;
+    line-height: 1.35;
 }
-.searchResultArtist {
-    font-size: 0.82rem;
-    color: #ddd;
+
+.searchResultName {
+    padding-right: 30px;
 }
-.searchResultAlbum {
+
+.searchResultArtist,
+.searchResultAlbum,
+.searchEntityInfo span {
     font-size: 0.8rem;
-    color: #aaa;
+    line-height: 1.4;
 }
+
+.searchResultAlbum {
+    color: #a3a2a3;
+}
+
 .searchResultMeta {
     display: flex;
-    align-items: baseline;
     gap: 10px;
     min-width: 0;
-    margin-top: 3px;
-    font-size: 0.7rem;
-    color: #a9a9a9;
+    margin-top: 5px;
+    color: #a3a2a3;
+    font-size: 0.72rem;
+    line-height: 1.4;
 }
+
 .searchResultQuality {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
+
 .searchResultDuration {
-    flex-shrink: 0;
     margin-left: auto;
+    flex-shrink: 0;
     font-variant-numeric: tabular-nums;
 }
+
 .searchResultMenuButton {
-    width: 32px;
-    height: 40px;
-    padding: 8px;
+    position: absolute;
+    top: 0;
+    right: 0;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 7px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 50%;
     background: transparent;
-    opacity: 0.7;
-    cursor: pointer;
 }
-.searchResultMenuButton:hover {
-    opacity: 1;
-    background: #252525;
+
+.searchResultMenuButton:hover,
+.searchResultMenuButton:focus-visible {
+    background: #303030;
 }
+
 .searchResultMenuButton img {
     display: block;
     width: 16px;
     height: 16px;
-    -webkit-user-drag: none;
 }
-.searchResultArtwork:focus-visible,
-.searchResultMenuButton:focus-visible,
-.searchLoadMore:focus-visible {
-    outline: 2px solid #ccc;
-    outline-offset: 3px;
-}
-.searchTrackSection[data-primary="true"] #firstResult .searchResult {
-    --art-size: 112px;
-    min-height: 148px;
-    padding: 18px;
-    gap: 18px;
-    border-color: #505050;
-}
-.searchTrackSection[data-primary="true"] #firstResult .searchResultName {
-    font-size: 1.35rem;
-}
-.searchTrackSection[data-primary="false"] #searchResultGrid {
-    grid-template-columns: minmax(0, 1fr);
-}
+
 .searchEntity {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    min-width: 0;
-    box-sizing: border-box;
-    min-height: 96px;
-    padding: 14px;
-    margin-bottom: var(--search-gap);
-    border: 1px solid var(--search-border);
-    border-radius: 16px;
-    background: #080808;
+    margin-bottom: 24px;
 }
+
 .searchEntity:last-child {
     margin-bottom: 0;
 }
+
+.searchEntityImage,
+.searchView .artistPortrait {
+    width: var(--art-size);
+    height: var(--art-size);
+}
+
 .searchEntityImage {
-    flex: 0 0 64px;
-    height: 64px;
-    overflow: hidden;
-    border-radius: 10px;
-    background: #242424;
     display: grid;
     place-items: center;
+    overflow: hidden;
+    border-radius: 7px;
+    background: #242424;
 }
-.searchArtist .searchEntityImage {
-    border-radius: 50%;
+
+.searchAlbum .searchEntityImage {
+    background: #fff;
 }
+
 .searchEntityImage img {
-    display: block;
     width: 100%;
     height: 100%;
     object-fit: cover;
 }
-.searchEntityInfo {
-    display: grid;
-    gap: 5px;
-    min-width: 0;
+
+.searchArtist .searchEntityImage {
+    border-radius: 50%;
 }
-.searchEntityInfo > * {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-.searchEntityInfo strong {
-    font-size: 0.95rem;
-    font-weight: 600;
-    line-height: 1.3;
-}
-.searchEntityInfo span {
-    color: #ccc;
-    font-size: 0.82rem;
-}
+
 .searchEntityInfo small {
-    color: #999;
+    color: #a3a2a3;
     font-size: 0.72rem;
 }
+
+.searchTrackSection[data-primary="true"] #searchResults,
 .searchSectionLayout section[data-primary="true"]:not(.searchTrackSection) {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--search-gap);
+    grid-template-columns: minmax(0, 1.15fr) repeat(2, minmax(0, 1fr));
+    gap: 24px 30px;
 }
+
 .searchSectionLayout section[data-primary="true"] > h2,
-.searchSectionLayout section[data-primary="true"] > .searchEntity:first-of-type,
 .searchSectionLayout section[data-primary="true"] > .searchEntityEmpty {
     grid-column: 1 / -1;
 }
-.searchSectionLayout section[data-primary="true"] > h2 {
+
+.searchSectionLayout
+    section[data-primary="true"]:not(.searchTrackSection)
+    > h2 {
     margin-bottom: 0;
 }
+
 .searchSectionLayout section[data-primary="true"] .searchEntity {
     margin: 0;
 }
-.searchSectionLayout section[data-primary="true"] .searchEntity:first-of-type {
-    min-height: 148px;
-    padding: 18px;
+
+.searchTrackSection[data-primary="true"] .searchResult[data-variant="featured"],
+.searchSectionLayout
+    section[data-primary="true"]
+    > .searchEntity:first-of-type {
+    --art-size: 150px;
+    grid-column: 1;
+    grid-row: span 2;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    justify-items: start;
     gap: 18px;
-    border-color: #505050;
+    padding: 0 16px 0 0;
 }
+
+.searchTrackSection[data-primary="true"]
+    .searchResult[data-variant="featured"]
+    .searchResultInfo,
 .searchSectionLayout
     section[data-primary="true"]
-    .searchEntity:first-of-type
-    .searchEntityImage {
-    flex-basis: 112px;
-    height: 112px;
+    > .searchEntity:first-of-type
+    .searchEntityInfo {
+    width: 100%;
 }
+
+.searchTrackSection[data-primary="true"]
+    .searchResult[data-variant="featured"]
+    .searchResultName,
 .searchSectionLayout
     section[data-primary="true"]
-    .searchEntity:first-of-type
+    > .searchEntity:first-of-type
     strong {
-    font-size: 1.35rem;
+    padding-right: 0;
+    font-size: 1.5rem;
     white-space: normal;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
     overflow-wrap: anywhere;
 }
-.searchLoadMore {
-    display: block;
-    margin: 12px auto;
-    padding: 10px 20px;
-    color: #ddd;
-    background: #151515;
-    border: 1px solid #535353;
-    border-radius: 12px;
-    cursor: pointer;
+
+@container (width < 1000px) {
+    .searchTrackSection[data-primary="true"] #searchResults,
+    .searchSectionLayout section[data-primary="true"]:not(.searchTrackSection) {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .searchTrackSection[data-primary="true"]
+        .searchResult[data-variant="featured"],
+    .searchSectionLayout
+        section[data-primary="true"]
+        > .searchEntity:first-of-type {
+        grid-column: 1 / -1;
+        grid-row: auto;
+        grid-template-columns: var(--art-size) minmax(0, 1fr);
+    }
 }
-.searchLoadMore:disabled {
-    opacity: 0.6;
-    cursor: wait;
-}
-@media screen and (width < 760px) {
+
+@container (width < 680px) {
     .searchSectionLayout {
         grid-template-columns: minmax(0, 1fr);
+        margin-inline: 20px;
     }
-    #searchResultGrid,
+
+    .searchTrackSection[data-primary="true"] #searchResults,
     .searchSectionLayout section[data-primary="true"]:not(.searchTrackSection) {
         grid-template-columns: minmax(0, 1fr);
     }
-    .searchResultsHeader .searchQuery {
-        max-width: 100%;
+
+    .searchTrackSection[data-primary="true"]
+        .searchResult[data-variant="featured"],
+    .searchSectionLayout
+        section[data-primary="true"]
+        > .searchEntity:first-of-type {
+        --art-size: 100px;
+        padding: 0;
     }
-    .searchView .searchResultsHeader {
-        padding-top: 78px;
-    }
-}
-.artistPortrait {
-    position: relative;
-    flex: 0 0 64px;
-    width: 64px;
-}
-.artistPortrait .searchEntityImage {
-    width: 100%;
-}
-.searchSectionLayout
-    section[data-primary="true"]
-    .searchEntity:first-of-type
-    .artistPortrait {
-    flex-basis: 112px;
-    width: 112px;
-}
-.artistImageCredit {
-    display: block;
-    max-width: 120px;
-    margin-top: 4px;
-    font-size: 9px;
-    color: #999;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
