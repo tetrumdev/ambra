@@ -1,11 +1,13 @@
 import { categoryOrder } from "../utils/catalogRanking";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { ArtworkImage } from "./ArtworkImage";
+import "./LibraryView.css";
 import "./SearchView.css";
 
 type SearchViewProps = {
@@ -100,6 +102,7 @@ function SearchResult({
           playTrack(track.globalId);
         }}
       >
+        <img className="searchArtworkPlay" src="/Play.svg" alt="" aria-hidden="true" />
         <TrackArtwork
           className="searchResultCover"
           track={track}
@@ -158,11 +161,12 @@ export function SearchView({
   registerScrollElement,
 }: SearchViewProps) {
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
+  useEffect(() => setOpenMenu(null), [query, provider]);
   const [featuredTrack, ...remainingTracks] = tracks.slice(0, 5);
   const order = categoryOrder(query, tracks, artists, albums, candidates);
   const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
   const count = Math.min(tracks.length, 5) + Math.min(artists.length, 5) + Math.min(albums.length, 5);
-  const status = isSearching ? `Searching ${providerNames[provider]}…` : error ?? `${count} results from ${providerNames[provider]}`;
+  const status = isSearching ? `Searching ${providerNames[provider]}…` : `${count} results from ${error ? "available services" : providerNames[provider]}`;
 
   function openActions(event: React.MouseEvent, trackId: GlobalTrackId) {
     event.preventDefault();
@@ -222,15 +226,21 @@ export function SearchView({
         <p className="searchQuery">Results for “{query.trim()}”</p>
         <p
           className="searchStatus"
-          role={error ? "alert" : "status"}
-          data-error={error ? "true" : undefined}
+          role="status"
         >
           {status}
         </p>
+        {error && (
+          <div className="searchError">
+            <p className="searchStatus" data-error="true" role="alert">{error}</p>
+            {canRetry && <button className="libraryShuffleBtn searchRetryButton" type="button" onClick={retry} disabled={isSearching}>{isSearching ? "Retrying…" : "Retry unavailable services"}</button>}
+          </div>
+        )}
       </div>
 
-      {error && isSearching && <p className="searchStatus" role="alert">{error}</p>}
-      {canRetry && <button className="searchLoadMore" type="button" onClick={retry} disabled={isSearching}>Retry unavailable services</button>}
+      {count === 0 && !isSearching && !error && <p className="searchEmptyState">No matches found. Try another artist, album, or track name.</p>}
+      {count > 0 && (
+      <div className="searchContent">
       <div className="searchSectionLayout">
       <section className="searchTrackSection" data-primary={order[0] === "tracks"} style={sectionStyle("tracks")} aria-labelledby="searchTracksHeading">
       <h2 id="searchTracksHeading" className="searchSectionTitle">Tracks</h2>
@@ -277,12 +287,14 @@ export function SearchView({
           <h2 id="searchAlbumsHeading">Albums</h2>
           {!albums.length && <p className="searchEntityEmpty">{isSearching ? "Searching albums…" : "No albums found"}</p>}
           {albums.slice(0, 5).map(album => <div className="searchEntity searchAlbum" key={album.id}>
-            <div className="searchEntityImage">{album.imageUrl ? <img src={album.imageUrl} alt="" loading="lazy" /> : <span>♫</span>}</div>
-            <div className="searchEntityInfo"><strong title={[album.title, album.version].filter(Boolean).join(" · ")}>{album.title}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}</strong><span>{album.artist}</span><small>{providerNames[album.provider]}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small></div>
+            <div className="searchEntityImage"><ArtworkImage src={album.imageUrl} alt={`${album.title} album cover`} loading="lazy" /></div>
+            <div className="searchEntityInfo"><strong>{album.title}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}</strong><span>{album.artist}</span><small>{providerNames[album.provider]}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small></div>
           </div>)}
         </section>
       </div>
       </div>
+      </div>
+      )}
     </div>
   );
 }

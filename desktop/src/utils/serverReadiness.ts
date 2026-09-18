@@ -15,13 +15,15 @@ function waitForRetry(milliseconds: number, signal?: AbortSignal) {
 
 // The packaged server restores provider sessions before accepting connections.
 // Retry connection failures only; real HTTP/provider errors remain authoritative.
+const MAX_READY_ATTEMPTS = 20;
+
 export async function fetchWhenServerReady(url: string, signal?: AbortSignal): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
     try {
       return await fetch(url, { signal });
     } catch (error) {
-      if (!(error instanceof TypeError) || signal?.aborted || attempt >= 7) throw error;
+      if (!(error instanceof TypeError) || signal?.aborted || attempt >= MAX_READY_ATTEMPTS) throw error;
       await waitForRetry(Math.min(200 * 2 ** attempt, 2000), signal);
     }
   }
