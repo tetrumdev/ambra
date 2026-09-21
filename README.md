@@ -52,8 +52,8 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ### Streaming service login
 
-Packaged desktop builds start the bundled server automatically. During
-development, start it separately:
+The desktop app runs by itself for local music. Streaming features require the
+separate Ambra server. Start it before using a streaming service:
 
 ```sh
 cd server
