@@ -13,7 +13,7 @@ function waitForRetry(milliseconds: number, signal?: AbortSignal) {
   });
 }
 
-// The packaged server restores provider sessions before accepting connections.
+// A separately started server may restore provider sessions before accepting connections.
 // Retry connection failures only; real HTTP/provider errors remain authoritative.
 const MAX_READY_ATTEMPTS = 20;
 

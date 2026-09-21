@@ -9,15 +9,6 @@
     "core:window:allow-set-focus",
     "core:window:allow-start-dragging",
     "core:window:allow-set-fullscreen",
-    "opener:default",
-    {
-      "identifier": "shell:allow-spawn",
-      "allow": [
-        {
-          "name": "binaries/ambra-server",
-          "sidecar": true
-        }
-      ]
-    }
+    "opener:default"
   ]
 }

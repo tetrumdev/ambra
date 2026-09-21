@@ -4,7 +4,7 @@ import type { Track } from "../src/types/music";
 
 type CsvRow = { title: string; artist: string; album: string; playlist: string; isrc: string; qobuzId: string };
 type RemoteTrack = Record<string, any>;
-const server = "http://127.0.0.1:8787";
+const server = "http://127.0.0.1:38147";
 
 function csvRows(text: string): string[][] {
   const rows: string[][] = [];
