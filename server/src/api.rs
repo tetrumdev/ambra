@@ -39,7 +39,7 @@ use crate::{
     providers::tidal::{PlaybackSource, TidalLogin, TidalProvider},
 };
 
-const DEFAULT_ADDRESS: &str = "127.0.0.1:8787";
+const DEFAULT_ADDRESS: &str = "127.0.0.1:38147";
 const DEFAULT_SEARCH_PAGE_SIZE: u32 = 10;
 const MAX_SEARCH_PAGE_SIZE: u32 = 50;
 const SEARCH_CACHE_LIMIT: usize = 100;
