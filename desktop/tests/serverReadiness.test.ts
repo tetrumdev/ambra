@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import { fetchWhenServerReady } from "../src/utils/serverReadiness";
 
-test("retries a starting sidecar, but returns provider HTTP errors without retrying", async () => {
+test("retries a starting server, but returns provider HTTP errors without retrying", async () => {
   const original = globalThis.fetch;
   let calls = 0;
   globalThis.fetch = (async () => {

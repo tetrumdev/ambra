@@ -10,7 +10,7 @@ import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 
 const serverBaseUrl = (
-  import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:8787"
+  import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147"
 ).replace(/\/$/, "");
 
 type RemoteAlbum = {
