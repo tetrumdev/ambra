@@ -52,9 +52,9 @@ export function Sidebar({
     <>
     <div id="sidebarMain">
       <div className="mainLogoContainer">
-        <div className="mainLogo">
-          <img src="/ambra.svg" id="logoImg" />
-        </div>
+        <button type="button" className="mainLogo" onClick={onOpenLibrary} aria-label="Open My Library">
+          <img src="/ambra.svg" id="logoImg" alt="" />
+        </button>
       </div>
       <div id="libraryContainer">
         <button type="button" onClick={onOpenLibrary} className="sidebarBtn sidebarLibraryButton" aria-current={activeLibrarySection === "overview" ? "page" : undefined}>

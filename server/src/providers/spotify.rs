@@ -94,7 +94,7 @@ impl SpotifyQuality {
 impl SpotifyProvider {
     /// Spotify stays optional so an absent login never prevents other providers from starting.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
-        let cache_root = spotify_cache_path();
+        let cache_root = spotify_cache_path()?;
         let audio_cache_path = cache_root.join("audio");
         let cache = Cache::new(
             Some(&cache_root),
@@ -574,8 +574,8 @@ fn nonempty_env(name: &str) -> Option<String> {
     env::var(name).ok().and_then(|value| nonempty(&value))
 }
 
-fn spotify_cache_path() -> PathBuf {
-    crate::storage::path("spotify-cache")
+fn spotify_cache_path() -> io::Result<PathBuf> {
+    crate::storage::login_path("spotify-cache")
 }
 
 fn track_metadata_cache_path() -> PathBuf {

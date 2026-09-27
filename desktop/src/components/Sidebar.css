@@ -25,6 +25,10 @@
 }
 
 .mainLogo {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: transparent;
     user-select: none;
     -webkit-user-select: none;
     cursor: pointer;
@@ -33,6 +37,11 @@
     margin: none;
     align-self: center;
     margin-left: 30px;
+}
+
+.mainLogo:focus-visible {
+    border-radius: 4px;
+    box-shadow: 0 0 0 2px white;
 }
 
 #logoImg {

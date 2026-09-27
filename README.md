@@ -66,9 +66,9 @@ button in the upper-right corner. Tidal and Qobuz open their login page and ask
 you to paste the resulting callback URL into Ambra. Spotify opens its login
 page and completes its local callback automatically.
 
-Tidal stores its session in `server/.tidal-session.json`. Qobuz stores its
-session in `server/.qobuz-session.json`. Spotify stores its login under
-`server/.spotify-cache`. These paths are ignored by Git.
+Saved Tidal and Qobuz sessions and Spotify login credentials are stored under
+`server/login-cache/` during development. Existing logins are moved there
+automatically on the next server start. The directory is ignored by Git.
 
 ### AI Usage
 
