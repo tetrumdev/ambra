@@ -26,6 +26,20 @@ export function trackForNativeAudioSource(tracks: Track[], source: string) {
   return tracks.find((track) => nativeAudioSource(track) === source);
 }
 
+export function trackForNativeAudioAdvance(
+  nextTrack: Track | undefined,
+  currentSource: string | null,
+) {
+  if (
+    !nextTrack ||
+    !currentSource ||
+    nativeAudioSource(nextTrack) !== currentSource
+  ) {
+    return undefined;
+  }
+  return nextTrack;
+}
+
 export function trackForNativeAudioStatus(
   tracks: Track[],
   currentTrackId: string | null,

@@ -34,8 +34,13 @@ import {
 } from "./utils/queueModel";
 import { isUnmodifiedKey } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
+import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 
 import { playlistTracks } from "./utils/playlists";
+import {
+  sortCollectionTracks,
+  type TrackSort,
+} from "./utils/trackCollectionOrder";
 
 import { usePlaylists } from "./hooks/usePlaylists";
 
@@ -48,6 +53,9 @@ function App() {
   );
   const [librarySection, setLibrarySection] =
     useState<LibrarySection>("overview");
+  const [collectionSorts, setCollectionSorts] = useState<
+    Record<string, TrackSort>
+  >({});
   const searchQuery = preferences.search.query;
   const [searchProviders, setSearchProviders] = useState<StreamingProvider[]>([]);
   const searchProvidersRequest = useRef(0);
@@ -117,6 +125,12 @@ function App() {
   useEffect(() => {
     void cachePlaylistArtwork(playlistStore.tracks);
   }, [playlistStore.tracks]);
+
+  useEffect(() => {
+    void preloadUpcomingBigscreenArtwork(
+      queue.upcomingEntries.map((entry) => entry.track),
+    );
+  }, [queue.upcomingEntries]);
 
   useEffect(() => {
     if (library.isServerReachable || library.isLoading) return;
@@ -220,15 +234,25 @@ function App() {
     },
     [activeViewKey],
   );
-  const collectionTracks = selectedPlaylist
+  const collectionSortKey = selectedPlaylist
+    ? `playlist:${selectedPlaylist.id}`
+    : "library:tracks";
+  const collectionSort = collectionSorts[collectionSortKey] ?? null;
+  const baseCollectionTracks = selectedPlaylist
     ? playlistTracks(selectedPlaylist, availableTracks)
     : library.tracks;
+  const collectionTracks = useMemo(
+    () => sortCollectionTracks(baseCollectionTracks, collectionSort),
+    [baseCollectionTracks, collectionSort],
+  );
   const activeCollectionContext = selectedPlaylist
     ? collectionQueueContext(collectionTracks, {
         kind: "playlist",
         id: selectedPlaylist.id,
       })
-    : queueContext;
+    : libraryQueueContext(
+        sortCollectionTracks(library.tracks, collectionSort),
+      );
 
   const removeFromCollection = (trackIds: GlobalTrackId[]) => {
     if (selectedPlaylist) {
@@ -236,6 +260,22 @@ function App() {
     } else {
       library.removeTracks(trackIds);
     }
+  };
+
+  const changeCollectionSort = (sort: TrackSort) => {
+    setCollectionSorts((current) => ({
+      ...current,
+      [collectionSortKey]: sort,
+    }));
+  };
+
+  const reorderCollectionTracks = (orderedTrackIds: GlobalTrackId[]) => {
+    if (selectedPlaylist) {
+      if (!playlistStore.reorderTracks(selectedPlaylist.id, orderedTrackIds)) return;
+    } else {
+      library.reorderTracks(orderedTrackIds);
+    }
+    changeCollectionSort(null);
   };
 
   useEffect(() => {
@@ -671,6 +711,9 @@ function App() {
     playNext: (trackId: GlobalTrackId) =>
       playNext(activeCollectionContext, trackId),
     removeTracks: removeFromCollection,
+    reorderTracks: reorderCollectionTracks,
+    sort: collectionSort,
+    onSortChange: changeCollectionSort,
     shuffleCollection,
     registerScrollElement,
   };
@@ -779,6 +822,7 @@ function App() {
             <PlaylistView
               key={selectedPlaylist.id}
               playlist={selectedPlaylist}
+              artworkTracks={baseCollectionTracks}
               {...collectionViewProps}
             />
           ) : (

@@ -6,7 +6,6 @@ import {
   type RefObject,
   type SyntheticEvent,
 } from "react";
-import { preloadBigscreenArtwork } from "../utils/artworkImages";
 import type { MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -14,6 +13,7 @@ import type { Deck, Track } from "../types/music";
 import { canAttemptPlayback } from "../utils/playbackReadiness";
 import {
   nativeAudioSource,
+  trackForNativeAudioAdvance,
   trackForNativeAudioStatus,
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
@@ -118,18 +118,6 @@ export function useAudioPlayer(
   const currentTrack = tracks.find(
     (track) => track.globalId === currentTrackId,
   );
-
-  const nextArtworkTrack = queueNavigation.nextTrack;
-  useEffect(() => {
-    if (!nextArtworkTrack) return;
-    void preloadBigscreenArtwork(nextArtworkTrack);
-  }, [
-    nextArtworkTrack?.albumId,
-    nextArtworkTrack?.cover,
-    nextArtworkTrack?.globalId,
-    nextArtworkTrack?.nativeCover,
-    nextArtworkTrack?.provider,
-  ]);
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -253,6 +241,33 @@ export function useAudioPlayer(
     },
     [],
   );
+
+  const acceptNativeAdvance = useCallback((currentSource: string | null) => {
+    const advancedTrack = trackForNativeAudioAdvance(
+      queueNavigationRef.current.peekNext(),
+      currentSource,
+    );
+    if (!advancedTrack) return false;
+
+    const committedTrack = queueNavigationRef.current.next();
+    if (committedTrack?.globalId !== advancedTrack.globalId) return false;
+
+    currentTrackIdRef.current = advancedTrack.globalId;
+    currentTimeRef.current = 0;
+    setCurrentTrackId(advancedTrack.globalId);
+    setCurrentTime(0);
+    setDuration(advancedTrack.durationSeconds);
+
+    const followingTrack = queueNavigationRef.current.peekNext();
+    if (followingTrack) {
+      void nativeCommandsRef.current.run("queue_native_audio", {
+        source: nativeAudioSource(followingTrack),
+      }).catch((error) =>
+        console.warn("Could not preload the next native track:", error),
+      );
+    }
+    return true;
+  }, []);
 
   const requestDeckPlayback = useCallback(
     (deck: Deck) => {
@@ -484,15 +499,37 @@ export function useAudioPlayer(
   }, [activeAudio, seek, switchToTrack, usesNativeAudio]);
 
   const next = useCallback(() => {
+    if (usesNativeAudio) {
+      void (async () => {
+        try {
+          const playback = await invoke<NativeAudioStatus>("native_audio_status");
+          const statusTrack = trackForNativeAudioStatus(
+            tracksRef.current,
+            currentTrackIdRef.current,
+            queueNavigationRef.current.peekNext(),
+            playback.currentSource,
+          );
+          if (statusTrack?.advanced) {
+            acceptNativeAdvance(playback.currentSource);
+          }
+        } catch (error) {
+          console.warn("Could not reconcile native audio before skipping:", error);
+        }
+
+        const nextTrack = queueNavigationRef.current.next();
+        if (!nextTrack) return;
+        const nextIndex = trackPosition(tracksRef.current, nextTrack.globalId);
+        if (nextIndex >= 0) {
+          switchToTrack(nextIndex, nativePlayIntentRef.current);
+        }
+      })();
+      return;
+    }
+
     const nextTrack = queueNavigationRef.current.next();
     if (!nextTrack) return;
     const nextIndex = trackPosition(tracksRef.current, nextTrack.globalId);
     if (nextIndex < 0) return;
-
-    if (usesNativeAudio) {
-      switchToTrack(nextIndex, nativePlayIntentRef.current);
-      return;
-    }
 
     const audio = activeAudio();
     if (!audio) return;
@@ -502,7 +539,7 @@ export function useAudioPlayer(
         pendingPlaybackDeckRef.current === activeDeckRef.current) &&
       !audio.ended;
     switchToTrack(nextIndex, shouldContinue);
-  }, [activeAudio, switchToTrack, usesNativeAudio]);
+  }, [acceptNativeAdvance, activeAudio, switchToTrack, usesNativeAudio]);
 
   const onLoadedMetadata = useCallback(
     (deck: Deck, event: SyntheticEvent<HTMLAudioElement>) => {
@@ -689,20 +726,7 @@ export function useAudioPlayer(
         }
 
         if (statusTrack.advanced) {
-          const advancedTrack = statusTrack.track;
-          queueNavigationRef.current.next();
-          currentTrackIdRef.current = advancedTrack.globalId;
-          setCurrentTrackId(advancedTrack.globalId);
-          setDuration(advancedTrack.durationSeconds);
-
-          const followingTrack = queueNavigationRef.current.peekNext();
-          if (followingTrack) {
-            void nativeCommandsRef.current.run("queue_native_audio", {
-              source: nativeAudioSource(followingTrack),
-            }).catch((error) =>
-              console.warn("Could not preload the next native track:", error),
-            );
-          }
+          acceptNativeAdvance(playback.currentSource);
         }
 
         setCurrentTime(playback.currentTime);
@@ -743,7 +767,25 @@ export function useAudioPlayer(
       disposed = true;
       if (timer !== undefined) clearTimeout(timer);
     };
-  }, [clearPlayback, currentTrack, switchToTrack, usesNativeAudio]);
+  }, [acceptNativeAdvance, clearPlayback, currentTrack, switchToTrack, usesNativeAudio]);
+
+  useEffect(() => {
+    if (!usesNativeAudio) return;
+
+    let disposed = false;
+    let stopListening: (() => void) | undefined;
+    void listen<string>("native-audio-source-changed", ({ payload }) => {
+      acceptNativeAdvance(payload);
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopListening = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      stopListening?.();
+    };
+  }, [acceptNativeAdvance, usesNativeAudio]);
 
   useEffect(
     () => () => {
