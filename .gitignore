@@ -23,6 +23,7 @@ dist-ssr
 *.sln
 *.sw?
 /server/target/
+/server/login-cache/
 /server/.tidal-session.json
 /server/.tidal-metadata-cache.json
 /server/.library-track-ids.json

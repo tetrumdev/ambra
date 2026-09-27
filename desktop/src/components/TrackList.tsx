@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
+import { musicProviderName } from "../utils/musicProviderName";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
@@ -31,6 +32,7 @@ export type TrackListProps = {
   removalLabel?: string;
   playlistOptions?: PlaylistMenuOptions;
   addToLibrary?: (trackId: GlobalTrackId) => void;
+  showServiceColumn?: boolean;
 };
 
 function formatTime(time: number) {
@@ -54,6 +56,7 @@ export function TrackList({
   removalLabel = "Remove from collection",
   addToLibrary,
   playlistOptions,
+  showServiceColumn = false,
 }: TrackListProps) {
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
   const trackIds = useMemo(
@@ -196,6 +199,7 @@ export function TrackList({
         <span className="trackColumn">Track</span>
         <span className="artistColumn">Artist</span>
         <span className="albumColumn">Album</span>
+        {showServiceColumn && <span className="serviceColumn">Service</span>}
         <span className="durationColumn">Duration</span>
         {selection.isSelecting && (
           <button
@@ -214,6 +218,7 @@ export function TrackList({
           selecting={selection.isSelecting}
           menuOpen={openMenu?.trackId === track.globalId}
           collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
+          showServiceColumn={showServiceColumn}
           onAction={onRowAction}
         />
       ))}
@@ -222,13 +227,14 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, onAction }: {
+const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showServiceColumn, onAction }: {
   track: Track;
   index: number;
   selected: boolean;
   selecting: boolean;
   menuOpen: boolean;
   collectionMenuOpen: boolean;
+  showServiceColumn: boolean;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
 }) {
   return (
@@ -268,6 +274,9 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
       </span>
       <span className="artistName trackDescriptor">{track.artist}</span>
       <span className="albumName trackDescriptor">{track.album}</span>
+      {showServiceColumn && (
+        <span className="trackService trackDescriptor">{musicProviderName(track.provider)}</span>
+      )}
       <span
         className="trackDuration trackDescriptor"
         data-playback-menu-trigger

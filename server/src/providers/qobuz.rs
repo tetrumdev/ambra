@@ -55,7 +55,7 @@ impl QobuzProvider {
     /// Qobuz stays optional: an absent login must not prevent Tidal/local startup.
     /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or interactive OAuth.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
-        let saved_session = if session_path().is_file() {
+        let saved_session = if session_path()?.is_file() {
             Some(load_session()?)
         } else {
             None
@@ -637,16 +637,16 @@ fn validate_album_id(album_id: &str) -> ProviderResult<()> {
     Ok(())
 }
 
-fn session_path() -> PathBuf {
-    crate::storage::path("qobuz-session.json")
+fn session_path() -> io::Result<PathBuf> {
+    crate::storage::login_path("qobuz-session.json")
 }
 
 fn load_session() -> ProviderResult<UserSession> {
-    Ok(serde_json::from_slice(&fs::read(session_path())?)?)
+    Ok(serde_json::from_slice(&fs::read(session_path()?)?)?)
 }
 
 fn save_session(session: &UserSession) -> ProviderResult<()> {
-    write_private_json(&session_path(), session)
+    write_private_json(&session_path()?, session)
 }
 
 fn track_metadata_cache_path() -> PathBuf {

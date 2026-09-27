@@ -1166,7 +1166,7 @@ async fn authenticated_client(interactive: bool) -> ProviderResult<Option<TidalC
 }
 
 async fn restore_session() -> ProviderResult<Option<TidalClient>> {
-    let session_json = match fs::read_to_string(session_path()) {
+    let session_json = match fs::read_to_string(session_path()?) {
         Ok(session_json) => session_json,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
@@ -1195,7 +1195,7 @@ async fn restore_session() -> ProviderResult<Option<TidalClient>> {
 }
 
 fn save_session(client: &TidalClient) -> ProviderResult<()> {
-    let path = session_path();
+    let path = session_path()?;
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);
 
@@ -1217,8 +1217,8 @@ fn save_session(client: &TidalClient) -> ProviderResult<()> {
     Ok(())
 }
 
-fn session_path() -> PathBuf {
-    crate::storage::path("tidal-session.json")
+fn session_path() -> io::Result<PathBuf> {
+    crate::storage::login_path("tidal-session.json")
 }
 
 fn track_metadata_cache_path() -> PathBuf {
