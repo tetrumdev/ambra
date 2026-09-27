@@ -4,6 +4,7 @@ import type {
   QueueSource,
   Track,
 } from "../types/music";
+import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 
 const QUEUE_STORAGE_KEY = "ambra.queue.v1";
 
@@ -149,7 +150,7 @@ export function resolveQueueSnapshot(
 
 export function loadQueueSnapshot() {
   try {
-    return parseQueueSnapshot(localStorage.getItem(QUEUE_STORAGE_KEY));
+    return parseQueueSnapshot(getPersistentItem(QUEUE_STORAGE_KEY));
   } catch (error) {
     console.warn("Could not load saved queue:", error);
     return null;
@@ -158,7 +159,7 @@ export function loadQueueSnapshot() {
 
 export function saveQueueSnapshot(snapshot: PersistedQueue) {
   try {
-    localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(snapshot));
+    setPersistentItem(QUEUE_STORAGE_KEY, JSON.stringify(snapshot));
   } catch (error) {
     console.warn("Could not save queue:", error);
   }

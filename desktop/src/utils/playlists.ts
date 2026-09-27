@@ -1,4 +1,5 @@
 import type { GlobalTrackId, Playlist, Track } from "../types/music";
+import { mergeVisibleTrackOrder } from "./trackCollectionOrder";
 
 export function playlistTracks(playlist: Playlist, availableTracks: Track[]): Track[] {
   const byId = new Map(availableTracks.map(track => [track.globalId, track]));
@@ -13,4 +14,22 @@ export function removePlaylistTracks(playlists: Playlist[], playlistId: string, 
   return playlists.map(playlist => playlist.id === playlistId
     ? { ...playlist, trackIds: playlist.trackIds.filter(id => !removed.has(id)) }
     : playlist);
+}
+
+export function reorderPlaylistTracks(
+  playlists: Playlist[],
+  playlistId: string,
+  orderedVisibleIds: GlobalTrackId[],
+): Playlist[] {
+  return playlists.map((playlist) =>
+    playlist.id === playlistId
+      ? {
+          ...playlist,
+          trackIds: mergeVisibleTrackOrder(
+            playlist.trackIds,
+            orderedVisibleIds.filter((id) => playlist.trackIds.includes(id)),
+          ),
+        }
+      : playlist,
+  );
 }

@@ -94,15 +94,15 @@ impl SpotifyQuality {
 impl SpotifyProvider {
     /// Spotify stays optional so an absent login never prevents other providers from starting.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
-        let cache_root = spotify_cache_path()?;
-        let audio_cache_path = cache_root.join("audio");
+        let credentials_path = spotify_credentials_path();
+        let audio_cache_path = spotify_audio_cache_path();
         let cache = Cache::new(
-            Some(&cache_root),
+            Some(&credentials_path),
             None::<&PathBuf>,
             Some(&audio_cache_path),
             Some(AUDIO_CACHE_LIMIT_BYTES),
         )?;
-        make_cache_private(&cache_root)?;
+        make_cache_private(&credentials_path)?;
 
         let environment_access_token = nonempty_env("AMBRA_SPOTIFY_ACCESS_TOKEN");
         let environment_username = nonempty_env("AMBRA_SPOTIFY_USERNAME");
@@ -574,12 +574,16 @@ fn nonempty_env(name: &str) -> Option<String> {
     env::var(name).ok().and_then(|value| nonempty(&value))
 }
 
-fn spotify_cache_path() -> io::Result<PathBuf> {
-    crate::storage::login_path("spotify-cache")
+fn spotify_credentials_path() -> PathBuf {
+    crate::storage::config_path("spotify")
+}
+
+fn spotify_audio_cache_path() -> PathBuf {
+    crate::storage::cache_path("spotify/audio")
 }
 
 fn track_metadata_cache_path() -> PathBuf {
-    crate::storage::path("spotify-metadata-cache.json")
+    crate::storage::cache_path("spotify-metadata-cache.json")
 }
 
 fn make_cache_private(path: &Path) -> io::Result<()> {

@@ -7,12 +7,14 @@ const thumbnails = new Map<string, Promise<HTMLImageElement>>();
 const fullSize = new Map<string, Promise<HTMLImageElement>>();
 const bigscreenSources = new Map<string, string>();
 const bigscreenRequests = new Map<string, Promise<string | null>>();
+const UPCOMING_BIGSCREEN_ARTWORK_COUNT = 2;
 
 function bigscreenArtworkKey(track: Track) {
   return [
     track.globalId,
     track.provider,
     track.albumId ?? "",
+    track.upc ?? "",
     track.nativeCover ?? "",
     track.cover,
   ].join(":");
@@ -54,7 +56,7 @@ export function preloadBigscreenArtwork(track: Track) {
   const request = (async () => {
     const source = track.provider === "local"
       ? track.cover
-      : (await highestQualityArtwork(track))?.url ?? track.cover;
+      : (await highestQualityArtwork(track))?.url;
     if (!source) return null;
 
     await preloadArtwork(source, true);
@@ -71,4 +73,14 @@ export function preloadBigscreenArtwork(track: Track) {
 
   bigscreenRequests.set(key, request);
   return request;
+}
+
+export async function preloadUpcomingBigscreenArtwork(
+  tracks: Track[],
+): Promise<void> {
+  await Promise.all(
+    tracks
+      .slice(0, UPCOMING_BIGSCREEN_ARTWORK_COUNT)
+      .map(preloadBigscreenArtwork),
+  );
 }

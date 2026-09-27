@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { playlistTracks, removePlaylistTracks } from "../src/utils/playlists";
+import { playlistTracks, removePlaylistTracks, reorderPlaylistTracks } from "../src/utils/playlists";
 import { collectionQueueContext, contextEntriesFrom } from "../src/utils/queueModel";
 import type { Playlist } from "../src/types/music";
 import { track } from "./searchFixture";
@@ -36,4 +36,19 @@ test("playlist playback and play-from-here use playlist order and provenance", (
   expect(context.entries.map(entry => entry.track.globalId)).toEqual([second.globalId, first.globalId]);
   expect(context.entries.every(entry => entry.source.kind === "playlist" && entry.source.id === "one")).toBe(true);
   expect(contextEntriesFrom(context, first.globalId).map(entry => entry.track.globalId)).toEqual([first.globalId]);
+});
+
+test("playlist reordering preserves tracks whose metadata is unavailable", () => {
+  const withUnavailable = [{
+    id: "one",
+    name: "One",
+    trackIds: [first.globalId, "missing", second.globalId],
+  }];
+
+  expect(
+    reorderPlaylistTracks(withUnavailable, "one", [
+      second.globalId,
+      first.globalId,
+    ])[0].trackIds,
+  ).toEqual([second.globalId, "missing", first.globalId]);
 });

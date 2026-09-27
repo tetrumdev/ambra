@@ -4,8 +4,8 @@
 )]
 
 mod api;
-mod artwork_quality;
 mod artwork_cache;
+mod artwork_quality;
 mod media_cache;
 mod models;
 mod providers;
@@ -13,5 +13,6 @@ mod storage;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    storage::migrate_legacy();
     api::serve().await
 }

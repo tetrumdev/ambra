@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { artworkPalette, thumbnailArtwork } from "../api/server";
+import { artworkPalette } from "../api/server";
 import {
   cachedBigscreenArtwork,
   preloadBigscreenArtwork,
@@ -7,7 +7,6 @@ import {
 import type { Track } from "../types/music";
 import { separateCollapsedPalette } from "../utils/backgroundPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
-import { cachedPlaylistArtwork } from "../utils/playlistArtworkCache";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
 
@@ -27,10 +26,6 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   useEffect(() => {
     let cancelled = false;
     setCover(cachedBigscreenArtwork(track) ?? whiteArtwork);
-
-    void cachedPlaylistArtwork(thumbnailArtwork(track)).then((source) => {
-      if (!cancelled && source) setCover(source);
-    });
 
     void preloadBigscreenArtwork(track).then((source) => {
       if (!cancelled && source) setCover(source);
