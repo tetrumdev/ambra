@@ -1118,11 +1118,11 @@ fn initial_library_entries() -> Vec<LibraryEntry> {
 }
 
 fn library_entries_path() -> PathBuf {
-    crate::storage::path("streaming-library.json")
+    crate::storage::data_path("streaming-library.json")
 }
 
 fn legacy_library_track_ids_path() -> PathBuf {
-    crate::storage::path("library-track-ids.json")
+    crate::storage::data_path("library-track-ids.json")
 }
 
 fn load_library_entries() -> Vec<LibraryEntry> {

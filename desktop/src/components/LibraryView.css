@@ -649,6 +649,38 @@
     grid-column: 6;
 }
 
+.columnSortButton {
+    width: fit-content;
+    min-width: 0;
+    margin: 0;
+    padding: 2px 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    white-space: nowrap;
+}
+
+.columnSortButton:hover,
+.columnSortButton:focus-visible,
+.columnSortButton[data-sort-direction] {
+    color: white;
+}
+
+.columnSortButton:hover span:first-child,
+.columnSortButton:focus-visible span:first-child {
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+.columnSortIndicator {
+    display: inline-block;
+    width: 1em;
+    margin-left: 5px;
+    text-align: center;
+}
+
 .libraryTrackView {
     grid-column: 5;
     width: 100%;
@@ -681,6 +713,46 @@
 
 .libraryItem:hover {
     background-color: #151515;
+}
+
+.libraryItem[data-reorderable="true"] {
+    cursor: grab;
+}
+
+.libraryItem[data-reorderable="true"]:active {
+    cursor: grabbing;
+}
+
+.libraryItem[data-selecting="true"] {
+    cursor: pointer;
+}
+
+.libraryItem[data-dragging="true"] {
+    opacity: 0.4;
+}
+
+.libraryItem[data-drop-position] {
+    position: relative;
+}
+
+.libraryItem[data-drop-position]::before {
+    position: absolute;
+    right: 15px;
+    left: 15px;
+    z-index: 2;
+    height: 2px;
+    border-radius: 2px;
+    background: white;
+    content: "";
+    pointer-events: none;
+}
+
+.libraryItem[data-drop-position="before"]::before {
+    top: -1px;
+}
+
+.libraryItem[data-drop-position="after"]::before {
+    bottom: -1px;
 }
 
 .libraryItem[data-menu-open="true"] {
@@ -819,6 +891,7 @@
     box-sizing: border-box;
     display: grid;
     place-items: center;
+    cursor: pointer;
     border-left: 1px solid transparent;
 }
 

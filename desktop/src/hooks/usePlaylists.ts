@@ -1,12 +1,13 @@
 import { useRef, useState } from "react";
 import type { Track } from "../types/music";
-import { removePlaylistTracks } from "../utils/playlists";
+import { removePlaylistTracks, reorderPlaylistTracks } from "../utils/playlists";
 import { addPlaylistTrack, emptyPlaylists, parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY, savePlaylistSnapshot, type PlaylistSnapshot } from "../utils/playlistStorage";
+import { getPersistentItem } from "../utils/persistentStorage";
 
 export function usePlaylists() {
   const [initial] = useState(() => {
     try {
-      return { snapshot: parsePlaylistSnapshot(localStorage.getItem(PLAYLIST_STORAGE_KEY)), error: null };
+      return { snapshot: parsePlaylistSnapshot(getPersistentItem(PLAYLIST_STORAGE_KEY)), error: null };
     } catch {
       return { snapshot: emptyPlaylists(), error: "Saved playlists could not be loaded. The stored data has been left untouched." };
     }
@@ -60,5 +61,13 @@ export function usePlaylists() {
       });
     },
     removeTracks: (id: string, ids: string[]) => commit({ ...current.current, playlists: removePlaylistTracks(current.current.playlists, id, ids) }),
+    reorderTracks: (id: string, orderedTrackIds: string[]) => commit({
+      ...current.current,
+      playlists: reorderPlaylistTracks(
+        current.current.playlists,
+        id,
+        orderedTrackIds,
+      ),
+    }),
   };
 }

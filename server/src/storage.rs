@@ -3,68 +3,211 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub fn path(filename: &str) -> PathBuf {
-    let directory = data_directory();
-    if let Err(error) = fs::create_dir_all(&directory) {
-        eprintln!(
-            "Could not create Ambra data directory {}: {error}",
-            directory.display()
-        );
-    }
-    directory.join(filename)
+const APP_ID: &str = "com.quantium.ambra";
+
+pub fn config_path(filename: &str) -> PathBuf {
+    path_in(config_directory(), filename, "config")
 }
 
-pub fn login_path(filename: &str) -> io::Result<PathBuf> {
-    login_path_in(&data_directory(), filename)
+pub fn data_path(filename: &str) -> PathBuf {
+    path_in(data_directory(), filename, "data")
 }
 
-fn login_path_in(directory: &Path, filename: &str) -> io::Result<PathBuf> {
-    let login_directory = directory.join("login-cache");
-    fs::create_dir_all(&login_directory)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&login_directory, fs::Permissions::from_mode(0o700))?;
-    }
+pub fn cache_path(filename: &str) -> PathBuf {
+    path_in(cache_directory(), filename, "cache")
+}
 
-    let destination = login_directory.join(filename);
-    if !destination.try_exists()? {
-        for old_path in [
-            directory.join(filename),
-            directory.join(format!(".{filename}")),
-        ] {
-            if old_path.try_exists()? {
-                match fs::rename(&old_path, &destination) {
-                    Ok(()) => break,
-                    Err(_error) if !old_path.try_exists()? && destination.try_exists()? => break,
-                    Err(error) => return Err(error),
-                }
-            }
+pub fn migrate_legacy() {
+    let roots = legacy_roots();
+    let migrations = [
+        (
+            config_path("tidal-session.json"),
+            vec!["tidal-session.json", ".tidal-session.json"],
+        ),
+        (
+            config_path("qobuz-session.json"),
+            vec!["qobuz-session.json", ".qobuz-session.json"],
+        ),
+        (
+            config_path("spotify/credentials.json"),
+            vec![
+                "spotify-cache/credentials.json",
+                ".spotify-cache/credentials.json",
+            ],
+        ),
+        (
+            data_path("streaming-library.json"),
+            vec!["streaming-library.json", ".streaming-library.json"],
+        ),
+        (
+            data_path("library-track-ids.json"),
+            vec!["library-track-ids.json", ".library-track-ids.json"],
+        ),
+        (
+            cache_path("tidal-metadata-cache.json"),
+            vec!["tidal-metadata-cache.json", ".tidal-metadata-cache.json"],
+        ),
+        (
+            cache_path("qobuz-metadata-cache.json"),
+            vec!["qobuz-metadata-cache.json", ".qobuz-metadata-cache.json"],
+        ),
+        (
+            cache_path("spotify-metadata-cache.json"),
+            vec![
+                "spotify-metadata-cache.json",
+                ".spotify-metadata-cache.json",
+            ],
+        ),
+    ];
+
+    for (target, names) in migrations {
+        if target.exists() {
+            continue;
+        }
+        let mut sources = roots
+            .iter()
+            .flat_map(|root| names.iter().map(move |name| root.join(name)))
+            .filter(|source| source.is_file() && source != &target)
+            .collect::<Vec<_>>();
+        sources.sort_by_key(|source| {
+            fs::metadata(source)
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        });
+        if let Some(source) = sources.pop()
+            && let Err(error) = move_path(&source, &target)
+        {
+            eprintln!(
+                "Could not migrate Ambra data from {} to {}: {error}",
+                source.display(),
+                target.display()
+            );
         }
     }
-    Ok(destination)
+
+    let audio_target = cache_path("spotify/audio");
+    if !audio_target.exists() {
+        let source = roots
+            .iter()
+            .flat_map(|root| {
+                [
+                    root.join("spotify-cache/audio"),
+                    root.join(".spotify-cache/audio"),
+                ]
+            })
+            .find(|source| source.is_dir() && source != &audio_target);
+        if let Some(source) = source
+            && let Err(error) = move_path(&source, &audio_target)
+        {
+            eprintln!(
+                "Could not migrate Ambra data from {} to {}: {error}",
+                source.display(),
+                audio_target.display()
+            );
+        }
+    }
 }
 
-fn data_directory() -> PathBuf {
-    if let Some(directory) = env::var_os("AMBRA_DATA_DIR").filter(|value| !value.is_empty()) {
-        return PathBuf::from(directory);
+fn move_path(source: &Path, target: &Path) -> io::Result<()> {
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::rename(source, target)
+}
+
+fn legacy_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(directory) = configured("AMBRA_LEGACY_DATA_DIR") {
+        roots.push(directory);
     }
 
-    if cfg!(debug_assertions) {
-        return PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    }
+    #[cfg(debug_assertions)]
+    roots.push(PathBuf::from(env!("CARGO_MANIFEST_DIR")));
 
     #[cfg(target_os = "windows")]
     if let Some(directory) = env::var_os("LOCALAPPDATA") {
-        return PathBuf::from(directory).join("AMBRA");
+        roots.push(PathBuf::from(directory).join("AMBRA"));
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(directory) = env::var_os("HOME") {
+        roots.push(
+            PathBuf::from(directory)
+                .join("Library/Application Support")
+                .join(APP_ID),
+        );
+    }
+
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+fn path_in(directory: PathBuf, filename: &str, kind: &str) -> PathBuf {
+    let path = directory.join(filename);
+    let parent = path.parent().unwrap_or(&directory);
+    if let Err(error) = fs::create_dir_all(parent) {
+        eprintln!(
+            "Could not create Ambra {kind} directory {}: {error}",
+            parent.display()
+        );
+    }
+    path
+}
+
+fn configured(name: &str) -> Option<PathBuf> {
+    env::var_os(name)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn config_directory() -> PathBuf {
+    if let Some(directory) = configured("AMBRA_CONFIG_DIR") {
+        return directory;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(directory) = env::var_os("APPDATA") {
+        return PathBuf::from(directory).join(APP_ID).join("config");
     }
 
     #[cfg(target_os = "macos")]
     if let Some(directory) = env::var_os("HOME") {
         return PathBuf::from(directory)
-            .join("Library")
-            .join("Application Support")
-            .join("com.quantium.ambra");
+            .join("Library/Application Support")
+            .join(APP_ID)
+            .join("config");
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(directory) = env::var_os("XDG_CONFIG_HOME") {
+            return PathBuf::from(directory).join("ambra");
+        }
+        if let Some(directory) = env::var_os("HOME") {
+            return PathBuf::from(directory).join(".config/ambra");
+        }
+    }
+
+    env::temp_dir().join("ambra/config")
+}
+
+fn data_directory() -> PathBuf {
+    if let Some(directory) = configured("AMBRA_DATA_DIR") {
+        return directory;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(directory) = env::var_os("APPDATA") {
+        return PathBuf::from(directory).join(APP_ID).join("data");
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(directory) = env::var_os("HOME") {
+        return PathBuf::from(directory)
+            .join("Library/Application Support")
+            .join(APP_ID)
+            .join("data");
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -77,53 +220,52 @@ fn data_directory() -> PathBuf {
         }
     }
 
-    env::temp_dir().join("ambra")
+    env::temp_dir().join("ambra/data")
+}
+
+fn cache_directory() -> PathBuf {
+    if let Some(directory) = configured("AMBRA_CACHE_DIR") {
+        return directory;
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(directory) = env::var_os("LOCALAPPDATA") {
+        return PathBuf::from(directory).join(APP_ID).join("cache");
+    }
+
+    #[cfg(target_os = "macos")]
+    if let Some(directory) = env::var_os("HOME") {
+        return PathBuf::from(directory)
+            .join("Library/Caches")
+            .join(APP_ID)
+            .join("server");
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        if let Some(directory) = env::var_os("XDG_CACHE_HOME") {
+            return PathBuf::from(directory).join("ambra");
+        }
+        if let Some(directory) = env::var_os("HOME") {
+            return PathBuf::from(directory).join(".cache/ambra");
+        }
+    }
+
+    env::temp_dir().join("ambra/cache")
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{login_path_in, path};
-    use std::{
-        fs,
-        path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use super::{cache_path, config_path, data_path};
 
     #[test]
-    fn storage_paths_include_the_requested_filename() {
-        assert_eq!(path("session.json").file_name().unwrap(), "session.json");
-    }
+    fn storage_kinds_use_distinct_directories() {
+        let config = config_path("session.json");
+        let data = data_path("library.json");
+        let cache = cache_path("metadata.json");
 
-    #[test]
-    fn login_cache_migrates_existing_sessions_and_credentials() {
-        let root = temporary_directory();
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("tidal-session.json"), "current session").unwrap();
-        fs::write(root.join(".tidal-session.json"), "older session").unwrap();
-        fs::write(root.join(".qobuz-session.json"), "older qobuz session").unwrap();
-        fs::create_dir(root.join("spotify-cache")).unwrap();
-        fs::write(root.join("spotify-cache/credentials.json"), "credentials").unwrap();
-
-        let tidal = login_path_in(&root, "tidal-session.json").unwrap();
-        let qobuz = login_path_in(&root, "qobuz-session.json").unwrap();
-        let spotify = login_path_in(&root, "spotify-cache").unwrap();
-        assert_eq!(fs::read_to_string(tidal).unwrap(), "current session");
-        assert_eq!(fs::read_to_string(qobuz).unwrap(), "older qobuz session");
-        assert_eq!(
-            fs::read_to_string(spotify.join("credentials.json")).unwrap(),
-            "credentials"
-        );
-        assert!(!root.join("tidal-session.json").exists());
-        assert!(!root.join("spotify-cache").exists());
-
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    fn temporary_directory() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("ambra-login-cache-{}-{nanos}", std::process::id()))
+        assert_ne!(config.parent(), data.parent());
+        assert_ne!(data.parent(), cache.parent());
+        assert_ne!(config.parent(), cache.parent());
     }
 }

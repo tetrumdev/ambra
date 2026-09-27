@@ -1,4 +1,5 @@
 import type { SearchProvider } from "../api/server";
+import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
 export type AppScreen = "bigscreen" | "library" | "search" | "queue";
 
@@ -151,14 +152,14 @@ function migratePreferences(value: unknown): AppPreferences {
 
 export function loadPreferences(): AppPreferences {
   try {
-    const savedPreferences = localStorage.getItem(preferencesKey);
+    const savedPreferences = getPersistentItem(preferencesKey);
     if (savedPreferences !== null) {
       return migratePreferences(JSON.parse(savedPreferences));
     }
 
-    const legacyScreen = localStorage.getItem(legacyScreenKey);
+    const legacyScreen = getPersistentItem(legacyScreenKey);
     if (isAppScreen(legacyScreen)) {
-      localStorage.removeItem(legacyScreenKey);
+      removePersistentItem(legacyScreenKey);
       return {
         ...defaultPreferences,
         ui: { screen: legacyScreen },
@@ -175,7 +176,7 @@ export function loadPreferences(): AppPreferences {
 
 export function savePreferences(preferences: AppPreferences) {
   try {
-    localStorage.setItem(preferencesKey, JSON.stringify(preferences));
+    setPersistentItem(preferencesKey, JSON.stringify(preferences));
   } catch (error) {
     console.warn("Could not save preferences:", error);
   }

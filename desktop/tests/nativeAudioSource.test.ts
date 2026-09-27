@@ -3,6 +3,7 @@ import type { Track } from "../src/types/music";
 import {
   nativeAudioQueue,
   nativeAudioSource,
+  trackForNativeAudioAdvance,
   trackForNativeAudioStatus,
   trackForNativeAudioSource,
 } from "../src/utils/nativeAudioSource";
@@ -141,6 +142,17 @@ describe("nativeAudioSource", () => {
         nativeAudioSource(next),
       ),
     ).toEqual({ track: next, advanced: true });
+  });
+
+  test("accepts a native source-change event for the expected queue entry", () => {
+    const repeated = track({ globalId: "repeated" });
+
+    expect(
+      trackForNativeAudioAdvance(repeated, nativeAudioSource(repeated)),
+    ).toBe(repeated);
+    expect(
+      trackForNativeAudioAdvance(repeated, "https://audio.example/other.mp4"),
+    ).toBeUndefined();
   });
 
   test("rejects stale status from the previously loaded track", () => {
