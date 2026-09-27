@@ -1,0 +1,11 @@
+/server/*-session.json export-ignore
+/server/.*-session.json export-ignore
+/server/*-metadata-cache.json export-ignore
+/server/.*-metadata-cache.json export-ignore
+/server/*library*.json export-ignore
+/server/.*library*.json export-ignore
+/server/spotify-cache export-ignore
+/server/.spotify-cache export-ignore
+desktop-state.json export-ignore
+.env export-ignore
+.env.* export-ignore
