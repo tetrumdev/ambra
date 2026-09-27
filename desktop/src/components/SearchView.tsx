@@ -1,4 +1,5 @@
 import { categoryOrder } from "../utils/catalogRanking";
+import { musicProviderName } from "../utils/musicProviderName";
 import { useEffect, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
@@ -54,19 +55,6 @@ const providerNames: Record<SearchProvider, string> = {
   spotify: "Spotify",
 };
 
-function trackProviderName(provider: Track["provider"]) {
-  switch (provider) {
-    case "qobuz":
-      return "Qobuz";
-    case "tidal":
-      return "Tidal";
-    case "spotify":
-      return "Spotify";
-    default:
-      return "Local";
-  }
-}
-
 function formatTime(time: number) {
   const totalSeconds = Math.max(0, Math.floor(time));
   const hours = Math.floor(totalSeconds / 3600);
@@ -121,7 +109,7 @@ function SearchResult({
         <div className="searchResultAlbum">On {track.album}</div>
         <div className="searchResultMeta">
           <span className="searchResultQuality">
-            {trackProviderName(track.provider)}
+            {musicProviderName(track.provider)}
             {track.quality ? ` · ${track.quality}` : ""}
           </span>
           <span className="searchResultDuration">
