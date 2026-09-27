@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { setPersistentItem } from "../utils/persistentStorage";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import type {
@@ -20,7 +21,7 @@ import {
   saveRemovedLibraryTrackIds,
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
-import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks } from "../utils/libraryOrder";
+import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
@@ -38,6 +39,7 @@ type MusicLibrary = {
   rescanLocalMusic: () => Promise<number>;
   refreshStreamingMusic: () => Promise<number>;
   removeTracks: (trackIds: GlobalTrackId[]) => void;
+  reorderTracks: (orderedTrackIds: GlobalTrackId[]) => void;
 };
 
 function playableLocalCover(cover: string | null) {
@@ -89,7 +91,7 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
 export function useMusicLibrary(): MusicLibrary {
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
   useEffect(() => {
-    try { localStorage.setItem("ambra.library-order.v1", JSON.stringify(libraryOrder)); }
+    try { setPersistentItem("ambra.library-order.v1", JSON.stringify(libraryOrder)); }
     catch (error) { console.warn("Could not save library ordering:", error); }
   }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
@@ -299,5 +301,10 @@ export function useMusicLibrary(): MusicLibrary {
     rescanLocalMusic,
     refreshStreamingMusic,
     removeTracks,
+    reorderTracks: (orderedTrackIds: GlobalTrackId[]) => {
+      setLibraryOrder((current) =>
+        reorderLibraryTracks(current, orderedTrackIds),
+      );
+    },
   };
 }

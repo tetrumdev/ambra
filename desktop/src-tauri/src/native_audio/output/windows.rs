@@ -5,7 +5,8 @@ use wasapi::{
     WasapiError, WaveFormat, calculate_period_100ns, deinitialize, initialize_mta,
 };
 
-use super::{AudioOutput, StreamSpec, normalized_to_signed};
+use super::{AudioOutput, StreamSpec, writable_frames};
+use super::{NativeAudioDevice, normalized_to_signed};
 
 const POLLING_BUFFER_PERIODS: i64 = 8;
 
@@ -85,6 +86,13 @@ pub struct PlatformOutput {
 }
 
 impl AudioOutput for PlatformOutput {
+    fn list_devices() -> Result<Vec<NativeAudioDevice>, String> {
+        initialize_mta().ok().map_err(wasapi_error)?;
+        let result = list_initialized_devices();
+        deinitialize();
+        result
+    }
+
     fn open(spec: StreamSpec) -> Result<Self, String> {
         Self::open_device_with_mode(spec, None, true)
     }
@@ -94,12 +102,8 @@ impl AudioOutput for PlatformOutput {
         device_id: Option<&str>,
         exclusive_mode: bool,
     ) -> Result<Self, String> {
-        if device_id.is_some() {
-            return Err("Selecting a Windows audio device is not implemented yet".to_owned());
-        }
-
         initialize_mta().ok().map_err(wasapi_error)?;
-        let result = Self::open_initialized(spec, exclusive_mode);
+        let result = Self::open_initialized(spec, device_id, exclusive_mode);
         if result.is_err() {
             deinitialize();
         }
@@ -143,7 +147,11 @@ impl AudioOutput for PlatformOutput {
             thread::sleep(self.poll_interval);
             return Ok(0);
         }
-        let frames = available_frames.min((first.len() + second.len()) / self.spec.channels);
+        let frames = writable_frames(
+            available_frames,
+            first.len() + second.len(),
+            self.spec.channels,
+        );
         let sample_count = frames * self.spec.channels;
         encode_sample_slices(
             first,
@@ -152,13 +160,8 @@ impl AudioOutput for PlatformOutput {
             self.sample_format,
             &mut self.conversion_buffer,
         );
-        let device_sample_count = available_frames * self.spec.channels;
-        self.conversion_buffer.resize(
-            device_sample_count * self.sample_format.bytes_per_sample(),
-            0,
-        );
         self.render_client
-            .write_to_device(available_frames, &self.conversion_buffer, None)
+            .write_to_device(frames, &self.conversion_buffer, None)
             .map_err(wasapi_error)?;
         Ok(frames)
     }
@@ -185,11 +188,20 @@ impl AudioOutput for PlatformOutput {
 }
 
 impl PlatformOutput {
-    fn open_initialized(spec: StreamSpec, exclusive_mode: bool) -> Result<Self, String> {
+    fn open_initialized(
+        spec: StreamSpec,
+        device_id: Option<&str>,
+        exclusive_mode: bool,
+    ) -> Result<Self, String> {
         let enumerator = DeviceEnumerator::new().map_err(wasapi_error)?;
-        let device = enumerator
-            .get_default_device(&Direction::Render)
-            .map_err(wasapi_error)?;
+        let device = match device_id {
+            Some(device_id) => enumerator.get_device(device_id).map_err(|error| {
+                format!("Could not open the selected Windows audio device: {error}")
+            })?,
+            None => enumerator
+                .get_default_device(&Direction::Render)
+                .map_err(wasapi_error)?,
+        };
         let mut audio_client = device.get_iaudioclient().map_err(wasapi_error)?;
         let (default_period, minimum_period) =
             audio_client.get_device_period().map_err(wasapi_error)?;
@@ -245,7 +257,7 @@ impl PlatformOutput {
                 .initialize_client(&wave_format, &Direction::Render, &mode)
                 .map_err(|error| {
                     format!(
-                        "Could not open the default audio device in WASAPI shared mode: {error}"
+                        "Could not open the Windows audio device in WASAPI shared mode: {error}"
                     )
                 })?;
         }
@@ -267,6 +279,37 @@ impl PlatformOutput {
             started: false,
         })
     }
+}
+
+fn list_initialized_devices() -> Result<Vec<NativeAudioDevice>, String> {
+    let enumerator = DeviceEnumerator::new().map_err(wasapi_error)?;
+    let default_id = enumerator
+        .get_default_device(&Direction::Render)
+        .and_then(|device| device.get_id())
+        .ok();
+    let collection = enumerator
+        .get_device_collection(&Direction::Render)
+        .map_err(wasapi_error)?;
+    let mut devices = Vec::new();
+
+    for device in &collection {
+        let device = device.map_err(wasapi_error)?;
+        let id = device.get_id().map_err(wasapi_error)?;
+        let name = device.get_friendlyname().map_err(wasapi_error)?;
+        devices.push(NativeAudioDevice {
+            is_default: default_id.as_deref() == Some(id.as_str()),
+            id,
+            name,
+        });
+    }
+
+    devices.sort_by(|left, right| {
+        right
+            .is_default
+            .cmp(&left.is_default)
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    Ok(devices)
 }
 
 impl Drop for PlatformOutput {
@@ -308,7 +351,7 @@ fn supported_format(
     }
 
     Err(format!(
-        "The default audio device does not support {} Hz, {} channel, {}-bit playback in WASAPI exclusive mode",
+        "The Windows audio device does not support {} Hz, {} channel, {}-bit playback in WASAPI exclusive mode",
         spec.sample_rate, spec.channels, spec.bits_per_sample
     ))
 }

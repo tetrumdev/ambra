@@ -1,4 +1,4 @@
-import type { Playlist } from "../types/music";
+import type { Playlist, Track } from "../types/music";
 import { TrackCollectionView, type TrackCollectionViewProps } from "./TrackCollectionView";
 import { TrackArtwork } from "./TrackArtwork";
 
@@ -7,9 +7,10 @@ type PlaylistViewProps = Omit<
   "title" | "removalLabel" | "collapsibleHeader" | "headerArtwork"
 > & {
   playlist: Playlist;
+  artworkTracks: Track[];
 };
 
-export function PlaylistView({ playlist, ...props }: PlaylistViewProps) {
+export function PlaylistView({ playlist, artworkTracks, ...props }: PlaylistViewProps) {
   return (
     <TrackCollectionView
       {...props}
@@ -20,7 +21,7 @@ export function PlaylistView({ playlist, ...props }: PlaylistViewProps) {
       headerArtwork={
         <div className="playlistArtworkGrid" aria-hidden="true">
           {Array.from({ length: 4 }, (_, index) => {
-            const track = props.tracks[index];
+            const track = artworkTracks[index];
             return track ? (
               <TrackArtwork
                 key={`${track.globalId}:${index}`}

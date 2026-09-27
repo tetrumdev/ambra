@@ -1,4 +1,5 @@
 import type { GlobalTrackId, Track } from "../types/music";
+import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
 const REMOVED_LIBRARY_TRACKS_KEY = "ambra.removed-library-tracks.v1";
@@ -75,7 +76,7 @@ export function loadCachedServerTracks(): Track[] {
 
   try {
     return parseCachedServerTracks(
-      localStorage.getItem(STREAMING_LIBRARY_CACHE_KEY),
+      getPersistentItem(STREAMING_LIBRARY_CACHE_KEY),
     );
   } catch {
     return [];
@@ -86,7 +87,7 @@ export function saveCachedServerTracks(tracks: Track[]) {
   if (typeof localStorage === "undefined") return;
 
   try {
-    localStorage.setItem(
+    setPersistentItem(
       STREAMING_LIBRARY_CACHE_KEY,
       JSON.stringify(tracks.filter((track) => track.provider !== "local")),
     );
@@ -116,7 +117,7 @@ export function loadRemovedLibraryTrackIds(): Set<GlobalTrackId> {
   try {
     return new Set(
       parseRemovedLibraryTrackIds(
-        localStorage.getItem(REMOVED_LIBRARY_TRACKS_KEY),
+        getPersistentItem(REMOVED_LIBRARY_TRACKS_KEY),
       ),
     );
   } catch {
@@ -128,7 +129,7 @@ export function saveRemovedLibraryTrackIds(trackIds: Set<GlobalTrackId>) {
   if (typeof localStorage === "undefined") return;
 
   try {
-    localStorage.setItem(
+    setPersistentItem(
       REMOVED_LIBRARY_TRACKS_KEY,
       JSON.stringify([...trackIds]),
     );

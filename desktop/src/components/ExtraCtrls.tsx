@@ -163,10 +163,10 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                   disabled={exclusiveMode === null || isChangingMode}
                   aria-label={
                     exclusiveMode === null
-                      ? "Reading the CoreAudio output mode…"
+                      ? "Reading the audio output mode…"
                       : exclusiveMode
-                        ? "CoreAudio exclusive mode is on. Click for system output."
-                        : "CoreAudio system output is on. Click for exclusive mode."
+                        ? "Exclusive audio mode is on. Click for system output."
+                        : "System output is on. Click for exclusive audio mode."
                   }
                   onClick={() => void toggleExclusiveMode()}
                 >

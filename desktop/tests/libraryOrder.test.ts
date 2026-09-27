@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { appendLibraryOrder, orderLibraryTracks } from "../src/utils/libraryOrder";
+import { appendLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../src/utils/libraryOrder";
 import { addPlaylistTrack, emptyPlaylists } from "../src/utils/playlistStorage";
 import { removePlaylistTracks } from "../src/utils/playlists";
 import { track } from "./searchFixture";
@@ -13,4 +13,9 @@ test("playlist removal and re-add append at the end", () => {
   const snapshot = { ...emptyPlaylists(), playlists: [{id: "p", name: "P", trackIds: ["a", "b"]}], tracks: [song] };
   const removed = { ...snapshot, playlists: removePlaylistTracks(snapshot.playlists, "p", ["a"]) };
   expect(addPlaylistTrack(removed, "p", song).playlists[0].trackIds).toEqual(["b", "a"]);
+});
+
+test("manual library order keeps temporarily hidden tracks in storage", () => {
+  expect(reorderLibraryTracks(["a", "hidden", "b", "c"], ["c", "a", "b"]))
+    .toEqual(["c", "hidden", "a", "b"]);
 });

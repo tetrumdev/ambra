@@ -11,6 +11,8 @@ use oxideav_core::{ContainerRegistry, NullCodecResolver, ReadSeek};
 
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeMap,
+    env,
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom, Write},
@@ -26,6 +28,24 @@ mod native_audio;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_PERSISTENT_STATE_BYTES: usize = 64 * 1024 * 1024;
+const PERSISTENT_STATE_KEYS: [&str; 7] = [
+    "ambra.preferences",
+    "ambra.current-screen",
+    "ambra.playlists.v1",
+    "ambra.streaming-library.v1",
+    "ambra.removed-library-tracks.v1",
+    "ambra.library-order.v1",
+    "ambra.queue.v1",
+];
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PersistentState {
+    version: u8,
+    updated_at_ms: u64,
+    values: BTreeMap<String, String>,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +64,95 @@ fn library_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
         .app_cache_dir()
         .map(|directory| directory.join("library.json"))
         .map_err(|error| format!("Could not locate Ambra's cache directory: {error}"))
+}
+
+fn persistent_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = env::var_os("AMBRA_DATA_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(Ok)
+        .unwrap_or_else(|| app.path().app_data_dir().map(|path| path.join("data")))
+        .map_err(|error| format!("Could not locate Ambra's data directory: {error}"))?;
+    Ok(directory.join("desktop-state.json"))
+}
+
+#[tauri::command]
+fn load_persistent_state(app: tauri::AppHandle) -> Result<Option<PersistentState>, String> {
+    let path = persistent_state_path(&app)?;
+    let encoded = match fs::read(&path) {
+        Ok(encoded) => encoded,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not read {}: {error}", path.display())),
+    };
+    if encoded.len() > MAX_PERSISTENT_STATE_BYTES {
+        return Err("Ambra's saved desktop state is unexpectedly large".to_owned());
+    }
+    let state: PersistentState = serde_json::from_slice(&encoded)
+        .map_err(|error| format!("Could not decode {}: {error}", path.display()))?;
+    if state.version != 1
+        || state
+            .values
+            .keys()
+            .any(|key| !PERSISTENT_STATE_KEYS.contains(&key.as_str()))
+    {
+        return Err("Ambra's saved desktop state has an unsupported format".to_owned());
+    }
+    Ok(Some(state))
+}
+
+#[tauri::command]
+fn save_persistent_state(
+    app: tauri::AppHandle,
+    state: PersistentState,
+) -> Result<(), String> {
+    if state.version != 1
+        || state
+            .values
+            .keys()
+            .any(|key| !PERSISTENT_STATE_KEYS.contains(&key.as_str()))
+    {
+        return Err("The desktop tried to save an unsupported state".to_owned());
+    }
+    let encoded = serde_json::to_vec(&state)
+        .map_err(|error| format!("Could not encode Ambra's desktop state: {error}"))?;
+    if encoded.len() > MAX_PERSISTENT_STATE_BYTES {
+        return Err("Ambra's saved desktop state is too large".to_owned());
+    }
+
+    let path = persistent_state_path(&app)?;
+    let directory = path
+        .parent()
+        .ok_or_else(|| "Ambra's state file has no parent directory".to_owned())?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("Could not create {}: {error}", directory.display()))?;
+    let temporary_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary_path =
+        path.with_extension(format!("{}.{}.tmp", std::process::id(), temporary_id));
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options
+        .open(&temporary_path)
+        .map_err(|error| format!("Could not create {}: {error}", temporary_path.display()))?;
+    file.write_all(&encoded)
+        .map_err(|error| format!("Could not write {}: {error}", temporary_path.display()))?;
+    file.sync_all()
+        .map_err(|error| format!("Could not sync {}: {error}", temporary_path.display()))?;
+    #[cfg(windows)]
+    if path.exists() {
+        fs::remove_file(&path).map_err(|error| {
+            let _ = fs::remove_file(&temporary_path);
+            format!("Could not replace {}: {error}", path.display())
+        })?;
+    }
+    fs::rename(&temporary_path, &path).map_err(|error| {
+        let _ = fs::remove_file(&temporary_path);
+        format!("Could not replace {}: {error}", path.display())
+    })
 }
 
 fn save_library_cache(app: &tauri::AppHandle, tracks: &[Track]) -> Result<(), String> {
@@ -620,6 +729,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            load_persistent_state,
+            save_persistent_state,
             load_cached_music,
             local_music_directory,
             scan_music,

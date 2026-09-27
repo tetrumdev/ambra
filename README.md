@@ -66,9 +66,21 @@ button in the upper-right corner. Tidal and Qobuz open their login page and ask
 you to paste the resulting callback URL into Ambra. Spotify opens its login
 page and completes its local callback automatically.
 
-Saved Tidal and Qobuz sessions and Spotify login credentials are stored under
-`server/login-cache/` during development. Existing logins are moved there
-automatically on the next server start. The directory is ignored by Git.
+Ambra never stores runtime data in the source tree. Provider sessions are
+private files in the operating system's application-config directory, durable
+libraries and desktop state use its application-data directory, and metadata
+and audio caches use its cache directory. Set `AMBRA_CONFIG_DIR`,
+`AMBRA_DATA_DIR`, or `AMBRA_CACHE_DIR` to override those locations when running
+the server directly. A stable or synchronized `AMBRA_DATA_DIR` lets another
+installation restore the library, playlists, preferences, queue, and ordering;
+provider login material remains separate and must be authorized per machine.
+
+Repository hooks and CI reject credential/session files and recognizable secret
+values. Enable the versioned hooks after cloning with:
+
+```sh
+git config core.hooksPath .githooks
+```
 
 ### AI Usage
 

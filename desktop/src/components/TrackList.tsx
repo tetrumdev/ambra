@@ -4,9 +4,16 @@ import { nativeAudioSource } from "../utils/nativeAudioSource";
 import { musicProviderName } from "../utils/musicProviderName";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
+import { useTrackReorder } from "../hooks/useTrackReorder";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { TrackArtwork } from "./TrackArtwork";
+import {
+  nextTrackSort,
+  type DropPosition,
+  type TrackSort,
+  type TrackSortKey,
+} from "../utils/trackCollectionOrder";
 
 type OpenMenu =
   | {
@@ -33,6 +40,9 @@ export type TrackListProps = {
   playlistOptions?: PlaylistMenuOptions;
   addToLibrary?: (trackId: GlobalTrackId) => void;
   showServiceColumn?: boolean;
+  reorderTracks?: (orderedTrackIds: GlobalTrackId[]) => void;
+  sort?: TrackSort;
+  onSortChange?: (sort: TrackSort) => void;
 };
 
 function formatTime(time: number) {
@@ -57,6 +67,9 @@ export function TrackList({
   addToLibrary,
   playlistOptions,
   showServiceColumn = false,
+  reorderTracks,
+  sort = null,
+  onSortChange,
 }: TrackListProps) {
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
   const trackIds = useMemo(
@@ -72,6 +85,14 @@ export function TrackList({
   }, [firstTrack]);
   const warmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(warmTimer.current), []);
+  const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
+    trackIds,
+    reorderTracks,
+    () => {
+      setOpenMenu(null);
+      clearTimeout(warmTimer.current);
+    },
+  );
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();
@@ -143,6 +164,12 @@ export function TrackList({
   actions.current = (action, event, index) => {
     const track = tracks[index];
     if (!track) return;
+    if (
+      suppressClick.current &&
+      ["select", "playback", "collection", "play"].includes(action)
+    ) {
+      return;
+    }
     switch (action) {
       case "select": handleTrackClick(event, index); break;
       case "playback": showPlaybackMenu(event, track.globalId); break;
@@ -161,6 +188,39 @@ export function TrackList({
   const onRowAction = useCallback((action: RowAction, event: React.MouseEvent, index: number) => {
     actions.current(action, event as React.MouseEvent<HTMLDivElement>, index);
   }, []);
+
+  function columnHeader(
+    key: TrackSortKey,
+    label: string,
+    className: string,
+  ) {
+    if (!onSortChange) return <span className={className}>{label}</span>;
+
+    const direction = sort?.key === key ? sort.direction : null;
+    const nextLabel =
+      direction === "descending"
+        ? `Sort ${label} ascending`
+        : direction === "ascending"
+          ? `Return to date-added order`
+          : `Sort ${label} descending`;
+    return (
+      <button
+        className={`${className} columnSortButton`}
+        type="button"
+        data-sort-direction={direction ?? undefined}
+        aria-label={nextLabel}
+        title={nextLabel}
+        onClick={() => onSortChange(nextTrackSort(sort, key))}
+      >
+        <span>{label}</span>
+        {direction && (
+          <span className="columnSortIndicator" aria-hidden="true">
+            {direction === "descending" ? "↓" : "↑"}
+          </span>
+        )}
+      </button>
+    );
+  }
 
   return (
     <>
@@ -196,11 +256,11 @@ export function TrackList({
         />
       )}
       <div className="columnInfo">
-        <span className="trackColumn">Track</span>
-        <span className="artistColumn">Artist</span>
-        <span className="albumColumn">Album</span>
+        {columnHeader("track", "Track", "trackColumn")}
+        {columnHeader("artist", "Artist", "artistColumn")}
+        {columnHeader("album", "Album", "albumColumn")}
         {showServiceColumn && <span className="serviceColumn">Service</span>}
-        <span className="durationColumn">Duration</span>
+        {columnHeader("duration", "Duration", "durationColumn")}
         {selection.isSelecting && (
           <button
             className="selectionDeleteButton"
@@ -219,7 +279,15 @@ export function TrackList({
           menuOpen={openMenu?.trackId === track.globalId}
           collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
           showServiceColumn={showServiceColumn}
+          reorderable={Boolean(reorderTracks)}
+          dragging={draggedTrackId === track.globalId}
+          dropPosition={
+            dropTarget?.trackId === track.globalId
+              ? dropTarget.position
+              : null
+          }
           onAction={onRowAction}
+          onPointerDown={onPointerDown}
         />
       ))}
     </>
@@ -227,7 +295,7 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showServiceColumn, onAction }: {
+const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showServiceColumn, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
   track: Track;
   index: number;
   selected: boolean;
@@ -235,7 +303,11 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
   menuOpen: boolean;
   collectionMenuOpen: boolean;
   showServiceColumn: boolean;
+  reorderable: boolean;
+  dragging: boolean;
+  dropPosition: DropPosition | null;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
+  onPointerDown: (event: React.PointerEvent<HTMLDivElement>, index: number) => void;
 }) {
   return (
     <div
@@ -247,9 +319,16 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
       data-menu-open={
         menuOpen ? "true" : undefined
       }
+      data-reorderable={reorderable ? "true" : undefined}
+      data-dragging={dragging ? "true" : undefined}
+      data-drop-position={dropPosition ?? undefined}
+      data-track-id={track.globalId}
+      draggable={false}
       onClickCapture={(event) => onAction("select", event, index)}
       onClick={(event) => onAction("playback", event, index)}
       onContextMenu={(event) => onAction("context", event, index)}
+      onPointerDown={(event) => onPointerDown(event, index)}
+      onDragStart={(event) => event.preventDefault()}
     >
       <div
         className="coverImgContainer"
@@ -266,6 +345,7 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
           track={track}
           alt={`${track.album} album cover`}
           className="coverImg"
+          draggable={false}
           onClick={(event) => onAction("play", event, index)}
         />
       </div>

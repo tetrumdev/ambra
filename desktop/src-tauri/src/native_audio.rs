@@ -10,7 +10,7 @@ use std::{
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, bounded, unbounded};
 use serde::Serialize;
-use tauri::{App, Manager, State};
+use tauri::{App, AppHandle, Emitter, Manager, State};
 
 mod decoder;
 mod gain;
@@ -30,6 +30,7 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const PAUSED_DEVICE_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const DECODE_BLOCKS: usize = 8;
 const GAIN_BLOCK_FRAMES: usize = 1_024;
+const SOURCE_CHANGED_EVENT: &str = "native-audio-source-changed";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StreamSpec {
@@ -126,9 +127,10 @@ pub fn setup(app: &mut App) {
     let (command_tx, command_rx) = unbounded();
     let status = Arc::new(Mutex::new(PlaybackStatus::default()));
     let worker_status = status.clone();
+    let worker_app = app.handle().clone();
     let worker = thread::Builder::new()
         .name("ambra-native-audio".to_owned())
-        .spawn(move || PlaybackWorker::new(command_rx, worker_status).run())
+        .spawn(move || PlaybackWorker::new(command_rx, worker_status, Some(worker_app)).run())
         .expect("could not start the native audio worker");
     app.manage(NativeAudioPlayer {
         command_tx,
@@ -365,6 +367,7 @@ struct PlaybackWorker {
     gain: GainStage,
     gain_buffer: Vec<f64>,
     gain_buffer_offset: usize,
+    event_app: Option<AppHandle>,
 }
 
 struct QueuedSource {
@@ -480,7 +483,11 @@ impl QueuedSource {
 }
 
 impl PlaybackWorker {
-    fn new(command_rx: Receiver<WorkerCommand>, status: Arc<Mutex<PlaybackStatus>>) -> Self {
+    fn new(
+        command_rx: Receiver<WorkerCommand>,
+        status: Arc<Mutex<PlaybackStatus>>,
+        event_app: Option<AppHandle>,
+    ) -> Self {
         Self {
             command_rx,
             status,
@@ -502,6 +509,7 @@ impl PlaybackWorker {
             gain: GainStage::default(),
             gain_buffer: Vec::new(),
             gain_buffer_offset: 0,
+            event_app,
         }
     }
 
@@ -1111,6 +1119,7 @@ impl PlaybackWorker {
         self.current_source = Some(source.clone());
         self.position_base = 0.0;
         self.rendered_frames = 0;
+        let event_source = source.clone();
         update_status(&self.status, |status| {
             status.current_source = Some(source);
             status.current_time = 0.0;
@@ -1120,6 +1129,9 @@ impl PlaybackWorker {
             status.ended = false;
             status.error = None;
         });
+        if let Some(app) = self.event_app.as_ref() {
+            let _ = app.emit(SOURCE_CHANGED_EVENT, event_source);
+        }
         Ok(())
     }
 
@@ -1386,7 +1398,11 @@ mod tests {
     fn speculative_failure_does_not_fail_current_playback() {
         use super::*;
         let (_tx, rx) = unbounded();
-        let mut worker = PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
+        let mut worker = PlaybackWorker::new(
+            rx,
+            Arc::new(Mutex::new(PlaybackStatus::default())),
+            None,
+        );
         let (sender, receiver) = bounded(1);
         sender
             .send(Err("temporary network outage".to_owned()))
@@ -1436,8 +1452,11 @@ mod tests {
             let prepared = prepare_source(source.clone(), false).unwrap();
             std::fs::remove_file(&path).unwrap();
             let (_tx, rx) = unbounded();
-            let mut worker =
-                PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())));
+            let mut worker = PlaybackWorker::new(
+                rx,
+                Arc::new(Mutex::new(PlaybackStatus::default())),
+                None,
+            );
             if mode > 0 {
                 let (sender, receiver) = bounded(1);
                 thread::spawn(move || {

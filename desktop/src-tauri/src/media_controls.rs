@@ -23,7 +23,7 @@ pub const MEDIA_CONTROL_EVENT: &str = "native-media-control";
 
 pub struct NativeMediaControls {
     controls: Arc<Mutex<MediaControls>>,
-    published: Mutex<PublishedMediaState>,
+    published: Arc<Mutex<PublishedMediaState>>,
     commands_enabled: Arc<AtomicBool>,
 }
 
@@ -41,6 +41,8 @@ pub struct NativeMediaMetadata {
 #[derive(Clone, Default)]
 struct PublishedMediaState {
     metadata: Option<PublishedMediaMetadata>,
+    metadata_revision: u64,
+    published_metadata_revision: u64,
     is_playing: bool,
     position_seconds: f64,
     last_playback_publication: Option<PublishedPlayback>,
@@ -98,7 +100,7 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
 
     app.manage(NativeMediaControls {
         controls: Arc::new(Mutex::new(controls)),
-        published: Mutex::new(PublishedMediaState::default()),
+        published: Arc::new(Mutex::new(PublishedMediaState::default())),
         commands_enabled,
     });
     Ok(())
@@ -127,7 +129,7 @@ pub fn set_native_media_metadata(
         .and_then(|source| native_cover_url(&app, source));
     let asset_url = metadata.asset_source.as_deref().and_then(native_asset_url);
 
-    let snapshot = {
+    {
         let mut published = controls
             .published
             .lock()
@@ -140,10 +142,10 @@ pub fn set_native_media_metadata(
             cover_url,
             asset_url,
         });
-        published.clone()
-    };
+        published.metadata_revision = published.metadata_revision.saturating_add(1);
+    }
 
-    publish_media_state(&app, controls.controls.clone(), snapshot, true)
+    publish_media_state(&app, controls.controls.clone(), controls.published.clone())
 }
 
 fn native_cover_url(app: &AppHandle, source: &str) -> Option<String> {
@@ -219,7 +221,7 @@ pub fn set_native_media_playback(
     is_playing: bool,
     position_seconds: f64,
 ) -> Result<(), String> {
-    let (snapshot, should_publish) = {
+    let should_publish = {
         let mut published = controls
             .published
             .lock()
@@ -242,14 +244,14 @@ pub fn set_native_media_playback(
                 published_at,
             });
         }
-        (published.clone(), should_publish)
+        should_publish
     };
 
     if !should_publish {
         return Ok(());
     }
 
-    publish_media_state(&app, controls.controls.clone(), snapshot, false)
+    publish_media_state(&app, controls.controls.clone(), controls.published.clone())
 }
 
 fn macos_playback_update_requires_publication(
@@ -287,18 +289,49 @@ pub fn set_native_media_commands_enabled(controls: State<'_, NativeMediaControls
 fn publish_media_state(
     app: &AppHandle,
     controls: Arc<Mutex<MediaControls>>,
-    snapshot: PublishedMediaState,
-    refresh_metadata: bool,
+    published: Arc<Mutex<PublishedMediaState>>,
 ) -> Result<(), String> {
     let app = app.clone();
     app.run_on_main_thread(move || {
-        if let Err(error) =
-            publish_media_state_on_main_thread(&controls, &snapshot, refresh_metadata)
-        {
+        if let Err(error) = publish_latest_media_state_on_main_thread(&controls, &published) {
             eprintln!("Could not publish native media state: {error}");
         }
     })
     .map_err(|error| format!("Could not schedule native media state update: {error}"))
+}
+
+fn publish_latest_media_state_on_main_thread(
+    controls: &Mutex<MediaControls>,
+    published: &Mutex<PublishedMediaState>,
+) -> Result<(), String> {
+    // Metadata and playback commands can queue from separate IPC tasks. Read
+    // shared state here so a delayed playback update cannot restore the
+    // outgoing track's asset identifier after the next track is published.
+    let (snapshot, refresh_metadata, metadata_revision) = latest_media_publication(published)?;
+
+    publish_media_state_on_main_thread(controls, &snapshot, refresh_metadata)?;
+
+    if refresh_metadata {
+        let mut published = published
+            .lock()
+            .map_err(|_| "Native media state is unavailable".to_owned())?;
+        published.published_metadata_revision =
+            published.published_metadata_revision.max(metadata_revision);
+    }
+    Ok(())
+}
+
+fn latest_media_publication(
+    published: &Mutex<PublishedMediaState>,
+) -> Result<(PublishedMediaState, bool, u64), String> {
+    let published = published
+        .lock()
+        .map_err(|_| "Native media state is unavailable".to_owned())?;
+    Ok((
+        published.clone(),
+        published.metadata_revision != published.published_metadata_revision,
+        published.metadata_revision,
+    ))
 }
 
 fn publish_media_state_on_main_thread(
@@ -436,11 +469,15 @@ fn finite_seconds(seconds: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        PublishedPlayback, finite_duration, finite_seconds,
-        macos_playback_update_requires_publication, media_control_action,
+        PublishedMediaMetadata, PublishedMediaState, PublishedPlayback, finite_duration,
+        finite_seconds, latest_media_publication, macos_playback_update_requires_publication,
+        media_control_action,
     };
     use souvlaki::MediaControlEvent;
-    use std::time::{Duration, Instant};
+    use std::{
+        sync::Mutex,
+        time::{Duration, Instant},
+    };
 
     #[test]
     fn maps_headphone_navigation_events() {
@@ -490,5 +527,39 @@ mod tests {
             45.0,
             started + Duration::from_secs(10),
         ));
+    }
+
+    #[test]
+    fn queued_publications_use_the_latest_track_metadata() {
+        let published = Mutex::new(PublishedMediaState {
+            metadata: Some(PublishedMediaMetadata {
+                title: "old track".to_owned(),
+                artist: "artist".to_owned(),
+                album: "album".to_owned(),
+                duration_seconds: 180.0,
+                cover_url: Some("old-cover".to_owned()),
+                asset_url: Some("old-source".to_owned()),
+            }),
+            metadata_revision: 1,
+            published_metadata_revision: 1,
+            ..PublishedMediaState::default()
+        });
+
+        {
+            let mut state = published.lock().unwrap();
+            let metadata = state.metadata.as_mut().unwrap();
+            metadata.title = "new track".to_owned();
+            metadata.cover_url = Some("new-cover".to_owned());
+            metadata.asset_url = Some("new-source".to_owned());
+            state.metadata_revision = 2;
+        }
+
+        let (snapshot, refresh_metadata, revision) = latest_media_publication(&published).unwrap();
+        let metadata = snapshot.metadata.unwrap();
+        assert_eq!(metadata.title, "new track");
+        assert_eq!(metadata.cover_url.as_deref(), Some("new-cover"));
+        assert_eq!(metadata.asset_url.as_deref(), Some("new-source"));
+        assert!(refresh_metadata);
+        assert_eq!(revision, 2);
     }
 }

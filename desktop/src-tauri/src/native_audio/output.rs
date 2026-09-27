@@ -55,9 +55,13 @@ fn normalized_to_signed(sample: f64, bits: u32) -> i64 {
         .clamp(-scale, scale - 1.0) as i64
 }
 
+fn writable_frames(available_frames: usize, sample_count: usize, channels: usize) -> usize {
+    available_frames.min(sample_count / channels)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::normalized_to_signed;
+    use super::{normalized_to_signed, writable_frames};
 
     #[test]
     fn exactly_restores_normalized_integer_samples() {
@@ -70,6 +74,12 @@ mod tests {
             normalized_to_signed(2_147_483_647.0 / 2_147_483_648.0, 32),
             i32::MAX as i64
         );
+    }
+
+    #[test]
+    fn limits_device_writes_to_the_frames_with_supplied_samples() {
+        assert_eq!(writable_frames(4_800, 2_048, 2), 1_024);
+        assert_eq!(writable_frames(512, 2_048, 2), 512);
     }
 }
 
