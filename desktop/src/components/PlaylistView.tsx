@@ -14,6 +14,7 @@ export function PlaylistView({ playlist, ...props }: PlaylistViewProps) {
     <TrackCollectionView
       {...props}
       title={playlist.name}
+      showServiceColumn
       removalLabel="Remove from Playlist"
       collapsibleHeader
       headerArtwork={

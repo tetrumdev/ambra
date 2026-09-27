@@ -26,7 +26,7 @@ import {
   type AppScreen,
 } from "./utils/preferences";
 import type { GlobalTrackId, Track } from "./types/music";
-import { resolveTrackPlayback } from "./api/server";
+import { configuredSearchProviders, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
 import {
   collectionQueueContext,
   libraryQueueContext,
@@ -49,7 +49,33 @@ function App() {
   const [librarySection, setLibrarySection] =
     useState<LibrarySection>("overview");
   const searchQuery = preferences.search.query;
-  const searchProvider = "all";
+  const [searchProviders, setSearchProviders] = useState<StreamingProvider[]>([]);
+  const searchProvidersRequest = useRef(0);
+  const searchProvider: SearchProvider = preferences.search.provider !== "all" && searchProviders.includes(preferences.search.provider)
+    ? preferences.search.provider
+    : "all";
+  const refreshSearchProviders = useCallback(() => {
+    const request = ++searchProvidersRequest.current;
+    void configuredSearchProviders().then((providers) => {
+      if (request !== searchProvidersRequest.current) return;
+      setSearchProviders(providers);
+      setPreferences((current) => current.search.provider !== "all" && !providers.includes(current.search.provider)
+        ? { ...current, search: { ...current.search, provider: "all" } }
+        : current);
+    }).catch(() => {
+      if (request === searchProvidersRequest.current) setSearchProviders([]);
+    });
+  }, []);
+  useEffect(() => {
+    refreshSearchProviders();
+    window.addEventListener("focus", refreshSearchProviders);
+    window.addEventListener("online", refreshSearchProviders);
+    return () => {
+      searchProvidersRequest.current++;
+      window.removeEventListener("focus", refreshSearchProviders);
+      window.removeEventListener("online", refreshSearchProviders);
+    };
+  }, [refreshSearchProviders]);
   const library = useMusicLibrary();
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
@@ -683,6 +709,12 @@ function App() {
           <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}
+            provider={searchProvider}
+            providers={searchProviders}
+            onProviderChange={(provider) => setPreferences((current) => ({
+              ...current,
+              search: { ...current.search, provider },
+            }))}
             onConfirm={() =>
               changeScreen(searchQuery.trim() ? "search" : "library")
             }
@@ -757,6 +789,7 @@ function App() {
               onSectionChange={setLibrarySection}
               onRescanLocalMusic={library.rescanLocalMusic}
               onServiceConnected={() => {
+                refreshSearchProviders();
                 search.retry();
                 void library.refreshStreamingMusic();
               }}

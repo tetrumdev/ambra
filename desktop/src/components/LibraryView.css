@@ -41,6 +41,9 @@
 }
 
 .playlistView {
+    --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
+        minmax(120px, 1.5fr) minmax(65px, 0.55fr)
+        minmax(64px, 0.55fr) 40px;
     --playlist-artwork-progress: 0;
     --playlist-title-progress: 0;
     --playlist-title-lag: 0;
@@ -638,6 +641,14 @@
     grid-column: 5;
 }
 
+.playlistView .serviceColumn {
+    grid-column: 5;
+}
+
+.playlistView .durationColumn {
+    grid-column: 6;
+}
+
 .libraryTrackView {
     grid-column: 5;
     width: 100%;
@@ -809,6 +820,10 @@
     display: grid;
     place-items: center;
     border-left: 1px solid transparent;
+}
+
+.playlistView .trackCollectionMenuTrigger {
+    grid-column: 7;
 }
 
 .trackCollectionMenuTrigger:hover {
