@@ -21,6 +21,8 @@ export type Track = {
   playbackKind: PlaybackKind;
   audio: string;
   cover: string;
+  /** Full-resolution artwork when `cover` is a smaller derived copy (local files). */
+  fullCover?: string;
   nativeCover: string | null;
   name: string;
   version: string | null;
@@ -84,6 +86,8 @@ export type QueueHistoryEntry = QueueItem & {
 export type ScannedTrack = {
   audio: string;
   cover: string | null;
+  /** Small derived copy of `cover`, generated in the background. */
+  thumbnail?: string | null;
   name: string;
   album: string;
   artist: string;

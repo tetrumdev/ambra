@@ -4,11 +4,20 @@ import type { SearchProvider, StreamingProvider } from "../api/server";
 import { useEffect, useRef, useState } from "react";
 
 const providerNames: Record<SearchProvider, string> = {
-  all: "Combined",
+  all: "All services",
   tidal: "Tidal",
   qobuz: "Qobuz",
   spotify: "Spotify",
 };
+
+const providerIcons: Record<SearchProvider, string> = {
+  all: "/routedSearch.svg",
+  tidal: "/tidalIcon.svg",
+  qobuz: "/qobuzIcon.svg",
+  spotify: "/spotifyIcon.svg",
+};
+
+const searchIcon = "/searchIcon.svg";
 
 type SearchBarProps = {
   query: string;
@@ -19,15 +28,53 @@ type SearchBarProps = {
   onConfirm: () => void;
 };
 
-export function SearchBar({ query, onQueryChange, provider, providers, onProviderChange, onConfirm }: SearchBarProps) {
+export function SearchBar({
+  query,
+  onQueryChange,
+  provider,
+  providers,
+  onProviderChange,
+  onConfirm,
+}: SearchBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(Boolean(query));
+  const input = useRef<HTMLInputElement>(null);
   const control = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (query) setSearchExpanded(true);
+    else if (document.activeElement !== input.current) setSearchExpanded(false);
+  }, [query]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if (
+        event.code !== "KeyF" ||
+        (!event.metaKey && !event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      setMenuOpen(false);
+      setSearchExpanded(true);
+      requestAnimationFrame(() => input.current?.focus());
+    };
+
+    window.addEventListener("keydown", focusSearch, true);
+    return () => window.removeEventListener("keydown", focusSearch, true);
+  }, []);
+
+  useEffect(() => {
     if (!menuOpen) return;
-    menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+    menu.current
+      ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
+      ?.focus();
     const closeOutside = (event: PointerEvent) => {
       if (!control.current?.contains(event.target as Node)) setMenuOpen(false);
     };
@@ -38,28 +85,69 @@ export function SearchBar({ query, onQueryChange, provider, providers, onProvide
   const options: SearchProvider[] = ["all", ...providers];
 
   return (
-    <div id="searchBar" role="search">
-      <input
-        id="input"
-        type="search"
-        value={query}
-        onChange={(event) => onQueryChange(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return;
-          if (isUnmodifiedKey(event, "Enter")) {
-            event.preventDefault();
-            onConfirm();
-            event.currentTarget.blur();
-          } else if (isUnmodifiedKey(event, "Escape")) {
-            event.preventDefault();
-            event.stopPropagation();
-            event.currentTarget.blur();
-          }
-        }}
-        placeholder="Search..."
-        aria-label="Search songs"
-        autoComplete="off"
-      />
+    <div
+      id="searchBar"
+      role="search"
+      onBlur={(event) => {
+        const nextTarget = event.relatedTarget;
+        if (
+          !query &&
+          !(nextTarget instanceof Node && event.currentTarget.contains(nextTarget))
+        ) {
+          setSearchExpanded(false);
+        }
+      }}
+    >
+      <div
+        className="searchInputControl"
+        data-expanded={searchExpanded ? "true" : undefined}
+      >
+        {searchExpanded ? (
+          <>
+            <img
+              className="searchInputIcon"
+              src={searchIcon}
+              alt=""
+              aria-hidden="true"
+            />
+            <input
+              id="input"
+              ref={input}
+              type="search"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.nativeEvent.isComposing) return;
+                if (isUnmodifiedKey(event, "Enter")) {
+                  event.preventDefault();
+                  onConfirm();
+                  event.currentTarget.blur();
+                } else if (isUnmodifiedKey(event, "Escape")) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.currentTarget.blur();
+                }
+              }}
+              placeholder="Search..."
+              aria-label="Search songs"
+              autoComplete="off"
+            />
+          </>
+        ) : (
+          <button
+            className="searchExpandButton"
+            type="button"
+            aria-label="Search songs"
+            title="Search"
+            onClick={() => {
+              setSearchExpanded(true);
+              requestAnimationFrame(() => input.current?.focus());
+            }}
+          >
+            <img src={searchIcon} alt="" aria-hidden="true" />
+          </button>
+        )}
+      </div>
       <div
         className="searchProviderControl"
         ref={control}
@@ -71,17 +159,35 @@ export function SearchBar({ query, onQueryChange, provider, providers, onProvide
             trigger.current?.focus();
             return;
           }
-          if (!menuOpen && event.target === trigger.current && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+          if (
+            !menuOpen &&
+            event.target === trigger.current &&
+            (event.key === "ArrowDown" || event.key === "ArrowUp")
+          ) {
             event.preventDefault();
             setMenuOpen(true);
             return;
           }
-          if (!menuOpen || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-          const items = [...menu.current?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []];
-          const index = items.indexOf(document.activeElement as HTMLButtonElement);
-          const next = event.key === "Home" ? 0
-            : event.key === "End" ? items.length - 1
-              : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+          if (
+            !menuOpen ||
+            !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
+          )
+            return;
+          const items = [
+            ...(menu.current?.querySelectorAll<HTMLButtonElement>(
+              '[role="menuitemradio"]',
+            ) ?? []),
+          ];
+          const index = items.indexOf(
+            document.activeElement as HTMLButtonElement,
+          );
+          const next =
+            event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? items.length - 1
+                : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) %
+                  items.length;
           event.preventDefault();
           items[next]?.focus();
         }}
@@ -96,24 +202,41 @@ export function SearchBar({ query, onQueryChange, provider, providers, onProvide
           aria-controls={menuOpen ? "searchProviderMenu" : undefined}
           onClick={() => setMenuOpen((open) => !open)}
         >
-          <span>{providerNames[provider]}</span>
-          <span className="searchProviderChevron" aria-hidden="true" />
+          <img
+            className="searchProviderIcon"
+            src={providerIcons[provider]}
+            alt=""
+            aria-hidden="true"
+          />
         </button>
         {menuOpen && (
-          <div id="searchProviderMenu" className="searchProviderMenu" ref={menu} role="menu" aria-label="Search service">
+          <div
+            id="searchProviderMenu"
+            className="searchProviderMenu"
+            ref={menu}
+            role="menu"
+            aria-label="Search service"
+          >
             {options.map((option) => (
               <button
                 key={option}
                 type="button"
                 role="menuitemradio"
                 aria-checked={provider === option}
+                aria-label={providerNames[option]}
+                title={providerNames[option]}
                 onClick={() => {
                   onProviderChange(option);
                   setMenuOpen(false);
                   trigger.current?.focus();
                 }}
               >
-                {providerNames[option]}
+                <img
+                  className="searchProviderIcon"
+                  src={providerIcons[option]}
+                  alt=""
+                  aria-hidden="true"
+                />
               </button>
             ))}
           </div>

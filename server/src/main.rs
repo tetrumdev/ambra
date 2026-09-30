@@ -10,6 +10,7 @@ mod media_cache;
 mod models;
 mod providers;
 mod storage;
+mod write_behind;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
