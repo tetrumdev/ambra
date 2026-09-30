@@ -17,6 +17,18 @@ pub fn cache_path(filename: &str) -> PathBuf {
     path_in(cache_directory(), filename, "cache")
 }
 
+/// A directory (created on demand) inside the cache root.
+pub fn cache_subdirectory(name: &str) -> PathBuf {
+    let directory = cache_directory().join(name);
+    if let Err(error) = fs::create_dir_all(&directory) {
+        eprintln!(
+            "Could not create Ambra cache directory {}: {error}",
+            directory.display()
+        );
+    }
+    directory
+}
+
 pub fn migrate_legacy() {
     let roots = legacy_roots();
     let migrations = [

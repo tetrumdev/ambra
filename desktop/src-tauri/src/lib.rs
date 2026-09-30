@@ -1,6 +1,5 @@
 #![allow(unexpected_cfgs)] // objc 0.2 macros still probe the removed cargo-clippy cfg.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use lofty::{
     file::{AudioFile, TaggedFileExt},
     picture::PictureType,
@@ -9,45 +8,35 @@ use lofty::{
 };
 use oxideav_core::{ContainerRegistry, NullCodecResolver, ReadSeek};
 
+use library_index::{FileStamp, IndexEntry};
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
     env,
     fs::{self, File, OpenOptions},
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Child, Command, Stdio},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
+    time::{Instant, UNIX_EPOCH},
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
+mod cover_thumbnails;
 mod keyboard;
+mod library_index;
 mod media_controls;
 mod native_audio;
+mod persistence;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
-const MAX_PERSISTENT_STATE_BYTES: usize = 64 * 1024 * 1024;
-const PERSISTENT_STATE_KEYS: [&str; 7] = [
-    "ambra.preferences",
-    "ambra.current-screen",
-    "ambra.playlists.v1",
-    "ambra.streaming-library.v1",
-    "ambra.removed-library-tracks.v1",
-    "ambra.library-order.v1",
-    "ambra.queue.v1",
-];
 
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct PersistentState {
-    version: u8,
-    updated_at_ms: u64,
-    values: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Track {
     audio: String,
@@ -57,134 +46,139 @@ struct Track {
     artist: String,
     track_number: Option<u32>,
     duration_seconds: f64,
+    /// Small derived copy of `cover` for lists and grids; absent until generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    thumbnail: Option<String>,
 }
 
-fn library_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+const LIBRARY_INDEX_VERSION: u32 = 2;
+
+#[derive(Deserialize)]
+struct LibraryIndex {
+    version: u32,
+    entries: Vec<IndexEntry<Track>>,
+}
+
+#[derive(Serialize)]
+struct LibraryIndexRef<'a> {
+    version: u32,
+    entries: &'a [IndexEntry<Track>],
+}
+
+fn cache_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_cache_dir()
-        .map(|directory| directory.join("library.json"))
         .map_err(|error| format!("Could not locate Ambra's cache directory: {error}"))
 }
 
-fn persistent_state_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let directory = env::var_os("AMBRA_DATA_DIR")
+/// Pre-index cache: a flat list of tracks with base64 covers embedded.
+fn legacy_library_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cache_directory(app).map(|directory| directory.join("library.json"))
+}
+
+fn library_index_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cache_directory(app).map(|directory| directory.join("library-index.v2.json"))
+}
+
+fn persistent_data_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    env::var_os("AMBRA_DATA_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(Ok)
         .unwrap_or_else(|| app.path().app_data_dir().map(|path| path.join("data")))
-        .map_err(|error| format!("Could not locate Ambra's data directory: {error}"))?;
-    Ok(directory.join("desktop-state.json"))
+        .map_err(|error| format!("Could not locate Ambra's data directory: {error}"))
 }
 
+// Persistence commands are `async` so Tauri runs them off the main thread, and
+// they hop to the blocking pool for disk I/O (including fsync). A synchronous
+// command would stall the window's event loop for the duration of every write.
 #[tauri::command]
-fn load_persistent_state(app: tauri::AppHandle) -> Result<Option<PersistentState>, String> {
-    let path = persistent_state_path(&app)?;
-    let encoded = match fs::read(&path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("Could not read {}: {error}", path.display())),
-    };
-    if encoded.len() > MAX_PERSISTENT_STATE_BYTES {
-        return Err("Ambra's saved desktop state is unexpectedly large".to_owned());
-    }
-    let state: PersistentState = serde_json::from_slice(&encoded)
-        .map_err(|error| format!("Could not decode {}: {error}", path.display()))?;
-    if state.version != 1
-        || state
-            .values
-            .keys()
-            .any(|key| !PERSISTENT_STATE_KEYS.contains(&key.as_str()))
-    {
-        return Err("Ambra's saved desktop state has an unsupported format".to_owned());
-    }
-    Ok(Some(state))
-}
-
-#[tauri::command]
-fn save_persistent_state(
+async fn load_persistent_state(
     app: tauri::AppHandle,
-    state: PersistentState,
-) -> Result<(), String> {
-    if state.version != 1
-        || state
-            .values
-            .keys()
-            .any(|key| !PERSISTENT_STATE_KEYS.contains(&key.as_str()))
-    {
-        return Err("The desktop tried to save an unsupported state".to_owned());
-    }
-    let encoded = serde_json::to_vec(&state)
-        .map_err(|error| format!("Could not encode Ambra's desktop state: {error}"))?;
-    if encoded.len() > MAX_PERSISTENT_STATE_BYTES {
-        return Err("Ambra's saved desktop state is too large".to_owned());
-    }
+    known_updated_at_ms: Option<u64>,
+) -> Result<Option<persistence::LoadedState>, String> {
+    let directory = persistent_data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || persistence::load(&directory, known_updated_at_ms))
+        .await
+        .map_err(|error| format!("Could not load Ambra's desktop state: {error}"))?
+}
 
-    let path = persistent_state_path(&app)?;
+#[tauri::command]
+async fn save_persistent_state(
+    app: tauri::AppHandle,
+    patch: persistence::StatePatch,
+) -> Result<(), String> {
+    let directory = persistent_data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || persistence::save(&directory, patch))
+        .await
+        .map_err(|error| format!("Could not save Ambra's desktop state: {error}"))?
+}
+
+fn write_file_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let directory = path
         .parent()
-        .ok_or_else(|| "Ambra's state file has no parent directory".to_owned())?;
+        .ok_or_else(|| format!("{} has no parent directory", path.display()))?;
     fs::create_dir_all(directory)
         .map_err(|error| format!("Could not create {}: {error}", directory.display()))?;
     let temporary_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temporary_path =
         path.with_extension(format!("{}.{}.tmp", std::process::id(), temporary_id));
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options
-        .open(&temporary_path)
-        .map_err(|error| format!("Could not create {}: {error}", temporary_path.display()))?;
-    file.write_all(&encoded)
+    fs::write(&temporary_path, bytes)
         .map_err(|error| format!("Could not write {}: {error}", temporary_path.display()))?;
-    file.sync_all()
-        .map_err(|error| format!("Could not sync {}: {error}", temporary_path.display()))?;
-    #[cfg(windows)]
-    if path.exists() {
-        fs::remove_file(&path).map_err(|error| {
-            let _ = fs::remove_file(&temporary_path);
-            format!("Could not replace {}: {error}", path.display())
-        })?;
-    }
-    fs::rename(&temporary_path, &path).map_err(|error| {
+    fs::rename(&temporary_path, path).map_err(|error| {
         let _ = fs::remove_file(&temporary_path);
         format!("Could not replace {}: {error}", path.display())
     })
 }
 
-fn save_library_cache(app: &tauri::AppHandle, tracks: &[Track]) -> Result<(), String> {
-    let cache_path = library_cache_path(app)?;
-    let cache_directory = cache_path
-        .parent()
-        .ok_or_else(|| "Ambra's library cache has no parent directory".to_owned())?;
-    fs::create_dir_all(cache_directory).map_err(|error| {
-        format!(
-            "Could not create library cache {}: {error}",
-            cache_directory.display()
-        )
-    })?;
+fn read_library_index(path: &Path) -> Vec<IndexEntry<Track>> {
+    let Ok(encoded) = fs::read(path) else {
+        return Vec::new();
+    };
+    match serde_json::from_slice::<LibraryIndex>(&encoded) {
+        Ok(index) if index.version == LIBRARY_INDEX_VERSION => index.entries,
+        Ok(_) => Vec::new(),
+        Err(error) => {
+            eprintln!("Could not decode library index {}: {error}", path.display());
+            Vec::new()
+        }
+    }
+}
 
-    let temporary_id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temporary_path =
-        cache_path.with_extension(format!("{}.{}.tmp", std::process::id(), temporary_id));
-    let encoded = serde_json::to_vec(tracks)
-        .map_err(|error| format!("Could not encode the library cache: {error}"))?;
-    fs::write(&temporary_path, encoded).map_err(|error| {
-        format!(
-            "Could not write library cache {}: {error}",
-            temporary_path.display()
-        )
-    })?;
-    fs::rename(&temporary_path, &cache_path).map_err(|error| {
-        let _ = fs::remove_file(&temporary_path);
-        format!(
-            "Could not replace library cache {}: {error}",
-            cache_path.display()
-        )
+fn save_library_index(path: &Path, entries: &[IndexEntry<Track>]) -> Result<(), String> {
+    let encoded = serde_json::to_vec(&LibraryIndexRef {
+        version: LIBRARY_INDEX_VERSION,
+        entries,
     })
+    .map_err(|error| format!("Could not encode the library index: {error}"))?;
+    write_file_atomic(path, &encoded)
+}
+
+fn streaming_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cache_directory(app).map(|directory| directory.join("streaming-library.json"))
+}
+
+// The streaming-library cache is a copy of what the Ambra server already owns, so
+// it lives in the rebuildable cache directory rather than in `localStorage` (size
+// limited, and synchronous on the UI thread) or the synchronized data directory.
+#[tauri::command]
+async fn load_streaming_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let path = streaming_cache_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || match fs::read_to_string(&path) {
+        Ok(encoded) => Ok(Some(encoded)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Could not read {}: {error}", path.display())),
+    })
+    .await
+    .map_err(|error| format!("Could not load the streaming library cache: {error}"))?
+}
+
+#[tauri::command]
+async fn save_streaming_cache(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    let path = streaming_cache_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || write_file_atomic(&path, json.as_bytes()))
+        .await
+        .map_err(|error| format!("Could not save the streaming library cache: {error}"))?
 }
 
 #[tauri::command]
@@ -195,22 +189,27 @@ async fn load_cached_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> 
 }
 
 fn load_cached_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
-    let cache_path = library_cache_path(app)?;
-    let encoded = match fs::read(&cache_path) {
+    let index = read_library_index(&library_index_path(app)?);
+    if !index.is_empty() {
+        return Ok(index.into_iter().map(|entry| entry.track).collect());
+    }
+
+    // First launch after upgrading: show the old cache until the scan writes the index.
+    let legacy_path = legacy_library_cache_path(app)?;
+    let encoded = match fs::read(&legacy_path) {
         Ok(encoded) => encoded,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => {
             return Err(format!(
                 "Could not read library cache {}: {error}",
-                cache_path.display()
+                legacy_path.display()
             ));
         }
     };
-
     serde_json::from_slice(&encoded).map_err(|error| {
         format!(
             "Could not decode library cache {}: {error}",
-            cache_path.display()
+            legacy_path.display()
         )
     })
 }
@@ -581,7 +580,36 @@ fn folder_metadata(path: &Path, library_root: &Path) -> (Option<String>, Option<
     (artist, album)
 }
 
-fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
+fn cover_extension(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/bmp" => "bmp",
+        _ => "jpg",
+    }
+}
+
+/// Store an embedded cover once, addressed by its content. Every track of an
+/// album embeds the same picture, so a library of N albums writes N files
+/// instead of carrying one base64 copy per track through the JSON cache, the IPC
+/// channel, and the WebView heap.
+fn write_cover(covers: &Path, mime_type: &str, data: &[u8]) -> Result<String, String> {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut hasher);
+    let path = covers.join(format!(
+        "{:016x}-{:x}.{}",
+        hasher.finish(),
+        data.len(),
+        cover_extension(mime_type)
+    ));
+    if !path.is_file() {
+        write_file_atomic(&path, data)?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
+
+fn read_track(path: &Path, library_root: &Path, covers: &Path) -> Result<Track, String> {
     let tagged_file = read_from_path(path)
         .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
 
@@ -603,13 +631,15 @@ fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
                 .find(|picture| picture.pic_type() == PictureType::CoverFront)
                 .or_else(|| tag.pictures().first())
         })
-        .map(|picture| {
+        .and_then(|picture| {
             let mime_type = picture
                 .mime_type()
                 .map(|mime_type| mime_type.as_str())
                 .unwrap_or("image/jpeg");
 
-            format!("data:{mime_type};base64,{}", BASE64.encode(picture.data()))
+            write_cover(covers, mime_type, picture.data())
+                .map_err(|error| eprintln!("Could not cache embedded artwork: {error}"))
+                .ok()
         });
 
     let duration_seconds = tagged_file.properties().duration().as_secs_f64();
@@ -633,6 +663,7 @@ fn read_track(path: &Path, library_root: &Path) -> Result<Track, String> {
             .unwrap_or_else(|| "Unknown Artist".to_owned()),
         track_number: tag.and_then(|tag| tag.track()),
         duration_seconds,
+        thumbnail: None,
     })
 }
 
@@ -655,22 +686,17 @@ async fn scan_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
         .map_err(|error| format!("Could not scan the music library: {error}"))?
 }
 
-fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
-    let music_directory: PathBuf = app
-        .path()
-        .audio_dir()
-        .map_err(|error| format!("Could not locate the Music directory: {error}"))?
-        .join("Ambra");
+fn modified_millis(metadata: &fs::Metadata) -> u64 {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
 
-    std::fs::create_dir_all(&music_directory)
-        .map_err(|error| format!("Could not create {}: {error}", music_directory.display()))?;
-    let flac_cache = app
-        .path()
-        .app_cache_dir()
-        .map_err(|error| format!("Could not locate Ambra's cache directory: {error}"))?
-        .join("seekable-flac");
-
-    let mut tracks: Vec<Track> = WalkDir::new(&music_directory)
+fn collect_audio_files(root: &Path) -> Vec<FileStamp> {
+    WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_map(|entry| match entry {
@@ -681,49 +707,318 @@ fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
             }
         })
         .filter(|entry| entry.file_type().is_file() && is_supported_audio(entry.path()))
-        .filter_map(|entry| match read_track(entry.path(), &music_directory) {
-            Ok(mut track) => {
-                if entry
-                    .path()
-                    .extension()
-                    .is_some_and(|extension| extension.eq_ignore_ascii_case("flac"))
-                {
-                    match seekable_flac(entry.path(), &flac_cache) {
-                        Ok(audio_path) => {
-                            track.audio = audio_path.to_string_lossy().into_owned();
-                        }
-                        Err(error) => eprintln!("{error}"),
+        .filter_map(|entry| {
+            let metadata = entry.metadata().ok()?;
+            Some(FileStamp {
+                path: entry.path().to_string_lossy().into_owned(),
+                size: metadata.len(),
+                modified_ms: modified_millis(&metadata),
+            })
+        })
+        .collect()
+}
+
+/// An unchanged file can still need a re-read when the artifacts its track
+/// points at (cached seekable FLAC, cover image) were deleted or have appeared.
+fn indexed_entry_is_current(entry: &IndexEntry<Track>) -> bool {
+    let track = &entry.track;
+    if track.audio != entry.path && !Path::new(&track.audio).is_file() {
+        return false;
+    }
+    match track.cover.as_deref() {
+        Some(cover) if cover.starts_with("data:") => false,
+        Some(cover) => Path::new(cover).is_file(),
+        None => nearby_cover(Path::new(&entry.path)).is_none(),
+    }
+}
+
+/// Keep background tag reading from competing with audio and the UI.
+fn lower_scan_thread_priority() {
+    #[cfg(target_os = "macos")]
+    {
+        thread_local!(static LOWERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) });
+        LOWERED.with(|lowered| {
+            if !lowered.replace(true) {
+                // SAFETY: adjusts only the calling thread's scheduling class.
+                unsafe {
+                    libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_UTILITY, 0);
+                }
+            }
+        });
+    }
+}
+
+fn read_indexed_track(
+    file: &FileStamp,
+    library_root: &Path,
+    flac_cache: &Path,
+    covers: &Path,
+) -> Option<Track> {
+    lower_scan_thread_priority();
+    let path = Path::new(&file.path);
+    match read_track(path, library_root, covers) {
+        Ok(mut track) => {
+            if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("flac"))
+            {
+                match seekable_flac(path, flac_cache) {
+                    Ok(audio_path) => track.audio = audio_path.to_string_lossy().into_owned(),
+                    Err(error) => eprintln!("{error}"),
+                }
+            }
+            Some(track)
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            None
+        }
+    }
+}
+
+fn scan_library(
+    library_root: &Path,
+    flac_cache: &Path,
+    covers: &Path,
+    previous: Vec<IndexEntry<Track>>,
+    workers: usize,
+) -> library_index::Reconciled<Track> {
+    let files = collect_audio_files(library_root);
+    let mut reconciled = library_index::reconcile(
+        previous,
+        &files,
+        indexed_entry_is_current,
+        |file| read_indexed_track(file, library_root, flac_cache, covers),
+        workers,
+    );
+    reconciled.entries.sort_by_cached_key(|entry| {
+        (
+            entry.track.artist.to_lowercase(),
+            entry.track.album.to_lowercase(),
+            entry.track.track_number,
+            entry.track.name.to_lowercase(),
+        )
+    });
+    reconciled
+}
+
+// Serializes read-modify-write cycles of the library index between scans and the
+// background thumbnail worker.
+static INDEX_LOCK: Mutex<()> = Mutex::new(());
+static THUMBNAIL_WORKER_RUNNING: AtomicBool = AtomicBool::new(false);
+const THUMBNAIL_PUBLISH_BATCH: usize = 100;
+
+/// Point each track at its cover thumbnail if one exists. Covers are shared by
+/// whole albums, so each distinct cover is checked once. Returns whether any
+/// track changed, and the distinct sources that still need a thumbnail.
+fn attach_thumbnails(entries: &mut [IndexEntry<Track>], covers: &Path) -> (bool, Vec<PathBuf>) {
+    let mut settled: std::collections::HashMap<String, Option<String>> =
+        std::collections::HashMap::new();
+    let mut pending = Vec::new();
+    let mut changed = false;
+    for entry in entries {
+        let Some(cover) = entry
+            .track
+            .cover
+            .clone()
+            .filter(|cover| !cover.starts_with("data:"))
+        else {
+            continue;
+        };
+        let thumbnail =
+            settled.entry(cover.clone()).or_insert_with(|| {
+                match cover_thumbnails::state(covers, Path::new(&cover)) {
+                    cover_thumbnails::ThumbnailState::Ready(path) => {
+                        Some(path.to_string_lossy().into_owned())
+                    }
+                    cover_thumbnails::ThumbnailState::Skip => None,
+                    cover_thumbnails::ThumbnailState::Missing => {
+                        pending.push(PathBuf::from(&cover));
+                        None
                     }
                 }
-                Some(track)
+            });
+        if entry.track.thumbnail != *thumbnail {
+            entry.track.thumbnail.clone_from(thumbnail);
+            changed = true;
+        }
+    }
+    (changed, pending)
+}
+
+struct WorkerGuard;
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        THUMBNAIL_WORKER_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+/// Generate missing thumbnails off the critical path: one low-priority thread,
+/// results published in batches so covers improve progressively.
+fn spawn_thumbnail_worker(app: tauri::AppHandle, pending: Vec<PathBuf>) {
+    if pending.is_empty() || THUMBNAIL_WORKER_RUNNING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("ambra-cover-thumbnails".to_owned())
+        .spawn({
+            let app = app.clone();
+            move || {
+                let _guard = WorkerGuard;
+                lower_scan_thread_priority();
+                let (Ok(index_path), Ok(cache)) = (library_index_path(&app), cache_directory(&app))
+                else {
+                    return;
+                };
+                let covers = cache.join("covers");
+                for batch in pending.chunks(THUMBNAIL_PUBLISH_BATCH) {
+                    for source in batch {
+                        cover_thumbnails::generate(&covers, source);
+                    }
+                    let _lock = INDEX_LOCK
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let mut entries = read_library_index(&index_path);
+                    if attach_thumbnails(&mut entries, &covers).0 {
+                        match save_library_index(&index_path, &entries) {
+                            Ok(()) => {
+                                let _ = app.emit("local-library-updated", ());
+                            }
+                            Err(error) => eprintln!("{error}"),
+                        }
+                    }
+                }
             }
-            Err(error) => {
+        });
+    if spawned.is_err() {
+        THUMBNAIL_WORKER_RUNNING.store(false, Ordering::Release);
+    }
+}
+
+fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
+    let started = Instant::now();
+    let music_directory: PathBuf = app
+        .path()
+        .audio_dir()
+        .map_err(|error| format!("Could not locate the Music directory: {error}"))?
+        .join("Ambra");
+
+    std::fs::create_dir_all(&music_directory)
+        .map_err(|error| format!("Could not create {}: {error}", music_directory.display()))?;
+    let cache = cache_directory(app)?;
+    let index_path = library_index_path(app)?;
+    let had_index = index_path.is_file();
+
+    let covers = cache.join("covers");
+    let mut reconciled = scan_library(
+        &music_directory,
+        &cache.join("seekable-flac"),
+        &covers,
+        read_library_index(&index_path),
+        library_index::default_workers(),
+    );
+
+    let pending = {
+        let _lock = INDEX_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let (thumbnails_changed, pending) = attach_thumbnails(&mut reconciled.entries, &covers);
+        if reconciled.stats.changed() || thumbnails_changed || !had_index {
+            if let Err(error) = save_library_index(&index_path, &reconciled.entries) {
                 eprintln!("{error}");
-                None
             }
-        })
-        .collect();
-
-    tracks.sort_by_cached_key(|track| (
-        track.artist.to_lowercase(),
-        track.album.to_lowercase(),
-        track.track_number,
-        track.name.to_lowercase(),
-    ));
-
-    if let Err(error) = save_library_cache(app, &tracks) {
-        eprintln!("{error}");
+        }
+        pending
+    };
+    spawn_thumbnail_worker(app.clone(), pending);
+    if env::var_os("AMBRA_PERF").is_some() {
+        eprintln!(
+            "[ambra:perf] scan files={} reused={} read={} failed={} removed={} elapsed_ms={}",
+            reconciled.entries.len(),
+            reconciled.stats.reused,
+            reconciled.stats.read,
+            reconciled.stats.failed,
+            reconciled.stats.removed,
+            started.elapsed().as_millis()
+        );
     }
 
-    Ok(tracks)
+    Ok(reconciled
+        .entries
+        .into_iter()
+        .map(|entry| entry.track)
+        .collect())
+}
+
+static PROCESS_STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+
+struct BundledBackend(Mutex<Option<Child>>);
+
+impl BundledBackend {
+    fn stop(&self) {
+        let Ok(mut child) = self.0.lock() else {
+            return;
+        };
+        let Some(mut child) = child.take() else {
+            return;
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+impl Drop for BundledBackend {
+    fn drop(&mut self) {
+        let Ok(child) = self.0.get_mut() else {
+            return;
+        };
+        let Some(mut child) = child.take() else {
+            return;
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_bundled_backend() -> std::io::Result<Option<Child>> {
+    let executable = env::current_exe()?
+        .parent()
+        .map(|directory| directory.join("ambra-server"));
+    let Some(executable) = executable.filter(|path| path.is_file()) else {
+        return Ok(None);
+    };
+
+    Command::new(executable)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(Some)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn spawn_bundled_backend() -> std::io::Result<Option<Child>> {
+    Ok(None)
+}
+
+/// Milliseconds since the Rust entry point began, for startup tracing.
+#[tauri::command]
+fn startup_elapsed_ms() -> u64 {
+    PROCESS_STARTED
+        .get()
+        .map(|started| started.elapsed().as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = PROCESS_STARTED.set(Instant::now());
     let app = tauri::Builder::default()
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            app.manage(BundledBackend(Mutex::new(spawn_bundled_backend()?)));
             media_controls::setup(app)?;
             native_audio::setup(app);
             Ok(())
@@ -731,6 +1026,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_persistent_state,
             save_persistent_state,
+            startup_elapsed_ms,
+            load_streaming_cache,
+            save_streaming_cache,
             load_cached_music,
             local_music_directory,
             scan_music,
@@ -755,13 +1053,234 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|_, _| {});
+    app.run(|app, event| {
+        if matches!(event, tauri::RunEvent::Exit) {
+            app.state::<BundledBackend>().stop();
+        }
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::folder_metadata;
-    use std::path::Path;
+    use super::{IndexEntry, Track, attach_thumbnails, folder_metadata, scan_library, write_cover};
+    use std::{
+        fs,
+        path::{Path, PathBuf},
+        time::Instant,
+    };
+
+    fn scratch(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "ambra-scan-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    /// A minimal valid PCM WAV file, so lofty parses real headers.
+    fn write_wav(path: &Path, samples: usize) {
+        let data_len = (samples * 2) as u32;
+        let mut bytes = Vec::with_capacity(44 + samples * 2);
+        bytes.extend_from_slice(b"RIFF");
+        bytes.extend_from_slice(&(36 + data_len).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&16_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&1_u16.to_le_bytes());
+        bytes.extend_from_slice(&8000_u32.to_le_bytes());
+        bytes.extend_from_slice(&16000_u32.to_le_bytes());
+        bytes.extend_from_slice(&2_u16.to_le_bytes());
+        bytes.extend_from_slice(&16_u16.to_le_bytes());
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&data_len.to_le_bytes());
+        bytes.resize(44 + samples * 2, 0);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn make_library(root: &Path, albums: usize, tracks_per_album: usize) {
+        for album in 0..albums {
+            for track in 0..tracks_per_album {
+                write_wav(
+                    &root.join(format!(
+                        "Artist {}/Album {album}/Track {track:02}.wav",
+                        album % 50
+                    )),
+                    800 + track,
+                );
+            }
+        }
+    }
+
+    fn scan(
+        root: &Path,
+        previous: Vec<IndexEntry<Track>>,
+    ) -> crate::library_index::Reconciled<Track> {
+        scan_library(
+            root,
+            &root.join("_flac"),
+            &root.join("_covers"),
+            previous,
+            super::library_index::default_workers(),
+        )
+    }
+
+    #[test]
+    fn incremental_scan_reads_only_what_changed() {
+        let root = scratch("incremental");
+        let music = root.join("music");
+        make_library(&music, 12, 10);
+
+        let cold = scan(&music, Vec::new());
+        assert_eq!(cold.entries.len(), 120);
+        assert_eq!(cold.stats.read, 120);
+
+        let warm = scan(&music, cold.entries);
+        assert_eq!(warm.entries.len(), 120);
+        assert_eq!((warm.stats.reused, warm.stats.read), (120, 0));
+        assert!(!warm.stats.changed());
+
+        write_wav(&music.join("Artist 0/Album 0/Track 00.wav"), 5000);
+        fs::remove_file(music.join("Artist 1/Album 1/Track 01.wav")).unwrap();
+        write_wav(&music.join("Artist 2/Album 2/Brand New.wav"), 900);
+        let changed = scan(&music, warm.entries);
+        assert_eq!(changed.entries.len(), 120);
+        assert_eq!(
+            (
+                changed.stats.read,
+                changed.stats.removed,
+                changed.stats.reused
+            ),
+            (2, 1, 118)
+        );
+        assert!(
+            changed
+                .entries
+                .iter()
+                .any(|entry| entry.track.name == "Brand New")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn scan_output_is_sorted_by_artist_album_track() {
+        let root = scratch("sorted");
+        let music = root.join("music");
+        write_wav(&music.join("Zed/Album/b.wav"), 800);
+        write_wav(&music.join("abba/Album/a.wav"), 800);
+        let scanned = scan(&music, Vec::new());
+        let artists: Vec<_> = scanned
+            .entries
+            .iter()
+            .map(|entry| entry.track.artist.as_str())
+            .collect();
+        assert_eq!(artists, ["abba", "Zed"]);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn tracks_gain_thumbnails_once_generated_and_large_covers_are_shrunk() {
+        let root = scratch("attach");
+        let music = root.join("music");
+        for track in 0..3 {
+            write_wav(
+                &music.join(format!("Artist/Album/Track {track}.wav")),
+                800 + track,
+            );
+        }
+        image::RgbImage::from_fn(1400, 1400, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 90])
+        })
+        .save(music.join("Artist/Album/cover.png"))
+        .unwrap();
+        let covers = root.join("_covers");
+        let mut entries = scan(&music, Vec::new()).entries;
+
+        // First pass: one shared cover, reported once, no thumbnails yet.
+        let (changed, pending) = attach_thumbnails(&mut entries, &covers);
+        assert!(!changed);
+        assert_eq!(
+            pending.len(),
+            1,
+            "an album's tracks share one thumbnail job"
+        );
+        assert!(entries.iter().all(|entry| entry.track.thumbnail.is_none()));
+
+        crate::cover_thumbnails::generate(&covers, &pending[0]);
+        let (changed, pending) = attach_thumbnails(&mut entries, &covers);
+        assert!(changed && pending.is_empty());
+        let thumbnails: std::collections::HashSet<_> = entries
+            .iter()
+            .map(|entry| entry.track.thumbnail.clone().unwrap())
+            .collect();
+        assert_eq!(thumbnails.len(), 1);
+        let thumbnail = thumbnails.into_iter().next().unwrap();
+        assert_eq!(image::open(&thumbnail).unwrap().width(), 512);
+        assert_ne!(
+            Some(thumbnail),
+            entries[0].track.cover.clone(),
+            "full cover is kept separately"
+        );
+
+        // Stable once settled.
+        assert!(!attach_thumbnails(&mut entries, &covers).0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn covers_are_stored_once_per_unique_image() {
+        let root = scratch("covers");
+        let covers = root.join("covers");
+        let first = write_cover(&covers, "image/jpeg", b"same-bytes").unwrap();
+        let again = write_cover(&covers, "image/jpeg", b"same-bytes").unwrap();
+        let other = write_cover(&covers, "image/png", b"different").unwrap();
+        assert_eq!(first, again);
+        assert_ne!(first, other);
+        assert!(other.ends_with(".png"));
+        assert_eq!(fs::read_dir(&covers).unwrap().count(), 2);
+        assert_eq!(fs::read(&first).unwrap(), b"same-bytes");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// `cargo test --release --lib scan_benchmark -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn scan_benchmark() {
+        for (albums, per_album) in [(100, 10), (1000, 10), (2000, 50)] {
+            let root = scratch(&format!("bench-{albums}-{per_album}"));
+            let music = root.join("music");
+            make_library(&music, albums, per_album);
+            let files = albums * per_album;
+
+            // What every launch cost before the index: a serial full read.
+            let started = Instant::now();
+            let serial = scan_library(
+                &music,
+                &root.join("_flac"),
+                &root.join("_covers"),
+                Vec::new(),
+                1,
+            );
+            let serial_ms = started.elapsed().as_millis();
+            assert_eq!(serial.entries.len(), files);
+
+            let started = Instant::now();
+            let cold = scan(&music, Vec::new());
+            let cold_ms = started.elapsed().as_millis();
+
+            let started = Instant::now();
+            let warm = scan(&music, cold.entries);
+            let warm_ms = started.elapsed().as_millis();
+            assert_eq!(warm.stats.read, 0);
+            println!(
+                "{files:>6} files: serial full scan (old, every launch) {serial_ms:>6} ms | parallel cold {cold_ms:>6} ms | warm incremental {warm_ms:>5} ms"
+            );
+            let _ = fs::remove_dir_all(root);
+        }
+    }
 
     #[test]
     fn derives_artist_and_album_from_library_folders() {

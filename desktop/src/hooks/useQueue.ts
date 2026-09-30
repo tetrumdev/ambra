@@ -246,12 +246,13 @@ export function useQueue(
           })),
     [state.current, state.upcoming],
   );
+  const upcomingEntries = useMemo(() => entries.slice(1), [entries]);
 
   return {
     historyEntries: state.history,
     entries,
     currentEntry: entries[0],
-    upcomingEntries: entries.slice(1),
+    upcomingEntries,
     isRestored,
     playFromContext,
     playStandalone,

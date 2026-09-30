@@ -281,11 +281,16 @@ impl TidalProvider {
             maximum_bit_depth: bit_depth,
             playback,
         };
-        let mut cache = self.track_metadata_cache.lock().await;
-        cache.insert(track_id.to_owned(), metadata.clone());
-        if let Err(error) = save_track_metadata_cache(&self.track_metadata_cache_path, &cache) {
-            eprintln!("Could not persist Tidal metadata cache: {error}");
-        }
+        self.track_metadata_cache
+            .lock()
+            .await
+            .insert(track_id.to_owned(), metadata.clone());
+        crate::write_behind::schedule(
+            self.track_metadata_cache.clone(),
+            self.track_metadata_cache_path.clone(),
+            "Tidal metadata cache",
+            |path, cache| save_track_metadata_cache(&path.to_path_buf(), cache),
+        );
 
         Ok(metadata)
     }

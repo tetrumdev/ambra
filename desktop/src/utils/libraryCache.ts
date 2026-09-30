@@ -1,7 +1,12 @@
 import type { GlobalTrackId, Track } from "../types/music";
-import { getPersistentItem, setPersistentItem } from "./persistentStorage";
+import {
+  getPersistentItem,
+  removePersistentItem,
+  setPersistentItem,
+} from "./persistentStorage";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
+const STREAMING_CACHE_SAVE_DELAY_MS = 1000;
 const REMOVED_LIBRARY_TRACKS_KEY = "ambra.removed-library-tracks.v1";
 
 type CachedTrack = Omit<Track, "globalId"> & {
@@ -83,7 +88,61 @@ export function loadCachedServerTracks(): Track[] {
   }
 }
 
+// The desktop app keeps this (potentially tens of megabytes) cache in a Rust-managed
+// file: localStorage is size-limited, parsed synchronously, and was mirrored in full
+// to disk on every change. The browser/dev build still uses localStorage.
+function inDesktop() {
+  return Boolean((globalThis as { isTauri?: boolean }).isTauri);
+}
+
+async function desktopInvoke<T>(command: string, args?: Record<string, unknown>) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<T>(command, args);
+}
+
+/**
+ * Load the cached streaming library from the desktop backend. On first launch
+ * after upgrading it migrates the old localStorage copy into the backend file and
+ * deletes it, which frees storage quota and stops syncing a redundant copy.
+ */
+export async function loadStreamingCache(): Promise<Track[]> {
+  if (!inDesktop()) return [];
+  let encoded = await desktopInvoke<string | null>("load_streaming_cache");
+  const legacy = getPersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+  if (encoded === null && legacy !== null) {
+    encoded = legacy;
+    await desktopInvoke("save_streaming_cache", { json: legacy });
+  }
+  if (legacy !== null) removePersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+  return encoded === null ? [] : parseCachedServerTracks(encoded);
+}
+
+let pendingStreamingTracks: Track[] | null = null;
+let streamingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+function flushStreamingCache() {
+  streamingSaveTimer = undefined;
+  const tracks = pendingStreamingTracks;
+  pendingStreamingTracks = null;
+  if (tracks === null) return;
+  const json = JSON.stringify(tracks.filter((track) => track.provider !== "local"));
+  void desktopInvoke("save_streaming_cache", { json })
+    .then(() => {
+      if (getPersistentItem(STREAMING_LIBRARY_CACHE_KEY) !== null) {
+        removePersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+      }
+    })
+    .catch((error) => console.warn("Could not save the streaming library cache:", error));
+}
+
 export function saveCachedServerTracks(tracks: Track[]) {
+  if (inDesktop()) {
+    // Coalesce bursts (e.g. adding an album track by track) into one write.
+    pendingStreamingTracks = tracks;
+    clearTimeout(streamingSaveTimer);
+    streamingSaveTimer = setTimeout(flushStreamingCache, STREAMING_CACHE_SAVE_DELAY_MS);
+    return;
+  }
   if (typeof localStorage === "undefined") return;
 
   try {

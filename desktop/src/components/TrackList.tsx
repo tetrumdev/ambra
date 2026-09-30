@@ -8,6 +8,9 @@ import { useTrackReorder } from "../hooks/useTrackReorder";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { TrackArtwork } from "./TrackArtwork";
+import { VirtualSpacer } from "./VirtualSpacer";
+import { PerfProfiler } from "./PerfProfiler";
+import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import {
   nextTrackSort,
   type DropPosition,
@@ -39,11 +42,15 @@ export type TrackListProps = {
   removalLabel?: string;
   playlistOptions?: PlaylistMenuOptions;
   addToLibrary?: (trackId: GlobalTrackId) => void;
-  showServiceColumn?: boolean;
+  showProviderIcon?: boolean;
   reorderTracks?: (orderedTrackIds: GlobalTrackId[]) => void;
   sort?: TrackSort;
   onSortChange?: (sort: TrackSort) => void;
 };
+
+// Collections longer than this render only the rows near the viewport. Shorter
+// ones (most playlists and albums) render in full, exactly as before.
+const VIRTUALIZE_AFTER_ROWS = 120;
 
 function formatTime(time: number) {
   const totalSeconds = Math.max(0, Math.floor(time));
@@ -66,7 +73,7 @@ export function TrackList({
   removalLabel = "Remove from collection",
   addToLibrary,
   playlistOptions,
-  showServiceColumn = false,
+  showProviderIcon = false,
   reorderTracks,
   sort = null,
   onSortChange,
@@ -93,6 +100,22 @@ export function TrackList({
       clearTimeout(warmTimer.current);
     },
   );
+
+  const columnHeaderRef = useRef<HTMLDivElement>(null);
+  const draggedIndex = useMemo(
+    () => (draggedTrackId === null ? null : trackIds.indexOf(draggedTrackId)),
+    [draggedTrackId, trackIds],
+  );
+  const virtual = useVirtualWindow({
+    count: tracks.length,
+    enabled: tracks.length > VIRTUALIZE_AFTER_ROWS,
+    probeRef: columnHeaderRef,
+    probeIsContainer: false,
+    fallback: { rowHeight: 76 },
+    cacheKey: "track-list",
+    overscanRows: 10,
+    pinnedIndex: draggedIndex,
+  });
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();
@@ -223,6 +246,7 @@ export function TrackList({
   }
 
   return (
+    <PerfProfiler id="track-list">
     <>
       {openMenu?.kind === "playback" && (
         <TrackPlaybackMenu
@@ -255,54 +279,66 @@ export function TrackList({
           ]}
         />
       )}
-      <div className="columnInfo">
+      {selection.isSelecting && (
+        <div className="selectionActionMenu" role="group" aria-label="Selected tracks">
+          <button
+            className="selectionRemoveAction"
+            type="button"
+            disabled={selection.selectedIds.size === 0}
+            aria-label={removalLabel}
+            title={removalLabel}
+            onClick={removeSelection}
+          >
+            Remove
+          </button>
+          <button type="button" onClick={selection.clear}>
+            Cancel
+          </button>
+        </div>
+      )}
+      <div className="columnInfo" ref={columnHeaderRef}>
         {columnHeader("track", "Track", "trackColumn")}
         {columnHeader("artist", "Artist", "artistColumn")}
         {columnHeader("album", "Album", "albumColumn")}
-        {showServiceColumn && <span className="serviceColumn">Service</span>}
         {columnHeader("duration", "Duration", "durationColumn")}
-        {selection.isSelecting && (
-          <button
-            className="selectionDeleteButton"
-            type="button"
-            disabled={selection.selectedIds.size === 0}
-            onClick={removeSelection}
-          >
-            {removalLabel}
-          </button>
-        )}
       </div>
-      {tracks.map((track, index) => (
-        <TrackRow key={track.globalId} track={track} index={index}
-          selected={selection.selectedIds.has(track.globalId)}
-          selecting={selection.isSelecting}
-          menuOpen={openMenu?.trackId === track.globalId}
-          collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
-          showServiceColumn={showServiceColumn}
-          reorderable={Boolean(reorderTracks)}
-          dragging={draggedTrackId === track.globalId}
-          dropPosition={
-            dropTarget?.trackId === track.globalId
-              ? dropTarget.position
-              : null
-          }
-          onAction={onRowAction}
-          onPointerDown={onPointerDown}
-        />
-      ))}
+      {virtual.topSpace > 0 && <VirtualSpacer position="top" height={virtual.topSpace} />}
+      {tracks.slice(virtual.start, virtual.end).map((track, windowIndex) => {
+        const index = virtual.start + windowIndex;
+        return (
+          <TrackRow key={track.globalId} track={track} index={index}
+            selected={selection.selectedIds.has(track.globalId)}
+            selecting={selection.isSelecting}
+            menuOpen={openMenu?.trackId === track.globalId}
+            collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
+            showProviderIcon={showProviderIcon}
+            reorderable={Boolean(reorderTracks)}
+            dragging={draggedTrackId === track.globalId}
+            dropPosition={
+              dropTarget?.trackId === track.globalId
+                ? dropTarget.position
+                : null
+            }
+            onAction={onRowAction}
+            onPointerDown={onPointerDown}
+          />
+        );
+      })}
+      {virtual.bottomSpace > 0 && <VirtualSpacer position="bottom" height={virtual.bottomSpace} />}
     </>
+    </PerfProfiler>
   );
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showServiceColumn, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
   track: Track;
   index: number;
   selected: boolean;
   selecting: boolean;
   menuOpen: boolean;
   collectionMenuOpen: boolean;
-  showServiceColumn: boolean;
+  showProviderIcon: boolean;
   reorderable: boolean;
   dragging: boolean;
   dropPosition: DropPosition | null;
@@ -323,6 +359,7 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
       data-dragging={dragging ? "true" : undefined}
       data-drop-position={dropPosition ?? undefined}
       data-track-id={track.globalId}
+      data-virtual-item=""
       draggable={false}
       onClickCapture={(event) => onAction("select", event, index)}
       onClick={(event) => onAction("playback", event, index)}
@@ -349,14 +386,23 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
           onClick={(event) => onAction("play", event, index)}
         />
       </div>
-      <span className="trackName trackDescriptor" data-playback-menu-trigger>
-        {track.name}
+      <span
+        className={`trackName trackDescriptor${showProviderIcon ? " trackNameWithProvider" : ""}`}
+        data-playback-menu-trigger
+      >
+        <span className="trackTitleText">{track.name}</span>
+        {showProviderIcon && (
+          <img
+            className="trackProviderIcon"
+            data-provider={track.provider}
+            src={track.provider === "local" ? "/ambra.svg" : `/${track.provider}Icon.svg`}
+            alt={musicProviderName(track.provider)}
+            title={musicProviderName(track.provider)}
+          />
+        )}
       </span>
       <span className="artistName trackDescriptor">{track.artist}</span>
       <span className="albumName trackDescriptor">{track.album}</span>
-      {showServiceColumn && (
-        <span className="trackService trackDescriptor">{musicProviderName(track.provider)}</span>
-      )}
       <span
         className="trackDuration trackDescriptor"
         data-playback-menu-trigger

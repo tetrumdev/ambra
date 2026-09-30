@@ -75,7 +75,9 @@ impl DecodedSource {
     }
 
     pub fn open_at(source: String, position_seconds: f64) -> Result<Self, String> {
-        if position_seconds > 0.0 && is_http_source(&source) && source_path(&source).ends_with(".m3u8")
+        if position_seconds > 0.0
+            && is_http_source(&source)
+            && source_path(&source).ends_with(".m3u8")
         {
             return Self::open_hls_position(source, Some(position_seconds));
         }
@@ -557,13 +559,16 @@ impl HttpRangeSource {
 
 fn http_client() -> io::Result<Client> {
     static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
-    CLIENT.get_or_init(|| Client::builder()
-        .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(20))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .tcp_keepalive(Duration::from_secs(30))
-        .build()
-        .map_err(|error| error.to_string()))
+    CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .connect_timeout(Duration::from_secs(3))
+                .timeout(Duration::from_secs(20))
+                .pool_idle_timeout(Duration::from_secs(90))
+                .tcp_keepalive(Duration::from_secs(30))
+                .build()
+                .map_err(|error| error.to_string())
+        })
         .as_ref()
         .cloned()
         .map_err(|error| io::Error::other(error.clone()))

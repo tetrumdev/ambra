@@ -4,6 +4,7 @@ use std::{
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::Arc,
+    time::{Duration, Instant, SystemTime},
 };
 
 use bytes::Bytes;
@@ -17,7 +18,8 @@ use librespot_metadata::{
     audio::{AudioFileFormat, AudioFiles},
     image::Images,
 };
-use librespot_oauth::OAuthClientBuilder;
+use librespot_oauth::{OAuthClient, OAuthClientBuilder, OAuthToken};
+use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
 use crate::models::{
@@ -27,6 +29,11 @@ use crate::models::{
 const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
 const DEFAULT_OAUTH_PORT: u16 = 8898;
 const AUDIO_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const OAUTH_REFRESH_MARGIN: Duration = Duration::from_secs(60);
+const SEARCH_ENDPOINT: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
+const SEARCH_OPERATION: &str = "findTracks";
+const SEARCH_QUERY_HASH: &str = "903df2a65d8121e27d73a2be03c01e88ebe6021bb6d4eb82a389e35d87e51d27";
+const SEARCH_PAGE_SIZE: usize = 5;
 
 pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 pub type AudioByteStream = mpsc::Receiver<Result<Bytes, io::Error>>;
@@ -34,10 +41,24 @@ pub type AudioByteStream = mpsc::Receiver<Result<Bytes, io::Error>>;
 #[derive(Clone)]
 pub struct SpotifyProvider {
     session: Session,
+    http_client: reqwest::Client,
+    search_auth: Arc<Mutex<SpotifySearchAuth>>,
+    oauth_refresh_path: Arc<PathBuf>,
+    oauth_client_id: Arc<String>,
     quality: SpotifyQuality,
     tracks: Arc<Mutex<HashMap<String, Track>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
+}
+
+enum SpotifySearchAuth {
+    Static(String),
+    Refreshable(OAuthToken),
+}
+
+#[derive(Deserialize, Serialize)]
+struct SavedSpotifyOAuth {
+    refresh_token: String,
 }
 
 pub struct PreparedSpotifyStream {
@@ -96,6 +117,7 @@ impl SpotifyProvider {
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
         let credentials_path = spotify_credentials_path();
         let audio_cache_path = spotify_audio_cache_path();
+        let oauth_refresh_path = spotify_oauth_refresh_path();
         let cache = Cache::new(
             Some(&credentials_path),
             None::<&PathBuf>,
@@ -105,35 +127,41 @@ impl SpotifyProvider {
         make_cache_private(&credentials_path)?;
 
         let environment_access_token = nonempty_env("AMBRA_SPOTIFY_ACCESS_TOKEN");
-        let environment_username = nonempty_env("AMBRA_SPOTIFY_USERNAME");
-        let environment_password = nonempty_env("AMBRA_SPOTIFY_PASSWORD");
-        let cached_credentials = cache.credentials();
-
-        if environment_access_token.is_none()
-            && (environment_username.is_none() || environment_password.is_none())
-            && cached_credentials.is_none()
-            && !interactive
-        {
-            return Ok(None);
-        }
-
         let session_config = SessionConfig::default();
-        let credentials = if let Some(token) = environment_access_token {
-            Credentials::with_access_token(token)
-        } else if let (Some(username), Some(password)) =
-            (environment_username, environment_password)
-        {
-            Credentials::with_password(username, password)
+        let (credentials, search_auth) = if let Some(token) = environment_access_token {
+            (
+                Credentials::with_access_token(token.clone()),
+                SpotifySearchAuth::Static(token),
+            )
+        } else if let Some(refresh_token) = load_spotify_refresh_token(&oauth_refresh_path) {
+            let mut token = spotify_oauth_client(&session_config.client_id, false)?
+                .refresh_token_async(&refresh_token)
+                .await?;
+            if token.refresh_token.is_empty() {
+                token.refresh_token = refresh_token;
+            }
+            save_spotify_refresh_token(&oauth_refresh_path, &token.refresh_token)?;
+            (
+                Credentials::with_access_token(token.access_token.clone()),
+                SpotifySearchAuth::Refreshable(token),
+            )
         } else if interactive {
-            interactive_credentials(&session_config).await?
-        } else if let Some(credentials) = cached_credentials {
-            credentials
+            let token = interactive_oauth_token(&session_config).await?;
+            save_spotify_refresh_token(&oauth_refresh_path, &token.refresh_token)?;
+            (
+                Credentials::with_access_token(token.access_token.clone()),
+                SpotifySearchAuth::Refreshable(token),
+            )
         } else {
             return Ok(None);
         };
 
+        let oauth_client_id = session_config.client_id.clone();
         let session = Session::new(session_config, Some(cache));
         session.connect(credentials, true).await?;
+        session
+            .login5()
+            .set_auth_token(librespot_token_for_search(&search_auth));
 
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
@@ -141,6 +169,10 @@ impl SpotifyProvider {
 
         Ok(Some(Self {
             session,
+            http_client: reqwest::Client::new(),
+            search_auth: Arc::new(Mutex::new(search_auth)),
+            oauth_refresh_path: Arc::new(oauth_refresh_path),
+            oauth_client_id: Arc::new(oauth_client_id),
             quality: configured_quality(),
             tracks: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
@@ -163,35 +195,111 @@ impl SpotifyProvider {
         limit: usize,
         offset: usize,
     ) -> ProviderResult<Vec<String>> {
-        let search_query = query
-            .split_whitespace()
-            .map(urlencoding::encode)
-            .collect::<Vec<_>>()
-            .join("+");
-        let context = self
-            .session
-            .spclient()
-            .get_context(&format!("spotify:search:{search_query}"))
-            .await?;
-        let mut track_ids = Vec::new();
+        if limit == 0 || query.trim().is_empty() {
+            return Ok(Vec::new());
+        }
 
-        for uri in context
-            .pages
-            .into_iter()
-            .flat_map(|page| page.tracks)
-            .filter_map(|track| track.uri)
-        {
-            let Some(track_id) = uri.strip_prefix("spotify:track:") else {
-                continue;
-            };
-            if validate_spotify_id("track", track_id).is_ok()
-                && !track_ids.iter().any(|existing| existing == track_id)
+        let access_token = self.search_access_token().await?;
+        let client_token = self.session.spclient().client_token().await?;
+        let mut track_ids = Vec::new();
+        let mut page_offset = offset;
+        let mut pages = 0;
+        let mut total_count = None;
+
+        while track_ids.len() < limit && pages < 5 {
+            pages += 1;
+            let page_limit = (limit - track_ids.len()).min(SEARCH_PAGE_SIZE);
+            let response = self
+                .http_client
+                .post(SEARCH_ENDPOINT)
+                .bearer_auth(&access_token)
+                .header("client-token", &client_token)
+                .header("app-platform", "WebPlayer")
+                .json(&serde_json::json!({
+                    "operationName": SEARCH_OPERATION,
+                    "variables": {
+                        "query": query.trim(),
+                        "limit": page_limit,
+                        "offset": page_offset,
+                    },
+                    "extensions": {
+                        "persistedQuery": {
+                            "version": 1,
+                            "sha256Hash": SEARCH_QUERY_HASH,
+                        }
+                    }
+                }))
+                .send()
+                .await?
+                .error_for_status()?
+                .json::<serde_json::Value>()
+                .await?;
+
+            if let Some(message) = response
+                .get("errors")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|errors| errors.first())
+                .and_then(|error| error.get("message"))
+                .and_then(serde_json::Value::as_str)
             {
-                track_ids.push(track_id.to_owned());
+                return Err(io::Error::other(format!("Spotify search failed: {message}")).into());
+            }
+
+            let page = spotify_track_ids_from_search(&response);
+            let page_count = page.len();
+            for track_id in page {
+                if !track_ids.iter().any(|existing| existing == &track_id) {
+                    track_ids.push(track_id);
+                }
+            }
+            page_offset = page_offset.saturating_add(page_count);
+            total_count = response
+                .pointer("/data/searchV2/tracksV2/totalCount")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|count| usize::try_from(count).ok());
+            if page_count < page_limit || total_count.is_some_and(|total| page_offset >= total) {
+                break;
             }
         }
 
-        Ok(track_ids.into_iter().skip(offset).take(limit).collect())
+        if total_count.is_some_and(|total| offset.saturating_add(track_ids.len()) < total)
+            && let Some(sentinel) = track_ids.last().cloned()
+        {
+            track_ids.resize(limit, sentinel);
+        }
+
+        Ok(track_ids.into_iter().take(limit).collect())
+    }
+
+    async fn search_access_token(&self) -> ProviderResult<String> {
+        let refresh_token = {
+            let auth = self.search_auth.lock().await;
+            match &*auth {
+                SpotifySearchAuth::Static(access_token) => return Ok(access_token.clone()),
+                SpotifySearchAuth::Refreshable(token)
+                    if token.expires_at > Instant::now() + OAUTH_REFRESH_MARGIN =>
+                {
+                    return Ok(token.access_token.clone());
+                }
+                SpotifySearchAuth::Refreshable(token) => token.refresh_token.clone(),
+            }
+        };
+
+        let mut refreshed = spotify_oauth_client(&self.oauth_client_id, false)?
+            .refresh_token_async(&refresh_token)
+            .await?;
+        if refreshed.refresh_token.is_empty() {
+            refreshed.refresh_token = refresh_token;
+        }
+        save_spotify_refresh_token(&self.oauth_refresh_path, &refreshed.refresh_token)?;
+        let access_token = refreshed.access_token.clone();
+        self.session
+            .login5()
+            .set_auth_token(librespot_token_for_search(&SpotifySearchAuth::Refreshable(
+                refreshed.clone(),
+            )));
+        *self.search_auth.lock().await = SpotifySearchAuth::Refreshable(refreshed);
+        Ok(access_token)
     }
 
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
@@ -262,11 +370,16 @@ impl SpotifyProvider {
             },
         };
 
-        let mut cache = self.track_metadata_cache.lock().await;
-        cache.insert(track_id.to_owned(), metadata.clone());
-        if let Err(error) = save_track_metadata_cache(&self.track_metadata_cache_path, &cache) {
-            eprintln!("Could not persist Spotify metadata cache: {error}");
-        }
+        self.track_metadata_cache
+            .lock()
+            .await
+            .insert(track_id.to_owned(), metadata.clone());
+        crate::write_behind::schedule(
+            self.track_metadata_cache.clone(),
+            self.track_metadata_cache_path.clone(),
+            "Spotify metadata cache",
+            save_track_metadata_cache,
+        );
         Ok(metadata)
     }
 
@@ -421,21 +534,45 @@ impl PreparedSpotifyStream {
     }
 }
 
-async fn interactive_credentials(config: &SessionConfig) -> ProviderResult<Credentials> {
+async fn interactive_oauth_token(config: &SessionConfig) -> ProviderResult<OAuthToken> {
+    let client = spotify_oauth_client(&config.client_id, true)?;
+    Ok(tokio::task::spawn_blocking(move || client.get_access_token()).await??)
+}
+
+fn spotify_oauth_client(client_id: &str, open_in_browser: bool) -> ProviderResult<OAuthClient> {
     let port = env::var("AMBRA_SPOTIFY_OAUTH_PORT")
         .ok()
         .and_then(|port| port.parse::<u16>().ok())
         .unwrap_or(DEFAULT_OAUTH_PORT);
-    let client = OAuthClientBuilder::new(
-        &config.client_id,
+    let mut builder = OAuthClientBuilder::new(
+        client_id,
         &format!("http://127.0.0.1:{port}/login"),
-        vec!["streaming"],
+        vec!["streaming", "user-read-private"],
     )
-    .open_in_browser()
-    .with_custom_message("Spotify connected. You can return to Ambra.")
-    .build()?;
-    let token = tokio::task::spawn_blocking(move || client.get_access_token()).await??;
-    Ok(Credentials::with_access_token(token.access_token))
+    .with_custom_message("Spotify connected. You can return to Ambra.");
+    if open_in_browser {
+        builder = builder.open_in_browser();
+    }
+    Ok(builder.build()?)
+}
+
+fn librespot_token_for_search(auth: &SpotifySearchAuth) -> librespot_core::token::Token {
+    match auth {
+        SpotifySearchAuth::Static(access_token) => librespot_core::token::Token {
+            access_token: access_token.clone(),
+            expires_in: Duration::from_secs(24 * 60 * 60),
+            token_type: "Bearer".to_owned(),
+            scopes: vec!["streaming".to_owned(), "user-read-private".to_owned()],
+            timestamp: SystemTime::now(),
+        },
+        SpotifySearchAuth::Refreshable(token) => librespot_core::token::Token {
+            access_token: token.access_token.clone(),
+            expires_in: token.expires_at.saturating_duration_since(Instant::now()),
+            token_type: token.token_type.clone(),
+            scopes: token.scopes.clone(),
+            timestamp: SystemTime::now(),
+        },
+    }
 }
 
 fn spotify_uri(kind: &str, id: &str) -> ProviderResult<SpotifyUri> {
@@ -456,6 +593,40 @@ fn validate_spotify_id(kind: &str, id: &str) -> ProviderResult<()> {
     }
     spotify_uri(kind, id)?;
     Ok(())
+}
+
+fn spotify_track_ids_from_search(search_result: &serde_json::Value) -> Vec<String> {
+    fn collect(value: &serde_json::Value, track_ids: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Array(values) => {
+                for value in values {
+                    collect(value, track_ids);
+                }
+            }
+            serde_json::Value::Object(values) => {
+                if let Some(track_id) = values
+                    .get("uri")
+                    .and_then(serde_json::Value::as_str)
+                    .and_then(|uri| uri.strip_prefix("spotify:track:"))
+                    && validate_spotify_id("track", track_id).is_ok()
+                    && !track_ids.iter().any(|existing| existing == track_id)
+                {
+                    track_ids.push(track_id.to_owned());
+                }
+                for value in values.values() {
+                    collect(value, track_ids);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut track_ids = Vec::new();
+    let tracks = search_result
+        .pointer("/data/searchV2/tracksV2")
+        .unwrap_or(search_result);
+    collect(tracks, &mut track_ids);
+    track_ids
 }
 
 fn configured_quality() -> SpotifyQuality {
@@ -582,8 +753,41 @@ fn spotify_audio_cache_path() -> PathBuf {
     crate::storage::cache_path("spotify/audio")
 }
 
+fn spotify_oauth_refresh_path() -> PathBuf {
+    crate::storage::config_path("spotify/oauth.json")
+}
+
 fn track_metadata_cache_path() -> PathBuf {
     crate::storage::cache_path("spotify-metadata-cache.json")
+}
+
+fn load_spotify_refresh_token(path: &Path) -> Option<String> {
+    let encoded = fs::read(path).ok()?;
+    let saved = serde_json::from_slice::<SavedSpotifyOAuth>(&encoded).ok()?;
+    nonempty(&saved.refresh_token)
+}
+
+fn save_spotify_refresh_token(path: &Path, refresh_token: &str) -> ProviderResult<()> {
+    if refresh_token.trim().is_empty() {
+        return Err(io::Error::other("Spotify did not return an OAuth refresh token").into());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut options = fs::OpenOptions::new();
+    options.create(true).truncate(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary_path)?;
+    file.write_all(&serde_json::to_vec(&SavedSpotifyOAuth {
+        refresh_token: refresh_token.to_owned(),
+    })?)?;
+    fs::rename(temporary_path, path)?;
+    Ok(())
 }
 
 fn make_cache_private(path: &Path) -> io::Result<()> {
@@ -630,7 +834,7 @@ fn save_track_metadata_cache(
 
 #[cfg(test)]
 mod tests {
-    use super::{format_quality, validate_spotify_id};
+    use super::{format_quality, spotify_track_ids_from_search, validate_spotify_id};
     use librespot_metadata::audio::AudioFileFormat;
 
     #[test]
@@ -644,6 +848,22 @@ mod tests {
         assert_eq!(
             format_quality(AudioFileFormat::OGG_VORBIS_320),
             "Ogg Vorbis 320 kbps"
+        );
+    }
+
+    #[test]
+    fn extracts_unique_track_ids_from_search_results() {
+        let result = serde_json::json!({
+            "data": { "searchV2": { "tracksV2": { "items": [
+                { "item": { "data": { "uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC" } } },
+                { "item": { "data": { "uri": "spotify:track:4uLU6hMCjMI75M1A2tKUQC" } } },
+                { "item": { "data": { "uri": "spotify:track:0VjIjW4GlUZAMYd2vXMi3b" } } }
+            ] } } }
+        });
+
+        assert_eq!(
+            spotify_track_ids_from_search(&result),
+            ["4uLU6hMCjMI75M1A2tKUQC", "0VjIjW4GlUZAMYd2vXMi3b"]
         );
     }
 }

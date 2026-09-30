@@ -10,7 +10,7 @@ use std::{
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
@@ -18,13 +18,14 @@ use axum::{
             LAST_MODIFIED, RANGE,
         },
     },
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 use tokio_stream::wrappers::ReceiverStream;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -45,6 +46,10 @@ const MAX_SEARCH_PAGE_SIZE: u32 = 50;
 const SEARCH_CACHE_LIMIT: usize = 100;
 const SEARCH_METADATA_TIMEOUT: Duration = Duration::from_secs(6);
 const UPSTREAM_ATTEMPTS: usize = 3;
+// Saved provider sessions are restored after the port is open. Requests that
+// need a provider wait at most this long for restoration before getting a 503,
+// which the desktop app treats as "keep showing the cached data".
+const PROVIDER_RESTORE_WAIT: Duration = Duration::from_secs(20);
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
@@ -62,6 +67,7 @@ struct AppState {
         Arc<RwLock<HashMap<SearchCacheKey, (Instant, crate::models::CatalogSearchPage)>>>,
     search_fetches: Arc<Mutex<HashMap<SearchCacheKey, Weak<Mutex<()>>>>>,
     media_cache: Arc<RwLock<MediaCache>>,
+    providers_ready: watch::Receiver<bool>,
     media_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     artwork_quality_cache: Arc<RwLock<HashMap<String, (Instant, ArtworkCandidate)>>>,
     artwork_dimensions_cache: Arc<RwLock<HashMap<String, (Instant, (u32, u32))>>>,
@@ -90,11 +96,7 @@ struct LibraryEntry {
 }
 
 pub async fn serve() -> ServerResult<()> {
-    let (tidal, qobuz, spotify) = tokio::try_join!(
-        authenticate_tidal(),
-        authenticate_qobuz(),
-        authenticate_spotify(),
-    )?;
+    let (providers_ready_tx, providers_ready) = watch::channel(false);
 
     let http_client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
@@ -103,35 +105,27 @@ pub async fn serve() -> ServerResult<()> {
         .pool_max_idle_per_host(16)
         .tcp_keepalive(Duration::from_secs(30))
         .build()?;
-    let media_cache = tidal
-        .as_ref()
-        .map(|provider| provider.media_cache.clone())
-        .unwrap_or_else(|| Arc::new(RwLock::new(MediaCache::default())));
+    let media_cache = Arc::new(RwLock::new(MediaCache::default()));
     let tidal_cell = Arc::new(OnceLock::new());
-    if let Some(provider) = tidal {
-        let _ = tidal_cell.set(provider);
-    }
     let qobuz_cell = Arc::new(OnceLock::new());
-    if let Some(provider) = qobuz {
-        let _ = qobuz_cell.set(provider);
-    }
     let spotify_cell = Arc::new(OnceLock::new());
-    if let Some(provider) = spotify {
-        let _ = spotify_cell.set(provider);
-    }
     let state = AppState {
         tidal: tidal_cell,
         qobuz: qobuz_cell,
         spotify: spotify_cell,
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
-        artwork: Arc::new(crate::artwork_cache::ArtworkCache::new(http_client.clone())),
+        artwork: Arc::new(crate::artwork_cache::ArtworkCache::with_disk(
+            http_client.clone(),
+            crate::storage::cache_subdirectory("artwork"),
+        )),
         http_client,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
         catalog_cache: Arc::new(RwLock::new(HashMap::new())),
         search_fetches: Arc::new(Mutex::new(HashMap::new())),
         media_cache,
+        providers_ready,
         media_fetches: Arc::new(Mutex::new(HashMap::new())),
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -189,8 +183,15 @@ pub async fn serve() -> ServerResult<()> {
             "/api/providers/{provider}/tracks/{track_id}/dash/{segment_number}",
             get(dash_segment),
         )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            wait_for_providers,
+        ))
         .layer(cors)
-        .with_state(state);
+        .with_state(state.clone());
+
+    // Open the port first; provider sessions restore concurrently behind it.
+    tokio::spawn(restore_providers(state, providers_ready_tx));
 
     let address = env::var("AMBRA_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
     let listener = tokio::net::TcpListener::bind(&address).await?;
@@ -198,6 +199,65 @@ pub async fn serve() -> ServerResult<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
+    let started = Instant::now();
+    let (tidal, qobuz, spotify) = tokio::join!(
+        authenticate_tidal(),
+        authenticate_qobuz(),
+        authenticate_spotify(),
+    );
+    if let Ok(Some(mut provider)) = tidal {
+        // Timing downloads and served segments share one bounded cache.
+        provider.media_cache = state.media_cache.clone();
+        let _ = state.tidal.set(provider);
+    }
+    if let Ok(Some(provider)) = qobuz {
+        let _ = state.qobuz.set(provider);
+    }
+    if let Ok(Some(provider)) = spotify {
+        let _ = state.spotify.set(provider);
+    }
+    let _ = ready.send(true);
+    if env::var_os("AMBRA_PERF").is_some() {
+        eprintln!(
+            "[ambra:perf] providers restored in {} ms",
+            started.elapsed().as_millis()
+        );
+    }
+}
+
+/// Routes that need no provider state answer immediately, even while saved
+/// sessions are still being restored.
+fn path_needs_providers(path: &str) -> bool {
+    path != "/api/health" && !path.starts_with("/api/artwork/")
+}
+
+/// Wait for provider restoration. Returns `false` if it did not finish in time.
+async fn providers_restored(mut ready: watch::Receiver<bool>, limit: Duration) -> bool {
+    if *ready.borrow() {
+        return true;
+    }
+    matches!(
+        tokio::time::timeout(limit, ready.wait_for(|done| *done)).await,
+        Ok(Ok(_))
+    )
+}
+
+async fn wait_for_providers(
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if request.method() != Method::OPTIONS
+        && path_needs_providers(request.uri().path())
+        && !providers_restored(state.providers_ready.clone(), PROVIDER_RESTORE_WAIT).await
+    {
+        return ApiError::service_unavailable("Music services are still starting")
+            .into_response();
+    }
+    next.run(request).await
 }
 
 async fn authenticate_tidal() -> ServerResult<Option<TidalProvider>> {
@@ -2017,5 +2077,59 @@ mod search_coalescing_tests {
         drop(other);
         let _next = search_request_lock(&requests, &key).await;
         assert_eq!(requests.lock().await.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod startup_gate_tests {
+    use super::{path_needs_providers, providers_restored};
+    use std::time::{Duration, Instant};
+    use tokio::sync::watch;
+
+    #[test]
+    fn health_and_artwork_answer_while_providers_restore() {
+        assert!(!path_needs_providers("/api/health"));
+        assert!(!path_needs_providers("/api/artwork/thumbnail"));
+        assert!(!path_needs_providers("/api/artwork/palette"));
+        assert!(path_needs_providers("/api/library"));
+        assert!(path_needs_providers("/api/search/providers"));
+        assert!(path_needs_providers("/api/auth/status"));
+        assert!(path_needs_providers("/api/providers/tidal/tracks/1/stream"));
+    }
+
+    #[tokio::test]
+    async fn an_already_restored_server_never_waits() {
+        let (_tx, rx) = watch::channel(true);
+        let started = Instant::now();
+        assert!(providers_restored(rx, Duration::from_secs(5)).await);
+        assert!(started.elapsed() < Duration::from_millis(50));
+    }
+
+    #[tokio::test]
+    async fn waiters_resume_as_soon_as_restoration_finishes() {
+        let (tx, rx) = watch::channel(false);
+        let waiters: Vec<_> = (0..8)
+            .map(|_| tokio::spawn(providers_restored(rx.clone(), Duration::from_secs(5))))
+            .collect();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let started = Instant::now();
+        tx.send(true).unwrap();
+        for waiter in waiters {
+            assert!(waiter.await.unwrap());
+        }
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn a_stuck_restoration_times_out_instead_of_hanging() {
+        let (_tx, rx) = watch::channel(false);
+        assert!(!providers_restored(rx, Duration::from_millis(40)).await);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_sender_does_not_hang_requests() {
+        let (tx, rx) = watch::channel(false);
+        drop(tx);
+        assert!(!providers_restored(rx, Duration::from_secs(5)).await);
     }
 }

@@ -92,6 +92,7 @@ export function useTrackReorder(
         suppressClick.current = true;
         row.setPointerCapture(pointerId);
         container!.style.scrollBehavior = "auto";
+        document.documentElement.dataset.trackReordering = "true";
         setDraggedTrackId(sourceId);
         latest.current.onStart();
         frame = requestAnimationFrame(scrollAtEdge);
@@ -109,6 +110,7 @@ export function useTrackReorder(
       row.removeEventListener("lostpointercapture", cancel);
       if (row.hasPointerCapture(pointerId)) row.releasePointerCapture(pointerId);
       container!.style.scrollBehavior = previousScrollBehavior;
+      delete document.documentElement.dataset.trackReordering;
       cleanup.current = null;
     }
 

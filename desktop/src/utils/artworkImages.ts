@@ -16,7 +16,8 @@ function bigscreenArtworkKey(track: Track) {
     track.albumId ?? "",
     track.upc ?? "",
     track.nativeCover ?? "",
-    track.cover,
+    // The thumbnail can appear while a track plays; the full image is what is cached.
+    track.fullCover ?? track.cover,
   ].join(":");
 }
 
@@ -55,7 +56,7 @@ export function preloadBigscreenArtwork(track: Track) {
 
   const request = (async () => {
     const source = track.provider === "local"
-      ? track.cover
+      ? track.fullCover ?? track.cover
       : (await highestQualityArtwork(track))?.url;
     if (!source) return null;
 
