@@ -13,7 +13,7 @@
     user-select: none;
     -webkit-user-select: none;
     z-index: 50;
-    background: rgba(60, 60, 60, 0.5);
+    background: rgb(30, 30, 30);
     backdrop-filter: blur(10px);
 }
 

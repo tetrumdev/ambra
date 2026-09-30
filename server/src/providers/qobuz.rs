@@ -259,11 +259,16 @@ impl QobuzProvider {
         let playback_source = self.playback_source(track_id).await?;
         let metadata = map_track(track_id, track, full_album.as_ref(), &playback_source);
 
-        let mut cache = self.track_metadata_cache.lock().await;
-        cache.insert(track_id.to_owned(), metadata.clone());
-        if let Err(error) = save_track_metadata_cache(&self.track_metadata_cache_path, &cache) {
-            eprintln!("Could not persist Qobuz metadata cache: {error}");
-        }
+        self.track_metadata_cache
+            .lock()
+            .await
+            .insert(track_id.to_owned(), metadata.clone());
+        crate::write_behind::schedule(
+            self.track_metadata_cache.clone(),
+            self.track_metadata_cache_path.clone(),
+            "Qobuz metadata cache",
+            save_track_metadata_cache,
+        );
         Ok(metadata)
     }
 

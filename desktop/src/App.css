@@ -27,8 +27,8 @@
     -webkit-user-select: none;
     --player-height: 100px;
     --scrollbar-column-width: 14px;
-    --library-titlebar-height: 32px;
-    --content-top-spacer: calc(var(--library-titlebar-height) + 20px);
+    --library-titlebar-height: 0px;
+    --content-top-spacer: 20px;
 }
 
 body,
@@ -39,9 +39,8 @@ body,
     overflow-x: hidden;
 }
 
-:root[data-platform="windows"] {
-    --library-titlebar-height: 0px;
-    --content-top-spacer: 20px;
+:root:has([data-tauri-drag-region]) {
+    --library-titlebar-height: 32px;
 }
 
 :root[data-window-fullscreen] {
@@ -152,7 +151,7 @@ button img {
 #library,
 #search,
 #queue {
-    inset: 0 var(--scrollbar-column-width) 0 0;
+    inset: var(--library-titlebar-height) var(--scrollbar-column-width) 0 0;
     width: auto;
     height: auto;
 }

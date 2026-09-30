@@ -77,7 +77,9 @@ pub struct NativeAudioDevice {
 }
 
 enum WorkerCommand {
-    Warm { source: String },
+    Warm {
+        source: String,
+    },
     Load {
         source: String,
         next_source: Option<String>,
@@ -222,7 +224,7 @@ pub async fn seek_native_audio(
 }
 
 #[tauri::command]
-pub fn native_audio_status(
+pub async fn native_audio_status(
     player: State<'_, NativeAudioPlayer>,
 ) -> Result<NativeAudioStatus, String> {
     let status = lock_status(&player.status).clone();
@@ -1398,11 +1400,8 @@ mod tests {
     fn speculative_failure_does_not_fail_current_playback() {
         use super::*;
         let (_tx, rx) = unbounded();
-        let mut worker = PlaybackWorker::new(
-            rx,
-            Arc::new(Mutex::new(PlaybackStatus::default())),
-            None,
-        );
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
         let (sender, receiver) = bounded(1);
         sender
             .send(Err("temporary network outage".to_owned()))
@@ -1452,11 +1451,8 @@ mod tests {
             let prepared = prepare_source(source.clone(), false).unwrap();
             std::fs::remove_file(&path).unwrap();
             let (_tx, rx) = unbounded();
-            let mut worker = PlaybackWorker::new(
-                rx,
-                Arc::new(Mutex::new(PlaybackStatus::default())),
-                None,
-            );
+            let mut worker =
+                PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
             if mode > 0 {
                 let (sender, receiver) = bounded(1);
                 thread::spawn(move || {

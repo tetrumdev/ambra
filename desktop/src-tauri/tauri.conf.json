@@ -30,7 +30,7 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$AUDIO/Ambra/**", "$APPCACHE/seekable-flac/**"]
+        "scope": ["$AUDIO/Ambra/**", "$APPCACHE/seekable-flac/**", "$APPCACHE/covers/**"]
       }
     }
   },

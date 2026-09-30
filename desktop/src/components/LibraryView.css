@@ -15,7 +15,7 @@
     min-width: 0;
     overscroll-behavior-x: none;
     touch-action: pan-y;
-    height: 100vh;
+    height: 100%;
     font-size: 0.9rem;
     font-weight: 300;
     font-family: "Stack Sans Text", Inter, sans-serif;
@@ -42,8 +42,7 @@
 
 .playlistView {
     --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
-        minmax(120px, 1.5fr) minmax(65px, 0.55fr)
-        minmax(64px, 0.55fr) 40px;
+        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     --playlist-artwork-progress: 0;
     --playlist-title-progress: 0;
     --playlist-title-lag: 0;
@@ -69,7 +68,7 @@
 
 .playlistView .libraryHeader {
     position: sticky;
-    top: var(--library-titlebar-height);
+    top: 0;
     z-index: 9;
     grid-template-columns: var(--playlist-title-offset) minmax(0, 1fr);
     align-items: start;
@@ -153,9 +152,7 @@
 }
 
 .playlistView .columnInfo {
-    top: calc(
-        var(--library-titlebar-height) + var(--playlist-current-header-height)
-    );
+    top: var(--playlist-current-header-height);
     padding-top: 10px;
     padding-bottom: 24px;
 }
@@ -641,14 +638,6 @@
     grid-column: 5;
 }
 
-.playlistView .serviceColumn {
-    grid-column: 5;
-}
-
-.playlistView .durationColumn {
-    grid-column: 6;
-}
-
 .columnSortButton {
     width: fit-content;
     min-width: 0;
@@ -716,11 +705,12 @@
 }
 
 .libraryItem[data-reorderable="true"] {
-    cursor: grab;
+    cursor: pointer;
 }
 
-.libraryItem[data-reorderable="true"]:active {
-    cursor: grabbing;
+:root[data-track-reordering="true"],
+:root[data-track-reordering="true"] * {
+    cursor: grabbing !important;
 }
 
 .libraryItem[data-selecting="true"] {
@@ -775,10 +765,54 @@
     filter: none;
 }
 
+.selectionActionMenu {
+    position: fixed;
+    top: calc(5% + 48px);
+    right: 3%;
+    z-index: 10;
+    box-sizing: border-box;
+    width: 120px;
+    overflow: hidden;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    background: rgba(29, 29, 29, 0.7);
+    backdrop-filter: blur(20px);
+}
+
+.selectionActionMenu button {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 42px;
+    margin: 0;
+    padding: 0 15px;
+    border: 0;
+    color: white;
+    background: transparent;
+    font: inherit;
+    font-size: 0.9rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+.selectionActionMenu button:hover,
+.selectionActionMenu button:focus-visible {
+    background: rgba(42, 42, 42, 0.8);
+}
+
+.selectionActionMenu .selectionRemoveAction {
+    color: #ff9d9d;
+}
+
+.selectionActionMenu button:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
 .selectionDeleteButton {
     grid-column: 4 / 7;
     justify-self: end;
-    position: fixed;
+    position: absolute;
     z-index: 1;
     min-width: 160px;
     height: 34px;
@@ -871,6 +905,36 @@
     font-weight: 600;
 }
 
+.trackNameWithProvider {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+}
+
+.trackTitleText {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trackProviderIcon {
+    width: 1em;
+    height: 1em;
+    flex: none;
+    object-fit: contain;
+    opacity: 0.55;
+}
+
+.trackProviderIcon[data-provider="tidal"] {
+    width: 1.45em;
+}
+
+.trackProviderIcon[data-provider="local"] {
+    width: 2.6em;
+}
+
 .trackName:hover {
     text-decoration: none;
 }
@@ -893,10 +957,6 @@
     place-items: center;
     cursor: pointer;
     border-left: 1px solid transparent;
-}
-
-.playlistView .trackCollectionMenuTrigger {
-    grid-column: 7;
 }
 
 .trackCollectionMenuTrigger:hover {

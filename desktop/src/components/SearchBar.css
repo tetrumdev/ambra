@@ -1,31 +1,80 @@
 #searchBar {
     position: absolute;
-    right: 3%;
+    right: 20px;
     z-index: 10;
     display: flex;
-    top: 5%;
+    top: 10px;
     overflow: visible;
-    border-radius: 21px;
+    border-radius: 100px;
     border: none;
     outline: none;
     color: white;
-    background-color: #111111;
+    background: linear-gradient(90deg, black, #161616);
     border: 1px solid #535353;
     font-family: Arial, sans-serif;
+    transition: 0.25s ease;
 }
 
 #searchBar:focus-within {
     outline: none;
 }
 
+#searchBar:has(#input:focus),
+#searchBar:has(.searchExpandButton:focus) {
+    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.3));
+    border: 1px solid rgb(100, 100, 100);
+}
+
+.searchInputControl {
+    position: relative;
+    width: 36px;
+    height: 40px;
+    flex: none;
+    transition: width 0.25s ease;
+}
+
+.searchInputControl[data-expanded="true"] {
+    width: 220px;
+}
+
+.searchExpandButton {
+    display: grid;
+    width: 44px;
+    height: 40px;
+    padding: 0;
+    margin-left: 1px;
+    place-items: center;
+    border: 0;
+    border-radius: 20px 0 0 20px;
+    background: transparent;
+}
+
+.searchExpandButton img,
+.searchInputIcon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    margin-top: 1px;
+}
+
+.searchInputIcon {
+    position: absolute;
+    top: 50%;
+    left: 15px;
+    z-index: 1;
+    pointer-events: none;
+    transform: translateY(-50%);
+}
+
 #input {
-    width: 200px;
+    box-sizing: border-box;
+    width: 100%;
     height: 40px;
     border-radius: 20px 0 0 20px;
     border: none;
     outline: none;
     color: white;
-    padding: 0 20px;
+    padding: 0 16px 0 43px;
     font-size: 16px;
     font-family: inherit;
     background-color: transparent;
@@ -34,7 +83,15 @@
 }
 
 #input::-webkit-search-cancel-button {
+    width: 28px;
+    height: 28px;
+    margin-right: -8px;
+    margin-left: 4px;
+    appearance: none;
+    -webkit-appearance: none;
+    background: url("/x.svg") center / 12px 12px no-repeat;
     cursor: pointer;
+    opacity: 0.45;
 }
 
 .searchProviderControl {
@@ -44,13 +101,11 @@
 #searchProvider {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    width: 130px;
+    justify-content: center;
+    width: 44px;
     height: 40px;
-    padding: 0 12px 0 14px;
+    padding: 0 9px;
     border: none;
-    border-left: 1px solid #535353;
     border-radius: 0 20px 20px 0;
     color: white;
     background-color: transparent;
@@ -58,38 +113,39 @@
     font-size: 16px;
 }
 
-.searchProviderChevron {
-    width: 7px;
-    height: 7px;
-    border-right: 1.5px solid currentColor;
-    border-bottom: 1.5px solid currentColor;
-    transform: translateY(-2px) rotate(45deg);
+.searchProviderIcon {
+    display: block;
+    max-width: 22px;
+    max-height: 22px;
+    object-fit: contain;
+    flex: none;
 }
 
 #searchProvider:focus-visible,
+.searchExpandButton:focus-visible,
 .searchProviderMenu button:focus-visible {
     box-shadow: inset 0 0 0 2px #aaa;
 }
 
 .searchProviderMenu {
     position: absolute;
-    top: calc(100% + 8px);
+    top: calc(100% + 5px);
     right: 0;
-    min-width: 160px;
+    width: 44px;
     box-sizing: border-box;
-    padding: 6px;
+    padding: 4px;
     border: 1px solid #535353;
     border-radius: 14px;
     background: #171717;
-    box-shadow: 0 12px 28px #000a;
 }
 
 .searchProviderMenu button {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: center;
     width: 100%;
-    padding: 8px 10px;
+    height: 38px;
+    padding: 4px;
     border: 0;
     border-radius: 8px;
     color: white;
@@ -101,12 +157,4 @@
 .searchProviderMenu button:hover,
 .searchProviderMenu button[aria-checked="true"] {
     background: #303030;
-}
-
-.searchProviderMenu button[aria-checked="true"]::after {
-    content: "";
-    width: 16px;
-    height: 16px;
-    flex: none;
-    background: url("/check.svg") center / contain no-repeat;
 }

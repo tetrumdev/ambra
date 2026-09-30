@@ -31,3 +31,6 @@ urlencoding = "2"
 [build-dependencies]
 # librespot 0.8's build helper is not compatible with vergen 9.1.
 vergen = "=9.0.6"
+
+[patch.crates-io]
+librespot-core = { path = "vendor/librespot-core" }

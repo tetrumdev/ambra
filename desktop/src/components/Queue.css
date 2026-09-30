@@ -9,7 +9,7 @@
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
-    height: 100vh;
+    height: 100%;
     width: 90vw;
     justify-self: center;
     position: absolute;
