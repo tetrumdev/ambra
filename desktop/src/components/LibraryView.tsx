@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo, useRef, type ReactNode } from "react";
 import { ArtistPortrait } from "./ArtistPortrait";
 import {
   libraryAlbums,
@@ -12,6 +12,9 @@ import {
 } from "./TrackCollectionView";
 import { LibrarySourcesDialog } from "./LibrarySourcesDialog";
 import { ArtworkImage } from "./ArtworkImage";
+import { PerfProfiler } from "./PerfProfiler";
+import { VirtualSpacer } from "./VirtualSpacer";
+import { useVirtualWindow } from "../hooks/useVirtualWindow";
 
 export type LibrarySection = "overview" | "artists" | "albums" | "tracks";
 
@@ -31,43 +34,122 @@ export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; l
   { id: "tracks", label: "Tracks" },
 ];
 
+const VIRTUALIZE_AFTER_ENTITIES = 80;
+
+function VirtualEntityGrid<T extends { id: string }>({
+  items,
+  label,
+  cacheKey,
+  renderItem,
+}: {
+  items: T[];
+  label: string;
+  cacheKey: string;
+  renderItem: (item: T, index: number) => ReactNode;
+}) {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const virtual = useVirtualWindow({
+    count: items.length,
+    enabled: items.length > VIRTUALIZE_AFTER_ENTITIES,
+    probeRef: gridRef,
+    probeIsContainer: true,
+    // The real, responsive grid geometry replaces this before paint. Starting
+    // with one column deliberately overestimates height and never under-renders.
+    fallback: { rowHeight: 230, columns: 1, rowGap: 28 },
+    cacheKey,
+    overscanRows: 3,
+  });
+
+  return (
+    <PerfProfiler id={cacheKey}>
+      <div className="libraryEntityGrid" aria-label={label} role="list" ref={gridRef}>
+        {virtual.topSpace > 0 && <VirtualSpacer position="top" height={virtual.topSpace} />}
+        {items.slice(virtual.start, virtual.end).map((item, windowIndex) =>
+          renderItem(item, virtual.start + windowIndex),
+        )}
+        {virtual.bottomSpace > 0 && <VirtualSpacer position="bottom" height={virtual.bottomSpace} />}
+      </div>
+    </PerfProfiler>
+  );
+}
+
+const ArtistCard = memo(function ArtistCard({ artist, index, count }: {
+  artist: LibraryArtist;
+  index: number;
+  count: number;
+}) {
+  return (
+    <article
+      className="libraryEntityCard"
+      key={artist.id}
+      role="listitem"
+      aria-posinset={index + 1}
+      aria-setsize={count}
+      data-virtual-item=""
+    >
+      <ArtistPortrait name={artist.name} fallback={artist.imageUrl} />
+      <h2>{artist.name}</h2>
+      <p>
+        {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
+        {" · "}
+        {artist.trackCount} {artist.trackCount === 1 ? "track" : "tracks"}
+      </p>
+    </article>
+  );
+});
+
+const AlbumCard = memo(function AlbumCard({ album, index, count }: {
+  album: LibraryAlbum;
+  index: number;
+  count: number;
+}) {
+  return (
+    <article
+      className="libraryEntityCard"
+      key={album.id}
+      role="listitem"
+      aria-posinset={index + 1}
+      aria-setsize={count}
+      data-virtual-item=""
+    >
+      <ArtworkImage
+        className="libraryAlbumCover"
+        src={album.cover}
+        alt={`${album.name} album cover`}
+        loading="lazy"
+      />
+      <h2>{album.name}</h2>
+      <p>
+        {album.artist}
+        {album.releaseYear ? ` · ${album.releaseYear}` : ""}
+      </p>
+    </article>
+  );
+});
+
 function ArtistSection({ artists }: { artists: LibraryArtist[] }) {
   return (
-    <div className="libraryEntityGrid" aria-label="Artists">
-      {artists.map((artist) => (
-        <article className="libraryEntityCard" key={artist.id}>
-          <ArtistPortrait name={artist.name} fallback={artist.imageUrl} />
-          <h2>{artist.name}</h2>
-          <p>
-            {artist.albumCount} {artist.albumCount === 1 ? "album" : "albums"}
-            {" · "}
-            {artist.trackCount} {artist.trackCount === 1 ? "track" : "tracks"}
-          </p>
-        </article>
-      ))}
-    </div>
+    <VirtualEntityGrid
+      items={artists}
+      label="Artists"
+      cacheKey="artist-grid"
+      renderItem={(artist, index) => (
+        <ArtistCard key={artist.id} artist={artist} index={index} count={artists.length} />
+      )}
+    />
   );
 }
 
 function AlbumSection({ albums }: { albums: LibraryAlbum[] }) {
   return (
-    <div className="libraryEntityGrid" aria-label="Albums">
-      {albums.map((album) => (
-        <article className="libraryEntityCard" key={album.id}>
-          <ArtworkImage
-            className="libraryAlbumCover"
-            src={album.cover}
-            alt={`${album.name} album cover`}
-            loading="lazy"
-          />
-          <h2>{album.name}</h2>
-          <p>
-            {album.artist}
-            {album.releaseYear ? ` · ${album.releaseYear}` : ""}
-          </p>
-        </article>
-      ))}
-    </div>
+    <VirtualEntityGrid
+      items={albums}
+      label="Albums"
+      cacheKey="album-grid"
+      renderItem={(album, index) => (
+        <AlbumCard key={album.id} album={album} index={index} count={albums.length} />
+      )}
+    />
   );
 }
 

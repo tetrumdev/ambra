@@ -1,7 +1,10 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { setPersistentItem } from "../utils/persistentStorage";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
+import { mark } from "../utils/perf";
+import { localCoverSources } from "../utils/localArtwork";
+import { reconcileTracks } from "../utils/trackReconcile";
 import type {
   GlobalTrackId,
   LibraryTrack,
@@ -17,6 +20,7 @@ import {
 import {
   loadCachedServerTracks,
   loadRemovedLibraryTrackIds,
+  loadStreamingCache,
   saveCachedServerTracks,
   saveRemovedLibraryTrackIds,
 } from "../utils/libraryCache";
@@ -42,20 +46,20 @@ type MusicLibrary = {
   reorderTracks: (orderedTrackIds: GlobalTrackId[]) => void;
 };
 
-function playableLocalCover(cover: string | null) {
-  if (cover === null) return whiteArtwork;
-  return cover.startsWith("data:") ? cover : convertFileSrc(cover);
-}
+const LOCAL_RESCAN_DELAY_MS = 1500;
 
 function localTrack(track: ScannedTrack): Track {
+  const { thumbnail: _thumbnail, ...scanned } = track;
+  const { cover, fullCover } = localCoverSources(track, convertFileSrc, whiteArtwork);
   return {
-    ...track,
+    ...scanned,
     globalId: `local:${track.audio}`,
     provider: "local",
     providerTrackId: track.audio,
     playbackKind: "direct",
     audio: convertFileSrc(track.audio),
-    cover: playableLocalCover(track.cover),
+    cover,
+    fullCover,
     nativeCover: track.cover,
     version: null,
     albumId: null,
@@ -90,7 +94,11 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
 
 export function useMusicLibrary(): MusicLibrary {
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
+  const savedLibraryOrder = useRef(libraryOrder);
   useEffect(() => {
+    // The initial value came from storage; re-serializing it on mount is wasted work.
+    if (savedLibraryOrder.current === libraryOrder) return;
+    savedLibraryOrder.current = libraryOrder;
     try { setPersistentItem("ambra.library-order.v1", JSON.stringify(libraryOrder)); }
     catch (error) { console.warn("Could not save library ordering:", error); }
   }, [libraryOrder]);
@@ -120,11 +128,19 @@ export function useMusicLibrary(): MusicLibrary {
   );
   const isLoading = isLocalLoading && isServerLoading;
 
+  // Only persist what changed since it was loaded. On a normal launch the cached
+  // library is restored and confirmed unchanged, so nothing is re-serialized.
+  const savedServerTracks = useRef(serverTracks);
   useEffect(() => {
+    if (savedServerTracks.current === serverTracks) return;
+    savedServerTracks.current = serverTracks;
     saveCachedServerTracks(serverTracks);
   }, [serverTracks]);
 
+  const savedRemovedTrackIds = useRef(removedTrackIds);
   useEffect(() => {
+    if (savedRemovedTrackIds.current === removedTrackIds) return;
+    savedRemovedTrackIds.current = removedTrackIds;
     saveRemovedLibraryTrackIds(removedTrackIds);
   }, [removedTrackIds]);
 
@@ -132,6 +148,46 @@ export function useMusicLibrary(): MusicLibrary {
     let cancelled = false;
     const controller = new AbortController();
 
+    // Show the cached streaming library immediately; the server sync below is
+    // only a refresh. Ignored if the server (or a legacy copy) already answered.
+    void loadStreamingCache()
+      .then((cached) => {
+        if (cancelled || cached.length === 0) return;
+        setServerTracks((current) => {
+          if (current.length > 0) return current;
+          // Adopted as-is from storage, so the save effect must not rewrite it.
+          savedServerTracks.current = cached;
+          mark("streaming-cache-loaded");
+          return cached;
+        });
+      })
+      .catch((reason) => console.warn("Could not load the streaming library cache:", reason));
+
+    // Thumbnails are generated in the background after a scan; pick them up as
+    // they land without rescanning the disk.
+    let stopListening: (() => void) | undefined;
+    if (isTauri()) {
+      void import("@tauri-apps/api/event")
+        .then(({ listen }) =>
+          listen("local-library-updated", () => {
+            void invoke<ScannedTrack[]>("load_cached_music")
+              .then((updated) => {
+                if (cancelled) return;
+                setLocalTracks((current) =>
+                  reconcileTracks(current, updated.map(localTrack)),
+                );
+              })
+              .catch(() => {});
+          }),
+        )
+        .then((unlisten) => {
+          if (cancelled) unlisten();
+          else stopListening = unlisten;
+        })
+        .catch(() => {});
+    }
+
+    let hasCachedLibrary = false;
     const loadLocalTracks = async () => {
       if (!isTauri()) return [];
 
@@ -139,18 +195,29 @@ export function useMusicLibrary(): MusicLibrary {
         const cachedTracks = await invoke<ScannedTrack[]>("load_cached_music");
         if (!cancelled && cachedTracks.length > 0) {
           setLocalTracks(cachedTracks.map(localTrack));
+          setIsLocalLoading(false);
+          hasCachedLibrary = true;
+          mark("local-cache-loaded");
         }
       } catch (reason) {
         console.warn("Could not load cached local library:", reason);
       }
 
-      if (cancelled) return [];
+      // With the cache on screen the rescan is only a background refresh, so let
+      // startup, first interaction and provider sync finish before touching disk.
+      if (hasCachedLibrary) await new Promise((resolve) => setTimeout(resolve, LOCAL_RESCAN_DELAY_MS));
+      if (cancelled) return null;
       return invoke<ScannedTrack[]>("scan_music");
     };
 
     void loadLocalTracks()
       .then((loadedTracks) => {
-        if (!cancelled) setLocalTracks(loadedTracks.map(localTrack));
+        if (cancelled || loadedTracks === null) return;
+        mark("local-scan-done");
+        // An unchanged library keeps its array and track identities.
+        setLocalTracks((current) =>
+          reconcileTracks(current, loadedTracks.map(localTrack)),
+        );
       })
       .catch((reason: unknown) => {
         if (!cancelled) setError(String(reason));
@@ -165,8 +232,9 @@ export function useMusicLibrary(): MusicLibrary {
           // A successful response is authoritative. Keeping cached tracks from
           // disconnected providers leaves playable-looking rows whose stream
           // endpoints can only return 503.
-          setServerTracks(loadedTracks);
+          setServerTracks((current) => reconcileTracks(current, loadedTracks));
           setIsServerReachable(true);
+          mark("server-synced");
         }
       })
       .catch((reason: unknown) => {
@@ -182,6 +250,7 @@ export function useMusicLibrary(): MusicLibrary {
     return () => {
       cancelled = true;
       controller.abort();
+      stopListening?.();
     };
   }, []);
 
@@ -266,7 +335,9 @@ export function useMusicLibrary(): MusicLibrary {
     setError(null);
     try {
       const loadedTracks = await invoke<ScannedTrack[]>("scan_music");
-      setLocalTracks(loadedTracks.map(localTrack));
+      setLocalTracks((current) =>
+        reconcileTracks(current, loadedTracks.map(localTrack)),
+      );
       return loadedTracks.length;
     } catch (reason) {
       setError(String(reason));
@@ -279,7 +350,7 @@ export function useMusicLibrary(): MusicLibrary {
   const refreshStreamingMusic = useCallback(async () => {
     try {
       const loadedTracks = await loadServerTracks();
-      setServerTracks(loadedTracks);
+      setServerTracks((current) => reconcileTracks(current, loadedTracks));
       setIsServerReachable(true);
       return loadedTracks.length;
     } catch (reason) {
