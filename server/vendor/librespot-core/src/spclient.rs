@@ -370,8 +370,6 @@ impl SpClient {
             inner.client_token = Some(client_token);
         });
 
-        trace!("Got client token: {granted_token:?}");
-
         Ok(access_token)
     }
 

@@ -206,8 +206,6 @@ impl Login5Manager {
             inner.auth_token.clone()
         });
 
-        trace!("Got auth token: {auth_token:?}");
-
         token.ok_or(Login5Error::NoStoredCredentials.into())
     }
 
