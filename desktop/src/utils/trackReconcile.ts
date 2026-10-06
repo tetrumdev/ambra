@@ -36,3 +36,18 @@ export function reconcileTracks<T extends { globalId: string }>(
   });
   return unchanged ? previous : merged;
 }
+
+/** Applies a server library sync, keeping the cached copy of any saved track
+ * the server could not load this time (a provider hiccup must not drop it). */
+export function reconcileServerLibrary<T extends { globalId: string }>(
+  previous: T[],
+  loaded: T[],
+  unavailableIds: ReadonlySet<string>,
+): T[] {
+  if (unavailableIds.size === 0) return reconcileTracks(previous, loaded);
+  const loadedIds = new Set(loaded.map((track) => track.globalId));
+  const kept = previous.filter(
+    (track) => unavailableIds.has(track.globalId) && !loadedIds.has(track.globalId),
+  );
+  return reconcileTracks(previous, [...loaded, ...kept]);
+}

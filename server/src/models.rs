@@ -96,6 +96,19 @@ pub fn search_next_offset(offset: u32, raw_count: usize, total: u32) -> Option<u
 #[serde(rename_all = "camelCase")]
 pub struct LibraryResponse {
     pub tracks: Vec<TrackMetadata>,
+    /// Saved tracks that could not be loaded this time (`provider:id`). The app
+    /// keeps its cached copies instead of treating them as removed.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable_track_ids: Vec<String>,
+}
+
+impl LibraryResponse {
+    pub fn new(tracks: Vec<TrackMetadata>) -> Self {
+        Self {
+            tracks,
+            unavailable_track_ids: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -181,6 +194,7 @@ pub struct CatalogAlbum {
     pub image_url: Option<String>,
     pub upc: Option<String>,
     pub release_date: Option<String>,
+    pub release_type: Option<String>,
     pub version: Option<String>,
     pub explicit: Option<bool>,
     pub maximum_bit_depth: Option<u32>,
@@ -194,4 +208,30 @@ pub struct CatalogSearchPage {
     pub tracks: Vec<TrackMetadata>,
     pub artists: Vec<CatalogArtist>,
     pub albums: Vec<CatalogAlbum>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogAlbumsPage {
+    pub albums: Vec<CatalogAlbum>,
+    pub next_offset: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogArtistProfile {
+    pub artist: CatalogArtist,
+    pub biography: Option<String>,
+    pub biography_source: Option<String>,
+    pub popular_tracks: Vec<TrackMetadata>,
+    pub popular_tracks_error: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct ArtistProfileMetadata {
+    pub artist: CatalogArtist,
+    pub biography: Option<String>,
+    pub biography_source: Option<String>,
+    pub popular_track_ids: Vec<String>,
+    pub popular_tracks_error: Option<String>,
 }

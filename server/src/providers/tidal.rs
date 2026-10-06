@@ -323,6 +323,175 @@ impl TidalProvider {
         Ok(track_ids)
     }
 
+    pub async fn artist_details(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::CatalogArtist> {
+        if artist_id.is_empty() || !artist_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(io::Error::other("Invalid Tidal artist ID").into());
+        }
+        let artist = self
+            .authenticated_request(
+                |client| async move { client.get_artist(artist_id.to_owned()).await },
+            )
+            .await?;
+        Ok(crate::models::CatalogArtist {
+            id: format!("tidal:{}", artist.id),
+            provider: MusicProvider::Tidal,
+            name: artist.name,
+            image_url: artist
+                .picture
+                .filter(|picture| !picture.is_empty())
+                .map(|picture| uuid_to_url_with_size(&picture, 750)),
+        })
+    }
+
+    pub async fn artist_profile(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::ArtistProfileMetadata> {
+        use crate::models::ArtistProfileMetadata;
+        if artist_id.is_empty() || !artist_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(io::Error::other("Invalid Tidal artist ID").into());
+        }
+        let (artist, top, biography) = tokio::join!(
+            self.artist_details(artist_id),
+            self.authenticated_request(|client| async move {
+                client
+                    .get_artist_tracks(artist_id.to_owned(), Some(10), Some(0))
+                    .await
+            }),
+            self.authenticated_request(|client| async move {
+                client.get_artist_bio(artist_id.to_owned()).await
+            }),
+        );
+        let artist = artist?;
+        let biography = biography.ok();
+        let popular_tracks_error = top
+            .as_ref()
+            .err()
+            .map(|_| "Popular tracks couldn't be loaded.".to_owned());
+        Ok(ArtistProfileMetadata {
+            artist,
+            biography: biography.as_ref().map(|bio| bio.text.clone()),
+            biography_source: biography.map(|bio| bio.source),
+            popular_track_ids: top
+                .map(|page| {
+                    page.items
+                        .into_iter()
+                        .filter(|track| track.allow_streaming && track.stream_ready)
+                        .map(|track| track.id.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            popular_tracks_error,
+        })
+    }
+
+    pub async fn artist_albums(
+        &self,
+        artist_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> ProviderResult<crate::models::CatalogAlbumsPage> {
+        use crate::models::{CatalogAlbum, CatalogAlbumsPage, search_next_offset};
+        if artist_id.is_empty() || !artist_id.chars().all(|c| c.is_ascii_digit()) {
+            return Err(io::Error::other("Invalid Tidal artist ID").into());
+        }
+        let (albums, singles) = tokio::try_join!(
+            self.authenticated_request(|client| async move {
+                client
+                    .get_artist_albums(
+                        artist_id.to_owned(),
+                        Some(limit as u64),
+                        Some(offset as u64),
+                    )
+                    .await
+            }),
+            self.artist_singles(artist_id, offset, limit)
+        )?;
+        let next_offset =
+            search_next_offset(offset, albums.items.len(), albums.total_number_of_items)
+                .into_iter()
+                .chain(search_next_offset(
+                    offset,
+                    singles.items.len(),
+                    singles.total_number_of_items,
+                ))
+                .max();
+        let albums = albums
+            .items
+            .into_iter()
+            .chain(singles.items)
+            .filter(|album| album.allow_streaming && album.stream_ready)
+            .map(|album| CatalogAlbum {
+                id: format!("tidal:{}", album.id),
+                provider: MusicProvider::Tidal,
+                title: album.title,
+                artist: album
+                    .artists
+                    .into_iter()
+                    .map(|artist| artist.name)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                image_url: Some(uuid_to_url_with_size(&album.cover, 640)),
+                upc: Some(album.upc),
+                release_date: Some(album.release_date),
+                release_type: Some(album.album_type),
+                version: album.version,
+                explicit: Some(album.explicit),
+                maximum_bit_depth: None,
+                maximum_sampling_rate_khz: None,
+            })
+            .collect();
+        Ok(CatalogAlbumsPage {
+            albums,
+            next_offset,
+        })
+    }
+
+    async fn artist_singles(
+        &self,
+        artist_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> ProviderResult<tidlers::client::models::artist::ArtistAlbumsResponse> {
+        // The library's album helper omits the filter required for EPs and singles.
+        let mut client = self.refreshed_client(None).await?;
+        for attempt in 0..2 {
+            let token = client
+                .session
+                .auth
+                .access_token
+                .as_deref()
+                .ok_or_else(|| io::Error::other("Tidal access token is missing"))?;
+            let country = client
+                .user_info
+                .as_ref()
+                .ok_or_else(|| io::Error::other("Tidal account country is missing"))?
+                .country_code
+                .as_str();
+            let response = self
+                .http_client
+                .get(format!("{TIDAL_API_BASE_URL}/artists/{artist_id}/albums"))
+                .bearer_auth(token)
+                .query(&[
+                    ("countryCode", country.to_owned()),
+                    ("filter", "EPSANDSINGLES".to_owned()),
+                    ("offset", offset.to_string()),
+                    ("limit", limit.to_string()),
+                ])
+                .send()
+                .await?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                client = self.refreshed_client(Some(token.to_owned())).await?;
+                continue;
+            }
+            return Ok(response.error_for_status()?.json().await?);
+        }
+        Err(io::Error::other("Tidal artist releases could not be loaded").into())
+    }
+
     pub async fn album_upc(&self, album_id: &str) -> ProviderResult<Option<String>> {
         validate_album_id(album_id)?;
         let album = self
@@ -404,6 +573,7 @@ impl TidalProvider {
                         .map(|cover| uuid_to_url_with_size(&cover, 320)),
                     upc: album.upc,
                     release_date: album.release_date,
+                    release_type: album.album_type,
                     version: album.version,
                     explicit: album.explicit,
                     maximum_bit_depth: None,

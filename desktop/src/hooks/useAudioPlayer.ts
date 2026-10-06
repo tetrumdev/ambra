@@ -173,6 +173,12 @@ export function useAudioPlayer(
     nativePlayIntentRef.current = false;
     pendingRestoreTimeRef.current = null;
     pendingPlaybackDeckRef.current = null;
+    if (usesNativeAudio) {
+      void nativeCommandsRef.current.run("queue_native_audio", { source: null })
+        .catch(error => console.warn("Could not clear native queue:", error));
+      void nativeCommandsRef.current.run("pause_native_audio")
+        .catch(error => console.warn("Could not stop native playback:", error));
+    }
     releaseDeck(0);
     releaseDeck(1);
     setCurrentTrackId(null);
@@ -180,7 +186,7 @@ export function useAudioPlayer(
     setDuration(0);
     setIsPlaying(false);
     setIsSessionRestored(true);
-  }, [releaseDeck]);
+  }, [releaseDeck, usesNativeAudio]);
 
   const prepareDeck = useCallback(
     (deck: Deck, trackIndex: number) => {
@@ -259,13 +265,12 @@ export function useAudioPlayer(
     setDuration(advancedTrack.durationSeconds);
 
     const followingTrack = queueNavigationRef.current.peekNext();
-    if (followingTrack) {
-      void nativeCommandsRef.current.run("queue_native_audio", {
-        source: nativeAudioSource(followingTrack),
-      }).catch((error) =>
-        console.warn("Could not preload the next native track:", error),
-      );
-    }
+    void nativeCommandsRef.current.run("queue_native_audio", {
+      source: followingTrack ? nativeAudioSource(followingTrack) : null,
+      expectedSource: nativeAudioSource(advancedTrack),
+    }).catch((error) =>
+      console.warn("Could not preload the next native track:", error),
+    );
     return true;
   }, []);
 
@@ -658,9 +663,10 @@ export function useAudioPlayer(
 
     const nextTrack = queueNavigationRef.current.peekNext();
     if (usesNativeAudio) {
-      if (!isSessionRestored || !nextTrack) return;
+      if (!isSessionRestored) return;
       void nativeCommandsRef.current.run("queue_native_audio", {
-        source: nativeAudioSource(nextTrack),
+        source: nextTrack ? nativeAudioSource(nextTrack) : null,
+        expectedSource: nativeAudioSource(currentTrack),
       }).catch((error) =>
         console.warn("Could not preload the next native track:", error),
       );

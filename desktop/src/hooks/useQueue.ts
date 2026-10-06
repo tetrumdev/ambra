@@ -20,7 +20,10 @@ import {
   completeQueueTrack,
   jumpQueue,
   refreshQueueTracks,
+  replayQueueHistory,
+  reorderQueueUpcoming,
   removeQueueEntries,
+  removeQueueHistory,
   rewindQueue,
   type QueueState,
 } from "../utils/queueNavigation";
@@ -44,6 +47,9 @@ export type QueueController = {
   completeCurrent: () => QueueItem | undefined;
   previous: () => QueueItem | undefined;
   jumpTo: (queueId: number) => QueueItem | undefined;
+  replayHistory: (historyId: string) => QueueItem | undefined;
+  reorderEntries: (queueIds: QueueId[]) => void;
+  removeHistoryEntries: (historyIds: string[]) => void;
   removeEntries: (queueIds: QueueId[]) => {
     currentRemoved: boolean;
     item: QueueItem | undefined;
@@ -231,6 +237,22 @@ export function useQueue(
     };
   }, [commitState]);
 
+  const replayHistory = useCallback((historyId: string) => {
+    const transition = replayQueueHistory(stateRef.current, historyId);
+    if (transition.item) commitState(transition.state);
+    return transition.item;
+  }, [commitState]);
+
+  const reorderEntries = useCallback((queueIds: QueueId[]) => {
+    const nextState = reorderQueueUpcoming(stateRef.current, queueIds);
+    if (nextState !== stateRef.current) commitState(nextState);
+  }, [commitState]);
+
+  const removeHistoryEntries = useCallback((historyIds: string[]) => {
+    const nextState = removeQueueHistory(stateRef.current, new Set(historyIds));
+    if (nextState !== stateRef.current) commitState(nextState);
+  }, [commitState]);
+
   const peekNext = useCallback(
     () => stateRef.current.upcoming[0],
     [],
@@ -264,6 +286,9 @@ export function useQueue(
     completeCurrent,
     previous,
     jumpTo,
+    replayHistory,
+    reorderEntries,
+    removeHistoryEntries,
     removeEntries,
     peekNext,
   };

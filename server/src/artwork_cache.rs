@@ -310,8 +310,15 @@ fn thumbnail_source(provider: &str, url: &str) -> String {
         return format!("{base}/320x320.jpg");
     }
     if provider == "qobuz" {
-        if let Some((stem, _)) = filename.rsplit_once('_') {
-            return format!("{base}/{stem}_300.jpg");
+        if let Some((stem, size)) = filename.rsplit_once('_') {
+            // Artist portraits can contain underscores but have no album-size variants.
+            if size == "max.jpg"
+                || size.strip_suffix(".jpg").is_some_and(|size| {
+                    !size.is_empty() && size.chars().all(|c| c.is_ascii_digit())
+                })
+            {
+                return format!("{base}/{stem}_300.jpg");
+            }
         }
     }
     url.to_owned()
@@ -337,6 +344,13 @@ mod tests {
         assert_eq!(
             thumbnail_source("spotify", "https://i.scdn.co/image/id"),
             "https://i.scdn.co/image/id"
+        );
+        assert_eq!(
+            thumbnail_source(
+                "qobuz",
+                "https://static.qobuz.com/images/artists/artist_portrait.jpg"
+            ),
+            "https://static.qobuz.com/images/artists/artist_portrait.jpg"
         );
     }
 

@@ -8,6 +8,7 @@ import {
   type RefObject,
 } from "react";
 import { isUnmodifiedKey } from "../utils/keyboard";
+import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 
 type AudioControlsMenuProps = {
   anchor: RefObject<HTMLButtonElement | null>;
@@ -21,6 +22,7 @@ export function AudioControlsMenu({
   onClose,
 }: AudioControlsMenuProps) {
   const panel = useRef<HTMLDivElement>(null);
+  useFadeOutOnUnmount(panel);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
 
   useLayoutEffect(() => {
@@ -59,7 +61,7 @@ export function AudioControlsMenu({
   useEffect(() => {
     panel.current
       ?.querySelector<HTMLElement>(
-        "select:not(:disabled), button:not(:disabled), input:not(:disabled)",
+        '[role="radio"][aria-checked="true"]:not(:disabled), button:not(:disabled), input:not(:disabled)',
       )
       ?.focus();
   }, []);

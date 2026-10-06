@@ -1,4 +1,7 @@
 import "./App.css";
+import "./components/EntityView.css";
+import { EntityView, type EntityPage, type EntityAction } from "./components/EntityView";
+import { entityKey, type BrowseEntity } from "./utils/browse";
 
 //Components
 import { AppChrome } from "./components/AppChrome";
@@ -47,6 +50,11 @@ import { usePlaylists } from "./hooks/usePlaylists";
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
   const playlistStore = usePlaylists();
+  const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
+  const browseCache = useRef(new Map<string, EntityPage>());
+  const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
+  const navigation = useRef<Array<{ entity: BrowseEntity | null; screen: AppScreen; playlistId: string | null; section: LibrarySection }>>([]);
+  const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => [...new Map([...current, ...tracks].map(track => [track.globalId, track])).values()]), []);
   const playlists = playlistStore.playlists;
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
@@ -88,13 +96,13 @@ function App() {
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
-      [...playlistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
+      [...browseTracks, ...playlistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
     );
     for (const track of search.knownTracks) {
       tracksById.set(track.globalId, track);
     }
     return [...tracksById.values()];
-  }, [playlistStore.tracks, library.catalogTracks, search.knownTracks]);
+  }, [browseTracks, playlistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
@@ -152,7 +160,7 @@ function App() {
   const isBigscreen =
     screen === "bigscreen" && player.currentTrack !== undefined;
   const isQueueView = screen === "queue";
-  const isSearchView = screen === "search";
+  const isSearchView = screen === "search" && !browseEntity;
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
@@ -196,6 +204,8 @@ function App() {
   });
   const activeViewKey = isQueueView
     ? "queue"
+    : browseEntity
+      ? entityKey(browseEntity)
     : isSearchView
       ? "search"
       : selectedPlaylist
@@ -397,18 +407,8 @@ function App() {
       event.stopPropagation();
 
       if (event.repeat) return;
-      setPreferences((current) => ({
-        ...current,
-        ui: {
-          ...current.ui,
-          screen:
-            current.ui.screen === "bigscreen"
-              ? bigscreenReturnScreenRef.current
-              : current.ui.screen === "queue"
-                ? queueReturnScreenRef.current
-                : "library",
-        },
-      }));
+      if (browseEntity && screen !== "bigscreen" && screen !== "queue") { goBack(); return; }
+      leaveScreen();
 
       if (f11FullscreenRef.current && isTauri()) {
         try {
@@ -423,12 +423,25 @@ function App() {
       }
     };
 
+    // The mouse's back button steps back the same way (WebView history would do nothing).
+    const handleMouseBack = (event: MouseEvent) => {
+      if (event.button !== 3 && event.button !== 4) return;
+      event.preventDefault();
+      if (event.type !== "mouseup" || event.button !== 3) return;
+      if (browseEntity && screen !== "bigscreen" && screen !== "queue") goBack();
+      else if (screen !== "library") leaveScreen();
+    };
+
     window.addEventListener("keydown", handleKeyDown, true);
+    window.addEventListener("mousedown", handleMouseBack, true);
+    window.addEventListener("mouseup", handleMouseBack, true);
 
     return () => {
       window.removeEventListener("keydown", handleKeyDown, true);
+      window.removeEventListener("mousedown", handleMouseBack, true);
+      window.removeEventListener("mouseup", handleMouseBack, true);
     };
-  }, []);
+  }, [browseEntity, screen]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -555,6 +568,54 @@ function App() {
     return () => window.removeEventListener("beforeunload", saveLatestSession);
   }, []);
 
+  // Bigscreen and queue return to where they were opened from; search returns to the library.
+  const leaveScreen = () => setPreferences((current) => ({
+    ...current,
+    ui: {
+      ...current.ui,
+      screen:
+        current.ui.screen === "bigscreen"
+          ? bigscreenReturnScreenRef.current
+          : current.ui.screen === "queue"
+            ? queueReturnScreenRef.current
+            : "library",
+    },
+  }));
+  const goBack = () => {
+    const previous = navigation.current.pop();
+    if (!previous) { setBrowseEntity(null); return; }
+    setBrowseEntity(previous.entity); setSelectedPlaylistId(previous.playlistId); setLibrarySection(previous.section);
+    setPreferences(current => ({ ...current, ui: { ...current.ui, screen: previous.screen } }));
+  };
+  const openEntity = (entity: BrowseEntity) => {
+    if (browseEntity && entityKey(entity) === entityKey(browseEntity)) return;
+    navigation.current.push({ entity: browseEntity, screen, playlistId: selectedPlaylistId, section: librarySection });
+    setBrowseEntity(entity); setSelectedPlaylistId(null);
+    setPreferences(current => ({ ...current, ui: { ...current.ui, screen: "library" } }));
+  };
+  const entityAction = async (action: EntityAction, tracks: Track[], id?: string) => {
+    if (!tracks.length) return;
+    const selected = tracks.find(track => track.globalId === id) ?? tracks[0];
+    try {
+      const track = await resolveTrackPlayback(selected, AbortSignal.timeout(8000));
+      rememberTracks([track]);
+      const context = searchQueueContext(tracks, browseEntity ? entityKey(browseEntity) : "browse", track);
+      if (action === "shuffle") {
+        const first = queue.shuffleContext(context);
+        if (first) player.playTrack(first.track.globalId, await resolveTrackPlayback(first.track, AbortSignal.timeout(8000)));
+        return;
+      }
+      if (action === "play") { queue.playFromContext(context, track.globalId); player.playTrack(track.globalId, track); return; }
+      const entry = queueEntryForTrack(context, track.globalId);
+      if (!entry) return;
+      if (action === "standalone") { queue.playStandalone(entry); player.playTrack(track.globalId, track); return; }
+      const start = !queue.currentEntry;
+      if (action === "next") queue.playNext(entry);
+      else for (const item of context.entries) queue.addToQueue(item);
+      if (start) player.playTrack(track.globalId, track);
+    } catch (error) { console.warn("Could not play catalog tracks:", error); }
+  };
+
   const changeScreen = (nextScreen: AppScreen) => {
     setPreferences((current) => ({
       ...current,
@@ -566,6 +627,7 @@ function App() {
   };
 
   const changeSearchQuery = (nextQuery: string) => {
+    setBrowseEntity(null); navigation.current = [];
     setPreferences((current) => ({
       ...current,
       ui: {
@@ -681,6 +743,11 @@ function App() {
     if (entry) player.playTrack(entry.track.globalId);
   };
 
+  const replayQueueHistoryEntry = (historyId: string) => {
+    const entry = queue.replayHistory(historyId);
+    if (entry) player.playTrack(entry.track.globalId, entry.track);
+  };
+
   const deleteQueueEntries = (queueIds: number[]) => {
     const result = queue.removeEntries(queueIds);
     if (!result.currentRemoved) return;
@@ -689,6 +756,7 @@ function App() {
   };
 
   const closeCurrentScreen = () => {
+    if (browseEntity && screen !== "bigscreen" && screen !== "queue") { goBack(); return; }
     changeScreen(
       screen === "bigscreen"
         ? bigscreenReturnScreenRef.current
@@ -701,6 +769,7 @@ function App() {
   const openQueue = () => changeScreen("queue");
 
   const collectionViewProps = {
+    onOpenEntity: openEntity,
     tracks: collectionTracks,
     playlistOptions,
     playTrack: playFromCollection,
@@ -737,19 +806,9 @@ function App() {
         </>
       )}
 
-      {isBigscreen ? null : isQueueView ? (
-        <main id="queue">
-          <Queue
-            currentEntry={queue.currentEntry}
-            upcomingEntries={queue.upcomingEntries}
-            jumpTo={jumpToQueueEntry}
-            deleteEntries={deleteQueueEntries}
-            registerScrollElement={registerScrollElement}
-          />
-        </main>
-      ) : (
-        <main id={isSearchView ? "search" : "library"}>
-          <SearchBar
+      {!isBigscreen && (
+        <main id={isQueueView ? "queue" : isSearchView ? "search" : "library"}>
+          {!isQueueView && <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}
             provider={searchProvider}
@@ -758,20 +817,20 @@ function App() {
               ...current,
               search: { ...current.search, provider },
             }))}
-            onConfirm={() =>
-              changeScreen(searchQuery.trim() ? "search" : "library")
-            }
-          />
-          {playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+            onConfirm={() => { setBrowseEntity(null); changeScreen(searchQuery.trim() ? "search" : "library"); }}
+          />}
+          {!isQueueView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
           <Sidebar
-            activeLibrarySection={!isSearchView && !selectedPlaylist ? librarySection : null}
-            activePlaylistId={!isSearchView ? selectedPlaylist?.id ?? null : null}
+            activeLibrarySection={!isQueueView && !isSearchView && !selectedPlaylist ? librarySection : null}
+            activePlaylistId={!isQueueView && !isSearchView ? selectedPlaylist?.id ?? null : null}
             onOpenLibrarySection={(section) => {
+              setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(null);
               setLibrarySection(section);
               changeScreen("library");
             }}
             onOpenLibrary={() => {
+              setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(null);
               setLibrarySection("overview");
               changeScreen("library");
@@ -785,12 +844,29 @@ function App() {
             }}
             playlists={playlists}
             onSelectPlaylist={(id) => {
+              setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(id);
               changeScreen("library");
             }}
           />
-          {isSearchView ? (
+          {isQueueView ? (
+            <Queue
+              currentEntry={queue.currentEntry}
+              upcomingEntries={queue.upcomingEntries}
+              historyEntries={queue.historyEntries}
+              jumpTo={jumpToQueueEntry}
+              replayHistory={replayQueueHistoryEntry}
+              reorderEntries={queue.reorderEntries}
+              deleteEntries={deleteQueueEntries}
+              deleteHistoryEntries={queue.removeHistoryEntries}
+              registerScrollElement={registerScrollElement}
+            />
+          ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
+            onBack={goBack} onOpenEntity={openEntity} onAction={(action, tracks, id) => { void entityAction(action, tracks, id); }}
+            onAddTrack={track => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); }}
+            rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
             <SearchView
+              onOpenEntity={openEntity}
               playlistOptions={playlistOptions}
               query={searchQuery}
               provider={searchProvider}
@@ -843,6 +919,7 @@ function App() {
       )}
 
       <NowPlayingBar
+        onOpenEntity={openEntity}
         variant={isBigscreen ? "expanded" : "compact"}
         track={player.currentTrack}
         currentTime={player.currentTime}

@@ -1,5 +1,7 @@
 import "./TrackMenus.css";
+import { useRef } from "react";
 import type { GlobalTrackId } from "../types/music";
+import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 
 type TrackPlaybackMenuProps = {
   onClose: () => void;
@@ -22,9 +24,12 @@ export function TrackPlaybackMenu({
   addToQueue,
   playNext,
 }: TrackPlaybackMenuProps) {
+  const menu = useRef<HTMLDivElement>(null);
+  useFadeOutOnUnmount(menu);
   return (
     <div id="trackMenuBackdrop" onClick={onClose}>
       <div
+        ref={menu}
         id="trackPlaybackMenu"
         style={{
           left: xPos,

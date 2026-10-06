@@ -1,4 +1,5 @@
 import type { Track } from "../types/music";
+import { thumbnailArtwork } from "../api/server";
 
 export type LibraryArtist = {
   id: string;
@@ -78,7 +79,7 @@ export function libraryAlbums(tracks: Track[]): LibraryAlbum[] {
       artist:
         track.albumArtists.map((artist) => artist.name).join(", ") ||
         track.artist,
-      cover: track.cover,
+      cover: thumbnailArtwork(track),
       releaseYear: track.releaseDate?.slice(0, 4) ?? null,
       trackCount: 1,
     });

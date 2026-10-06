@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ImgHTMLAttributes } from "react";
 import { highestQualityArtwork, thumbnailArtwork } from "../api/server";
-import { preloadArtwork } from "../utils/artworkImages";
+import { cachedArtwork, preloadArtwork } from "../utils/artworkImages";
 import type { Track } from "../types/music";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { cachedPlaylistArtwork } from "../utils/playlistArtworkCache";
@@ -14,7 +14,7 @@ export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArt
   const thumbnail = thumbnailArtwork(track);
   const key = `${track.globalId}:${thumbnail}`;
   const [resolved, setResolved] = useState<{ key: string; src: string } | null>(null);
-  const src = resolved?.key === key ? resolved.src : whiteArtwork;
+  const src = resolved?.key === key ? resolved.src : cachedArtwork(thumbnail) ? thumbnail : whiteArtwork;
   const imageRef = useRef<HTMLImageElement>(null);
   const [nearby, setNearby] = useState(imageProps.loading === "eager");
   const candidates = useMemo(

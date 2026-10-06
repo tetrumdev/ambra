@@ -189,6 +189,95 @@ impl SpotifyProvider {
             .collect::<ProviderResult<Vec<_>>>()
     }
 
+    pub async fn artist_details(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::CatalogArtist> {
+        let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
+        Ok(crate::models::CatalogArtist {
+            id: format!("spotify:{}", artist.id.to_id()?),
+            provider: MusicProvider::Spotify,
+            name: artist.name.clone(),
+            image_url: best_image_url(&artist.portraits),
+        })
+    }
+
+    pub async fn artist_profile(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::ArtistProfileMetadata> {
+        use crate::models::{ArtistProfileMetadata, CatalogArtist};
+        let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
+        Ok(ArtistProfileMetadata {
+            artist: CatalogArtist {
+                id: format!("spotify:{}", artist.id.to_id()?),
+                provider: MusicProvider::Spotify,
+                name: artist.name.clone(),
+                image_url: best_image_url(&artist.portraits),
+            },
+            biography: artist.biographies.first().map(|bio| bio.text.clone()),
+            biography_source: None,
+            popular_track_ids: artist
+                .top_tracks
+                .for_country(&self.session.country())
+                .iter()
+                .take(10)
+                .map(|track| track.to_id())
+                .collect::<Result<Vec<_>, _>>()?,
+            popular_tracks_error: None,
+        })
+    }
+
+    pub async fn artist_albums(
+        &self,
+        artist_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> ProviderResult<crate::models::CatalogAlbumsPage> {
+        use crate::models::{CatalogAlbum, CatalogAlbumsPage, search_next_offset};
+        let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
+        let ids: Vec<_> = artist
+            .albums_current()
+            .chain(artist.singles_current())
+            .chain(artist.compilations_current())
+            .cloned()
+            .collect();
+        let total = ids.len() as u32;
+        let selected: Vec<_> = ids
+            .into_iter()
+            .skip(offset as usize)
+            .take(limit as usize)
+            .collect();
+        let next_offset = search_next_offset(offset, selected.len(), total);
+        let mut albums = Vec::new();
+        for id in selected {
+            let album = Album::get(&self.session, &id).await?;
+            albums.push(CatalogAlbum {
+                id: format!("spotify:{}", album.id.to_id()?),
+                provider: MusicProvider::Spotify,
+                title: album.name.clone(),
+                artist: album
+                    .artists
+                    .iter()
+                    .map(|artist| artist.name.clone())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                image_url: best_image_url(&album.covers),
+                upc: external_id(&album.external_ids, &["upc", "ean"]),
+                release_date: Some(format_spotify_date(&album.date)),
+                release_type: Some(format!("{:?}", album.album_type).to_lowercase()),
+                version: nonempty(&album.version_title),
+                explicit: None,
+                maximum_bit_depth: None,
+                maximum_sampling_rate_khz: None,
+            });
+        }
+        Ok(CatalogAlbumsPage {
+            albums,
+            next_offset,
+        })
+    }
+
     pub async fn search_track_ids(
         &self,
         query: &str,

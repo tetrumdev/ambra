@@ -7,7 +7,8 @@
 
 .libraryView,
 .searchView {
-    --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
+    --library-leading-width: 100px;
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
         minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     overflow-y: auto;
     overflow-x: hidden;
@@ -41,7 +42,7 @@
 }
 
 .playlistView {
-    --library-columns: 60px minmax(140px, 2fr) minmax(100px, 1fr)
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
         minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     --playlist-artwork-progress: 0;
     --playlist-title-progress: 0;
@@ -160,7 +161,8 @@
 .librarySourcesTrigger {
     position: absolute;
     top: 8px;
-    right: 30px;
+    /* Shares the search pill's right edge. */
+    right: 20px;
     display: grid;
     width: 34px;
     height: 34px;
@@ -173,7 +175,7 @@
     font:
         300 24px/1 "Stack Sans Text",
         sans-serif;
-    cursor: pointer;
+    cursor: default;
 }
 
 .librarySourcesTrigger:hover,
@@ -241,18 +243,26 @@
 }
 
 .librarySourcesClose {
+    display: grid;
     width: 30px;
     height: 30px;
     padding: 0;
+    place-items: center;
     border: 0;
     background: transparent;
-    color: #aaa;
-    font: 300 25px/1 sans-serif;
-    cursor: pointer;
+    opacity: 0.65;
+    cursor: default;
+    transition: opacity 0.25s ease;
 }
 
-.librarySourcesClose:hover {
-    color: white;
+.librarySourcesClose img {
+    width: 14px;
+    height: 14px;
+}
+
+.librarySourcesClose:hover,
+.librarySourcesClose:focus-visible {
+    opacity: 1;
 }
 
 .librarySourceRow {
@@ -287,7 +297,7 @@
     color: white;
     font: inherit;
     font-size: 0.78rem;
-    cursor: pointer;
+    cursor: default;
 }
 
 .librarySourceRow button:hover:not(:disabled),
@@ -434,7 +444,7 @@
     color: #a3a2a3;
     font: inherit;
     font-size: 1rem;
-    cursor: pointer;
+    cursor: default;
 }
 
 .librarySectionButton:hover,
@@ -465,6 +475,30 @@
 .libraryEntityCard h2 {
     margin: 12px 0 5px;
     font-size: 1rem;
+}
+
+.libraryEntityCard:has(.libraryAlbumCover) {
+    container-type: inline-size;
+}
+
+.libraryEntityCard:has(.libraryAlbumCover) .libraryEntityButton {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    min-height: calc(100cqw + 17px + 3.5rem);
+}
+
+.libraryEntityCard:has(.libraryAlbumCover) h2 {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    white-space: normal;
+    line-height: 1.25;
+}
+
+.libraryEntityCard:has(.libraryAlbumCover) p {
+    line-height: 1.25;
 }
 
 .libraryEntityCard p {
@@ -605,20 +639,16 @@
     top: 0;
     background: linear-gradient(
         to bottom,
-        rgb(0 0 0 / 1) 30%,
-        rgb(0 0 0 / 0.98) 38%,
-        rgb(0 0 0 / 0.92) 46%,
-        rgb(0 0 0 / 0.82) 54%,
-        rgb(0 0 0 / 0.68) 62%,
-        rgb(0 0 0 / 0.5) 70%,
-        rgb(0 0 0 / 0.32) 78%,
-        rgb(0 0 0 / 0.18) 86%,
-        rgb(0 0 0 / 0.07) 93%,
+        rgb(0 0 0 / 1) 70%,
+        rgb(0 0 0 / 0.92) 76%,
+        rgb(0 0 0 / 0.75) 82%,
+        rgb(0 0 0 / 0.5) 88%,
+        rgb(0 0 0 / 0.22) 94%,
         transparent 100%
     );
     color: #b6b6b6;
     padding-top: 45px;
-    padding-bottom: 50px;
+    padding-bottom: 24px;
     z-index: 8;
 }
 
@@ -684,7 +714,7 @@
 .libraryItem {
     margin: 0;
     background-color: black;
-    cursor: pointer;
+    cursor: default;
     padding-left: 15px;
     height: 76px;
     border-bottom: 1px solid #535353;
@@ -705,7 +735,7 @@
 }
 
 .libraryItem[data-reorderable="true"] {
-    cursor: pointer;
+    cursor: default;
 }
 
 :root[data-track-reordering="true"],
@@ -714,7 +744,7 @@
 }
 
 .libraryItem[data-selecting="true"] {
-    cursor: pointer;
+    cursor: default;
 }
 
 .libraryItem[data-dragging="true"] {
@@ -754,17 +784,6 @@
     background-color: #352000;
 }
 
-.libraryItem[data-selecting="true"] .coverPlayBtn {
-    opacity: 0;
-}
-
-.libraryView
-    .libraryItem[data-selecting="true"]
-    .coverImgContainer:hover
-    .coverImg {
-    filter: none;
-}
-
 .selectionActionMenu {
     position: fixed;
     top: calc(5% + 48px);
@@ -792,7 +811,7 @@
     font: inherit;
     font-size: 0.9rem;
     text-align: left;
-    cursor: pointer;
+    cursor: default;
 }
 
 .selectionActionMenu button:hover,
@@ -823,7 +842,7 @@
     color: white;
     font: inherit;
     font-weight: 600;
-    cursor: pointer;
+    cursor: default;
 }
 
 .selectionDeleteButton:hover {
@@ -835,6 +854,42 @@
     opacity: 0.5;
 }
 
+.trackLeading {
+    grid-column: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.trackPlayButton {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: default;
+    opacity: 0.6;
+}
+
+.trackPlayButton img {
+    width: 12px;
+    height: 12px;
+    pointer-events: none;
+}
+
+.trackPlayButton:not(:disabled):hover,
+.trackPlayButton:not(:disabled):focus-visible {
+    opacity: 1;
+}
+
+.trackPlayButton:disabled {
+    opacity: 0.25;
+}
+
 .coverImgContainer {
     width: 56px;
     height: 56px;
@@ -842,29 +897,11 @@
     align-self: center;
     align-content: center;
     justify-content: center;
-    cursor: pointer;
+    cursor: default;
     border-radius: 7px;
     overflow: hidden;
     display: grid;
     place-items: center;
-}
-
-.coverPlayBtn {
-    width: 13px;
-    grid-area: 1 / 1;
-    z-index: 1;
-    pointer-events: none;
-    filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.7));
-}
-
-.coverImgContainer:hover .coverPlayBtn {
-    opacity: 100%;
-    transition: 0.25s ease-out;
-}
-
-.coverPlayBtn {
-    opacity: 0;
-    transition: 0.25s ease-in;
 }
 
 .coverImg {
@@ -876,11 +913,6 @@
     transition-duration: 0.25s;
     user-select: none;
     -webkit-user-drag: none;
-}
-
-.libraryView .coverImgContainer:hover .coverImg,
-.searchView .coverImgContainer:hover .coverImg {
-    filter: brightness(50%) blur(3px);
 }
 
 .trackDescriptor {
@@ -955,11 +987,13 @@
     box-sizing: border-box;
     display: grid;
     place-items: center;
-    cursor: pointer;
+    cursor: default;
+    border: 0;
     border-left: 1px solid transparent;
+    background: transparent;
 }
 
-.trackCollectionMenuTrigger:hover {
+.libraryItem:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover {
     background-color: black;
     border-left: 1px solid #535353;
 }

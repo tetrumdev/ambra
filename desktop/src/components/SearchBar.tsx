@@ -2,6 +2,7 @@ import "./SearchBar.css";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import type { SearchProvider, StreamingProvider } from "../api/server";
 import { useEffect, useRef, useState } from "react";
+import { FadeOutOnClose } from "../hooks/useFadeOutOnUnmount";
 
 const providerNames: Record<SearchProvider, string> = {
   all: "All services",
@@ -111,6 +112,7 @@ export function SearchBar({
               aria-hidden="true"
             />
             <input
+              spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
               id="input"
               ref={input}
               type="search"
@@ -130,7 +132,6 @@ export function SearchBar({
               }}
               placeholder="Search..."
               aria-label="Search songs"
-              autoComplete="off"
             />
           </>
         ) : (
@@ -138,7 +139,7 @@ export function SearchBar({
             className="searchExpandButton"
             type="button"
             aria-label="Search songs"
-            title="Search"
+            data-tooltip="Search"
             onClick={() => {
               setSearchExpanded(true);
               requestAnimationFrame(() => input.current?.focus());
@@ -197,6 +198,7 @@ export function SearchBar({
           ref={trigger}
           type="button"
           aria-label={`Search service: ${providerNames[provider]}`}
+          data-tooltip={`Searching ${providerNames[provider]}`}
           aria-haspopup="menu"
           aria-expanded={menuOpen}
           aria-controls={menuOpen ? "searchProviderMenu" : undefined}
@@ -210,36 +212,38 @@ export function SearchBar({
           />
         </button>
         {menuOpen && (
-          <div
-            id="searchProviderMenu"
-            className="searchProviderMenu"
-            ref={menu}
-            role="menu"
-            aria-label="Search service"
-          >
-            {options.map((option) => (
-              <button
-                key={option}
-                type="button"
-                role="menuitemradio"
-                aria-checked={provider === option}
-                aria-label={providerNames[option]}
-                title={providerNames[option]}
-                onClick={() => {
-                  onProviderChange(option);
-                  setMenuOpen(false);
-                  trigger.current?.focus();
-                }}
-              >
-                <img
-                  className="searchProviderIcon"
-                  src={providerIcons[option]}
-                  alt=""
-                  aria-hidden="true"
-                />
-              </button>
-            ))}
-          </div>
+          <FadeOutOnClose>
+            <div
+              id="searchProviderMenu"
+              className="searchProviderMenu"
+              ref={menu}
+              role="menu"
+              aria-label="Search service"
+            >
+              {options.map((option) => (
+                <button
+                  key={option}
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={provider === option}
+                  aria-label={providerNames[option]}
+                  data-tooltip={providerNames[option]}
+                  onClick={() => {
+                    onProviderChange(option);
+                    setMenuOpen(false);
+                    trigger.current?.focus();
+                  }}
+                >
+                  <img
+                    className="searchProviderIcon"
+                    src={providerIcons[option]}
+                    alt=""
+                    aria-hidden="true"
+                  />
+                </button>
+              ))}
+            </div>
+          </FadeOutOnClose>
         )}
       </div>
     </div>

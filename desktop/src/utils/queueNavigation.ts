@@ -130,6 +130,39 @@ export function rewindQueue(state: QueueState): QueueTransition {
   };
 }
 
+export function replayQueueHistory(state: QueueState, historyId: string): QueueTransition {
+  const index = state.history.findIndex(entry => entry.historyId === historyId);
+  const entry = state.history[index];
+  if (!entry) return { state, item: undefined };
+  const asItem = ({ track, source, shufflePackageId }: QueueItem): QueueItem => ({ track, source, shufflePackageId });
+  const item = asItem(entry);
+  return {
+    state: {
+      history: state.history.slice(0, index),
+      current: item,
+      upcoming: [
+        ...state.history.slice(index + 1).map(asItem),
+        ...(state.current ? [state.current] : []),
+        ...state.upcoming,
+      ],
+    },
+    item,
+  };
+}
+
+export function reorderQueueUpcoming(state: QueueState, queueIds: readonly QueueId[]): QueueState {
+  if (queueIds.length !== state.upcoming.length || new Set(queueIds).size !== queueIds.length) return state;
+  const upcoming = queueIds.map(id => state.upcoming[id - 2]);
+  if (upcoming.some(entry => !entry)) return state;
+  if (upcoming.every((entry, index) => entry === state.upcoming[index])) return state;
+  return { ...state, upcoming };
+}
+
+export function removeQueueHistory(state: QueueState, historyIds: ReadonlySet<string>): QueueState {
+  const history = state.history.filter(entry => !historyIds.has(entry.historyId));
+  return history.length === state.history.length ? state : { ...state, history };
+}
+
 export function jumpQueue(
   state: QueueState,
   upcomingIndex: number,

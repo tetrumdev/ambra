@@ -62,7 +62,7 @@
     border: 0;
     border-radius: 8px;
     background: #fff;
-    cursor: pointer;
+    cursor: default;
 }
 
 #compactArtwork img {
@@ -82,7 +82,7 @@
     background: transparent;
     border: none;
     width: 35px;
-    cursor: pointer;
+    cursor: default;
     align-self: center;
 }
 

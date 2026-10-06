@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
+import { closeDialog, openDialog } from "../utils/dialogs";
 import {
   completeServiceAuth,
   serviceAuthStatus,
@@ -40,8 +41,8 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open && !dialog.current?.open) dialog.current?.showModal();
-    if (!open && dialog.current?.open) dialog.current.close();
+    if (open) openDialog(dialog.current);
+    else closeDialog(dialog.current);
   }, [open]);
 
   useEffect(() => {
@@ -135,6 +136,7 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
         type="button"
         className="librarySourcesTrigger"
         aria-label="Add music and connect services"
+        data-tooltip="Add music and connect services"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen(true)}
@@ -160,7 +162,7 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
               <h2 id="library-sources-title">Add to your library</h2>
               <p>Import local music or connect a streaming service.</p>
             </div>
-            <button type="button" className="librarySourcesClose" aria-label="Close" onClick={close}>×</button>
+            <button type="button" className="librarySourcesClose" aria-label="Close" onClick={close}><img src="/x.svg" alt="" /></button>
           </div>
 
           <section className="librarySourceRow">
@@ -213,6 +215,7 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
               <p>The page may fail to load after sign-in. Copy its full address from the browser.</p>
               <div>
                 <input
+                  spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
                   id="library-callback-url"
                   autoFocus
                   value={callbackUrl}

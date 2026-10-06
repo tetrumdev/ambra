@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { reconcileTracks } from "../src/utils/trackReconcile";
+import { reconcileServerLibrary, reconcileTracks } from "../src/utils/trackReconcile";
 
 type T = { globalId: string; name: string; artists: { name: string }[] };
 const track = (id: string, name = id): T => ({ globalId: id, name, artists: [{ name: "a" }] });
@@ -59,5 +59,19 @@ describe("reconcileTracks", () => {
     console.log(`reconcile 100k identical tracks: ${elapsed.toFixed(0)} ms`);
     expect(result).toBe(previous);
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe("reconcileServerLibrary", () => {
+  test("keeps cached copies of saved tracks the server could not load", () => {
+    const previous = [track("a"), track("b"), track("c")];
+    const result = reconcileServerLibrary(previous, clone([previous[0]]), new Set(["b"]));
+    expect(result.map((item) => item.globalId)).toEqual(["a", "b"]);
+    expect(result[1]).toBe(previous[1]);
+  });
+
+  test("is a plain reconcile when everything loaded", () => {
+    const previous = [track("a"), track("b")];
+    expect(reconcileServerLibrary(previous, clone(previous), new Set())).toBe(previous);
   });
 });

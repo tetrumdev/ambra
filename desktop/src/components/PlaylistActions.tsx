@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
 import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { closeDialog, openDialog } from "../utils/dialogs";
 
 type Props = {
   playlist: Playlist;
@@ -17,8 +18,8 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
   const trigger = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
-    if (action) dialog.current?.showModal();
-    else dialog.current?.close();
+    if (action) openDialog(dialog.current);
+    else closeDialog(dialog.current);
   }, [action]);
 
   function close() {
@@ -98,6 +99,7 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
             </h2>
             {action === "rename" ? (
               <input
+                spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
                 autoFocus
                 aria-label="Playlist name"
                 value={name}

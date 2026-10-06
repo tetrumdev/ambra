@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { mark } from "../utils/perf";
 import { localCoverSources } from "../utils/localArtwork";
-import { reconcileTracks } from "../utils/trackReconcile";
+import { reconcileServerLibrary, reconcileTracks } from "../utils/trackReconcile";
 import type {
   GlobalTrackId,
   LibraryTrack,
@@ -14,7 +14,8 @@ import type {
 import {
   addServerAlbum,
   addServerTrack,
-  loadServerTracks,
+  loadServerLibrary,
+  removeServerTracks,
   type SearchProvider,
 } from "../api/server";
 import {
@@ -130,6 +131,8 @@ export function useMusicLibrary(): MusicLibrary {
 
   // Only persist what changed since it was loaded. On a normal launch the cached
   // library is restored and confirmed unchanged, so nothing is re-serialized.
+  const serverTracksRef = useRef(serverTracks);
+  serverTracksRef.current = serverTracks;
   const savedServerTracks = useRef(serverTracks);
   useEffect(() => {
     if (savedServerTracks.current === serverTracks) return;
@@ -226,13 +229,15 @@ export function useMusicLibrary(): MusicLibrary {
         if (!cancelled) setIsLocalLoading(false);
       });
 
-    void loadServerTracks(controller.signal)
-      .then((loadedTracks) => {
+    void loadServerLibrary(controller.signal)
+      .then(({ tracks: loadedTracks, unavailableTrackIds }) => {
         if (!cancelled) {
           // A successful response is authoritative. Keeping cached tracks from
           // disconnected providers leaves playable-looking rows whose stream
           // endpoints can only return 503.
-          setServerTracks((current) => reconcileTracks(current, loadedTracks));
+          setServerTracks((current) =>
+            reconcileServerLibrary(current, loadedTracks, unavailableTrackIds),
+          );
           setIsServerReachable(true);
           mark("server-synced");
         }
@@ -318,6 +323,15 @@ export function useMusicLibrary(): MusicLibrary {
     const idsToRemove = new Set(trackIds);
     if (idsToRemove.size === 0) return;
 
+    // The local tombstones hide the rows immediately; the server forgets them so
+    // its saved library stops growing and stops loading removed tracks.
+    const streamingTracks = serverTracksRef.current.filter((track) => idsToRemove.has(track.globalId));
+    if (streamingTracks.length > 0) {
+      void removeServerTracks(streamingTracks).catch((reason) =>
+        console.warn("Could not remove tracks from the streaming library:", reason),
+      );
+    }
+
     setRemovedTrackIds((currentTrackIds) => {
       if ([...idsToRemove].every((trackId) => currentTrackIds.has(trackId))) {
         return currentTrackIds;
@@ -349,8 +363,10 @@ export function useMusicLibrary(): MusicLibrary {
 
   const refreshStreamingMusic = useCallback(async () => {
     try {
-      const loadedTracks = await loadServerTracks();
-      setServerTracks((current) => reconcileTracks(current, loadedTracks));
+      const { tracks: loadedTracks, unavailableTrackIds } = await loadServerLibrary();
+      setServerTracks((current) =>
+        reconcileServerLibrary(current, loadedTracks, unavailableTrackIds),
+      );
       setIsServerReachable(true);
       return loadedTracks.length;
     } catch (reason) {
