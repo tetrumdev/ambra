@@ -8,7 +8,10 @@
 //   user-library-modify, user-library-read, user-follow-modify, user-follow-read, streaming,
 //   app-remote-control
 
-use std::time::{Duration, SystemTime};
+use std::{
+    fmt,
+    time::{Duration, SystemTime},
+};
 
 use serde::Deserialize;
 use thiserror::Error;
@@ -33,13 +36,25 @@ impl From<TokenError> for Error {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Token {
     pub access_token: String,
     pub expires_in: Duration,
     pub token_type: String,
     pub scopes: Vec<String>,
     pub timestamp: SystemTime,
+}
+
+impl fmt::Debug for Token {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Token")
+            .field("access_token", &"[REDACTED]")
+            .field("expires_in", &self.expires_in)
+            .field("token_type", &self.token_type)
+            .field("scopes", &self.scopes)
+            .field("timestamp", &self.timestamp)
+            .finish()
+    }
 }
 
 #[derive(Deserialize)]
@@ -98,8 +113,8 @@ impl TokenProvider {
         let request = self.session().mercury().get(query_uri)?;
         let response = request.await?;
         let data = response.payload.first().ok_or(TokenError::Empty)?.to_vec();
-        let token = Token::from_json(String::from_utf8(data)?)?;
-        trace!("Got token: {token:#?}");
+        // Utf8Error does not retain the credential-bearing response bytes.
+        let token = Token::from_json(std::str::from_utf8(&data)?.to_owned())?;
         self.lock(|inner| inner.tokens.push(token.clone()));
         Ok(token)
     }
@@ -109,7 +124,14 @@ impl Token {
     const EXPIRY_THRESHOLD: Duration = Duration::from_secs(10);
 
     pub fn from_json(body: String) -> Result<Self, Error> {
-        let data: TokenData = serde_json::from_slice(body.as_ref())?;
+        // Serde data errors can quote response values. Keep only safe location data.
+        let data: TokenData = serde_json::from_slice(body.as_ref()).map_err(|error| {
+            Error::failed_precondition(format!(
+                "invalid token response JSON at line {} column {}",
+                error.line(),
+                error.column()
+            ))
+        })?;
         Ok(Self {
             access_token: data.access_token,
             expires_in: Duration::from_secs(data.expires_in),
@@ -139,5 +161,54 @@ impl Token {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SECRET: &str = "spotify-secret-regression-sentinel";
+
+    #[test]
+    fn token_debug_redacts_access_token() {
+        let token = Token::from_json(format!(
+            r#"{{"accessToken":"{SECRET}","expiresIn":3600,"tokenType":"Bearer","scope":["streaming"]}}"#
+        ))
+        .unwrap();
+        assert_eq!(token.access_token, SECRET);
+        assert!(token.in_scope("streaming"));
+        assert!(!token.is_expired());
+        for output in [format!("{token:?}"), format!("{token:#?}")] {
+            assert!(!output.contains(SECRET), "token leaked through Debug");
+            assert!(output.contains("[REDACTED]"));
+        }
+    }
+
+    #[test]
+    fn token_parse_errors_do_not_retain_response_values() {
+        for body in [
+            format!(
+                r#"{{"accessToken":"{SECRET}","expiresIn":"{SECRET}","tokenType":"Bearer","scope":[]}}"#
+            ),
+            format!(
+                r#"{{"accessToken":"{SECRET}","expiresIn":3600,"tokenType":"Bearer","scope":"{SECRET}"}}"#
+            ),
+            format!(r#""{SECRET}""#),
+        ] {
+            let error = Token::from_json(body).unwrap_err();
+            assert_eq!(error.kind, crate::error::ErrorKind::FailedPrecondition);
+            for output in [
+                format!("{error}"),
+                format!("{error:?}"),
+                format!("{error:#?}"),
+            ] {
+                assert!(
+                    !output.contains(SECRET),
+                    "token response leaked through error"
+                );
+            }
+            assert!(std::error::Error::source(&error).is_none());
+        }
     }
 }
