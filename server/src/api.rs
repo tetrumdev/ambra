@@ -27,7 +27,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, watch};
 use tokio_stream::wrappers::ReceiverStream;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
     artwork_quality::{
@@ -52,6 +52,10 @@ const UPSTREAM_ATTEMPTS: usize = 3;
 const PROVIDER_RESTORE_WAIT: Duration = Duration::from_secs(20);
 
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+type ArtistMetadataCache = HashMap<
+    (MusicProvider, String),
+    (Instant, Arc<tokio::sync::OnceCell<crate::models::ArtistProfileMetadata>>),
+>;
 
 #[derive(Clone)]
 struct AppState {
@@ -72,6 +76,7 @@ struct AppState {
     artwork_quality_cache: Arc<RwLock<HashMap<String, (Instant, ArtworkCandidate)>>>,
     artwork_dimensions_cache: Arc<RwLock<HashMap<String, (Instant, (u32, u32))>>>,
     artwork: Arc<crate::artwork_cache::ArtworkCache>,
+    artist_metadata: Arc<Mutex<ArtistMetadataCache>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -129,10 +134,13 @@ pub async fn serve() -> ServerResult<()> {
         media_fetches: Arc::new(Mutex::new(HashMap::new())),
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
+        artist_metadata: Arc::new(Mutex::new(HashMap::new())),
     };
 
+    let address = env::var("AMBRA_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
+    let access = crate::access::AccessPolicy::from_env(&address);
     let cors = CorsLayer::new()
-        .allow_origin(Any)
+        .allow_origin(AllowOrigin::list(access.origin_values()))
         .allow_methods([Method::GET, Method::HEAD, Method::POST])
         .allow_headers([RANGE, CONTENT_TYPE])
         .expose_headers([CONTENT_LENGTH, CONTENT_RANGE, ACCEPT_RANGES, CONTENT_TYPE])
@@ -145,9 +153,26 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/auth/{provider}/complete", post(complete_auth))
         .route("/api/library", get(library))
         .route("/api/library/tracks", post(add_track))
+        .route("/api/library/tracks/remove", post(remove_tracks))
         .route("/api/search/tracks", get(search_tracks))
         .route("/api/search/providers", get(search_providers))
         .route("/api/search/catalog", get(search_catalog))
+        .route(
+            "/api/providers/{provider}/albums/{album_id}/tracks",
+            get(album_tracks),
+        )
+        .route(
+            "/api/providers/{provider}/artists/{artist_id}/albums",
+            get(artist_albums),
+        )
+        .route(
+            "/api/providers/{provider}/artists/{artist_id}",
+            get(artist_profile),
+        )
+        .route(
+            "/api/providers/{provider}/artists/{artist_id}/metadata",
+            get(artist_metadata),
+        )
         .route(
             "/api/providers/{provider}/tracks/{track_id}/metadata",
             get(track_metadata),
@@ -188,13 +213,19 @@ pub async fn serve() -> ServerResult<()> {
             wait_for_providers,
         ))
         .layer(cors)
+        // Outermost, so a foreign page is refused before CORS or provider waits.
+        .layer(middleware::from_fn_with_state(
+            access,
+            crate::access::enforce,
+        ))
         .with_state(state.clone());
 
     // Open the port first; provider sessions restore concurrently behind it.
     tokio::spawn(restore_providers(state, providers_ready_tx));
 
-    let address = env::var("AMBRA_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
-    let listener = tokio::net::TcpListener::bind(&address).await?;
+    let listener = tokio::net::TcpListener::bind(&address)
+        .await
+        .map_err(|error| format!("Could not listen on {address}: {error}"))?;
     println!("Ambra server listening on http://{address}");
 
     axum::serve(listener, app).await?;
@@ -617,9 +648,15 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .into_iter()
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
-    let tracks = load_tracks(&state, &available_entries).await?;
+    let (tracks, unavailable) = load_available_tracks(&state, &available_entries).await;
 
-    Ok(Json(LibraryResponse { tracks }))
+    Ok(Json(LibraryResponse {
+        tracks,
+        unavailable_track_ids: unavailable
+            .iter()
+            .map(|entry| format!("{}:{}", provider_slug(entry.provider), entry.provider_track_id))
+            .collect(),
+    }))
 }
 
 #[derive(Deserialize)]
@@ -739,6 +776,7 @@ async fn search_catalog(
                         image_url: album.cover_url.clone(),
                         upc: album.upc.clone(),
                         release_date: album.release_date.clone(),
+                        release_type: None,
                         version: album.version.clone(),
                         explicit: None,
                         maximum_bit_depth: None,
@@ -978,7 +1016,26 @@ async fn add_track(
         }
     }
 
-    Ok(Json(LibraryResponse { tracks }))
+    Ok(Json(LibraryResponse::new(tracks)))
+}
+
+#[derive(Deserialize)]
+struct RemoveTracksRequest {
+    tracks: Vec<LibraryEntry>,
+}
+
+async fn remove_tracks(
+    State(state): State<AppState>,
+    Json(request): Json<RemoveTracksRequest>,
+) -> Result<StatusCode, ApiError> {
+    let removed = request.tracks.into_iter().collect::<HashSet<_>>();
+    let mut library_entries = state.library_entries.write().await;
+    let before = library_entries.len();
+    library_entries.retain(|entry| !removed.contains(entry));
+    if library_entries.len() != before {
+        save_library_entries(&library_entries).map_err(ApiError::internal)?;
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn add_album(
@@ -1026,41 +1083,228 @@ async fn add_spotify_album(
     import_album(&state, MusicProvider::Spotify, album_id).await
 }
 
-async fn import_album(
+#[derive(Deserialize)]
+struct CatalogPageRequest {
+    #[serde(default)]
+    offset: u32,
+    limit: Option<u32>,
+}
+
+// Cache profile data separately from popular-track hydration.
+async fn cached_artist_metadata(
     state: &AppState,
     provider: MusicProvider,
-    album_id: String,
+    artist_id: &str,
+) -> Result<crate::models::ArtistProfileMetadata, ApiError> {
+    let cell = {
+        let mut cache = state.artist_metadata.lock().await;
+        cache.retain(|_, (when, _)| when.elapsed() < Duration::from_secs(3600));
+        let key = (provider, artist_id.to_owned());
+        if !cache.contains_key(&key) && cache.len() >= 256 {
+            if let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, (when, _))| *when)
+                .map(|(key, _)| key.clone())
+            {
+                cache.remove(&oldest);
+            }
+        }
+        cache
+            .entry(key)
+            .or_insert_with(|| (Instant::now(), Arc::new(tokio::sync::OnceCell::new())))
+            .1
+            .clone()
+    };
+    let fetch = async {
+        match provider {
+            MusicProvider::Tidal => tidal_provider(state)?
+                .artist_profile(artist_id)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Qobuz => qobuz_provider(state)?
+                .artist_profile(artist_id)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Spotify => spotify_provider(state)?
+                .artist_profile(artist_id)
+                .await
+                .map_err(ApiError::upstream),
+        }
+    };
+    let profile = cell
+        .get_or_try_init(|| async {
+            tokio::time::timeout(Duration::from_secs(30), fetch)
+                .await
+                .map_err(|_| ApiError::upstream(io::Error::other("Artist profile timed out")))?
+        })
+        .await
+        .cloned()?;
+    if profile.popular_tracks_error.is_some() {
+        state
+            .artist_metadata
+            .lock()
+            .await
+            .remove(&(provider, artist_id.to_owned()));
+    }
+    Ok(profile)
+}
+
+async fn artist_metadata(
+    State(state): State<AppState>,
+    Path((provider, artist_id)): Path<(MusicProvider, String)>,
+) -> Result<Json<crate::models::CatalogArtist>, ApiError> {
+    let cached = state
+        .artist_metadata
+        .lock()
+        .await
+        .get(&(provider, artist_id.clone()))
+        .filter(|(when, _)| when.elapsed() < Duration::from_secs(3600))
+        .and_then(|(_, cell)| cell.get().map(|profile| profile.artist.clone()));
+    if let Some(artist) = cached {
+        return Ok(Json(artist));
+    }
+    // A library portrait must not wait for biography or popular-track requests.
+    let fetch = async {
+        match provider {
+            MusicProvider::Tidal => tidal_provider(&state)?.artist_details(&artist_id).await,
+            MusicProvider::Qobuz => qobuz_provider(&state)?.artist_details(&artist_id).await,
+            MusicProvider::Spotify => spotify_provider(&state)?.artist_details(&artist_id).await,
+        }
+        .map_err(ApiError::upstream)
+    };
+    Ok(Json(
+        tokio::time::timeout(Duration::from_secs(15), fetch)
+            .await
+            .map_err(|_| ApiError::upstream(io::Error::other("Artist portrait timed out")))??,
+    ))
+}
+
+async fn artist_profile(
+    State(state): State<AppState>,
+    Path((provider, artist_id)): Path<(MusicProvider, String)>,
+) -> Result<Json<crate::models::CatalogArtistProfile>, ApiError> {
+    use crate::models::CatalogArtistProfile;
+    let profile = cached_artist_metadata(&state, provider, &artist_id).await?;
+    let entries: Vec<_> = profile
+        .popular_track_ids
+        .into_iter()
+        .map(|provider_track_id| LibraryEntry {
+            provider,
+            provider_track_id,
+        })
+        .collect();
+    let popular_tracks = load_search_tracks(&state, &entries).await;
+    let popular_tracks_error = profile.popular_tracks_error.or_else(|| {
+        (!entries.is_empty() && popular_tracks.is_empty())
+            .then(|| "Popular tracks couldn't be loaded.".to_owned())
+    });
+    Ok(Json(CatalogArtistProfile {
+        artist: profile.artist,
+        biography: profile.biography,
+        biography_source: profile.biography_source,
+        popular_tracks,
+        popular_tracks_error,
+    }))
+}
+
+async fn artist_albums(
+    State(state): State<AppState>,
+    Path((provider, artist_id)): Path<(MusicProvider, String)>,
+    Query(request): Query<CatalogPageRequest>,
+) -> Result<Json<crate::models::CatalogAlbumsPage>, ApiError> {
+    let limit = request.limit.unwrap_or(30).clamp(1, 50);
+    let fetch = async {
+        match provider {
+            MusicProvider::Tidal => tidal_provider(&state)?
+                .artist_albums(&artist_id, request.offset, limit)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Qobuz => qobuz_provider(&state)?
+                .artist_albums(&artist_id, request.offset, limit)
+                .await
+                .map_err(ApiError::upstream),
+            MusicProvider::Spotify => spotify_provider(&state)?
+                .artist_albums(&artist_id, request.offset, limit)
+                .await
+                .map_err(ApiError::upstream),
+        }
+    };
+    Ok(Json(
+        tokio::time::timeout(Duration::from_secs(30), fetch)
+            .await
+            .map_err(|_| ApiError::upstream(io::Error::other("Artist albums timed out")))??,
+    ))
+}
+
+// Browsing must never import music or change saved library membership.
+async fn album_tracks(
+    State(state): State<AppState>,
+    Path((provider, album_id)): Path<(MusicProvider, String)>,
 ) -> Result<Json<LibraryResponse>, ApiError> {
+    let entries = album_entries(&state, provider, &album_id).await?;
+    let (tracks, _) = load_available_tracks(&state, &entries).await;
+    if tracks.is_empty() {
+        return Err(ApiError::upstream(io::Error::other(format!(
+            "No tracks on {} album {album_id} could be loaded",
+            provider_name(provider)
+        ))));
+    }
+    Ok(Json(LibraryResponse::new(tracks)))
+}
+
+async fn album_entries(
+    state: &AppState,
+    provider: MusicProvider,
+    album_id: &str,
+) -> Result<Vec<LibraryEntry>, ApiError> {
     let track_ids = match provider {
         MusicProvider::Tidal => tidal_provider(state)?
-            .album_track_ids(&album_id)
+            .album_track_ids(album_id)
             .await
             .map_err(ApiError::upstream)?,
         MusicProvider::Qobuz => qobuz_provider(state)?
-            .album_track_ids(&album_id)
+            .album_track_ids(album_id)
             .await
             .map_err(ApiError::upstream)?,
         MusicProvider::Spotify => spotify_provider(state)?
-            .album_track_ids(&album_id)
+            .album_track_ids(album_id)
             .await
             .map_err(ApiError::upstream)?,
     };
-
     if track_ids.is_empty() {
         return Err(ApiError::not_found(format!(
             "{} album {album_id} contains no tracks",
             provider_name(provider)
         )));
     }
-
-    let entries = track_ids
+    Ok(track_ids
         .into_iter()
         .map(|provider_track_id| LibraryEntry {
             provider,
             provider_track_id,
         })
-        .collect::<Vec<_>>();
-    let tracks = load_tracks(state, &entries).await?;
+        .collect())
+}
+
+async fn import_album(
+    state: &AppState,
+    provider: MusicProvider,
+    album_id: String,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    let entries = album_entries(state, provider, &album_id).await?;
+    // Region-locked or pulled tracks are skipped instead of failing the album.
+    let (tracks, unavailable) = load_available_tracks(state, &entries).await;
+    if tracks.is_empty() {
+        return Err(ApiError::upstream(io::Error::other(format!(
+            "No tracks on {} album {album_id} could be loaded",
+            provider_name(provider)
+        ))));
+    }
+    let unavailable = unavailable.into_iter().collect::<HashSet<_>>();
+    let entries = entries
+        .into_iter()
+        .filter(|entry| !unavailable.contains(entry))
+        .collect();
 
     let mut library_entries = state.library_entries.write().await;
     move_entries_to_end(&mut library_entries, entries);
@@ -1068,7 +1312,7 @@ async fn import_album(
         eprintln!("Could not persist the streaming library cache: {error}");
     }
 
-    Ok(Json(LibraryResponse { tracks }))
+    Ok(Json(LibraryResponse::new(tracks)))
 }
 
 async fn load_tracks(
@@ -1084,6 +1328,41 @@ async fn load_tracks(
         .map_err(ApiError::upstream)
         .try_collect()
         .await
+}
+
+/// Loads what it can, in order; one pulled or region-locked track must not hide
+/// the rest. Returns the entries that failed alongside the loaded tracks.
+async fn load_available_tracks(
+    state: &AppState,
+    entries: &[LibraryEntry],
+) -> (Vec<TrackMetadata>, Vec<LibraryEntry>) {
+    let results = stream::iter(entries.iter().cloned())
+        .map(|entry| {
+            let state = state.clone();
+            async move {
+                let result = load_track(&state, &entry).await;
+                (entry, result)
+            }
+        })
+        .buffered(4)
+        .collect::<Vec<_>>()
+        .await;
+    let mut tracks = Vec::with_capacity(results.len());
+    let mut failed = Vec::new();
+    for (entry, result) in results {
+        match result {
+            Ok(track) => tracks.push(track),
+            Err(error) => {
+                eprintln!(
+                    "Could not load {} track {}: {error}",
+                    provider_name(entry.provider),
+                    entry.provider_track_id
+                );
+                failed.push(entry);
+            }
+        }
+    }
+    (tracks, failed)
 }
 
 async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<TrackMetadata> {

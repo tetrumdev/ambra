@@ -53,7 +53,7 @@
 .menuItem:hover,
 .menuItem:focus-visible {
     background-color: rgba(42, 42, 42, 0.7);
-    cursor: pointer;
+    cursor: default;
 }
 
 .menuItem:focus-visible {
@@ -103,5 +103,5 @@
 .playlistMenuCreate button {
     padding: 6px;
     background: #353535;
-    cursor: pointer;
+    cursor: default;
 }

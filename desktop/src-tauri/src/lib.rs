@@ -16,7 +16,6 @@ use std::{
     hash::{Hash, Hasher},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     sync::{
         Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -26,6 +25,9 @@ use std::{
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
+use bundled_backend::BundledBackend;
+
+mod bundled_backend;
 mod cover_thumbnails;
 mod keyboard;
 mod library_index;
@@ -952,56 +954,6 @@ fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
 
 static PROCESS_STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
-struct BundledBackend(Mutex<Option<Child>>);
-
-impl BundledBackend {
-    fn stop(&self) {
-        let Ok(mut child) = self.0.lock() else {
-            return;
-        };
-        let Some(mut child) = child.take() else {
-            return;
-        };
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-impl Drop for BundledBackend {
-    fn drop(&mut self) {
-        let Ok(child) = self.0.get_mut() else {
-            return;
-        };
-        let Some(mut child) = child.take() else {
-            return;
-        };
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn spawn_bundled_backend() -> std::io::Result<Option<Child>> {
-    let executable = env::current_exe()?
-        .parent()
-        .map(|directory| directory.join("ambra-server"));
-    let Some(executable) = executable.filter(|path| path.is_file()) else {
-        return Ok(None);
-    };
-
-    Command::new(executable)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map(Some)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn spawn_bundled_backend() -> std::io::Result<Option<Child>> {
-    Ok(None)
-}
-
 /// Milliseconds since the Rust entry point began, for startup tracing.
 #[tauri::command]
 fn startup_elapsed_ms() -> u64 {
@@ -1018,7 +970,12 @@ pub fn run() {
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            app.manage(BundledBackend(Mutex::new(spawn_bundled_backend()?)));
+            let server_log = app
+                .path()
+                .app_log_dir()
+                .ok()
+                .map(|directory| directory.join("ambra-server.log"));
+            app.manage(BundledBackend::start(server_log));
             media_controls::setup(app)?;
             native_audio::setup(app);
             Ok(())

@@ -9,6 +9,13 @@ const bigscreenSources = new Map<string, string>();
 const bigscreenRequests = new Map<string, Promise<string | null>>();
 const UPCOMING_BIGSCREEN_ARTWORK_COUNT = 2;
 
+export function cachedArtwork(url: string): boolean {
+  // Image.complete also becomes true on failure; only successful decodes count.
+  const request = thumbnails.get(url);
+  return !!request && readyThumbnails.has(url);
+}
+const readyThumbnails = new Set<string>();
+
 function bigscreenArtworkKey(track: Track) {
   return [
     track.globalId,
@@ -32,12 +39,19 @@ export function preloadArtwork(url: string, large = false) {
   const image = new Image();
   image.decoding = "async";
   image.src = url;
-  const request = image.decode().then(() => image).catch((error) => {
+  const request = image.decode().then(() => {
+    if (!large && cache.get(url) === request) readyThumbnails.add(url);
+    return image;
+  }).catch((error) => {
     if (cache.get(url) === request) cache.delete(url);
     throw error;
   });
   cache.set(url, request);
-  while (cache.size > (large ? 3 : 192)) cache.delete(cache.keys().next().value!);
+  while (cache.size > (large ? 3 : 192)) {
+    const oldest = cache.keys().next().value!;
+    cache.delete(oldest);
+    if (!large) readyThumbnails.delete(oldest);
+  }
   return request;
 }
 

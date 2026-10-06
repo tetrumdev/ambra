@@ -12,6 +12,11 @@
     padding-top: 3px;
 }
 
+/* With nothing to scroll the empty rail's divider reads as a stray line. */
+.appScrollbar:has(> .appScrollbarThumb[hidden]) {
+    border-left-color: transparent;
+}
+
 .appScrollbarThumb {
     position: absolute;
     top: 0;

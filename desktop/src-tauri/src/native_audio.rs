@@ -88,7 +88,8 @@ enum WorkerCommand {
         reply: Sender<Result<(), String>>,
     },
     Queue {
-        source: String,
+        source: Option<String>,
+        expected_source: Option<String>,
         reply: Sender<Result<(), String>>,
     },
     Play {
@@ -175,11 +176,13 @@ pub fn warm_native_audio(
 #[tauri::command]
 pub async fn queue_native_audio(
     player: State<'_, NativeAudioPlayer>,
-    source: String,
+    source: Option<String>,
+    expected_source: Option<String>,
 ) -> Result<(), String> {
     let command_tx = player.command_tx.clone();
     request_async(command_tx, move |reply| WorkerCommand::Queue {
         source,
+        expected_source,
         reply,
     })
     .await
@@ -586,23 +589,12 @@ impl PlaybackWorker {
                 }
                 let _ = reply.send(result);
             }
-            WorkerCommand::Queue { source, reply } => {
-                let is_already_queued = self
-                    .next_source
-                    .as_ref()
-                    .is_some_and(|queued| queued.source == source)
-                    || self
-                        .ready_next
-                        .as_ref()
-                        .is_some_and(|(queued, _)| queued == &source);
-                let result = if is_already_queued {
-                    Ok(())
-                } else {
-                    QueuedSource::prepare(source).map(|source| {
-                        self.next_source = Some(source);
-                        self.ready_next = None;
-                    })
-                };
+            WorkerCommand::Queue {
+                source,
+                expected_source,
+                reply,
+            } => {
+                let result = self.queue(source, expected_source);
                 let _ = reply.send(result);
             }
             WorkerCommand::Play { reply } => {
@@ -813,6 +805,38 @@ impl PlaybackWorker {
             status.ended = false;
             status.error = None;
         });
+        Ok(())
+    }
+
+    fn queue(
+        &mut self,
+        source: Option<String>,
+        expected_source: Option<String>,
+    ) -> Result<(), String> {
+        // A delayed preload must not requeue audio after the worker has advanced.
+        if expected_source
+            .as_ref()
+            .is_some_and(|expected| self.current_source.as_ref() != Some(expected))
+        {
+            return Ok(());
+        }
+        let Some(source) = source else {
+            self.next_source = None;
+            self.ready_next = None;
+            return Ok(());
+        };
+        let is_already_queued = self
+            .next_source
+            .as_ref()
+            .is_some_and(|queued| queued.source == source)
+            || self
+                .ready_next
+                .as_ref()
+                .is_some_and(|(queued, _)| queued == &source);
+        if !is_already_queued {
+            self.next_source = Some(QueuedSource::prepare(source)?);
+            self.ready_next = None;
+        }
         Ok(())
     }
 
@@ -1395,6 +1419,90 @@ fn lock_status(status: &Arc<Mutex<PlaybackStatus>>) -> std::sync::MutexGuard<'_,
 #[cfg(test)]
 mod tests {
     use super::{StreamSpec, max_buffer_samples, prebuffer_samples, valid_position};
+
+    fn prepared_test_audio(name: &str) -> (String, super::PreparedSource) {
+        use super::*;
+        let path = std::env::temp_dir().join(format!("ambra-{name}-{}.wav", std::process::id()));
+        let mut wav = b"RIFF".to_vec();
+        wav.extend_from_slice(&40u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&44100u32.to_le_bytes());
+        wav.extend_from_slice(&176400u32.to_le_bytes());
+        wav.extend_from_slice(&4u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&4u32.to_le_bytes());
+        wav.extend_from_slice(&[0; 4]);
+        std::fs::write(&path, wav).unwrap();
+        let source = path.to_string_lossy().into_owned();
+        let prepared = prepare_source(source.clone(), false).unwrap();
+        std::fs::remove_file(path).unwrap();
+        (source, prepared)
+    }
+
+    #[test]
+    fn stale_preload_cannot_requeue_the_track_after_native_advance() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        worker.current_source = Some("last.flac".into());
+        worker
+            .queue(Some("last.flac".into()), Some("previous.flac".into()))
+            .unwrap();
+        assert!(worker.next_source.is_none());
+        assert!(worker.ready_next.is_none());
+    }
+
+    #[test]
+    fn empty_queue_clears_pending_and_prepared_audio() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        let (_sender, receiver) = bounded(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        worker.current_source = Some("current.flac".into());
+        worker.next_source = Some(QueuedSource {
+            source: "removed.flac".into(),
+            receiver,
+            foreground: Arc::new(AtomicBool::new(false)),
+            cancelled: cancelled.clone(),
+        });
+        worker.ready_next = Some(prepared_test_audio("clear-queue"));
+        worker.queue(None, Some("current.flac".into())).unwrap();
+        assert!(worker.next_source.is_none());
+        assert!(worker.ready_next.is_none());
+        assert!(cancelled.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn stale_clear_cannot_discard_the_new_tracks_preparation() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        worker.current_source = Some("new-current.flac".into());
+        worker.ready_next = Some(prepared_test_audio("stale-clear"));
+        worker.queue(None, Some("old-current.flac".into())).unwrap();
+        assert!(worker.ready_next.is_some());
+    }
+
+    #[test]
+    fn deliberate_repeated_queue_entries_are_still_supported() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        let (source, prepared) = prepared_test_audio("deliberate-repeat");
+        worker.current_source = Some(source.clone());
+        worker.ready_next = Some((source.clone(), prepared));
+        worker.queue(Some(source.clone()), Some(source)).unwrap();
+        assert!(worker.ready_next.is_some());
+    }
 
     #[test]
     fn speculative_failure_does_not_fail_current_playback() {
