@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
   cachedBigscreenArtwork,
+  cachedArtwork,
   preloadArtwork,
   preloadBigscreenArtwork,
   preloadUpcomingBigscreenArtwork,
@@ -21,14 +22,18 @@ test("decoded artwork shares work, retries failures, and bounds thumbnail retent
   } as unknown as typeof Image;
   try {
     const first = preloadArtwork("cover:1");
+    expect(cachedArtwork("cover:1")).toBe(false);
     expect(preloadArtwork("cover:1")).toBe(first);
     await first;
+    expect(cachedArtwork("cover:1")).toBe(true);
     expect(decodes).toBe(1);
     fail = true;
     await expect(preloadArtwork("broken")).rejects.toThrow("decode failed");
+    expect(cachedArtwork("broken")).toBe(false);
     fail = false;
     await preloadArtwork("broken");
     for (let index = 0; index < 192; index++) await preloadArtwork(`next:${index}`);
+    expect(cachedArtwork("cover:1")).toBe(false);
     const before = decodes;
     await preloadArtwork("cover:1");
     expect(decodes).toBe(before + 1);

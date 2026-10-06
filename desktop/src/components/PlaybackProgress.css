@@ -46,7 +46,7 @@
     border: 0;
     margin: 0;
     background: transparent;
-    cursor: pointer;
+    cursor: default;
     filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));
     overflow: visible;
 }

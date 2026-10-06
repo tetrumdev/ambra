@@ -8,9 +8,13 @@ import {
 } from "react";
 import { TrackList, type TrackListProps } from "./TrackList";
 import { secureRandomInt } from "../utils/queueModel";
+import { formatTotalDuration } from "../utils/totalDuration";
 
 export type TrackCollectionViewProps = TrackListProps & {
   title: string;
+  className?: string;
+  headerNavigation?: ReactNode;
+  playbackActions?: ReactNode;
   registerScrollElement: (element: HTMLDivElement | null) => void;
   headerContent?: ReactNode;
   headerArtwork?: ReactNode;
@@ -22,11 +26,14 @@ export type TrackCollectionViewProps = TrackListProps & {
     count: number;
     unit: string;
     showDuration?: boolean;
-  };
+  } | null;
 };
 
 export function TrackCollectionView({
   title,
+  className = "",
+  headerNavigation,
+  playbackActions,
   registerScrollElement,
   headerContent,
   headerArtwork,
@@ -45,10 +52,6 @@ export function TrackCollectionView({
     (total, track) => total + track.durationSeconds,
     0,
   ), [tracks]);
-  const hours = Math.floor(totalDurationSeconds / 3600);
-  const minutes = Math.floor((totalDurationSeconds % 3600) / 60);
-  const seconds = Math.floor(totalDurationSeconds % 60);
-
   function formatUnit(value: number, unit: string) {
     return `${value} ${unit}${value === 1 ? "" : "s"}`;
   }
@@ -154,7 +157,7 @@ export function TrackCollectionView({
 
   return (
     <div
-      className={`libraryView smoothScroll${collapsibleHeader ? " playlistView" : ""}`}
+      className={`libraryView smoothScroll ${className}${collapsibleHeader ? " playlistView" : ""}`}
       ref={setScrollElement}
       onScroll={
         collapsibleHeader
@@ -165,6 +168,7 @@ export function TrackCollectionView({
       {collapsibleHeader && (
         <div className="playlistHeaderAnchor" aria-hidden="true" />
       )}
+      {headerNavigation && <div className="libraryHeaderNavigation">{headerNavigation}</div>}
       <div className="libraryHeader">
         {headerArtwork && (
           <div className="libraryHeaderArtwork">{headerArtwork}</div>
@@ -192,9 +196,10 @@ export function TrackCollectionView({
                 <img src="/shuffle.svg" alt="" aria-hidden="true" />
                 <span>SHUFFLE</span>
               </button>
+              {playbackActions}
             </div>
           )}
-          <div className="libraryInfo">
+          {summary !== null && <div className="libraryInfo">
             <span className="numOfTracks">
               {formatUnit(summaryCount, summaryUnit)}
             </span>
@@ -202,12 +207,11 @@ export function TrackCollectionView({
               <>
                 <span className="separator">•</span>
                 <span className="playlistLength">
-                  {formatUnit(hours, "hour")}, {formatUnit(minutes, "minute")},{" "}
-                  {formatUnit(seconds, "second")}
+                  {formatTotalDuration(totalDurationSeconds)}
                 </span>
               </>
             )}
-          </div>
+          </div>}
         </div>
       </div>
       {content ?? <TrackList {...trackListProps} />}

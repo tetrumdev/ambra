@@ -139,6 +139,151 @@ impl QobuzProvider {
         Ok(track_ids)
     }
 
+    pub async fn artist_details(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::CatalogArtist> {
+        let id = artist_id
+            .parse::<u64>()
+            .map_err(|_| io::Error::other("Invalid Qobuz artist ID"))?;
+        let artist = self.client.get_artist(id, false).await?;
+        Ok(crate::models::CatalogArtist {
+            id: format!("qobuz:{}", artist.id),
+            provider: MusicProvider::Qobuz,
+            name: artist.name,
+            image_url: artist.image.and_then(|image| image.best().cloned()),
+        })
+    }
+
+    pub async fn artist_profile(
+        &self,
+        artist_id: &str,
+    ) -> ProviderResult<crate::models::ArtistProfileMetadata> {
+        use crate::models::{ArtistProfileMetadata, CatalogArtist};
+        let id = artist_id
+            .parse::<u64>()
+            .map_err(|_| io::Error::other("Invalid Qobuz artist ID"))?;
+        let (page, basic) = tokio::join!(
+            self.client.get_artist_page(id, None),
+            self.artist_details(artist_id)
+        );
+        let page = page?;
+        let image_url = basic
+            .ok()
+            .and_then(|artist| artist.image_url);
+        let biography = page.biography;
+        Ok(ArtistProfileMetadata {
+            artist: CatalogArtist {
+                id: format!("qobuz:{}", page.id),
+                provider: MusicProvider::Qobuz,
+                name: page.name.display,
+                image_url,
+            },
+            biography: biography.as_ref().and_then(|bio| bio.content.clone()),
+            biography_source: biography.and_then(|bio| bio.source).and_then(|source| {
+                source.as_str().map(str::to_owned).or_else(|| {
+                    source
+                        .get("name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+            }),
+            popular_track_ids: page
+                .top_tracks
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|track| {
+                    !track
+                        .rights
+                        .as_ref()
+                        .is_some_and(|rights| rights.streamable == Some(false))
+                })
+                .take(10)
+                .map(|track| track.id.to_string())
+                .collect(),
+            popular_tracks_error: None,
+        })
+    }
+
+    pub async fn artist_albums(
+        &self,
+        artist_id: &str,
+        offset: u32,
+        limit: u32,
+    ) -> ProviderResult<crate::models::CatalogAlbumsPage> {
+        use crate::models::{CatalogAlbum, CatalogAlbumsPage};
+        let id = artist_id
+            .parse::<u64>()
+            .map_err(|_| io::Error::other("Invalid Qobuz artist ID"))?;
+        // The legacy /artist/get albums omit release types. Use the same groups
+        // as Qobuz's artist page and paginate each group without guessing from titles.
+        let artist = self.client.get_artist_page(id, None).await?;
+        let groups: Vec<_> = artist
+            .releases
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|group| group.release_type != "awardedRelease")
+            .collect();
+        let pages = futures_util::future::try_join_all(groups.iter().map(|group| async {
+            let page = self
+                .client
+                .get_releases_grid(id, &group.release_type, limit, offset, None)
+                .await?;
+            Ok::<_, qbz_qobuz::ApiError>((group.release_type.clone(), page))
+        }))
+        .await?;
+        let next_offset = pages
+            .iter()
+            .filter_map(|(_, page)| {
+                (page.has_more && !page.items.is_empty())
+                    .then(|| offset.saturating_add(page.items.len() as u32))
+            })
+            .max();
+        let albums = pages
+            .into_iter()
+            .flat_map(|(release_type, page)| {
+                page.items
+                    .into_iter()
+                    .map(move |album| (release_type.clone(), album))
+            })
+            .filter(|(_, album)| {
+                !album
+                    .rights
+                    .as_ref()
+                    .is_some_and(|rights| rights.streamable == Some(false))
+            })
+            .map(|(release_type, album)| CatalogAlbum {
+                id: format!("qobuz:{}", album.id),
+                provider: MusicProvider::Qobuz,
+                title: album.title,
+                artist: album
+                    .artist
+                    .map(|artist| artist.name.display)
+                    .unwrap_or_else(|| artist.name.display.clone()),
+                image_url: album.image.and_then(|image| image.best().cloned()),
+                upc: None,
+                release_date: album
+                    .dates
+                    .and_then(|dates| dates.original.or(dates.stream)),
+                release_type: Some(release_type),
+                version: album.version,
+                explicit: album.parental_warning,
+                maximum_bit_depth: album
+                    .audio_info
+                    .as_ref()
+                    .and_then(|audio| audio.maximum_bit_depth),
+                maximum_sampling_rate_khz: album
+                    .audio_info
+                    .and_then(|audio| audio.maximum_sampling_rate)
+                    .and_then(normalize_sampling_rate),
+            })
+            .collect();
+        Ok(CatalogAlbumsPage {
+            albums,
+            next_offset,
+        })
+    }
+
     pub async fn search_catalog(
         &self,
         query: &str,
@@ -187,6 +332,7 @@ impl QobuzProvider {
                     artist: album.artist.name,
                     image_url: album.image.best().cloned(),
                     upc: album.upc,
+                    release_type: None,
                     release_date: album.release_date_original,
                     version: album.version,
                     explicit: album.parental_warning,

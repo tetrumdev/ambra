@@ -27,6 +27,7 @@ export function PlayerControls({
         type="button"
         onClick={onPrevious}
         disabled={disabled}
+        data-tooltip="Previous"
       >
         <img src="/back.svg" alt="Previous" />
       </button>
@@ -37,6 +38,7 @@ export function PlayerControls({
         onClick={onTogglePlayback}
         className={isPlaying ? "pause" : "play"}
         disabled={disabled}
+        data-tooltip={isPlaying ? "Pause" : "Play"}
       >
         <img
           src={isPlaying ? "/Pause.svg" : "/Play.svg"}
@@ -44,7 +46,7 @@ export function PlayerControls({
         />
       </button>
 
-      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled}>
+      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled} data-tooltip="Next">
         <img src="/skip.svg" alt="Next" />
       </button>
     </div>

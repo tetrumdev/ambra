@@ -1,27 +1,25 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import type { CatalogArtist } from "../api/server";
 import { observeNearbyArtwork } from "../utils/nearbyArtwork";
-import { artistImage } from "../utils/artistImages";
+import { cachedArtistImage, resolveArtistImage, subscribeArtistImages } from "../utils/artistImages";
+import { ArtworkImage } from "./ArtworkImage";
 
-export function ArtistPortrait({ name, fallback }: { name: string; fallback: string | null }) {
+export function ArtistPortrait({ artist, eager = false }: { artist: CatalogArtist; eager?: boolean }) {
   const container = useRef<HTMLDivElement>(null);
-  const [nearby, setNearby] = useState(false);
+  const [nearby, setNearby] = useState(eager);
+  const image = useSyncExternalStore(subscribeArtistImages, () => cachedArtistImage(artist), () => cachedArtistImage(artist));
   useEffect(() => {
-    if (container.current) return observeNearbyArtwork(container.current, () => setNearby(true));
-  }, []);
-  const [image, setImage] = useState<string | null>(null);
-  const [failed, setFailed] = useState<string[]>([]);
+    if (container.current && !nearby) return observeNearbyArtwork(container.current, () => setNearby(true));
+  }, [nearby]);
   useEffect(() => {
-    let cancelled = false;
-    setImage(null);
-    if (nearby && (!fallback || failed.includes(fallback))) {
-      void artistImage(name).then(value => { if (!cancelled) setImage(value); });
-    }
-    return () => { cancelled = true; };
-  }, [name, fallback, failed, nearby]);
-  const source = [fallback, image].find(url => url && !failed.includes(url));
+    if (nearby) void resolveArtistImage(artist, eager);
+  }, [artist.id, artist.provider, artist.name, nearby, eager]);
+  const source = image ?? artist.imageUrl;
   return <div className="artistPortrait" ref={container}>
     <div className="searchEntityImage">
-      {source ? <img src={source} alt={`${name} portrait`} loading="lazy" onError={() => setFailed(current => [...current, source])} /> : <span>{name.slice(0, 1)}</span>}
+      {/* The initial sits under the photo, so a slow or missing portrait never leaves a blank circle. */}
+      <span aria-hidden={source ? true : undefined}>{artist.name.slice(0, 1).toLocaleUpperCase()}</span>
+      {source && <ArtworkImage src={source} alt={`${artist.name} portrait`} loading={nearby ? "eager" : "lazy"} />}
     </div>
   </div>;
 }
