@@ -26,20 +26,75 @@
     display: flex;
     gap: 4px;
     padding: 10px;
-    border: 1px solid #535353;
+    border: 1px solid #2f2f2f;
     border-radius: 12px;
     color: white;
-    background: rgba(0, 0, 0, 0.3);
-    backdrop-filter: blur(5px);
-    -webkit-backdrop-filter: blur(5px);
+    background: rgba(29, 29, 29, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
 }
 
-.devAudioControls select {
-    width: 140px;
+.audioDeviceList {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 260px;
+    padding-bottom: 6px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid #2f2f2f;
+}
+
+.audioDeviceHeading {
+    padding: 0 8px 4px;
+    text-align: left;
+    color: #a3a2a3;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 0.7rem;
+}
+
+/* Rows like the search service menu: rounded #303030 highlight, check on the active one. */
+.audioDeviceOption {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    color: white;
+    background: transparent;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.audioDeviceOption:hover:not(:disabled),
+.audioDeviceOption:focus-visible {
+    background: #303030;
+}
+
+.audioDeviceOption:disabled {
+    color: #a3a2a3;
+}
+
+.audioDeviceCheck {
+    width: 12px;
+    height: 12px;
+}
+
+.audioDeviceOption[aria-checked="true"] .audioDeviceCheck {
+    background: url("/check.svg") center / contain no-repeat;
+}
+
+.audioDeviceName {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .volumeSlider {
-    width: 140px;
+    width: 100%;
     height: 12px;
     margin: 6px 0 2px;
     padding: 0;
@@ -47,7 +102,7 @@
     -webkit-appearance: none;
     background: transparent;
     outline: none;
-    cursor: pointer;
+    cursor: default;
 }
 
 .volumeSlider::-webkit-slider-runnable-track {
@@ -94,7 +149,7 @@
     border: 0;
     background: transparent;
     line-height: 0;
-    cursor: pointer;
+    cursor: default;
 }
 
 #extraCtrls #queueBtn {
@@ -128,7 +183,7 @@
     font-size: 10px;
     font-weight: 650;
     letter-spacing: 0.08em;
-    cursor: pointer;
+    cursor: default;
 }
 
 .devAudioModeToggle:disabled {

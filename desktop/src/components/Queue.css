@@ -1,142 +1,124 @@
-#queueList::before {
-    height: var(--content-top-spacer);
-    content: "";
-    display: block;
-}
-
-#queueList {
-    color: white;
-    overflow-y: auto;
-    overflow-x: hidden;
-    min-height: 0;
-    height: 100%;
-    width: 90vw;
-    justify-self: center;
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 0.9rem;
-    font-weight: 300;
-    font-family: "Stack Sans Text", Inter, sans-serif;
-    filter: none;
-    display: grid;
-    gap: 50px;
-}
-
-#queueList::after {
-    display: block;
-    height: 100px;
-    content: "";
-}
-
-.queueSection {
-    background: transparent;
-    position: relative;
-    top: 12px;
-    width: 100%;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.8rem;
-}
-
-.queueSelectionDeleteButton {
-    position: absolute;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-}
-
-.queueSection::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background-color: #535353;
-}
-
-.queueItem {
-    margin: 0;
-    background-color: black;
-    padding-left: 15px;
-    height: 76px;
-    border-bottom: 1px solid #535353;
-    display: grid;
-    align-content: center;
-    grid-template-columns:
-        60px minmax(100px, 1fr)
-        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
-    gap: 10px;
-    text-align: left;
-    font-family: inherit;
-    width: 100%;
-    cursor: pointer;
-}
-
-.queueItem:hover {
-    background-color: #151515;
-}
-
-.queueItem[data-selected="true"],
-.queueItem[data-selected="true"]:hover {
-    background-color: #352000;
-}
-
-#currentQueueTrack,
-#upcomingQueueTracks {
+#queue .queueView {
+    grid-column: 2;
+    container: queue / inline-size;
     display: flex;
     flex-direction: column;
-}
-
-#queueList .coverImgContainer {
-    width: 54px;
-    height: 54px;
-    grid-column: 1;
-    align-self: center;
-    align-content: center;
-    justify-content: center;
-    cursor: pointer;
-    border-radius: 6px;
-    overflow: hidden;
-    display: grid;
-    place-items: center;
-}
-
-#queueList .coverImg {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
+    height: calc(100% - var(--player-height));
+    min-width: 0;
+    min-height: 0;
+    font: 300 0.9rem "Stack Sans Text", Inter, sans-serif;
 }
 
-#queueList .queueTrackInfo {
-    grid-column: 2;
-    align-self: center;
-    display: grid;
-    grid-template-rows: 24px 24px;
+.queueHeader {
+    flex: none;
+    padding-top: var(--content-top-spacer);
+}
+
+.queueHeader .libraryTitle {
+    margin-top: 0;
+}
+
+.queueHeader .librarySections {
+    flex-wrap: wrap;
+    row-gap: 8px;
+}
+
+.queueHeader .librarySectionButton:disabled {
+    opacity: 0.5;
+    text-decoration: none;
+}
+
+.queueHeader .libraryInfo {
     align-items: center;
-    justify-items: left;
 }
 
-.queueTrackInfo .trackName {
-    grid-column: 1;
-    grid-row: 1;
-    font-weight: 600;
-    margin: 0;
-    text-align: left;
+.queueView .columnInfo {
+    background: black;
 }
 
-.queueTrackInfo .artistName {
-    grid-column: 1;
-    grid-row: 2;
-    text-align: left;
-    /*align-self: center;*/
+.queueView #queueList {
+    flex: 1;
+    height: auto;
+    width: 100%;
+    min-height: 0;
 }
 
-.queueSelectionIndicator {
-    grid-column: 5;
-    width: 20px;
-    height: 20px;
-    align-self: center;
-    justify-self: center;
-    user-select: none;
-    -webkit-user-drag: none;
+.queueView #queueList::before {
+    content: none;
+}
+
+.queueView #queueList::after {
+    height: 24px;
+}
+
+.queueItem .trackName,
+.queueItem .artistName,
+.queueItem .albumName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queueTrackName > span {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queueItem[data-played="true"] .trackName {
+    color: #a3a2a3;
+}
+
+.queueNowPlaying,
+.queueTrackArtist {
+    color: #a3a2a3;
+    font-size: 0.75rem;
+    font-weight: 400;
+}
+
+.queueNowPlaying {
+    display: block;
+}
+
+.queueTrackArtist {
+    display: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.queueEmpty {
+    margin: 30px;
+    color: #a3a2a3;
+}
+
+@container queue (width < 780px) {
+    .queueHeader .libraryTitle {
+        font-size: 2.5rem;
+    }
+
+    .queueView #queueList {
+        --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px 40px;
+    }
+
+    .queueItem .artistName,
+    .queueItem .albumName,
+    .queueView .artistColumn,
+    .queueView .albumColumn {
+        display: none;
+    }
+
+    .queueTrackArtist {
+        display: block;
+    }
+
+    .queueItem .trackDuration,
+    .queueView .durationColumn {
+        grid-column: 3;
+    }
+
+    .queueItem .trackCollectionMenuTrigger {
+        grid-column: 4;
+    }
 }

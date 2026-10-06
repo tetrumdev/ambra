@@ -81,7 +81,12 @@
 }
 
 .searchResult {
-    cursor: pointer;
+    cursor: default;
+    grid-template-columns: calc(var(--art-size) + 40px) minmax(0, 1fr);
+}
+
+.searchResultLeading {
+    width: calc(var(--art-size) + 40px);
 }
 
 .searchResult:hover .searchResultName {
@@ -99,11 +104,10 @@
     overflow: hidden;
     border: 0;
     border-radius: 7px;
-    background: #fff;
+    background: transparent;
 }
 
-.searchResultCover,
-.searchArtworkPlay {
+.searchResultCover {
     grid-area: 1 / 1;
 }
 
@@ -113,25 +117,6 @@
     height: 100%;
     object-fit: cover;
     -webkit-user-drag: none;
-    transition: filter 0.25s;
-}
-
-.searchArtworkPlay {
-    width: 13px;
-    z-index: 1;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.25s;
-}
-
-.searchResultArtwork:hover .searchArtworkPlay,
-.searchResultArtwork:focus-visible .searchArtworkPlay {
-    opacity: 1;
-}
-
-.searchResultArtwork:hover .searchResultCover,
-.searchResultArtwork:focus-visible .searchResultCover {
-    filter: brightness(50%) blur(3px);
 }
 
 .searchResultInfo,
@@ -242,6 +227,14 @@
     background: #242424;
 }
 
+.artistPortrait .searchEntityImage > * {
+    grid-area: 1 / 1;
+}
+
+.artistPortrait img[data-placeholder] {
+    visibility: hidden;
+}
+
 .searchAlbum .searchEntityImage {
     background: #fff;
 }
@@ -334,6 +327,10 @@
         grid-column: 1 / -1;
         grid-row: auto;
         grid-template-columns: var(--art-size) minmax(0, 1fr);
+    }
+
+    .searchTrackSection[data-primary="true"] .searchResult[data-variant="featured"] {
+        grid-template-columns: calc(var(--art-size) + 40px) minmax(0, 1fr);
     }
 }
 

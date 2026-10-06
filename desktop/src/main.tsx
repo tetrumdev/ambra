@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import "./interaction.css";
 import "./scrollbars.css";
 import { hydratePersistentStorage } from "./utils/persistentStorage";
+import { installTooltips } from "./utils/tooltips";
+import { isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 
 mark("js-start");
@@ -37,6 +40,14 @@ function Root() {
     });
   }, []);
   return <App key={restoreEpoch} />;
+}
+
+installTooltips();
+// Development keeps reload and friends.
+if (!import.meta.env.DEV) {
+  window.addEventListener("keydown", (event) => {
+    if (isBrowserShortcut(event)) event.preventDefault();
+  }, true);
 }
 
 mark("first-render");

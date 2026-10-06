@@ -1,3 +1,4 @@
+import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
@@ -34,6 +35,11 @@ type OpenMenu =
 
 export type TrackListProps = {
   tracks: Track[];
+  onOpenEntity?: (entity: BrowseEntity) => void;
+  savedTrackIds?: ReadonlySet<string>;
+  showTrackNumbers?: boolean;
+  showArtwork?: boolean;
+  showRank?: boolean;
   playTrack: (trackId: GlobalTrackId) => void;
   playStandalone: (trackId: GlobalTrackId) => void;
   addToQueue: (trackId: GlobalTrackId) => void;
@@ -65,6 +71,7 @@ function formatTime(time: number) {
 
 export function TrackList({
   tracks,
+  onOpenEntity, savedTrackIds, showTrackNumbers = false, showRank = false, showArtwork = true,
   playTrack,
   playStandalone,
   addToQueue,
@@ -79,6 +86,10 @@ export function TrackList({
   onSortChange,
 }: TrackListProps) {
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
+  const showDiscNumbers = useMemo(() => tracks.some(track => (track.discNumber ?? 1) > 1), [tracks]);
+  const entityActions = useRef(onOpenEntity);
+  entityActions.current = onOpenEntity;
+  const openEntity = useCallback((entity: BrowseEntity) => entityActions.current?.(entity), []);
   const trackIds = useMemo(
     () => tracks.map((track) => track.globalId),
     [tracks],
@@ -232,7 +243,7 @@ export function TrackList({
         type="button"
         data-sort-direction={direction ?? undefined}
         aria-label={nextLabel}
-        title={nextLabel}
+        data-tooltip={nextLabel}
         onClick={() => onSortChange(nextTrackSort(sort, key))}
       >
         <span>{label}</span>
@@ -272,7 +283,7 @@ export function TrackList({
               label: removalLabel,
               onSelect: () => removeTracks([openMenu.trackId]),
             }] : []),
-            ...(addToLibrary ? [{
+            ...(addToLibrary && !savedTrackIds?.has(openMenu.trackId) ? [{
               label: "Add to Library",
               onSelect: () => addToLibrary(openMenu.trackId),
             }] : []),
@@ -286,7 +297,7 @@ export function TrackList({
             type="button"
             disabled={selection.selectedIds.size === 0}
             aria-label={removalLabel}
-            title={removalLabel}
+            data-tooltip={removalLabel}
             onClick={removeSelection}
           >
             Remove
@@ -307,6 +318,7 @@ export function TrackList({
         const index = virtual.start + windowIndex;
         return (
           <TrackRow key={track.globalId} track={track} index={index}
+            onOpenEntity={onOpenEntity ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
             selected={selection.selectedIds.has(track.globalId)}
             selecting={selection.isSelecting}
             menuOpen={openMenu?.trackId === track.globalId}
@@ -331,9 +343,15 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
   track: Track;
   index: number;
+  onOpenEntity?: (entity: BrowseEntity) => void;
+  saved?: boolean;
+  showTrackNumbers: boolean;
+  showRank: boolean;
+  showDiscNumbers: boolean;
+  showArtwork: boolean;
   selected: boolean;
   selecting: boolean;
   menuOpen: boolean;
@@ -367,50 +385,45 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
       onPointerDown={(event) => onPointerDown(event, index)}
       onDragStart={(event) => event.preventDefault()}
     >
-      <div
-        className="coverImgContainer"
-        onMouseEnter={(event) => onAction("warm", event, index)}
-        onMouseLeave={(event) => onAction("cancelWarm", event, index)}
-      >
-        <img
-          src="/Play.svg"
-          alt=""
-          aria-hidden="true"
-          className="coverPlayBtn"
-        />
-        <TrackArtwork
-          track={track}
-          alt={`${track.album} album cover`}
-          className="coverImg"
-          draggable={false}
-          onClick={(event) => onAction("play", event, index)}
-        />
+      <div className="trackLeading">
+        <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
+          onClick={event => { event.stopPropagation(); onAction("play", event, index); }}
+          onMouseEnter={event => onAction("warm", event, index)}
+          onMouseLeave={event => onAction("cancelWarm", event, index)}>
+          <img src="/Play.svg" alt="" aria-hidden="true" />
+        </button>
+        {showArtwork && <div className="coverImgContainer" data-playback-menu-trigger>
+          <TrackArtwork track={track} alt={`${track.album} album cover`} className="coverImg" draggable={false} />
+        </div>}
       </div>
       <span
         className={`trackName trackDescriptor${showProviderIcon ? " trackNameWithProvider" : ""}`}
         data-playback-menu-trigger
       >
-        <span className="trackTitleText">{track.name}</span>
+        <span className="trackTitleText">{(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? index + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? index + 1}</>}</small>}{track.name}{saved && <small className="savedTrackBadge">Saved</small>}</span>
         {showProviderIcon && (
           <img
             className="trackProviderIcon"
             data-provider={track.provider}
             src={track.provider === "local" ? "/ambra.svg" : `/${track.provider}Icon.svg`}
             alt={musicProviderName(track.provider)}
-            title={musicProviderName(track.provider)}
+            data-tooltip={musicProviderName(track.provider)}
           />
         )}
       </span>
-      <span className="artistName trackDescriptor">{track.artist}</span>
-      <span className="albumName trackDescriptor">{track.album}</span>
+      <span className="artistName trackDescriptor">{onOpenEntity ? <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "artist", artist: artistForTrack(track) }); }}>{track.artist}</button> : track.artist}</span>
+      <span className="albumName trackDescriptor">{onOpenEntity ? <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button> : track.album}</span>
       <span
         className="trackDuration trackDescriptor"
         data-playback-menu-trigger
       >
         {formatTime(track.durationSeconds)}
       </span>
-      <div
+      <button
+        type="button"
         className="trackCollectionMenuTrigger"
+        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
+        aria-expanded={selecting ? undefined : collectionMenuOpen}
         onClick={(event) => onAction("collection", event, index)}
         data-collection-menu-trigger
         data-collection-menu-open={collectionMenuOpen ? "true" : undefined}
@@ -428,7 +441,7 @@ const TrackRow = memo(function TrackRow({ track, index, selected, selecting, men
             selecting ? "selectionIndicator" : undefined
           }
         />
-      </div>
+      </button>
     </div>
   );
 });

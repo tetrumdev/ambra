@@ -1,3 +1,4 @@
+import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { Track } from "../types/music";
 import "./NowPlayingBar.css";
@@ -12,6 +13,7 @@ type PlayerBarVariant = "expanded" | "compact";
 
 type NowPlayingBarProps = {
   variant: PlayerBarVariant;
+  onOpenEntity: (entity: BrowseEntity) => void;
   track: Track | undefined;
   currentTime: number;
   duration: number;
@@ -27,6 +29,7 @@ type NowPlayingBarProps = {
 
 export function NowPlayingBar({
   variant,
+  onOpenEntity,
   track,
   onOpenBigscreen,
   currentTime,
@@ -59,7 +62,7 @@ export function NowPlayingBar({
           )}
         </button>
       )}
-      <SongInfo track={track} />
+      <SongInfo track={track} onOpenEntity={onOpenEntity} />
       <div id="playbackCluster">
         <PlayerControls
           isPlaying={isPlaying}

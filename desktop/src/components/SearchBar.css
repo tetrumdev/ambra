@@ -11,7 +11,7 @@
     color: white;
     background: linear-gradient(90deg, black, #161616);
     border: 1px solid #535353;
-    font-family: Arial, sans-serif;
+    font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
     transition: 0.25s ease;
 }
 
@@ -90,7 +90,7 @@
     appearance: none;
     -webkit-appearance: none;
     background: url("/x.svg") center / 12px 12px no-repeat;
-    cursor: pointer;
+    cursor: default;
     opacity: 0.45;
 }
 

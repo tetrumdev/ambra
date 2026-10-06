@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { moveTrackId, type DropPosition } from "../utils/trackCollectionOrder";
 
 type DropTarget = { trackId: string; position: DropPosition };
@@ -8,9 +8,10 @@ export function useTrackReorder(
   trackIds: string[],
   reorderTracks: ((ids: string[]) => void) | undefined,
   onStart: () => void,
+  scrollRef?: RefObject<HTMLElement | null>,
 ) {
-  const latest = useRef({ trackIds, reorderTracks, onStart });
-  latest.current = { trackIds, reorderTracks, onStart };
+  const latest = useRef({ trackIds, reorderTracks, onStart, scrollRef });
+  latest.current = { trackIds, reorderTracks, onStart, scrollRef };
   const cleanup = useRef<(() => void) | null>(null);
   const suppressClick = useRef(false);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
@@ -28,6 +29,7 @@ export function useTrackReorder(
     const sourceId = latest.current.trackIds[index];
     if (!container || !sourceId) return;
     cleanup.current?.();
+    const scroller = latest.current.scrollRef?.current ?? container;
 
     const pointerId = event.pointerId;
     const startX = event.clientX;
@@ -37,17 +39,18 @@ export function useTrackReorder(
     let dragging = false;
     let destination: DropTarget | null = null;
     let frame = 0;
-    const previousScrollBehavior = container.style.scrollBehavior;
+    const previousScrollBehavior = scroller.style.scrollBehavior;
 
     function viewport() {
       const bounds = container!.getBoundingClientRect();
+      const scrollBounds = scroller.getBoundingClientRect();
       const columns = container!.querySelector(".columnInfo")?.getBoundingClientRect();
       const playerHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--player-height")) || 0;
       return {
-        left: bounds.left,
-        right: bounds.right,
-        top: Math.max(bounds.top, columns?.bottom ?? bounds.top),
-        bottom: Math.min(bounds.bottom, window.innerHeight - playerHeight),
+        left: Math.max(bounds.left, scrollBounds.left),
+        right: Math.min(bounds.right, scrollBounds.right),
+        top: Math.max(bounds.top, scrollBounds.top, columns?.bottom ?? bounds.top),
+        bottom: Math.min(bounds.bottom, scrollBounds.bottom, window.innerHeight - playerHeight),
       };
     }
 
@@ -75,7 +78,7 @@ export function useTrackReorder(
           : y > bounds.bottom - edge
             ? 12 * (1 - (bounds.bottom - y) / edge)
             : 0;
-        if (speed) container!.scrollTop += speed;
+        if (speed) scroller.scrollTop += speed;
       }
       updateDestination();
       frame = requestAnimationFrame(scrollAtEdge);
@@ -91,7 +94,7 @@ export function useTrackReorder(
         dragging = true;
         suppressClick.current = true;
         row.setPointerCapture(pointerId);
-        container!.style.scrollBehavior = "auto";
+        scroller.style.scrollBehavior = "auto";
         document.documentElement.dataset.trackReordering = "true";
         setDraggedTrackId(sourceId);
         latest.current.onStart();
@@ -109,7 +112,7 @@ export function useTrackReorder(
       window.removeEventListener("blur", cancel);
       row.removeEventListener("lostpointercapture", cancel);
       if (row.hasPointerCapture(pointerId)) row.releasePointerCapture(pointerId);
-      container!.style.scrollBehavior = previousScrollBehavior;
+      scroller.style.scrollBehavior = previousScrollBehavior;
       delete document.documentElement.dataset.trackReordering;
       cleanup.current = null;
     }

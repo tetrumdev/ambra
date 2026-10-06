@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music.ts";
 import { PlaylistActions } from "./PlaylistActions";
 import { librarySections, type LibrarySection } from "./LibraryView";
+import { closeDialog, openDialog } from "../utils/dialogs";
 
 type SidebarProps = {
   onOpenLibrary: () => void;
@@ -33,8 +34,8 @@ export function Sidebar({
   const createDialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
-    if (isCreatingPlaylist) createDialog.current?.showModal();
-    else createDialog.current?.close();
+    if (isCreatingPlaylist) openDialog(createDialog.current);
+    else closeDialog(createDialog.current);
   }, [isCreatingPlaylist]);
 
   function cancelCreatingPlaylist() {
@@ -122,6 +123,7 @@ export function Sidebar({
         <div className="playlistEditContent">
           <h2>Name playlist</h2>
           <input
+            spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
             autoFocus
             aria-label="Playlist name"
             value={newPlaylistName}

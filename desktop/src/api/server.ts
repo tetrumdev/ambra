@@ -1,5 +1,6 @@
 import { fallbackQuery, textRelevance, matchingTrackArtist, leadingSong, searchText } from "../utils/catalogRanking";
 import type {
+  GlobalTrackId,
   MusicProvider,
   PlaybackKind,
   Track,
@@ -51,6 +52,13 @@ export type RemoteTrack = {
 
 type LibraryResponse = {
   tracks: RemoteTrack[];
+  /** Saved tracks the server could not load this time; keep cached copies. */
+  unavailableTrackIds?: GlobalTrackId[];
+};
+
+export type ServerLibrary = {
+  tracks: Track[];
+  unavailableTrackIds: Set<GlobalTrackId>;
 };
 
 export type SearchProvider =
@@ -105,8 +113,8 @@ export async function completeServiceAuth(
   if (!response.ok) throw new Error(await responseError(response));
 }
 
-export type CatalogArtist = { id: string; provider: StreamingProvider; name: string; imageUrl: string | null };
-export type CatalogAlbum = { id: string; provider: StreamingProvider; title: string; artist: string; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
+export type CatalogArtist = { id: string; provider: MusicProvider; name: string; imageUrl: string | null };
+export type CatalogAlbum = { id: string; provider: MusicProvider; title: string; artist: string; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; releaseType?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
 export type SearchPage = {
   artists?: CatalogArtist[];
   albums?: CatalogAlbum[];
@@ -151,6 +159,17 @@ function artworkQuery(track: Track) {
 export function thumbnailArtwork(track: Track) {
   const query = artworkQuery(track);
   return query ? `${serverBaseUrl}/api/artwork/thumbnail?${query}` : track.cover;
+}
+
+// Cards and portraits must use the same persistent thumbnail cache as tracks.
+export function thumbnailSource(source: string): string {
+  let url: URL;
+  try { url = new URL(source); } catch { return source; }
+  if (url.protocol !== "https:") return source;
+  const provider = url.hostname === "resources.tidal.com" ? "tidal"
+    : url.hostname === "static.qobuz.com" ? "qobuz"
+    : url.hostname === "i.scdn.co" ? "spotify" : null;
+  return provider ? `${serverBaseUrl}/api/artwork/thumbnail?${new URLSearchParams({ provider, url: source })}` : source;
 }
 
 const paletteRequests = new Map<string, Promise<string[]>>();
@@ -277,6 +296,10 @@ function withVersion(title: string, version: string | null) {
 }
 
 async function responseTracks(response: Response): Promise<Track[]> {
+  return (await libraryResponse(response)).tracks.map(playableTrack);
+}
+
+async function libraryResponse(response: Response): Promise<LibraryResponse> {
   if (!response.ok) {
     const body = await response.text();
     let message = body;
@@ -289,12 +312,30 @@ async function responseTracks(response: Response): Promise<Track[]> {
     throw new Error(`Ambra server returned HTTP ${response.status}: ${message}`);
   }
 
-  const library = (await response.json()) as LibraryResponse;
-  return library.tracks.map(playableTrack);
+  return (await response.json()) as LibraryResponse;
 }
 
-export async function loadServerTracks(signal?: AbortSignal): Promise<Track[]> {
-  return responseTracks(await fetchWhenServerReady(`${serverBaseUrl}/api/library`, signal));
+export async function loadServerLibrary(signal?: AbortSignal): Promise<ServerLibrary> {
+  const library = await libraryResponse(
+    await fetchWhenServerReady(`${serverBaseUrl}/api/library`, signal),
+  );
+  return {
+    tracks: library.tracks.map(playableTrack),
+    unavailableTrackIds: new Set(library.unavailableTrackIds ?? []),
+  };
+}
+
+export async function removeServerTracks(
+  tracks: Pick<Track, "provider" | "providerTrackId">[],
+): Promise<void> {
+  const response = await fetch(`${serverBaseUrl}/api/library/tracks/remove`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tracks: tracks.map(({ provider, providerTrackId }) => ({ provider, providerTrackId })),
+    }),
+  });
+  if (!response.ok) throw new Error(await responseError(response));
 }
 
 export async function addServerAlbum(url: string): Promise<Track[]> {
@@ -432,4 +473,75 @@ export async function searchServerCatalog(query: string, provider: StreamingProv
     if (signal?.aborted) throw error;
     return page; // A best-effort spelling retry must not discard successful primary results.
   }
+}
+
+export type ArtistProfile = { artist: CatalogArtist; biography: string | null; biographySource: string | null; popularTracks: Track[]; popularTracksError: string | null };
+type ArtistAlbumsPage = { albums: CatalogAlbum[]; nextOffset: number | null };
+const artistProfiles = new SearchCache<ArtistProfile>(600_000, 80);
+const artistAlbumPages = new SearchCache<ArtistAlbumsPage>(600_000, 80);
+const artistRequests = new Map<string, Promise<unknown>>();
+const artistKey = (artist: CatalogArtist) => `${artist.provider}:${providerEntityId(artist.id, artist.provider)}`;
+
+export const cachedArtistProfile = (artist: CatalogArtist) => artistProfiles.get(artistKey(artist));
+export const cachedArtistAlbums = (artist: CatalogArtist) => artistAlbumPages.get(`${artistKey(artist)}:0`);
+
+async function sharedArtistRequest<T>(key: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  signal?.throwIfAborted();
+  let request = artistRequests.get(key) as Promise<T> | undefined;
+  if (!request) {
+    request = work().finally(() => artistRequests.delete(key));
+    artistRequests.set(key, request);
+  }
+  // Navigation may unmount the prefetch owner. Keep shared work alive for the page.
+  const value = await request;
+  signal?.throwIfAborted();
+  return value;
+}
+
+export async function loadArtistDetails(artist: CatalogArtist): Promise<CatalogArtist> {
+  return sharedArtistRequest(`details:${artistKey(artist)}`, async () => {
+    const response = await fetch(`${serverBaseUrl}/api/providers/${artist.provider}/artists/${providerEntityId(artist.id, artist.provider)}/metadata`, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(await responseError(response));
+    return response.json() as Promise<CatalogArtist>;
+  });
+}
+
+function providerEntityId(id: string, provider: MusicProvider) {
+  return encodeURIComponent(id.startsWith(`${provider}:`) ? id.slice(provider.length + 1) : id);
+}
+
+export async function loadAlbumTracks(album: CatalogAlbum, signal?: AbortSignal): Promise<Track[]> {
+  if (album.provider === "local") return [];
+  return responseTracks(await fetch(`${serverBaseUrl}/api/providers/${album.provider}/albums/${providerEntityId(album.id, album.provider)}/tracks`, { signal }));
+}
+
+export async function loadArtistAlbums(artist: CatalogArtist, offset = 0, signal?: AbortSignal, refresh = false): Promise<ArtistAlbumsPage> {
+  if (artist.provider === "local") return { albums: [], nextOffset: null };
+  const key = `${artistKey(artist)}:${offset}`;
+  signal?.throwIfAborted();
+  const cached = !refresh && artistAlbumPages.get(key);
+  if (cached) return cached;
+  return sharedArtistRequest(`albums:${key}`, async () => {
+    const response = await fetch(`${serverBaseUrl}/api/providers/${artist.provider}/artists/${providerEntityId(artist.id, artist.provider)}/albums?offset=${offset}&limit=30`, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(await responseError(response));
+    const page = await response.json() as { albums: CatalogAlbum[]; nextOffset: number | null };
+    if (page.nextOffset !== null && (!Number.isInteger(page.nextOffset) || page.nextOffset <= offset)) throw new Error("Invalid artist album pagination cursor");
+    artistAlbumPages.set(key, page);
+    return page;
+  }, signal);
+}
+
+export async function loadArtistProfile(artist: CatalogArtist, signal?: AbortSignal, refresh = false): Promise<ArtistProfile> {
+  const key = artistKey(artist);
+  signal?.throwIfAborted();
+  const cached = !refresh && artistProfiles.get(key);
+  if (cached) return cached;
+  return sharedArtistRequest(`profile:${key}`, async () => {
+    const response = await fetch(`${serverBaseUrl}/api/providers/${artist.provider}/artists/${providerEntityId(artist.id, artist.provider)}`, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(await responseError(response));
+    const profile = await response.json() as Omit<ArtistProfile, "popularTracks"> & { popularTracks: RemoteTrack[] };
+    const value = { ...profile, popularTracks: profile.popularTracks.map(playableTrack) };
+    if (!value.popularTracksError) artistProfiles.set(key, value);
+    return value;
+  }, signal);
 }

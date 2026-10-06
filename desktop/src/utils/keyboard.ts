@@ -22,3 +22,16 @@ export function isUnmodifiedKey(event: KeyPress, code: string) {
     && !modifierIsActive("Meta")
     && !modifierIsActive("Shift");
 }
+
+// Shortcuts the WebView would answer with browser behavior (reload, print,
+// view source, find-next, caret browsing...). A native app has none of these.
+// Cmd/Ctrl+F is left alone: the app uses it to focus search.
+const BROWSER_MODIFIED_KEYS = new Set(["KeyR", "KeyP", "KeyU", "KeyS", "KeyO", "KeyG", "KeyJ"]);
+const BROWSER_FUNCTION_KEYS = new Set(["F3", "F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh"]);
+
+export function isBrowserShortcut(event: KeyPress) {
+  if (BROWSER_FUNCTION_KEYS.has(event.code)) return true;
+  // Ctrl+H is browser history on Windows/Linux; Cmd+H (hide app) never reaches the page.
+  if (event.ctrlKey && !event.metaKey && event.code === "KeyH") return true;
+  return (event.ctrlKey || event.metaKey) && !event.altKey && BROWSER_MODIFIED_KEYS.has(event.code);
+}

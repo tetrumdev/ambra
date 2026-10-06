@@ -1,8 +1,10 @@
+import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
 import { categoryOrder } from "../utils/catalogRanking";
 import { musicProviderName } from "../utils/musicProviderName";
 import { useEffect, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
+import { prefetchArtistPage } from "../utils/artistPage";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
@@ -12,6 +14,7 @@ import "./LibraryView.css";
 import "./SearchView.css";
 
 type SearchViewProps = {
+  onOpenEntity: (entity: BrowseEntity) => void;
   playlistOptions: PlaylistMenuOptions;
   query: string;
   provider: SearchProvider;
@@ -38,6 +41,7 @@ type OpenMenu = {
 };
 
 type SearchResultProps = {
+  onOpenEntity: (entity: BrowseEntity) => void;
   track: Track;
   variant: "featured" | "grid";
   playTrack: (trackId: GlobalTrackId) => void;
@@ -69,6 +73,7 @@ function formatTime(time: number) {
 function SearchResult({
   track,
   variant,
+  onOpenEntity,
   playTrack,
   openActions,
   openCollectionMenu,
@@ -81,32 +86,29 @@ function SearchResult({
       onClick={(event) => openActions(event, track.globalId)}
       onContextMenu={(event) => openActions(event, track.globalId)}
     >
-      <button
-        className="searchResultArtwork"
-        type="button"
-        aria-label={`Play ${track.name}`}
-        onClick={(event) => {
-          event.stopPropagation();
-          playTrack(track.globalId);
-        }}
-      >
-        <img className="searchArtworkPlay" src="/Play.svg" alt="" aria-hidden="true" />
-        <TrackArtwork
-          className="searchResultCover"
-          track={track}
-          alt={`${track.album} album cover`}
-          width={124}
-          height={124}
-          loading={variant === "featured" ? "eager" : "lazy"}
-          fetchPriority={variant === "featured" ? "high" : "auto"}
-          decoding="async"
-        />
-      </button>
+      <div className="trackLeading searchResultLeading">
+        <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
+          onClick={event => { event.stopPropagation(); playTrack(track.globalId); }}>
+          <img src="/Play.svg" alt="" aria-hidden="true" />
+        </button>
+        <div className="searchResultArtwork">
+          <TrackArtwork
+            className="searchResultCover"
+            track={track}
+            alt={`${track.album} album cover`}
+            width={124}
+            height={124}
+            loading={variant === "featured" ? "eager" : "lazy"}
+            fetchPriority={variant === "featured" ? "high" : "auto"}
+            decoding="async"
+          />
+        </div>
+      </div>
 
       <div className="searchResultInfo">
         <div className="searchResultName">{track.name}</div>
-        <div className="searchResultArtist">By {track.artist}</div>
-        <div className="searchResultAlbum">On {track.album}</div>
+        <div className="searchResultArtist">By <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "artist", artist: artistForTrack(track) }); }}>{track.artist}</button></div>
+        <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button></div>
         <div className="searchResultMeta">
           <span className="searchResultQuality">
             {musicProviderName(track.provider)}
@@ -131,6 +133,7 @@ function SearchResult({
 }
 
 export function SearchView({
+  onOpenEntity,
   query,
   provider,
   tracks,
@@ -237,6 +240,7 @@ export function SearchView({
         <div id="searchResults">
           <div id="firstResult">
             <SearchResult
+              onOpenEntity={onOpenEntity}
               track={featuredTrack}
               variant="featured"
               playTrack={playStandalone}
@@ -249,6 +253,7 @@ export function SearchView({
             <div id="searchResultGrid">
               {remainingTracks.map((track) => (
                 <SearchResult
+              onOpenEntity={onOpenEntity}
                   key={track.globalId}
                   track={track}
                   variant="grid"
@@ -266,18 +271,18 @@ export function SearchView({
         <section data-primary={order[0] === "artists"} style={sectionStyle("artists")} aria-labelledby="searchArtistsHeading">
           <h2 id="searchArtistsHeading">Artists</h2>
           {!artists.length && <p className="searchEntityEmpty">{isSearching ? "Searching artists…" : "No artists found"}</p>}
-          {artists.slice(0, 5).map(artist => <div className="searchEntity searchArtist" key={artist.id}>
-            <ArtistPortrait key={artist.id} name={artist.name} fallback={artist.imageUrl} />
-            <div className="searchEntityInfo"><strong>{artist.name}</strong><small>{providerNames[artist.provider]}</small></div>
-          </div>)}
+          {artists.slice(0, 5).map(artist => <button type="button" className="searchEntity searchArtist" key={artist.id} onPointerEnter={() => prefetchArtistPage(artist)} onFocus={() => prefetchArtistPage(artist)} onClick={() => onOpenEntity({ kind: "artist", artist })}>
+            <ArtistPortrait key={artist.id} artist={artist} />
+            <div className="searchEntityInfo"><strong>{artist.name}</strong><small>{musicProviderName(artist.provider)}</small></div>
+          </button>)}
         </section>
         <section data-primary={order[0] === "albums"} style={sectionStyle("albums")} aria-labelledby="searchAlbumsHeading">
           <h2 id="searchAlbumsHeading">Albums</h2>
           {!albums.length && <p className="searchEntityEmpty">{isSearching ? "Searching albums…" : "No albums found"}</p>}
-          {albums.slice(0, 5).map(album => <div className="searchEntity searchAlbum" key={album.id}>
+          {albums.slice(0, 5).map(album => <button type="button" className="searchEntity searchAlbum" key={album.id} onClick={() => onOpenEntity({ kind: "album", album })}>
             <div className="searchEntityImage"><ArtworkImage src={album.imageUrl} alt={`${album.title} album cover`} loading="lazy" /></div>
-            <div className="searchEntityInfo"><strong>{album.title}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}</strong><span>{album.artist}</span><small>{providerNames[album.provider]}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small></div>
-          </div>)}
+            <div className="searchEntityInfo"><strong>{album.title}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}</strong><span>{album.artist}</span><small>{musicProviderName(album.provider)}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small></div>
+          </button>)}
         </section>
       </div>
       </div>

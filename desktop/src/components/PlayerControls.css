@@ -28,7 +28,7 @@
     background: transparent;
     appearance: none;
     -webkit-appearance: none;
-    cursor: pointer;
+    cursor: default;
     /*filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));*/
     outline: none;
     transition-duration: 0.15s;

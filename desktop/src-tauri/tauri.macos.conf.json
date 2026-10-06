@@ -1,7 +1,0 @@
-{
-  "bundle": {
-    "externalBin": [
-      "binaries/ambra-server"
-    ]
-  }
-}

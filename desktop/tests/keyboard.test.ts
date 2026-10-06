@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isUnmodifiedKey } from "../src/utils/keyboard";
+import { isBrowserShortcut, isUnmodifiedKey } from "../src/utils/keyboard";
 
 const keyPress = (
   code: string,
@@ -37,5 +37,23 @@ describe("in-app keyboard shortcuts", () => {
         getModifierState: (key) => key === modifier,
       }, "KeyF")).toBe(false);
     }
+  });
+});
+
+describe("browser shortcuts", () => {
+  test("reload, print, and caret browsing are caught", () => {
+    expect(isBrowserShortcut(keyPress("KeyR", { metaKey: true }))).toBe(true);
+    expect(isBrowserShortcut(keyPress("KeyR", { ctrlKey: true, shiftKey: true }))).toBe(true);
+    expect(isBrowserShortcut(keyPress("KeyP", { ctrlKey: true }))).toBe(true);
+    expect(isBrowserShortcut(keyPress("F5"))).toBe(true);
+    expect(isBrowserShortcut(keyPress("F7"))).toBe(true);
+    expect(isBrowserShortcut(keyPress("KeyH", { ctrlKey: true }))).toBe(true);
+  });
+
+  test("the app's own shortcuts and plain typing pass through", () => {
+    expect(isBrowserShortcut(keyPress("KeyF", { metaKey: true }))).toBe(false);
+    expect(isBrowserShortcut(keyPress("KeyR"))).toBe(false);
+    expect(isBrowserShortcut(keyPress("Space"))).toBe(false);
+    expect(isBrowserShortcut(keyPress("KeyH", { metaKey: true }))).toBe(false);
   });
 });

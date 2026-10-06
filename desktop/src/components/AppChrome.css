@@ -17,7 +17,8 @@
     backdrop-filter: blur(10px);
 }
 
-.libraryTitlebar[data-content-layout="library"] {
+.libraryTitlebar[data-content-layout="library"],
+.libraryTitlebar[data-content-layout="queue"] {
     --titlebar-content-left: 230px;
 }
 
@@ -54,7 +55,7 @@
     padding: 0;
     border: 0;
     background: transparent;
-    cursor: pointer;
+    cursor: default;
     z-index: 1;
 }
 

@@ -2,6 +2,7 @@ import "./TrackMenus.css";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
+import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -42,6 +43,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     }
   }
   const panel = useRef<HTMLDivElement>(null);
+  useFadeOutOnUnmount(panel);
   const [position, setPosition] = useState({ left: xPos, top: yPos });
   useLayoutEffect(() => {
     const element = panel.current;
@@ -83,7 +85,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
             event.preventDefault();
             void save(() => playlistOptions.onCreate(name, trackId));
           }}>
-            <input aria-label="New playlist name" placeholder="New playlist name" value={name} onChange={event => setName(event.target.value)} />
+            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New playlist name" placeholder="New playlist name" value={name} onChange={event => setName(event.target.value)} />
             <button type="submit" disabled={!name.trim() || saving}>{saving ? "Saving…" : "Create & add"}</button>
             {error && <span role="alert">{error}</span>}
           </form>

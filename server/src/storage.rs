@@ -30,6 +30,14 @@ pub fn cache_subdirectory(name: &str) -> PathBuf {
 }
 
 pub fn migrate_legacy() {
+    // Migration moves files, so an isolated or test run with overridden
+    // directories must never pull the real installation's data into them.
+    if ["AMBRA_CONFIG_DIR", "AMBRA_DATA_DIR", "AMBRA_CACHE_DIR"]
+        .iter()
+        .any(|name| configured(name).is_some())
+    {
+        return;
+    }
     let roots = legacy_roots();
     let migrations = [
         (

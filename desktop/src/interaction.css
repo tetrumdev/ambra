@@ -1,0 +1,46 @@
+/* Shared press feedback for icon buttons. */
+
+#volumeBtn,
+#queueBtn,
+.xContainer,
+.librarySourcesClose,
+.sidebarPlaylistActions,
+.searchResultMenuButton {
+    transition-duration: 0.15s;
+}
+
+#volumeBtn:active,
+#queueBtn:active,
+.xContainer:active,
+.librarySourcesClose:active,
+.sidebarPlaylistActions:active,
+.searchResultMenuButton:active {
+    filter: brightness(70%);
+    scale: 0.7;
+}
+
+/* Dialogs fade in and out like system sheets (see utils/dialogs.ts). */
+dialog[open],
+dialog[open]::backdrop {
+    opacity: 1;
+    transition: opacity 0.15s ease;
+}
+
+dialog[data-closing],
+dialog[data-closing]::backdrop {
+    opacity: 0;
+}
+
+@starting-style {
+    dialog[open],
+    dialog[open]::backdrop {
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    dialog[open],
+    dialog[open]::backdrop {
+        transition: none;
+    }
+}

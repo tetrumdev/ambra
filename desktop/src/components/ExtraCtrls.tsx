@@ -1,5 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { AudioControlsMenu } from "./AudioControlsMenu";
 import "./ExtraCtrls.css";
 
@@ -126,6 +126,17 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     void sendPendingVolume();
   };
 
+  // Up/Down move between devices, as in a native menu.
+  const moveDeviceFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(".audioDeviceOption:not(:disabled)")];
+    if (options.length === 0) return;
+    event.preventDefault();
+    const current = options.indexOf(document.activeElement as HTMLButtonElement);
+    const step = event.key === "ArrowDown" ? 1 : -1;
+    options[(current + step + options.length) % options.length]?.focus();
+  };
+
   const closeAudioMenu = () => {
     setAudioMenuOpen(false);
     volumeButton.current?.focus();
@@ -138,24 +149,38 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           <AudioControlsMenu anchor={volumeButton} onClose={closeAudioMenu}>
             {showAudioModeToggle && (
               <>
-                <select
+                <div
+                  className="audioDeviceList"
+                  role="radiogroup"
                   aria-label="Audio output device"
-                  value={selectedDeviceId}
-                  disabled={isLoadingDevices || isChangingDevice}
-                  onChange={(event) =>
-                    void selectAudioDevice(event.target.value)
-                  }
+                  onKeyDown={moveDeviceFocus}
                 >
-                  <option value="">
-                    {isLoadingDevices ? "Loading devices…" : "System Default"}
-                  </option>
-                  {audioDevices.map((device) => (
-                    <option key={device.id} value={device.id}>
-                      {device.name}
-                      {device.isDefault ? " (Default)" : ""}
-                    </option>
-                  ))}
-                </select>
+                  <span className="audioDeviceHeading" aria-hidden="true">Output</span>
+                  {isLoadingDevices ? (
+                    <button className="audioDeviceOption" type="button" role="radio" aria-checked={false} disabled>
+                      <span className="audioDeviceCheck" aria-hidden="true" />
+                      <span className="audioDeviceName">Loading devices…</span>
+                    </button>
+                  ) : (
+                    [{ id: "", name: "System Default", isDefault: false }, ...audioDevices].map((device) => (
+                      <button
+                        key={device.id || "system-default"}
+                        className="audioDeviceOption"
+                        type="button"
+                        role="radio"
+                        aria-checked={selectedDeviceId === device.id}
+                        disabled={isChangingDevice}
+                        onClick={() => void selectAudioDevice(device.id)}
+                      >
+                        <span className="audioDeviceCheck" aria-hidden="true" />
+                        <span className="audioDeviceName" data-tooltip={device.name} data-tooltip-overflow="">
+                          {device.name}
+                          {device.isDefault ? " (Default)" : ""}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
                 <button
                   className="devAudioModeToggle"
                   type="button"
@@ -197,6 +222,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           id="volumeBtn"
           type="button"
           aria-label="Volume"
+          data-tooltip={hasNativeAudio ? "Volume and output device" : "Volume"}
           aria-haspopup={hasNativeAudio ? "dialog" : undefined}
           aria-expanded={hasNativeAudio ? audioMenuOpen : undefined}
           onClick={() => {
@@ -209,7 +235,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           {Math.round(volume)}%
         </span>
       </div>
-      <button id="queueBtn" type="button" onClick={onOpenQueue}>
+      <button id="queueBtn" type="button" onClick={onOpenQueue} data-tooltip="Queue">
         <img src="/queue.svg" alt="Queue" id="queueImg" />
       </button>
     </div>

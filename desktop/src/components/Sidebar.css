@@ -31,17 +31,12 @@
     background: transparent;
     user-select: none;
     -webkit-user-select: none;
-    cursor: pointer;
+    cursor: default;
     z-index: 2;
     width: 140px;
     margin: none;
     align-self: center;
     margin-left: 30px;
-}
-
-.mainLogo:focus-visible {
-    border-radius: 4px;
-    box-shadow: 0 0 0 2px white;
 }
 
 #logoImg {
@@ -63,14 +58,21 @@
 }
 
 .sidebarBtn {
-    cursor: pointer;
+    cursor: default;
     width: fit-content;
+    color: #b3b3b3;
 }
 
-.sidebarBtn:hover,
-.sidebarBtn[aria-current="page"] {
+/* Hover underlines; the current page is white and heavier, so the two never look alike. */
+.sidebarBtn:hover {
+    color: white;
     text-decoration: underline;
     text-underline-offset: 4px;
+}
+
+.sidebarBtn[aria-current="page"] {
+    color: white;
+    font-weight: 600;
 }
 
 .sidebarLibraryButton {
@@ -83,6 +85,10 @@
     text-align: left;
 }
 
+.sidebarBtn.sidebarLibraryButton {
+    color: #b3b3b3;
+}
+
 .sidebarLibrarySections {
     display: grid;
     gap: 1px;
@@ -92,17 +98,15 @@
     border-left: 1px solid white;
 }
 
-.sidebarLibraryButton:hover,
-.sidebarLibraryButton[aria-current="page"] {
+.sidebarBtn.sidebarLibraryButton:hover,
+.sidebarBtn.sidebarLibraryButton[aria-current="page"] {
     color: white;
-    text-decoration: underline;
-    text-underline-offset: 4px;
 }
 
 #createPlaylistBtn {
     font-family: "Stack Sans Text";
     background: none;
-    color: #a3a2a3;
+    color: #b3b3b3;
     border: 1px solid transparent;
     font-size: 1rem;
     padding: 0;
@@ -111,6 +115,13 @@
     text-align: left;
     padding: 5px 10px;
     margin-left: -10px;
+}
+
+#createPlaylistBtn::before {
+    content: "+";
+    display: inline-block;
+    width: 1em;
+    margin-right: 4px;
 }
 
 #createPlaylistBtn:hover {
@@ -149,7 +160,7 @@
     margin-left: auto;
     width: 28px;
     height: 28px;
-    cursor: pointer;
+    cursor: default;
     border-radius: 100px;
     outline: none;
     align-items: center;
@@ -188,7 +199,7 @@
     font: inherit;
     font-size: 12px;
     line-height: 1.5;
-    cursor: pointer;
+    cursor: default;
 }
 
 .playlistEditCancel:hover,
@@ -255,7 +266,7 @@
 .playlistEditButtons button {
     height: 40px;
     font: inherit;
-    cursor: pointer;
+    cursor: default;
     background: white;
     color: black;
     border: 1px solid transparent;
@@ -272,13 +283,16 @@
 }
 
 @media screen and (width <= 1250px) {
-    .mainLogoContainer {
+    #library .mainLogoContainer,
+    #search .mainLogoContainer {
         display: none;
     }
-    #sidebarMain {
+    #library #sidebarMain,
+    #search #sidebarMain {
         border: none;
     }
-    #libraryContainer {
+    #library #libraryContainer,
+    #search #libraryContainer {
         display: none;
     }
 }
