@@ -25,9 +25,6 @@ use std::{
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
-use bundled_backend::BundledBackend;
-
-mod bundled_backend;
 mod cover_thumbnails;
 mod keyboard;
 mod library_index;
@@ -970,12 +967,6 @@ pub fn run() {
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
-            let server_log = app
-                .path()
-                .app_log_dir()
-                .ok()
-                .map(|directory| directory.join("ambra-server.log"));
-            app.manage(BundledBackend::start(server_log));
             media_controls::setup(app)?;
             native_audio::setup(app);
             Ok(())
@@ -1010,11 +1001,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
-        if matches!(event, tauri::RunEvent::Exit) {
-            app.state::<BundledBackend>().stop();
-        }
-    });
+    app.run(|_, _| {});
 }
 
 #[cfg(test)]

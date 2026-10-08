@@ -30,6 +30,7 @@ const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
 const DEFAULT_OAUTH_PORT: u16 = 8898;
 const AUDIO_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const OAUTH_REFRESH_MARGIN: Duration = Duration::from_secs(60);
+const SESSION_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEARCH_ENDPOINT: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
 const SEARCH_OPERATION: &str = "findTracks";
 const SEARCH_QUERY_HASH: &str = "903df2a65d8121e27d73a2be03c01e88ebe6021bb6d4eb82a389e35d87e51d27";
@@ -127,7 +128,12 @@ impl SpotifyProvider {
         make_cache_private(&credentials_path)?;
 
         let environment_access_token = nonempty_env("AMBRA_SPOTIFY_ACCESS_TOKEN");
-        let session_config = SessionConfig::default();
+        // Spotify prefers port 4070, which many networks block even when browser
+        // sign-in succeeds over HTTPS. Use the resolver's supported port filter.
+        let session_config = SessionConfig {
+            ap_port: Some(443),
+            ..SessionConfig::default()
+        };
         let (credentials, search_auth) = if let Some(token) = environment_access_token {
             (
                 Credentials::with_access_token(token.clone()),
@@ -158,7 +164,14 @@ impl SpotifyProvider {
 
         let oauth_client_id = session_config.client_id.clone();
         let session = Session::new(session_config, Some(cache));
-        session.connect(credentials, true).await?;
+        tokio::time::timeout(SESSION_CONNECT_TIMEOUT, session.connect(credentials, true))
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Spotify session connection timed out. Check network access to Spotify on port 443.",
+                )
+            })??;
         session
             .login5()
             .set_auth_token(librespot_token_for_search(&search_auth));
@@ -638,7 +651,9 @@ fn spotify_oauth_client(client_id: &str, open_in_browser: bool) -> ProviderResul
         &format!("http://127.0.0.1:{port}/login"),
         vec!["streaming", "user-read-private"],
     )
-    .with_custom_message("Spotify connected. You can return to Ambra.");
+    .with_custom_message(
+        "Spotify authorization received. Return to Ambra to check connection status.",
+    );
     if open_in_browser {
         builder = builder.open_in_browser();
     }

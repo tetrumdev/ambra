@@ -60,9 +60,6 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": [
-      "binaries/ambra-server"
-    ],
     "targets": "all",
     "icon": [
       "icons/macIcon.png",

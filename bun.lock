@@ -33,7 +33,7 @@
 
     "codem-isoboxer": ["codem-isoboxer@0.3.10", "", {}, "sha512-eNk3TRV+xQMJ1PEj0FQGY8KD4m0GPxT487XJ+Iftm7mVa9WpPFDMWqPt+46buiP5j5Wzqe5oMIhqBcAeKfygSA=="],
 
-    "dashjs": ["dashjs@5.2.0", "", { "dependencies": { "@svta/cml-608": "1.0.2", "@svta/cml-cmcd": "2.3.2", "@svta/cml-cmsd": "1.0.6", "@svta/cml-dash": "1.0.6", "@svta/cml-id3": "1.0.6", "@svta/cml-request": "1.0.12", "@svta/cml-xml": "1.1.4", "bcp-47-match": "^2.0.3", "codem-isoboxer": "0.3.10", "fast-deep-equal": "3.1.3", "html-entities": "^2.6.0", "imsc": "^1.1.5", "localforage": "^1.10.0", "path-browserify": "^1.0.1" } }, "sha512-2W2KHFN53Sk7+rtdnIfSUK/3Oov+hraMTeVZwDOTSCNKM1cQtFiJdblNzRMnl59a/QDseG7JW+PC9mh/B+CMcg=="],
+    "dashjs": ["dashjs@5.2.1", "", { "dependencies": { "@svta/cml-608": "1.0.2", "@svta/cml-cmcd": "2.3.2", "@svta/cml-cmsd": "1.0.6", "@svta/cml-dash": "1.0.6", "@svta/cml-id3": "1.0.6", "@svta/cml-request": "1.0.12", "@svta/cml-xml": "1.1.4", "bcp-47-match": "^2.0.3", "codem-isoboxer": "0.3.10", "fast-deep-equal": "3.1.3", "html-entities": "^2.6.0", "imsc": "^1.1.5", "localforage": "^1.10.0", "path-browserify": "^1.0.1" } }, "sha512-axcJmLeJCTJMLUfQRErUJB1KOiU5iHF+DMLBc3FKeox1HPYtGUQlC6Xm5Mm6vhBUR3CHHLIPOqw0JDIqMtP+Dw=="],
 
     "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
 
