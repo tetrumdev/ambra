@@ -52,22 +52,18 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ### Streaming service login
 
-The desktop app runs by itself for local music. Streaming features use the
-Ambra server, which the app bundles, starts, and restarts automatically (its
-log is `ambra-server.log` in the app's log directory). Build it into the app
-once per machine before `tauri dev` or `tauri build`:
-
-```sh
-scripts/build-server-sidecar.sh
-```
-
-During server development, run it directly instead; the app uses a server
-that is already listening rather than starting its own:
+The desktop app runs by itself for local music. It does not bundle or start
+the Ambra server. Streaming features require the separate server; start it
+in its own terminal when needed:
 
 ```sh
 cd server
 cargo run
 ```
+
+Run the client separately from `desktop` with `tauri dev`. Building or running
+the client does not require a server binary. Closing the client leaves a
+separately running server alone; stop the server with Ctrl+C in its terminal.
 
 The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
