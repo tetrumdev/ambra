@@ -106,7 +106,7 @@ struct LibraryEntry {
 pub async fn serve() -> ServerResult<()> {
     let (providers_ready_tx, providers_ready) = watch::channel(false);
 
-    let http_client = reqwest::Client::builder()
+    let http_client = crate::http_client::builder()
         .connect_timeout(Duration::from_secs(3))
         .timeout(Duration::from_secs(20))
         .pool_idle_timeout(Duration::from_secs(90))
@@ -2223,6 +2223,73 @@ mod tests {
     };
     use crate::models::MusicProvider;
     use axum::http::HeaderValue;
+
+    #[tokio::test]
+    async fn proxies_audio_with_many_upstream_headers() {
+        use axum::{
+            body::to_bytes,
+            http::{HeaderMap, StatusCode, header::*},
+        };
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        for header_count in [101, 300, 1024] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/audio", listener.local_addr().unwrap());
+            let upstream = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                while !request.ends_with(b"\r\n\r\n") {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                }
+                assert!(
+                    String::from_utf8(request)
+                        .unwrap()
+                        .to_ascii_lowercase()
+                        .contains("range: bytes=5-8\r\n")
+                );
+
+                let mut response = String::from(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/flac\r\nContent-Length: 4\r\nContent-Range: bytes 5-8/12\r\nAccept-Ranges: bytes\r\nETag: \"audio\"\r\nLast-Modified: Fri, 09 Oct 2026 12:00:00 GMT\r\nConnection: close\r\n",
+                );
+                // Repeated CDN diagnostics count individually toward the parser limit.
+                for _ in 7..header_count {
+                    response.push_str("X-AK-GRN: 0\r\n");
+                }
+                response.push_str("\r\nFLAC");
+                socket.write_all(response.as_bytes()).await.unwrap();
+            });
+
+            let mut headers = HeaderMap::new();
+            headers.insert(RANGE, HeaderValue::from_static("bytes=5-8"));
+            let response = super::proxy_direct_stream(
+                &crate::http_client::builder().build().unwrap(),
+                &url,
+                "application/octet-stream",
+                &headers,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+            assert_eq!(response.headers()[CONTENT_TYPE], "audio/flac");
+            assert_eq!(response.headers()[CONTENT_LENGTH], "4");
+            assert_eq!(response.headers()[CONTENT_RANGE], "bytes 5-8/12");
+            assert_eq!(response.headers()[ACCEPT_RANGES], "bytes");
+            assert_eq!(response.headers()[ETAG], "\"audio\"");
+            assert_eq!(
+                response.headers()[LAST_MODIFIED],
+                "Fri, 09 Oct 2026 12:00:00 GMT"
+            );
+            assert!(!response.headers().contains_key("x-ak-grn"));
+            assert_eq!(
+                to_bytes(response.into_body(), 4).await.unwrap().as_ref(),
+                b"FLAC"
+            );
+            upstream.await.unwrap();
+        }
+    }
 
     #[test]
     fn empty_tidal_track_configuration_adds_nothing() {

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
 import "./interaction.css";
 import "./scrollbars.css";
 import { hydratePersistentStorage } from "./utils/persistentStorage";
@@ -39,7 +40,7 @@ function Root() {
       if (restored) setRestoreEpoch((epoch) => epoch + 1);
     });
   }, []);
-  return <App key={restoreEpoch} />;
+  return <AudioSettingsProvider key={restoreEpoch}><App /></AudioSettingsProvider>;
 }
 
 installTooltips();

@@ -41,16 +41,26 @@ export function useTrackReorder(
     let frame = 0;
     const previousScrollBehavior = scroller.style.scrollBehavior;
 
-    function viewport() {
-      const bounds = container!.getBoundingClientRect();
+    function scrollViewport() {
       const scrollBounds = scroller.getBoundingClientRect();
       const columns = container!.querySelector(".columnInfo")?.getBoundingClientRect();
       const playerHeight = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--player-height")) || 0;
       return {
+        left: scrollBounds.left,
+        right: scrollBounds.right,
+        top: Math.max(0, scrollBounds.top, columns?.bottom ?? scrollBounds.top),
+        bottom: Math.min(scrollBounds.bottom, window.innerHeight - playerHeight),
+      };
+    }
+
+    function viewport() {
+      const bounds = container!.getBoundingClientRect();
+      const scrollBounds = scrollViewport();
+      return {
         left: Math.max(bounds.left, scrollBounds.left),
         right: Math.min(bounds.right, scrollBounds.right),
-        top: Math.max(bounds.top, scrollBounds.top, columns?.bottom ?? bounds.top),
-        bottom: Math.min(bounds.bottom, scrollBounds.bottom, window.innerHeight - playerHeight),
+        top: Math.max(bounds.top, scrollBounds.top),
+        bottom: Math.min(bounds.bottom, scrollBounds.bottom),
       };
     }
 
@@ -70,7 +80,8 @@ export function useTrackReorder(
     }
 
     function scrollAtEdge() {
-      const bounds = viewport();
+      // Section bounds constrain drops; scrolling follows the visible scroller edges.
+      const bounds = scrollViewport();
       if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
         const edge = Math.min(48, (bounds.bottom - bounds.top) / 3);
         const speed = y < bounds.top + edge

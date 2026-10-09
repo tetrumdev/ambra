@@ -1,0 +1,56 @@
+/* Layout only: keep settings plain so its visual design can evolve separately. */
+#settings { grid-template-columns: 180px minmax(0, 1fr); }
+.settingsSidebar { grid-column: 1; grid-row: 1; padding: 42px 20px calc(var(--player-height) + 20px); border-right: 1px solid #333; overflow-y: auto; font-family: "Stack Sans Text", sans-serif; }
+.settingsSidebar h2 { margin: 28px 0 16px; font-size: 16px; }
+.settingsSidebar nav { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
+.settingsSidebar button { font: inherit; font-size: 13px; color: #aaa; border: 0; padding: 0; background: none; text-align: left; }
+.settingsSidebar button[aria-current="page"] { color: white; text-decoration: underline; text-underline-offset: 4px; }
+.settingsView { padding-top: 42px; }
+.settingsView h2 { font-size: 19px; margin: 0 0 12px; }
+.settingsView h3 { font-size: 15px; margin: 0 0 12px; }
+.settingsView p { color: #aaa; font-size: 13px; line-height: 1.5; }
+.settingsView section { max-width: 1050px; }
+.settingsView [hidden] { display: none !important; }
+.settingsSectionHeading, .settingsOutputTitle, .settingsEditorHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
+.settingsOutputCard { padding: 0 0 24px; margin-bottom: 24px; border-bottom: 1px solid #333; }
+.settingsOutputTitle strong, .settingsOutputTitle > div > span { display: block; }
+.settingsOutputTitle > div > span { font-size: 12px; color: #aaa; margin-top: 6px; }
+.settingsInlineToggle { display: flex; align-items: center; gap: 12px; font-size: 12px; }
+.settingsView label:not(.settingsToggleRow, .settingsInlineToggle) { display: grid; gap: 8px; font-size: 12px; }
+.settingsView input:not([type="checkbox"], [type="file"]), .settingsView select { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; color: white; background: #171717; border: 1px solid #555; border-radius: 0; padding: 6px; color-scheme: dark; }
+.settingsView button { font: inherit; font-size: 12px; }
+.settingsButton { color: white; background: none; border: 1px solid #555; border-radius: 0; padding: 6px 10px; }
+.settingsTextButton { color: #bbb; background: none; border: 0; padding: 6px; }
+.settingsView button:disabled { opacity: .45; }
+.settingsView input[type="checkbox"] { accent-color: white; }
+.settingsView :focus-visible, .settingsSidebar :focus-visible { outline: 1px solid #aaa; outline-offset: 3px; }
+.settingsOutputFields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.settingsOutputActions, .settingsActions, .settingsEditorFooter { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.settingsDspLayout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 24px; }
+.settingsPresetList { display: flex; flex-direction: column; gap: 16px; }
+.settingsPreset { text-align: left; color: #aaa; background: none; border: 0; padding: 0; overflow-wrap: anywhere; }
+.settingsPreset strong, .settingsPreset span { display: block; }
+.settingsPreset span { font-size: 11px; margin-top: 5px; }
+.settingsPreset[aria-pressed="true"] { color: white; }
+.settingsDspEditor { min-width: 0; }
+.settingsEditorHeading > label:first-child { flex: 1; }
+.settingsSignalPath { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; font-size: 12px; color: #aaa; }
+.settingsGainFields { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 24px; }
+.settingsEqTable { overflow-x: auto; margin-bottom: 28px; }
+.settingsEqTable table { width: 100%; min-width: 400px; border-collapse: collapse; }
+.settingsEqTable th { font-size: 11px; text-align: left; font-weight: normal; color: #aaa; padding: 0 5px 10px; }
+.settingsEqTable td { padding: 4px 5px; }
+.settingsEqTable td:nth-child(2) { width: 120px; }
+.settingsImpulse { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 12px 0; font-size: 12px; overflow-wrap: anywhere; }
+.settingsImpulse small { display: block; margin-top: 4px; color: #aaa; }
+.settingsEditorFooter { border-top: 1px solid #333; padding-top: 16px; margin-top: 24px; }
+.settingsDspStatus { display: grid; gap: 8px; font-size: 12px; border-top: 1px solid #333; padding-top: 16px; margin-top: 30px; }
+.settingsError { color: #ffb7b7 !important; overflow-wrap: anywhere; }
+.settingsSrOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (max-width: 1050px) {
+  .settingsOutputFields { grid-template-columns: 1fr; }
+  .settingsDspLayout { grid-template-columns: 1fr; }
+  .settingsPresetList { flex-direction: row; flex-wrap: wrap; }
+}
+.settingsView .settingsToggle { appearance: auto; width: auto; height: auto; padding: 0; border-radius: 0; background: none; }
+.settingsView .settingsToggle::before { display: none; }

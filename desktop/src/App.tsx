@@ -14,6 +14,8 @@ import { NowPlayingBar } from "./components/NowPlayingBar";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
+import { SettingsView } from "./components/SettingsView";
+import { SettingsSidebar, type SettingsTab } from "./components/SettingsSidebar";
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
@@ -51,6 +53,7 @@ import { usePlaylists } from "./hooks/usePlaylists";
 
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("outputs");
   const playlistStore = usePlaylists();
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
   const browseCache = useRef(new Map<string, EntityPage>());
@@ -835,7 +838,7 @@ function App() {
             onConfirm={() => { setBrowseEntity(null); changeScreen(searchQuery.trim() ? "search" : "library"); }}
           />}
           {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
-          <Sidebar
+          {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
             isSettingsActive={isSettingsView}
             onOpenSettings={() => {
               setBrowseEntity(null); navigation.current = [];
@@ -869,34 +872,10 @@ function App() {
               setSelectedPlaylistId(id);
               changeScreen("library");
             }}
-          />
+          />}
           {isSettingsView ? (
-            <div className="settingsView" role="region" aria-label="Settings" ref={registerScrollElement}>
-              <h1>Settings</h1>
-              <label className="settingsToggleRow">
-                <span>
-                  <span className="settingsToggleLabel">Show song specs</span>
-                  <span className="settingsToggleDescription" id="songSpecsDescription">
-                    Show audio quality, format, and bitrate in the playback bar.
-                  </span>
-                </span>
-                <input
-                  type="checkbox"
-                  role="switch"
-                  className="settingsToggle"
-                  aria-label="Show song specs"
-                  aria-describedby="songSpecsDescription"
-                  checked={preferences.ui.showAudioQuality}
-                  onChange={(event) => {
-                    const showAudioQuality = event.currentTarget.checked;
-                    setPreferences((current) => ({
-                      ...current,
-                      ui: { ...current.ui, showAudioQuality },
-                    }));
-                  }}
-                />
-              </label>
-            </div>
+            <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
+              onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))} />
           ) : isQueueView ? (
             <Queue
               currentEntry={queue.currentEntry}
