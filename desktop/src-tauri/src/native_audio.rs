@@ -13,12 +13,16 @@ use serde::Serialize;
 use tauri::{App, AppHandle, Emitter, Manager, State};
 
 mod decoder;
+mod dsp;
 mod gain;
 mod output;
+mod settings;
 
 use decoder::DecodedSource;
+use dsp::{DspEngine, DspStatus, ImpulseFile};
 use gain::GainStage;
 use output::{AudioOutput, PlatformOutput};
+use settings::AudioSettings;
 
 const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
 const LOCAL_MAX_BUFFER_MILLISECONDS: usize = 750;
@@ -135,6 +139,16 @@ enum WorkerCommand {
     SetVolume {
         volume: f64,
         reply: Sender<Result<(), String>>,
+    },
+    GetAudioSettings {
+        reply: Sender<Result<AudioSettings, String>>,
+    },
+    SetAudioSettings {
+        settings: AudioSettings,
+        reply: Sender<Result<(), String>>,
+    },
+    GetDspStatus {
+        reply: Sender<Result<DspStatus, String>>,
     },
     Shutdown,
 }
@@ -322,6 +336,65 @@ pub async fn set_native_audio_volume(
     .await
 }
 
+#[tauri::command]
+pub async fn native_audio_settings(
+    player: State<'_, NativeAudioPlayer>,
+) -> Result<AudioSettings, String> {
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::GetAudioSettings { reply }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_native_audio_settings(
+    player: State<'_, NativeAudioPlayer>,
+    settings: AudioSettings,
+) -> Result<(), String> {
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::SetAudioSettings { settings, reply }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn native_dsp_status(player: State<'_, NativeAudioPlayer>) -> Result<DspStatus, String> {
+    request_async(player.command_tx.clone(), |reply| {
+        WorkerCommand::GetDspStatus { reply }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn import_dsp_impulse(
+    app: AppHandle,
+    name: String,
+    bytes: Vec<u8>,
+) -> Result<ImpulseFile, String> {
+    let directory = crate::persistent_data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let (sample_rate, channels) = dsp::read_impulse(&bytes)?;
+        let id = format!(
+            "{}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| e.to_string())?
+                .as_nanos(),
+            crate::TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        crate::write_file_atomic(&dsp::impulse_path(&directory, &id)?, &bytes)?;
+        Ok(ImpulseFile {
+            id,
+            name: name.chars().take(200).collect(),
+            sample_rate,
+            channels: channels.len(),
+            frames: channels[0].len(),
+        })
+    })
+    .await
+    .map_err(|e| format!("Impulse import failed: {e}"))?
+}
+
 impl Drop for NativeAudioPlayer {
     fn drop(&mut self) {
         let _ = self.command_tx.send(WorkerCommand::Shutdown);
@@ -384,6 +457,10 @@ struct PlaybackWorker {
     selected_device_id: Option<String>,
     exclusive_mode: bool,
     gain: GainStage,
+    audio_settings: AudioSettings,
+    dsp: Option<DspEngine>,
+    tail_frames_remaining: usize,
+    draining_dsp_tail: bool,
     gain_buffer: Vec<f64>,
     gain_buffer_offset: usize,
     event_app: Option<AppHandle>,
@@ -507,7 +584,7 @@ impl PlaybackWorker {
         status: Arc<Mutex<PlaybackStatus>>,
         event_app: Option<AppHandle>,
     ) -> Self {
-        Self {
+        let mut worker = Self {
             command_rx,
             status,
             decoder: None,
@@ -526,10 +603,35 @@ impl PlaybackWorker {
             selected_device_id: None,
             exclusive_mode: false,
             gain: GainStage::default(),
+            audio_settings: AudioSettings::default(),
+            dsp: None,
+            tail_frames_remaining: 0,
+            draining_dsp_tail: false,
             gain_buffer: Vec::new(),
             gain_buffer_offset: 0,
             event_app,
+        };
+        if let Some(app) = worker.event_app.as_ref() {
+            match crate::persistent_data_directory(app).and_then(|path| AudioSettings::load(&path))
+            {
+                Ok(mut settings) => {
+                    if let Ok(devices) = PlatformOutput::list_devices() {
+                        settings.discover(&devices);
+                        if !settings.selected_output_id.is_empty()
+                            && !devices.iter().any(|d| d.id == settings.selected_output_id)
+                        {
+                            settings.selected_output_id.clear();
+                        }
+                    }
+                    worker.selected_device_id = (!settings.selected_output_id.is_empty())
+                        .then(|| settings.selected_output_id.clone());
+                    worker.exclusive_mode = settings.selected().exclusive_mode;
+                    worker.audio_settings = settings;
+                }
+                Err(error) => eprintln!("{error}"),
+            }
         }
+        worker
     }
 
     fn run(mut self) {
@@ -664,71 +766,129 @@ impl PlaybackWorker {
                     });
                 let _ = reply.send(result);
             }
+            WorkerCommand::GetAudioSettings { reply } => {
+                let result = PlatformOutput::list_devices().map(|devices| {
+                    self.audio_settings.discover(&devices);
+                    self.audio_settings.clone()
+                });
+                let _ = reply.send(result);
+            }
+            WorkerCommand::SetAudioSettings { settings, reply } => {
+                let result = self.apply_audio_settings(settings);
+                let _ = reply.send(result);
+            }
+            WorkerCommand::GetDspStatus { reply } => {
+                let _ = reply.send(Ok(self
+                    .dsp
+                    .as_ref()
+                    .map(|d| d.status.clone())
+                    .unwrap_or_default()));
+            }
             WorkerCommand::Shutdown => return true,
         }
         false
     }
 
-    fn select_device(&mut self, device_id: Option<String>) -> Result<(), String> {
-        if self.selected_device_id == device_id {
-            return Ok(());
-        }
+    fn audio_directory(&self) -> Result<std::path::PathBuf, String> {
+        self.event_app
+            .as_ref()
+            .map(crate::persistent_data_directory)
+            .transpose()
+            .map(|path| path.unwrap_or_else(std::env::temp_dir))
+    }
 
-        if let Some(device_id) = device_id.as_ref() {
-            let devices = PlatformOutput::list_devices()?;
-
-            if !devices.iter().any(|device| &device.id == device_id) {
-                return Err("The selected native audio device is no longer available".to_owned());
+    fn apply_audio_settings(&mut self, settings: AudioSettings) -> Result<(), String> {
+        settings.validate()?;
+        let directory = self.audio_directory()?;
+        let device_id =
+            (!settings.selected_output_id.is_empty()).then(|| settings.selected_output_id.clone());
+        let mode = settings.selected().exclusive_mode;
+        let output_changed = self.selected_device_id != device_id || self.exclusive_mode != mode;
+        if output_changed {
+            if !settings.selected().enabled {
+                return Err("Enable this output in Settings before selecting it".into());
+            }
+            if let Some(id) = device_id.as_ref() {
+                if !PlatformOutput::list_devices()?.iter().any(|d| &d.id == id) {
+                    return Err("This output is disconnected".into());
+                }
             }
         }
-
-        let previous_device_id = self.selected_device_id.clone();
-        let position_seconds = lock_status(&self.status).current_time;
-        let has_loaded_source = self.current_source.is_some();
-
-        if let Some(output) = self.output.as_mut() {
-            output.reset()?;
+        let preset_changed = settings.preset() != self.audio_settings.preset();
+        let prepared_dsp = if preset_changed || output_changed {
+            self.spec
+                .map(|spec| {
+                    DspEngine::build(
+                        settings.preset(),
+                        spec.sample_rate,
+                        spec.channels,
+                        &directory,
+                    )
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        // Persist first; a failed write must not change the live signal path.
+        let previous_settings = self.audio_settings.clone();
+        if self.event_app.is_some() {
+            settings.save(&directory)?;
         }
-
-        self.output = None;
-        self.selected_device_id = device_id;
-
-        if has_loaded_source {
-            if let Err(error) = self.seek(position_seconds) {
-                self.selected_device_id = previous_device_id;
-                let _ = self.seek(position_seconds);
-                return Err(error);
+        let old_id = self.selected_device_id.clone();
+        let old_mode = self.exclusive_mode;
+        let position = lock_status(&self.status).current_time;
+        self.audio_settings = settings;
+        if output_changed {
+            if let Some(output) = self.output.as_mut() {
+                if let Err(error) = output.reset() {
+                    self.audio_settings = previous_settings;
+                    if self.event_app.is_some() {
+                        let _ = self.audio_settings.save(&directory);
+                    }
+                    return Err(error);
+                }
+            }
+            self.output = None;
+            self.selected_device_id = device_id;
+            self.exclusive_mode = mode;
+            if self.current_source.is_some() {
+                if let Err(error) = self.seek(position) {
+                    self.audio_settings = previous_settings;
+                    self.selected_device_id = old_id;
+                    self.exclusive_mode = old_mode;
+                    if self.event_app.is_some() {
+                        let _ = self.audio_settings.save(&directory);
+                    }
+                    let _ = self.seek(position);
+                    return Err(error);
+                }
             }
         }
-
+        if let Some(mut next) = prepared_dsp {
+            if !output_changed {
+                if let Some(previous) = self.dsp.take() {
+                    next.transition_from(previous);
+                }
+            }
+            self.dsp = Some(next);
+        }
         Ok(())
     }
 
+    fn select_device(&mut self, device_id: Option<String>) -> Result<(), String> {
+        let mut settings = self.audio_settings.clone();
+        settings.discover(&PlatformOutput::list_devices()?);
+        settings.selected_output_id = device_id.unwrap_or_default();
+        self.apply_audio_settings(settings)
+    }
+
     fn set_exclusive_mode(&mut self, enabled: bool) -> Result<(), String> {
-        if self.exclusive_mode == enabled {
-            return Ok(());
+        let mut settings = self.audio_settings.clone();
+        let selected = settings.selected_output_id.clone();
+        if let Some(output) = settings.outputs.iter_mut().find(|o| o.id == selected) {
+            output.exclusive_mode = enabled;
         }
-
-        let previous_mode = self.exclusive_mode;
-        let position_seconds = lock_status(&self.status).current_time;
-        let has_loaded_source = self.current_source.is_some();
-
-        if let Some(output) = self.output.as_mut() {
-            output.reset()?;
-        }
-
-        self.output = None;
-        self.exclusive_mode = enabled;
-
-        if has_loaded_source {
-            if let Err(error) = self.seek(position_seconds) {
-                self.exclusive_mode = previous_mode;
-                let _ = self.seek(position_seconds);
-                return Err(error);
-            }
-        }
-
-        Ok(())
+        self.apply_audio_settings(settings)
     }
 
     fn load(
@@ -988,6 +1148,13 @@ impl PlaybackWorker {
                 return self.advance(source, prepared);
             }
 
+            if self.tail_frames_remaining > 0 {
+                let frames = self.tail_frames_remaining.min(dsp::BLOCK_FRAMES);
+                self.pcm.resize(frames * spec.channels, 0.0);
+                self.tail_frames_remaining -= frames;
+                self.draining_dsp_tail = true;
+                return Ok(());
+            }
             let output = self
                 .output
                 .as_mut()
@@ -1036,8 +1203,9 @@ impl PlaybackWorker {
         });
 
         if !self.pcm.is_empty() {
-            let using_gain_buffer = !cfg!(target_os = "macos")
-                && (!self.gain.is_unity() || self.gain_buffer_offset < self.gain_buffer.len());
+            let using_gain_buffer = self.dsp.as_ref().is_some_and(DspEngine::active)
+                || (!cfg!(target_os = "macos") && !self.gain.is_unity())
+                || self.gain_buffer_offset < self.gain_buffer.len();
             let frames = if !using_gain_buffer {
                 let (first, second) = self.pcm.as_slices();
                 output.write(first, second)?
@@ -1048,11 +1216,19 @@ impl PlaybackWorker {
                         .pcm
                         .len()
                         .min(GAIN_BLOCK_FRAMES.saturating_mul(spec.channels));
-                    self.gain.process_interleaved(
-                        self.pcm.iter().take(sample_limit).copied(),
-                        spec.channels,
-                        &mut self.gain_buffer,
-                    );
+                    self.gain_buffer.clear();
+                    self.gain_buffer
+                        .extend(self.pcm.iter().take(sample_limit).copied());
+                    if let Some(dsp) = self.dsp.as_mut() {
+                        dsp.process(&mut self.gain_buffer)?;
+                        if !self.draining_dsp_tail {
+                            self.tail_frames_remaining = dsp.tail_frames();
+                        }
+                    }
+                    if !cfg!(target_os = "macos") {
+                        self.gain
+                            .process_in_place(&mut self.gain_buffer, spec.channels);
+                    }
                 }
                 output.write(&self.gain_buffer[self.gain_buffer_offset..], &[])?
             };
@@ -1064,6 +1240,7 @@ impl PlaybackWorker {
                     if self.gain_buffer_offset >= self.gain_buffer.len() {
                         self.gain_buffer.clear();
                         self.gain_buffer_offset = 0;
+                        self.draining_dsp_tail = false;
                     }
                 }
                 self.rendered_frames = self.rendered_frames.saturating_add(frames as u64);
@@ -1194,6 +1371,14 @@ impl PlaybackWorker {
         let stream = (!decoder_ended)
             .then(|| DecoderStream::start(decoder))
             .transpose()?;
+        if self.spec != Some(spec) || self.dsp.is_none() {
+            self.dsp = Some(DspEngine::build(
+                self.audio_settings.preset(),
+                spec.sample_rate,
+                spec.channels,
+                &self.audio_directory()?,
+            )?);
+        }
         self.pcm = pcm;
         self.decoder = stream;
         self.spec = Some(spec);
@@ -1340,6 +1525,11 @@ impl PlaybackWorker {
         self.gain_buffer.clear();
         self.gain_buffer_offset = 0;
         self.gain.settle();
+        self.tail_frames_remaining = 0;
+        self.draining_dsp_tail = false;
+        if let Some(dsp) = self.dsp.as_mut() {
+            dsp.reset();
+        }
     }
 }
 
@@ -1467,6 +1657,53 @@ mod tests {
         let prepared = prepare_source(source.clone(), false).unwrap();
         std::fs::remove_file(path).unwrap();
         (source, prepared)
+    }
+
+    #[test]
+    fn assigned_preset_updates_live_dsp_and_failed_configuration_keeps_previous() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        worker.spec = Some(StreamSpec {
+            sample_rate: 48000,
+            channels: 2,
+            bits_per_sample: 24,
+        });
+        let preset = dsp::DspPreset {
+            id: "headphones".into(),
+            name: "Headphones".into(),
+            enabled: true,
+            headroom_db: 6.0,
+            output_gain_db: 0.0,
+            bands: vec![],
+            convolution: vec![],
+        };
+        let mut settings = AudioSettings::default();
+        settings.outputs[0].preset_id = Some(preset.id.clone());
+        settings.presets.push(preset);
+        worker.apply_audio_settings(settings.clone()).unwrap();
+        let mut input = [1.0, -1.0];
+        worker.dsp.as_mut().unwrap().process(&mut input).unwrap();
+        assert!((input[0] - 10.0_f64.powf(-6.0 / 20.0)).abs() < 1e-12);
+        assert_eq!(input[0], -input[1]);
+        let mut invalid = settings.clone();
+        invalid.presets[0].convolution.push(dsp::ImpulseFile {
+            id: "missing".into(),
+            name: "missing.wav".into(),
+            sample_rate: 44100,
+            channels: 1,
+            frames: 10,
+        });
+        assert!(worker.apply_audio_settings(invalid).is_err());
+        assert_eq!(worker.audio_settings, settings);
+        assert!(worker.dsp.as_ref().unwrap().active());
+        settings.outputs[0].preset_id = None;
+        worker.apply_audio_settings(settings).unwrap();
+        let mut fade = vec![0.25; 1024];
+        worker.dsp.as_mut().unwrap().process(&mut fade).unwrap();
+        assert_eq!(fade.last(), Some(&0.25));
+        assert!(!worker.dsp.as_ref().unwrap().active());
     }
 
     #[test]

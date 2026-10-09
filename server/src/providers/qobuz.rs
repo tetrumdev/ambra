@@ -9,7 +9,7 @@ use std::{
 
 use futures_util::{StreamExt, stream};
 use qbz_models::{Album, AlbumSummary, Artist, Quality, Track, UserSession};
-use qbz_qobuz::QobuzClient;
+use qbz_qobuz::{QobuzClient, performers::parse_performers};
 use tokio::sync::Mutex;
 
 use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
@@ -547,12 +547,9 @@ impl QobuzProvider {
 
 fn map_search_track(track: Track) -> TrackMetadata {
     let track_id = track.id.to_string();
-    let primary_artist = track
-        .performer
-        .as_ref()
-        .map(artist_metadata)
-        .unwrap_or_else(unknown_artist);
-    let artists = vec![primary_artist.clone()];
+    let performer = track.performer.as_ref().map(artist_metadata);
+    let artists = track_artists(track.performers.as_deref(), performer, &[]);
+    let primary_artist = artists[0].clone();
     let album = track.album.as_ref().map(|summary| AlbumMetadata {
         provider_id: summary.id.clone(),
         title: summary.title.clone(),
@@ -624,13 +621,14 @@ fn map_track(
     full_album: Option<&Album>,
     source: &PlaybackSource,
 ) -> TrackMetadata {
-    let primary_artist = track
+    let performer = track
         .performer
         .as_ref()
         .map(artist_metadata)
-        .or_else(|| full_album.map(|album| artist_metadata(&album.artist)))
-        .unwrap_or_else(unknown_artist);
-    let artists = vec![primary_artist.clone()];
+        .or_else(|| full_album.map(|album| artist_metadata(&album.artist)));
+    let known_album_artists = full_album.map(album_artists).unwrap_or_default();
+    let artists = track_artists(track.performers.as_deref(), performer, &known_album_artists);
+    let primary_artist = artists[0].clone();
     let album = track.album.as_ref().map(|summary| {
         let album_artists = full_album
             .map(album_artists)
@@ -724,6 +722,45 @@ fn unknown_artist() -> ArtistMetadata {
         name: "Unknown Artist".to_owned(),
         image_url: None,
     }
+}
+
+/// Qobuz's single `performer` is sometimes a producer rather than the act (Billy
+/// Joel's "She's Got a Way" names Artie Ripp). The `performers` credits mark who
+/// fronts the track, so prefer their main then featured artists, reusing IDs and
+/// portraits from artists already known by name. Without such credits, keep the
+/// `performer`.
+fn track_artists(
+    performers: Option<&str>,
+    performer: Option<ArtistMetadata>,
+    album_artists: &[ArtistMetadata],
+) -> Vec<ArtistMetadata> {
+    let known: Vec<&ArtistMetadata> = performer.iter().chain(album_artists).collect();
+    let credits = parse_performers(performers.unwrap_or_default());
+    let mut artists = Vec::new();
+    for wanted in ["mainartist", "featuredartist"] {
+        let credited = credits.iter().filter(|credit| {
+            credit
+                .roles
+                .iter()
+                .any(|role| role.replace(' ', "").eq_ignore_ascii_case(wanted))
+        });
+        for credit in credited {
+            let artist = known
+                .iter()
+                .find(|artist| artist.name.eq_ignore_ascii_case(&credit.name))
+                .map(|artist| (*artist).clone())
+                .unwrap_or_else(|| ArtistMetadata {
+                    provider_id: String::new(),
+                    name: credit.name.clone(),
+                    image_url: None,
+                });
+            push_unique_artist(&mut artists, artist);
+        }
+    }
+    if artists.is_empty() {
+        artists.push(performer.unwrap_or_else(unknown_artist));
+    }
+    artists
 }
 
 fn push_unique_artist(artists: &mut Vec<ArtistMetadata>, artist: ArtistMetadata) {
@@ -856,7 +893,9 @@ fn save_session(session: &UserSession) -> ProviderResult<()> {
 }
 
 fn track_metadata_cache_path() -> PathBuf {
-    crate::storage::cache_path("qobuz-metadata-cache.json")
+    // v2: artists come from main/featured credits. The version bump makes
+    // tracks cached with a producer as their artist load again.
+    crate::storage::cache_path("qobuz-metadata-cache.v2.json")
 }
 
 fn load_track_metadata_cache(path: &Path) -> HashMap<String, TrackMetadata> {
@@ -898,7 +937,46 @@ fn write_private_json(path: &Path, value: &impl serde::Serialize) -> ProviderRes
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_sampling_rate, oauth_code, stream_quality_label};
+    use super::{normalize_sampling_rate, oauth_code, stream_quality_label, track_artists};
+    use crate::models::ArtistMetadata;
+
+    fn artist(provider_id: &str, name: &str) -> ArtistMetadata {
+        ArtistMetadata {
+            provider_id: provider_id.to_owned(),
+            name: name.to_owned(),
+            image_url: None,
+        }
+    }
+
+    #[test]
+    fn credits_main_artists_over_a_producer_performer() {
+        let artists = track_artists(
+            Some("Billy Joel, MainArtist, Composer - Artie Ripp, Producer"),
+            Some(artist("406054", "Artie Ripp")),
+            &[artist("11412", "Billy Joel")],
+        );
+        assert_eq!(artists.len(), 1);
+        assert_eq!(artists[0].provider_id, "11412");
+        assert_eq!(artists[0].name, "Billy Joel");
+    }
+
+    #[test]
+    fn lists_every_main_and_featured_artist_in_order() {
+        let artists = track_artists(
+            Some("B, FeaturedArtist - A, Main Artist - C, MainArtist - D, Mixer"),
+            Some(artist("1", "A")),
+            &[],
+        );
+        let names: Vec<_> = artists.iter().map(|artist| artist.name.as_str()).collect();
+        assert_eq!(names, ["A", "C", "B"]);
+        assert_eq!(artists[0].provider_id, "1");
+    }
+
+    #[test]
+    fn keeps_the_performer_without_credits() {
+        let artists = track_artists(None, Some(artist("1", "A")), &[]);
+        assert_eq!(artists[0].name, "A");
+    }
 
     #[test]
     fn extracts_oauth_code_from_qobuz_callback() {

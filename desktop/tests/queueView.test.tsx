@@ -172,6 +172,75 @@ test("playlist pointer gestures reorder only upcoming entries and suppress the d
   } finally { document.elementFromPoint = originalElementFromPoint; }
 });
 
+test("queue drag scrolling uses visible scroller edges rather than Up Next section edges", async () => {
+  const originalRequestFrame = globalThis.requestAnimationFrame;
+  const originalCancelFrame = globalThis.cancelAnimationFrame;
+  const originalElementFromPoint = document.elementFromPoint;
+  const frames = new Map<number, FrameRequestCallback>();
+  let frameId = 0;
+  globalThis.requestAnimationFrame = callback => {
+    frames.set(++frameId, callback);
+    return frameId;
+  };
+  globalThis.cancelAnimationFrame = id => { frames.delete(id); };
+  const advanceFrame = async () => {
+    await act(async () => {
+      const pending = [...frames.values()];
+      frames.clear();
+      for (const callback of pending) callback(0);
+    });
+  };
+  try {
+    const props = await renderQueue();
+    await advanceFrame();
+    const rows = mount.querySelectorAll<HTMLElement>("#upcomingQueueTracks .queueItem");
+    const container = rows[0].parentElement!;
+    const scroller = mount.querySelector<HTMLElement>("#queueList")!;
+    const rectangle = (top: number, height: number): DOMRect => ({ x: 0, y: top, top, bottom: top + height, left: 0, right: 900, width: 900, height, toJSON: () => ({}) });
+    scroller.scrollTop = 100;
+    scroller.getBoundingClientRect = () => rectangle(100, 500);
+    container.getBoundingClientRect = () => rectangle(350 - scroller.scrollTop, 228);
+    rows.forEach((row, index) => {
+      row.getBoundingClientRect = () => rectangle(350 + index * 76 - scroller.scrollTop, 76);
+    });
+    let captured = false;
+    rows[2].setPointerCapture = () => { captured = true; };
+    rows[2].hasPointerCapture = () => captured;
+    rows[2].releasePointerCapture = () => { captured = false; };
+    document.elementFromPoint = (_x, y) => Array.from(rows).find(row => {
+      const rect = row.getBoundingClientRect();
+      return y >= rect.top && y < rect.bottom;
+    }) ?? null;
+    const pointer = { bubbles: true, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, clientX: 100 };
+    const move = async (clientY: number) => {
+      await act(async () => { window.dispatchEvent(new PointerEvent("pointermove", { ...pointer, clientY })); });
+      await advanceFrame();
+    };
+    await act(async () => { rows[2].dispatchEvent(new PointerEvent("pointerdown", { ...pointer, clientY: 440 })); });
+    await move(260);
+    expect(scroller.scrollTop).toBe(100);
+    expect(rows[0].dataset.dropPosition).toBe("before");
+    await move(470);
+    expect(scroller.scrollTop).toBe(100);
+    await move(110);
+    expect(scroller.scrollTop).toBeLessThan(100);
+    scroller.scrollTop = 100;
+    await move(590);
+    expect(scroller.scrollTop).toBeGreaterThan(100);
+    scroller.scrollTop = 100;
+    await move(260);
+    expect(scroller.scrollTop).toBe(100);
+    await act(async () => { window.dispatchEvent(new PointerEvent("pointerup", { ...pointer, clientY: 260 })); });
+    expect(props.reorderEntries).toHaveBeenCalledWith([4, 2, 3]);
+  } finally {
+    await act(async () => root?.unmount());
+    root = null;
+    globalThis.requestAnimationFrame = originalRequestFrame;
+    globalThis.cancelAnimationFrame = originalCancelFrame;
+    document.elementFromPoint = originalElementFromPoint;
+  }
+});
+
 test("long queue and history sections keep their rendered rows bounded", async () => {
   const upcomingEntries = Array.from({ length: 1000 }, (_, index) => entry(index + 2));
   const historyEntries = Array.from({ length: 1000 }, (_, index) => ({ ...past, historyId: `history-${index}` }));

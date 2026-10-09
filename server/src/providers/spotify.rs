@@ -182,7 +182,7 @@ impl SpotifyProvider {
 
         Ok(Some(Self {
             session,
-            http_client: reqwest::Client::new(),
+            http_client: crate::http_client::builder().build()?,
             search_auth: Arc::new(Mutex::new(search_auth)),
             oauth_refresh_path: Arc::new(oauth_refresh_path),
             oauth_client_id: Arc::new(oauth_client_id),

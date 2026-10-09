@@ -138,7 +138,7 @@ impl TidalProvider {
         Ok(Self {
             media_cache: Arc::new(RwLock::new(MediaCache::default())),
             client: Arc::new(Mutex::new(client)),
-            http_client: reqwest::Client::builder()
+            http_client: crate::http_client::builder()
                 .connect_timeout(Duration::from_secs(3))
                 .timeout(Duration::from_secs(15))
                 .pool_idle_timeout(Duration::from_secs(90))

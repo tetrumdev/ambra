@@ -9,6 +9,7 @@ import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu } from "./TrackCollectionMenu";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
+import { trackArtistNames } from "./ArtistLinks";
 import "./LibraryView.css";
 import "./Queue.css";
 
@@ -266,8 +267,8 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, onA
       <div className="trackLeading">
         <div className="coverImgContainer"><TrackArtwork track={entry.track} alt={`${entry.track.album} cover`} className="coverImg" draggable={false} /></div>
       </div>
-      <span className="trackName queueTrackName"><span title={entry.track.name}>{entry.track.name}</span><small className="queueTrackArtist">{entry.track.artist}</small></span>
-      <span className="artistName" title={entry.track.artist}>{entry.track.artist}</span>
+      <span className="trackName queueTrackName"><span title={entry.track.name}>{entry.track.name}</span><small className="queueTrackArtist">{trackArtistNames(entry.track)}</small></span>
+      <span className="artistName" title={trackArtistNames(entry.track)}>{trackArtistNames(entry.track)}</span>
       <span className="trackDuration">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
       {selecting && <span className="queueSelectionIndicator" aria-hidden="true">
         <img src={selected ? "/select.svg" : "/noSelect.svg"} className="selectionIndicator" alt="" />

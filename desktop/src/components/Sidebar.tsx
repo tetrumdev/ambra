@@ -55,106 +55,135 @@ export function Sidebar({
 
   return (
     <>
-    <div id="sidebarMain">
-      <div className="mainLogoContainer">
-        <button type="button" className="mainLogo" onClick={onOpenLibrary} aria-label="Open My Library">
-          <img src="/ambra.svg" id="logoImg" alt="" />
-        </button>
-      </div>
-      <div id="libraryContainer">
-        <button type="button" onClick={onOpenLibrary} className="sidebarBtn sidebarLibraryButton" aria-current={activeLibrarySection === "overview" ? "page" : undefined}>
-          My Library
-        </button>
-        <nav className="sidebarLibrarySections" aria-label="Library sections">
-          {librarySections.map(({ id, label }) => (
-            <button type="button" className="sidebarBtn sidebarLibraryButton" key={id} onClick={() => onOpenLibrarySection(id)} aria-current={activeLibrarySection === id ? "page" : undefined}>{label}</button>
-          ))}
-        </nav>
-        <div id="playlistContainer">
-          {playlists.map((playlist) => (
-            <div key={playlist.id} className="sidebarPlaylistRow">
-              <button
-                type="button"
-                className="sidebarBtn sidebarPlaylistName"
-                onClick={() => onSelectPlaylist(playlist.id)}
-                aria-current={activePlaylistId === playlist.id ? "page" : undefined}
-              >
-                {playlist.name}
-              </button>
-              <PlaylistActions
-                playlist={playlist}
-                onRename={onRenamePlaylist}
-                onDelete={onDeletePlaylist}
-              />
-            </div>
-          ))}
-        </div>
-        <button type="button" onClick={beginCreatingPlaylist} id="createPlaylistBtn">
-          Create Playlist
-        </button>
-      </div>
-      <div className="sidebarFooter">
-        <button
-          type="button"
-          className="sidebarBtn sidebarLibraryButton"
-          onClick={onOpenSettings}
-          aria-current={isSettingsActive ? "page" : undefined}
-        >
-          Settings
-        </button>
-      </div>
-    </div>
-    <dialog
-      ref={createDialog}
-      className="playlistEditDialog"
-      aria-label="Name playlist"
-      onCancel={(event) => {
-        event.preventDefault();
-        cancelCreatingPlaylist();
-      }}
-      onKeyDown={(event) => event.stopPropagation()}
-    >
-      <button
-        type="button"
-        className="playlistEditCancel"
-        onClick={cancelCreatingPlaylist}
-      >
-        Cancel
-      </button>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          const playlistId = onCreatePlaylist(newPlaylistName);
-          if (!playlistId) {
-            setCreateError(true);
-            return;
-          }
-          setIsCreatingPlaylist(false);
-          setCreateError(false);
-          onSelectPlaylist(playlistId);
-        }}
-      >
-        <div className="playlistEditContent">
-          <h2>Name playlist</h2>
-          <input
-            spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
-            autoFocus
-            aria-label="Playlist name"
-            value={newPlaylistName}
-            onFocus={(event) => event.currentTarget.select()}
-            onChange={(event) => setNewPlaylistName(event.target.value)}
-          />
-          {createError && (
-            <p role="alert">Could not save this change. Please try again.</p>
-          )}
-        </div>
-        <div className="playlistEditButtons">
-          <button type="submit" disabled={!newPlaylistName.trim()}>
-            Save
+      <div id="sidebarMain">
+        <div className="mainLogoContainer">
+          <button
+            type="button"
+            className="mainLogo"
+            onClick={onOpenLibrary}
+            aria-label="Open My Library"
+          >
+            <img src="/ambra.svg" id="logoImg" alt="" />
           </button>
         </div>
-      </form>
-    </dialog>
+        <div id="libraryContainer">
+          <button
+            type="button"
+            onClick={onOpenLibrary}
+            className="sidebarBtn sidebarLibraryButton"
+            aria-current={
+              activeLibrarySection === "overview" ? "page" : undefined
+            }
+          >
+            My Library
+          </button>
+          <nav className="sidebarLibrarySections" aria-label="Library sections">
+            {librarySections.map(({ id, label }) => (
+              <button
+                type="button"
+                className="sidebarBtn sidebarLibraryButton"
+                key={id}
+                onClick={() => onOpenLibrarySection(id)}
+                aria-current={activeLibrarySection === id ? "page" : undefined}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+          <div id="playlistContainer">
+            {playlists.map((playlist) => (
+              <div key={playlist.id} className="sidebarPlaylistRow">
+                <button
+                  type="button"
+                  className="sidebarBtn sidebarPlaylistName"
+                  onClick={() => onSelectPlaylist(playlist.id)}
+                  aria-current={
+                    activePlaylistId === playlist.id ? "page" : undefined
+                  }
+                >
+                  {playlist.name}
+                </button>
+                <PlaylistActions
+                  playlist={playlist}
+                  onRename={onRenamePlaylist}
+                  onDelete={onDeletePlaylist}
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={beginCreatingPlaylist}
+            id="createPlaylistBtn"
+          >
+            Create Playlist
+          </button>
+        </div>
+        <div className="sidebarFooter">
+          <button
+            type="button"
+            className="sidebarBtn sidebarLibraryButton sidebarSettingsButton"
+            onClick={onOpenSettings}
+            aria-current={isSettingsActive ? "page" : undefined}
+          >
+            <img src="/settings.svg" alt="Settings" width={22} height={22} />
+          </button>
+        </div>
+      </div>
+      <dialog
+        ref={createDialog}
+        className="playlistEditDialog"
+        aria-label="Name playlist"
+        onCancel={(event) => {
+          event.preventDefault();
+          cancelCreatingPlaylist();
+        }}
+        onKeyDown={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="playlistEditCancel"
+          onClick={cancelCreatingPlaylist}
+        >
+          Cancel
+        </button>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            const playlistId = onCreatePlaylist(newPlaylistName);
+            if (!playlistId) {
+              setCreateError(true);
+              return;
+            }
+            setIsCreatingPlaylist(false);
+            setCreateError(false);
+            onSelectPlaylist(playlistId);
+          }}
+        >
+          <div className="playlistEditContent">
+            <h2>Name playlist</h2>
+            <input
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+              autoComplete="off"
+              autoFocus
+              aria-label="Playlist name"
+              value={newPlaylistName}
+              onFocus={(event) => event.currentTarget.select()}
+              onChange={(event) => setNewPlaylistName(event.target.value)}
+            />
+            {createError && (
+              <p role="alert">Could not save this change. Please try again.</p>
+            )}
+          </div>
+          <div className="playlistEditButtons">
+            <button type="submit" disabled={!newPlaylistName.trim()}>
+              Save
+            </button>
+          </div>
+        </form>
+      </dialog>
     </>
   );
 }
