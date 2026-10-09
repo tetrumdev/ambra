@@ -7,7 +7,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use qbz_models::{Album, Artist, Quality, Track, UserSession};
+use futures_util::{StreamExt, stream};
+use qbz_models::{Album, AlbumSummary, Artist, Quality, Track, UserSession};
 use qbz_qobuz::QobuzClient;
 use tokio::sync::Mutex;
 
@@ -404,7 +405,62 @@ impl QobuzProvider {
         };
         let playback_source = self.playback_source(track_id).await?;
         let metadata = map_track(track_id, track, full_album.as_ref(), &playback_source);
+        self.remember_metadata(track_id, &metadata).await;
+        Ok(metadata)
+    }
 
+    /// The album response already embeds each track, so only the stream
+    /// lookup remains per track instead of a full track request as well.
+    pub async fn album_tracks(
+        &self,
+        album_id: &str,
+        concurrency: usize,
+    ) -> ProviderResult<Vec<(String, ProviderResult<TrackMetadata>)>> {
+        validate_album_id(album_id)?;
+        let album = self.album(album_id).await?;
+        let summary = AlbumSummary {
+            id: album.id.clone(),
+            title: album.title.clone(),
+            image: album.image.clone(),
+            label: album.label.clone(),
+            genre: album.genre.clone(),
+        };
+        let tracks = album
+            .tracks
+            .as_ref()
+            .map(|tracks| tracks.items.clone())
+            .unwrap_or_default();
+        let album = &album;
+        let summary = &summary;
+        Ok(stream::iter(tracks)
+            .map(|mut track| async move {
+                let track_id = track.id.to_string();
+                let cached = self.track_metadata_cache.lock().await.get(&track_id).cloned();
+                if let Some(metadata) = cached {
+                    return (track_id, Ok(metadata));
+                }
+                if !track.streamable {
+                    let error = io::Error::other("Qobuz reports that this track is not streamable");
+                    return (track_id, Err(error.into()));
+                }
+                // Tracks nested in an album response omit their album summary.
+                track.album.get_or_insert_with(|| summary.clone());
+                let result = match self.playback_source(&track_id).await {
+                    Ok(source) => {
+                        let metadata = map_track(&track_id, track, Some(album), &source);
+                        self.remember_metadata(&track_id, &metadata).await;
+                        Ok(metadata)
+                    }
+                    Err(error) => Err(error),
+                };
+                (track_id, result)
+            })
+            .buffered(concurrency)
+            .collect()
+            .await)
+    }
+
+    async fn remember_metadata(&self, track_id: &str, metadata: &TrackMetadata) {
         self.track_metadata_cache
             .lock()
             .await
@@ -415,7 +471,6 @@ impl QobuzProvider {
             "Qobuz metadata cache",
             save_track_metadata_cache,
         );
-        Ok(metadata)
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {

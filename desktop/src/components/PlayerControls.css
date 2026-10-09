@@ -36,6 +36,9 @@
 
 #controls button:active {
     filter: brightness(70%);
+}
+
+#controls button:active img {
     scale: 0.7;
 }
 
@@ -46,6 +49,9 @@
 
 #controls button:disabled:active {
     filter: none;
+}
+
+#controls button:disabled:active img {
     scale: 1;
 }
 
@@ -54,4 +60,6 @@
     max-width: 25px;
     user-select: none;
     -webkit-user-drag: none;
+    pointer-events: none;
+    transition: scale 0.15s;
 }

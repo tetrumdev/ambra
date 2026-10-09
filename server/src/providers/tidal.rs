@@ -16,16 +16,21 @@ use tidlers::{
     TidalClient,
     auth::TidalAuth,
     client::models::{
+        album::AlbumResponse,
         search::{
             SearchTrackHit,
             config::{SearchConfig, SearchType},
         },
-        track::playback::{DashManifest, JsonTrackManifest},
+        track::{
+            Track as TidalTrack,
+            playback::{DashManifest, JsonTrackManifest},
+        },
     },
     error::TidalError,
     requests::RequestClientError,
     resources::uuid_to_url_with_size,
 };
+use futures_util::{StreamExt, stream};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::models::{
@@ -188,6 +193,57 @@ impl TidalProvider {
             (track, album_details)
         };
 
+        self.metadata_from_track(track, album_details.as_ref()).await
+    }
+
+    /// Album pages already carry every track's details. Building metadata from
+    /// them leaves only the per-track playback lookup, instead of refetching
+    /// each track and the same album once per track.
+    pub async fn album_tracks(
+        &self,
+        album_id: &str,
+        concurrency: usize,
+    ) -> ProviderResult<Vec<(String, ProviderResult<TrackMetadata>)>> {
+        validate_album_id(album_id)?;
+
+        let client = self.client.lock().await.clone();
+        let album_details = client.get_album(album_id.to_owned()).await.ok();
+        let mut tracks = Vec::new();
+        let mut offset = 0_u64;
+        loop {
+            let page = client
+                .get_album_items(album_id.to_owned(), Some(100), Some(offset))
+                .await?;
+            let page_length = page.items.len();
+            tracks.extend(page.items.into_iter().map(|entry| entry.item));
+            if page_length == 0 || tracks.len() >= page.total_number_of_items.max(0) as usize {
+                break;
+            }
+            offset += page_length as u64;
+        }
+
+        let album_details = album_details.as_ref();
+        Ok(stream::iter(tracks)
+            .map(|track| async move {
+                let track_id = track.id.to_string();
+                let cached = self.track_metadata_cache.lock().await.get(&track_id).cloned();
+                let result = match cached {
+                    Some(metadata) => Ok(metadata),
+                    None => self.metadata_from_track(track, album_details).await,
+                };
+                (track_id, result)
+            })
+            .buffered(concurrency)
+            .collect()
+            .await)
+    }
+
+    async fn metadata_from_track(
+        &self,
+        track: TidalTrack,
+        album_details: Option<&AlbumResponse>,
+    ) -> ProviderResult<TrackMetadata> {
+        let track_id = &track.id.to_string();
         if !track.allow_streaming || !track.stream_ready {
             return Err(io::Error::other("Tidal reports that this track is not streamable").into());
         }

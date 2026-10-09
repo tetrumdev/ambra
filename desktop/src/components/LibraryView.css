@@ -160,7 +160,9 @@
 
 .librarySourcesTrigger {
     position: absolute;
-    top: 8px;
+    /* Sits 8px below the search pill (10px top + 42px tall, in <main>). The
+       header starts after the content spacer, so subtract that back out. */
+    top: calc(10px + 42px + 8px - var(--content-top-spacer));
     /* Shares the search pill's right edge. */
     right: 20px;
     display: grid;
@@ -631,7 +633,7 @@
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
-    grid-template-columns: var(--library-columns);
+    grid-template-columns: var(--resized-library-columns, var(--library-columns));
     gap: 15px;
     display: grid;
     align-items: baseline;
@@ -723,7 +725,7 @@
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
-    grid-template-columns: var(--library-columns);
+    grid-template-columns: var(--resized-library-columns, var(--library-columns));
     grid-template-rows: 100%;
     gap: 15px;
     text-align: left;
@@ -786,6 +788,7 @@
 
 .selectionActionMenu {
     position: fixed;
+    font-family: "Stack Sans Text", Inter, sans-serif;
     top: calc(5% + 48px);
     right: 3%;
     z-index: 10;

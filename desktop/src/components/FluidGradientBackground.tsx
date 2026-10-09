@@ -1,12 +1,22 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  softenedPaletteWeights,
+  type CoverSeparation,
+} from "../utils/backgroundPalette";
 
 type FluidGradientBackgroundProps = {
   colors: string[];
+  weights: number[];
+  separation: CoverSeparation;
+  coverId: string;
   seed: string;
   active: boolean;
 };
 
 const COLOR_TRANSITION_MS = 1800;
+// The field drifts far too slowly for frames beyond 60 fps to differ, so
+// high-refresh displays draw every other frame instead of doubling the work.
+const MIN_FRAME_INTERVAL_MS = 1000 / 60 - 2;
 
 const vertexShaderSource = `
 attribute vec2 a_position;
@@ -23,9 +33,17 @@ uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_seed;
 uniform vec3 u_colors[4];
+uniform vec4 u_weights;
+uniform vec4 u_cover;
+uniform vec4 u_edgeLuma;
+uniform vec4 u_edgeDirection;
 
+// Arithmetic hash (Dave Hoskins, "Hash without Sine"): every pixel evaluates
+// this ~180 times a frame, and sin() is far slower than multiply-adds on GPUs.
 float hash(vec2 point) {
-  return fract(sin(dot(point, vec2(127.1, 311.7)) + u_seed) * 43758.5453);
+  vec3 p3 = fract(vec3(point.xyx + u_seed) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
 }
 
 float noise(vec2 point) {
@@ -52,6 +70,33 @@ float fbm(vec2 point) {
   return value;
 }
 
+// Quietly lifts or deepens the field right around the cover, mostly where it
+// would otherwise match the cover's own edge, so the art never sits flush.
+vec3 separateFromCover(vec3 color) {
+  if (u_cover.z <= 0.0) return color;
+  vec2 offset = gl_FragCoord.xy - u_cover.xy;
+  vec2 outside = abs(offset) - u_cover.z;
+  float gap = length(max(outside, 0.0));
+  float nearby = exp(-(gap * gap) / (u_cover.w * u_cover.w));
+  if (nearby < 0.004) return color;
+
+  // Corners blend their two sides' edge measurements.
+  vec4 side = max(vec4(offset.y, offset.x, -offset.y, -offset.x), 0.0)
+    / max(length(offset), 1.0);
+  side *= side;
+  side *= side;
+  side /= max(dot(side, vec4(1.0)), 0.0001);
+  float edge = dot(side, u_edgeLuma);
+  float direction = dot(side, u_edgeDirection);
+
+  float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+  float similarity = 1.0 - smoothstep(0.03, 0.22, abs(luma - edge));
+  float amount = nearby * (0.15 + 0.85 * similarity);
+  vec3 deeper = color * (1.0 - 0.07 * amount);
+  vec3 lifted = 1.0 - (1.0 - color) * (1.0 - 0.04 * amount);
+  return mix(color, direction < 0.0 ? deeper : lifted, abs(direction));
+}
+
 void main() {
   vec2 point = gl_FragCoord.xy / u_resolution.xy - 0.5;
   point.x *= u_resolution.x / max(u_resolution.y, 1.0);
@@ -74,6 +119,7 @@ void main() {
     fbm(fluidPoint * 1.38 + vec2(2.6 - time * 0.52, -7.4 + time * 0.35))
   );
   fields = exp((fields - max(max(fields.x, fields.y), max(fields.z, fields.w))) * 9.0);
+  fields *= u_weights;
   fields /= fields.x + fields.y + fields.z + fields.w;
 
   vec3 color = u_colors[0] * fields.x
@@ -83,7 +129,7 @@ void main() {
   float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
   color = mix(vec3(luminance), color, 1.18);
   color *= 0.84 + 0.22 * fbm(fluidPoint * 2.2 + secondWarp);
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(separateFromCover(color), 1.0);
 }
 `;
 
@@ -109,10 +155,20 @@ function colorComponents(color: string) {
   );
 }
 
-function paletteComponents(colors: string[]) {
+function paletteComponents(
+  colors: string[],
+  weights: number[],
+  separation: CoverSeparation,
+) {
   const palette = colors.slice(0, 4);
   while (palette.length < 4) palette.push(palette[0] ?? "#000000");
-  return palette.flatMap(colorComponents);
+  // Transition colors, their influence, and the cover separation together.
+  return [
+    ...palette.flatMap(colorComponents),
+    ...softenedPaletteWeights(weights, colors.length),
+    ...separation.edges,
+    ...separation.directions,
+  ];
 }
 
 function mixPalette(from: number[], to: number[], progress: number) {
@@ -137,15 +193,23 @@ function seedNumber(seed: string) {
 
 export function FluidGradientBackground({
   colors,
+  weights,
+  separation,
+  coverId,
   seed,
   active,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const paletteKey = colors.slice(0, 4).join(":");
+  const paletteKey = [
+    ...colors.slice(0, 4),
+    ...weights.slice(0, 4),
+    ...separation.edges,
+    ...separation.directions,
+  ].join(":");
   const initialSeedRef = useRef(seed);
   const transitionRef = useRef({
-    from: paletteComponents(colors),
-    to: paletteComponents(colors),
+    from: paletteComponents(colors, weights, separation),
+    to: paletteComponents(colors, weights, separation),
     startedAt: 0,
   });
   const drawRef = useRef<((now: number) => void) | null>(null);
@@ -158,7 +222,7 @@ export function FluidGradientBackground({
     const now = performance.now();
     const previous = transitionRef.current;
     const progress = easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS);
-    const target = paletteComponents(colors);
+    const target = paletteComponents(colors, weights, separation);
     const current = mixPalette(previous.from, previous.to, progress);
     transitionRef.current = reducedMotionRef.current || !activeRef.current
       ? { from: target, to: target, startedAt: now }
@@ -233,7 +297,14 @@ export function FluidGradientBackground({
     const time = gl.getUniformLocation(program, "u_time");
     const shaderSeed = gl.getUniformLocation(program, "u_seed");
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
-    if (!buffer || position < 0 || !resolution || !time || !shaderSeed || !shaderColors) {
+    const shaderWeights = gl.getUniformLocation(program, "u_weights");
+    const shaderCover = gl.getUniformLocation(program, "u_cover");
+    const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma");
+    const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection");
+    if (
+      !buffer || position < 0 || !resolution || !time || !shaderSeed || !shaderColors
+      || !shaderWeights || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
+    ) {
       gl.deleteProgram(program);
       return;
     }
@@ -248,7 +319,9 @@ export function FluidGradientBackground({
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
 
-    gl.uniform1f(shaderSeed, seedNumber(initialSeedRef.current) * 1000);
+    // The hash offsets lattice coordinates by the seed; a small range keeps
+    // full precision even where mediump floats are 16-bit.
+    gl.uniform1f(shaderSeed, seedNumber(initialSeedRef.current) * 64);
 
     const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotionRef.current = motionPreference.matches;
@@ -257,6 +330,31 @@ export function FluidGradientBackground({
     // from display density, and measure layout only when the canvas changes size.
     let width = 1;
     let height = 1;
+    // The cover, in canvas pixels: center (GL y-up), half size, glow falloff.
+    let cover = [0, 0, 0, 1];
+    let observedCover: HTMLElement | null = null;
+    const measureCover = () => {
+      const element = document.getElementById(coverId);
+      if (element && element !== observedCover) {
+        observedCover = element;
+        resizeObserver.observe(element);
+      }
+      const bounds = canvas.getBoundingClientRect();
+      const rect = element?.getBoundingClientRect();
+      if (!rect || rect.width <= 0 || bounds.width <= 0 || bounds.height <= 0) {
+        cover = [0, 0, 0, 1];
+        return;
+      }
+      const scaleX = width / bounds.width;
+      const scaleY = height / bounds.height;
+      const halfSize = (rect.width / 2) * scaleX;
+      cover = [
+        (rect.left + rect.width / 2 - bounds.left) * scaleX,
+        height - (rect.top + rect.height / 2 - bounds.top) * scaleY,
+        halfSize,
+        Math.max(1, halfSize * 0.36),
+      ];
+    };
     const resize = () => {
       const cssWidth = canvas.clientWidth;
       const cssHeight = canvas.clientHeight;
@@ -267,6 +365,7 @@ export function FluidGradientBackground({
         canvas.width = width;
         canvas.height = height;
       }
+      measureCover();
       scheduleDraw();
     };
     const scheduleDraw = () => {
@@ -277,18 +376,32 @@ export function FluidGradientBackground({
       reducedMotionRef.current = motionPreference.matches;
       scheduleDraw();
     };
+    let lastDrawnAt = -Infinity;
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
+      if (
+        now - lastDrawnAt < MIN_FRAME_INTERVAL_MS
+        && !reducedMotionRef.current
+        && activeRef.current
+      ) {
+        animationFrameRef.current = requestAnimationFrame(draw);
+        return;
+      }
+      lastDrawnAt = now;
       gl.viewport(0, 0, width, height);
       const transition = transitionRef.current;
       const progress = easedProgress(
         (now - transition.startedAt) / COLOR_TRANSITION_MS,
       );
-      gl.uniform3fv(
-        shaderColors,
-        mixPalette(transition.from, transition.to, progress),
-      );
+      const palette = mixPalette(transition.from, transition.to, progress);
+      gl.uniform3fv(shaderColors, palette.slice(0, 12));
+      gl.uniform4fv(shaderWeights, palette.slice(12, 16));
+      // The cover may mount after the canvas; keep looking until it appears.
+      if (!observedCover) measureCover();
+      gl.uniform4fv(shaderCover, cover);
+      gl.uniform4fv(shaderEdgeLuma, palette.slice(16, 20));
+      gl.uniform4fv(shaderEdgeDirection, palette.slice(20, 24));
       gl.uniform2f(resolution, width, height);
       gl.uniform1f(time, reducedMotionRef.current ? 0 : (now - startedAt) / 1000);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -315,7 +428,7 @@ export function FluidGradientBackground({
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);
     };
-  }, [contextVersion]);
+  }, [contextVersion, coverId]);
 
   return (
     <canvas

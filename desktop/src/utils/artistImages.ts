@@ -35,11 +35,11 @@ async function lookup(name: string): Promise<string | null> {
   return null;
 }
 
-export function artistImage(name: string): Promise<string | null> {
+export function artistImage(name: string, useLimiter = true): Promise<string | null> {
   const key = searchText(name);
   const found = cache.get(key);
   if (found && found.until > Date.now()) return found.request;
-  const request = limited(() => lookup(name)).catch(() => null);
+  const request = (useLimiter ? limited(() => lookup(name)) : lookup(name)).catch(() => null);
   const entry = { until: Infinity, request };
   cache.set(key, entry);
   void request.then(image => { entry.until = Date.now() + (image ? 3600000 : 30000); });
@@ -109,8 +109,12 @@ export function resolveArtistImage(artist: CatalogArtist, priority = false): Pro
     if (current && current.until > Date.now()) return current.image;
     if (artist.provider !== "local") {
       const details = await loadArtistDetails(artist);
-      rememberArtistImage(details);
-      return details.imageUrl;
+      // Some services have no photo for smaller artists. Borrow one from another
+      // service only when exactly one artist there has this exact name. This
+      // already runs in a limiter slot, so the name search must not take another.
+      const imageUrl = details.imageUrl ?? await artistImage(details.name, false);
+      rememberArtistImage({ ...details, imageUrl });
+      return imageUrl;
     }
     const imageUrl = await artistImage(artist.name);
     rememberArtistImage({ ...artist, imageUrl });

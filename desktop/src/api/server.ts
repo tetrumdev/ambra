@@ -173,23 +173,29 @@ export function thumbnailSource(source: string): string {
   return provider ? `${serverBaseUrl}/api/artwork/thumbnail?${new URLSearchParams({ provider, url: source })}` : source;
 }
 
-const paletteRequests = new Map<string, Promise<string[]>>();
-export function artworkPalette(track: Track): Promise<string[]> {
+export type ArtworkPalette = { colors: string[]; weights: number[] };
+
+const paletteRequests = new Map<string, Promise<ArtworkPalette>>();
+export function artworkPalette(track: Track): Promise<ArtworkPalette> {
   const query = artworkQuery(track);
-  if (!query) return Promise.resolve([]);
+  if (!query) return Promise.resolve({ colors: [], weights: [] });
   const cached = paletteRequests.get(query);
   if (cached) {
     paletteRequests.delete(query);
     paletteRequests.set(query, cached);
     return cached;
   }
-  const request = fetch(`${serverBaseUrl}/api/artwork/palette?${query}`)
+  const request = fetch(`${serverBaseUrl}/api/artwork/palette?${query}&weighted=true`)
     .then(async response => {
       if (!response.ok) throw new Error(`Artwork palette HTTP ${response.status}`);
-      return await response.json() as string[];
+      const palette = await response.json() as ArtworkPalette | string[];
+      // Older servers don't include coverage; fall back to the original blend.
+      return Array.isArray(palette)
+        ? { colors: palette, weights: palette.map(() => 1 / palette.length) }
+        : palette;
     }).catch(() => {
       if (paletteRequests.get(query) === request) paletteRequests.delete(query);
-      return [];
+      return { colors: [], weights: [] };
     });
   paletteRequests.set(query, request);
   if (paletteRequests.size > 512) paletteRequests.delete(paletteRequests.keys().next().value!);
@@ -512,9 +518,21 @@ function providerEntityId(id: string, provider: MusicProvider) {
   return encodeURIComponent(id.startsWith(`${provider}:`) ? id.slice(provider.length + 1) : id);
 }
 
+const albumTracks = new SearchCache<Track[]>(600_000, 80);
+
 export async function loadAlbumTracks(album: CatalogAlbum, signal?: AbortSignal): Promise<Track[]> {
   if (album.provider === "local") return [];
-  return responseTracks(await fetch(`${serverBaseUrl}/api/providers/${album.provider}/albums/${providerEntityId(album.id, album.provider)}/tracks`, { signal }));
+  const key = `${album.provider}:${providerEntityId(album.id, album.provider)}`;
+  signal?.throwIfAborted();
+  const cached = albumTracks.get(key);
+  if (cached) return cached;
+  // Shared and not tied to the caller's signal, so a hover prefetch or a quick
+  // back-and-forward reuses one in-flight request instead of starting over.
+  return sharedArtistRequest(`album:${key}`, async () => {
+    const tracks = await responseTracks(await fetch(`${serverBaseUrl}/api/providers/${album.provider}/albums/${key.slice(album.provider.length + 1)}/tracks`, { signal: AbortSignal.timeout(60_000) }));
+    albumTracks.set(key, tracks);
+    return tracks;
+  }, signal);
 }
 
 export async function loadArtistAlbums(artist: CatalogArtist, offset = 0, signal?: AbortSignal, refresh = false): Promise<ArtistAlbumsPage> {

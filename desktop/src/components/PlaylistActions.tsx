@@ -47,7 +47,7 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
           setMenu({ x: bounds.right, y: bounds.bottom });
         }}
       >
-        ⋯
+        <span aria-hidden="true">⋯</span>
       </button>
       {menu && (
         <TrackCollectionMenu
