@@ -2,6 +2,7 @@ import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { AudioQuality, Track } from "../types/music";
 import { formatAudioQuality } from "../utils/audioQuality";
+import type { PlaybackClock } from "../utils/playbackClock";
 import "./NowPlayingBar.css";
 import { AudioDecks } from "./AudioDecks";
 import { PlaybackProgress } from "./PlaybackProgress";
@@ -18,7 +19,7 @@ type NowPlayingBarProps = {
   track: Track | undefined;
   audioQuality?: AudioQuality | null;
   showAudioQuality?: boolean;
-  currentTime: number;
+  clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
   audioDecks: AudioDeckController;
@@ -37,7 +38,7 @@ export function NowPlayingBar({
   audioQuality,
   showAudioQuality = false,
   onOpenBigscreen,
-  currentTime,
+  clock,
   duration,
   isPlaying,
   audioDecks,
@@ -79,7 +80,7 @@ export function NowPlayingBar({
         />
         <div className="playbackReadout">
           <PlaybackProgress
-            currentTime={currentTime}
+            clock={clock}
             duration={duration}
             onSeek={onSeek}
             disabled={isEmpty}

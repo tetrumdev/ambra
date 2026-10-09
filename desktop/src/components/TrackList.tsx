@@ -11,12 +11,11 @@ import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollection
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { PerfProfiler } from "./PerfProfiler";
+import { TrackColumnHeader } from "./TrackColumnHeader";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import {
-  nextTrackSort,
   type DropPosition,
   type TrackSort,
-  type TrackSortKey,
 } from "../utils/trackCollectionOrder";
 
 type OpenMenu =
@@ -223,39 +222,6 @@ export function TrackList({
     actions.current(action, event as React.MouseEvent<HTMLDivElement>, index);
   }, []);
 
-  function columnHeader(
-    key: TrackSortKey,
-    label: string,
-    className: string,
-  ) {
-    if (!onSortChange) return <span className={className}>{label}</span>;
-
-    const direction = sort?.key === key ? sort.direction : null;
-    const nextLabel =
-      direction === "descending"
-        ? `Sort ${label} ascending`
-        : direction === "ascending"
-          ? `Return to date-added order`
-          : `Sort ${label} descending`;
-    return (
-      <button
-        className={`${className} columnSortButton`}
-        type="button"
-        data-sort-direction={direction ?? undefined}
-        aria-label={nextLabel}
-        data-tooltip={nextLabel}
-        onClick={() => onSortChange(nextTrackSort(sort, key))}
-      >
-        <span>{label}</span>
-        {direction && (
-          <span className="columnSortIndicator" aria-hidden="true">
-            {direction === "descending" ? "↓" : "↑"}
-          </span>
-        )}
-      </button>
-    );
-  }
-
   return (
     <PerfProfiler id="track-list">
     <>
@@ -307,12 +273,7 @@ export function TrackList({
           </button>
         </div>
       )}
-      <div className="columnInfo" ref={columnHeaderRef}>
-        {columnHeader("track", "Track", "trackColumn")}
-        {columnHeader("artist", "Artist", "artistColumn")}
-        {columnHeader("album", "Album", "albumColumn")}
-        {columnHeader("duration", "Duration", "durationColumn")}
-      </div>
+      <TrackColumnHeader headerRef={columnHeaderRef} sort={sort} onSortChange={onSortChange} />
       {virtual.topSpace > 0 && <VirtualSpacer position="top" height={virtual.topSpace} />}
       {tracks.slice(virtual.start, virtual.end).map((track, windowIndex) => {
         const index = virtual.start + windowIndex;

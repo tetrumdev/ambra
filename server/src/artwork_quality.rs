@@ -1,4 +1,10 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+pub struct ArtworkPalette {
+    pub colors: Vec<String>,
+    pub weights: Vec<f32>,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -88,7 +94,12 @@ pub fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     png_dimensions(bytes).or_else(|| jpeg_dimensions(bytes))
 }
 
-pub fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
+#[cfg(test)]
+fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
+    dominant_palette(bytes).map(|palette| palette.colors)
+}
+
+pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
     const CANDIDATE_COLORS: usize = 8;
 
     let image = image::load_from_memory(bytes)
@@ -188,12 +199,25 @@ pub fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
         selected.push(candidates.remove(accent));
     }
 
+    // Include all sampled shades in the nearest selected color's coverage.
+    let mut counts = vec![0_usize; selected.len()];
+    for pixel in &pixels {
+        let nearest = selected
+            .iter()
+            .enumerate()
+            .min_by(|(_, left), (_, right)| {
+                color_distance(*pixel, left.color).total_cmp(&color_distance(*pixel, right.color))
+            })?
+            .0;
+        counts[nearest] += 1;
+    }
     while selected.len() < 4 {
         selected.push(*selected.last()?);
+        counts.push(0);
     }
 
-    Some(
-        selected
+    Some(ArtworkPalette {
+        colors: selected
             .into_iter()
             .map(|cluster| {
                 let color = cluster.color;
@@ -205,7 +229,11 @@ pub fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
                 )
             })
             .collect(),
-    )
+        weights: counts
+            .into_iter()
+            .map(|count| count as f32 / pixels.len() as f32)
+            .collect(),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -370,9 +398,61 @@ fn jpeg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtworkCandidate, dominant_colors, highest_resolution, image_dimensions, normalized_upc,
-        qobuz_max_artwork_url, same_release_upc, trusted_artwork_url,
+        ArtworkCandidate, dominant_colors, dominant_palette, highest_resolution, image_dimensions,
+        normalized_upc, qobuz_max_artwork_url, same_release_upc, trusted_artwork_url,
     };
+
+    #[test]
+    fn preserves_coverage_and_does_not_duplicate_yellow_influence() {
+        let mut image = image::RgbImage::new(64, 64);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            *pixel = if y < 40 {
+                image::Rgb([4, 6, 8])
+            } else if x < 56 {
+                image::Rgb([30, 90, 150])
+            } else {
+                image::Rgb([230, 200, 35])
+            };
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let palette = dominant_palette(encoded.get_ref()).unwrap();
+        assert_eq!(palette.colors.len(), 4);
+        for (color, expected) in [
+            ("#040608", 0.625),
+            ("#1e5a96", 0.328125),
+            ("#e6c823", 0.046875),
+        ] {
+            let share: f32 = palette
+                .colors
+                .iter()
+                .zip(&palette.weights)
+                .filter(|(candidate, _)| candidate.as_str() == color)
+                .map(|(_, weight)| weight)
+                .sum();
+            assert!((share - expected).abs() < 0.001, "{color}: {share}");
+        }
+        assert_eq!(palette.weights[3], 0.0);
+        assert!((palette.weights.iter().sum::<f32>() - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn every_shade_contributes_to_coverage() {
+        let mut image = image::RgbImage::new(64, 64);
+        for (x, y, pixel) in image.enumerate_pixels_mut() {
+            let shade = (x / 8) as u8 * 25;
+            *pixel = image::Rgb([shade, y as u8 * 3, 200 - shade]);
+        }
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let palette = dominant_palette(encoded.get_ref()).unwrap();
+        assert_eq!(palette.weights.len(), 4);
+        assert!((palette.weights.iter().sum::<f32>() - 1.0).abs() < 0.0001);
+    }
 
     #[test]
     fn extracts_four_balanced_artwork_colors() {

@@ -92,14 +92,32 @@ describe("shared artwork", () => {
     try {
       const track = playableTrack(spotifyTrack);
       const [a, b] = await Promise.all([artworkPalette(track), artworkPalette(track)]);
-      expect(a).toEqual([]);
-      expect(b).toEqual([]);
+      expect(a).toEqual({ colors: [], weights: [] });
+      expect(b).toEqual({ colors: [], weights: [] });
       expect(urls.length).toBe(1);
       fail = false;
-      expect((await artworkPalette(track)).length).toBe(4);
+      const palette = await artworkPalette(track);
+      expect(palette.colors.length).toBe(4);
+      expect(palette.weights).toEqual([0.25, 0.25, 0.25, 0.25]);
       await artworkPalette(track);
       expect(urls.length).toBe(2);
       expect(urls.every(url => url.includes("/api/artwork/palette?"))).toBe(true);
+      expect(urls.every(url => url.includes("weighted=true"))).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
+  test("passes cover proportions through to the background", async () => {
+    const original = globalThis.fetch;
+    const expected = {
+      colors: ["#040608", "#1e5a96", "#e6c823", "#e6c823"],
+      weights: [0.625, 0.328125, 0.046875, 0],
+    };
+    globalThis.fetch = (async () => Response.json(expected)) as unknown as typeof fetch;
+    try {
+      const track = { ...playableTrack(spotifyTrack), nativeCover: "https://i.scdn.co/image/weighted-cover" };
+      expect(await artworkPalette(track)).toEqual(expected);
     } finally {
       globalThis.fetch = original;
     }

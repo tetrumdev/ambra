@@ -1,5 +1,17 @@
 type Rgb = [number, number, number];
 
+export function softenedPaletteWeights(weights: number[], colorCount: number) {
+  const count = Math.min(4, Math.max(1, colorCount));
+  // Square roots gently favor common colors while keeping small accents visible.
+  const softened = Array.from({ length: 4 }, (_, index) =>
+    index < count && Number.isFinite(weights[index]) ? Math.sqrt(Math.max(0, weights[index])) : 0,
+  );
+  const total = softened.reduce((sum, weight) => sum + weight, 0);
+  return total > 0
+    ? softened.map((weight) => weight / total)
+    : softened.map((_, index) => index < count ? 1 / count : 0);
+}
+
 function parseColor(color: string): Rgb {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return [0, 0, 0];
   return [1, 3, 5].map(
@@ -62,4 +74,65 @@ export function separateCollapsedPalette(colors: string[]) {
       ) as Rgb,
     ),
   );
+}
+
+export type CoverSeparation = {
+  // Per side, in shader order: top, right, bottom, left.
+  edges: number[];
+  // -1 darkens the background beside that side, 1 lightens it.
+  directions: number[];
+};
+
+export const neutralCoverSeparation: CoverSeparation = {
+  edges: [0.5, 0.5, 0.5, 0.5],
+  directions: [0, 0, 0, 0],
+};
+
+// Averages the outer band of a small, square RGBA sample of the cover per side.
+export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
+  const band = Math.max(1, Math.round(size / 8));
+  const sides = [0, 0, 0, 0];
+  const counts = [0, 0, 0, 0];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const offset = (y * size + x) * 4;
+      const value = luminance([
+        pixels[offset] / 255,
+        pixels[offset + 1] / 255,
+        pixels[offset + 2] / 255,
+      ]);
+      const add = (side: number) => {
+        sides[side] += value;
+        counts[side] += 1;
+      };
+      if (y < band) add(0);
+      if (x >= size - band) add(1);
+      if (y >= size - band) add(2);
+      if (x < band) add(3);
+    }
+  }
+  return sides.map((sum, side) => counts[side] ? sum / counts[side] : 0.5);
+}
+
+export function coverSeparation(
+  edges: number[] | null,
+  colors: string[],
+  weights: number[],
+): CoverSeparation {
+  if (colors.length === 0) return neutralCoverSeparation;
+  const influence = softenedPaletteWeights(weights, colors.length);
+  const background = colors
+    .slice(0, 4)
+    .reduce((sum, color, index) => sum + luminance(parseColor(color)) * influence[index], 0);
+  // Without a readable cover, its palette is the best guess for every edge.
+  const sides = edges?.length === 4 ? edges : [background, background, background, background];
+  return {
+    edges: sides,
+    directions: sides.map((edge) => {
+      // Push the way the background already leans; when it doesn't, use the headroom.
+      const difference = background - edge;
+      if (Math.abs(difference) >= 0.08) return Math.sign(difference);
+      return edge > 0.5 ? -1 : 1;
+    }),
+  };
 }
