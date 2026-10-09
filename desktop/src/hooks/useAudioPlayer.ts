@@ -9,7 +9,7 @@ import {
 import type { MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { Deck, Track } from "../types/music";
+import type { AudioQuality, Deck, Track } from "../types/music";
 import { canAttemptPlayback } from "../utils/playbackReadiness";
 import {
   nativeAudioSource,
@@ -41,6 +41,7 @@ export type AudioDeckController = {
 
 type AudioPlayer = {
   currentTrack: Track | undefined;
+  audioQuality: AudioQuality | null;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
@@ -75,6 +76,7 @@ type NativeAudioStatus = {
   buffering: boolean;
   ended: boolean;
   error: string | null;
+  audioQuality: AudioQuality | null;
 };
 
 export function useAudioPlayer(
@@ -110,6 +112,10 @@ export function useAudioPlayer(
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
+  const [nativeQuality, setNativeQuality] = useState<{
+    source: string;
+    quality: AudioQuality;
+  } | null>(null);
 
   tracksRef.current = tracks;
   queueNavigationRef.current = queueNavigation;
@@ -165,6 +171,7 @@ export function useAudioPlayer(
   );
 
   const clearPlayback = useCallback(() => {
+    setNativeQuality(null);
     restoreStartedRef.current = true;
     nativeLoadGenerationRef.current += 1;
     nativeReadyGenerationRef.current = null;
@@ -222,6 +229,7 @@ export function useAudioPlayer(
       const nextTrack = queueNavigationRef.current.peekNext();
       const loadGeneration = nativeLoadGenerationRef.current + 1;
       nativeLoadGenerationRef.current = loadGeneration;
+      setNativeQuality(null);
       nativeReadyGenerationRef.current = null;
       nativePlayIntentRef.current = autoplay;
 
@@ -735,6 +743,14 @@ export function useAudioPlayer(
           acceptNativeAdvance(playback.currentSource);
         }
 
+        setNativeQuality((previous) => {
+          if (!playback.currentSource || !playback.audioQuality) return null;
+          if (
+            previous?.source === playback.currentSource &&
+            JSON.stringify(previous.quality) === JSON.stringify(playback.audioQuality)
+          ) return previous;
+          return { source: playback.currentSource, quality: playback.audioQuality };
+        });
         setCurrentTime(playback.currentTime);
         if (playback.duration > 0) setDuration(playback.duration);
         if (playback.ended || playback.error) {
@@ -989,6 +1005,9 @@ export function useAudioPlayer(
     playTrack,
     clear: stopPlayback,
     currentTrack,
+    audioQuality: currentTrack && nativeQuality?.source === nativeAudioSource(currentTrack)
+      ? nativeQuality.quality
+      : null,
     currentTime,
     duration,
     isPlaying,

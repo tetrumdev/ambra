@@ -50,6 +50,18 @@ pub struct PlaybackMetadata {
     pub url: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackPlaybackMetadata {
+    pub quality: String,
+    #[serde(rename = "maximumSamplingRateKHz")]
+    pub maximum_sampling_rate_khz: Option<f64>,
+    pub maximum_bit_depth: Option<u32>,
+    /// Encoded bandwidth from the selected representation, not PCM output rate.
+    pub bitrate_kbps: Option<f64>,
+    pub playback: PlaybackMetadata,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TrackMetadata {
@@ -119,7 +131,29 @@ pub struct HealthResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata};
+    use super::{
+        ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
+        TrackPlaybackMetadata,
+    };
+
+    #[test]
+    fn playback_details_preserve_desktop_field_names_and_encoded_bitrate() {
+        let details = TrackPlaybackMetadata {
+            quality: "FLAC 24-bit/192 kHz".into(),
+            maximum_sampling_rate_khz: Some(192.0),
+            maximum_bit_depth: Some(24),
+            bitrate_kbps: Some(5607.961),
+            playback: PlaybackMetadata {
+                kind: PlaybackKind::Dash,
+                url: "/api/providers/tidal/tracks/1/manifest.mpd".into(),
+            },
+        };
+        let json = serde_json::to_value(details).unwrap();
+        assert_eq!(json["maximumSamplingRateKHz"], 192.0);
+        assert_eq!(json["maximumBitDepth"], 24);
+        assert_eq!(json["bitrateKbps"], 5607.961);
+        assert_eq!(json["playback"]["kind"], "dash");
+    }
 
     #[test]
     fn serializes_provider_neutral_metadata_for_desktop() {

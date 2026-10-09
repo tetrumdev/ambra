@@ -34,7 +34,10 @@ use crate::{
         ArtworkCandidate, highest_resolution, image_dimensions, normalized_upc,
         qobuz_max_artwork_url, trusted_artwork_url,
     },
-    models::{HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata},
+    models::{
+        HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata,
+        TrackPlaybackMetadata,
+    },
     providers::qobuz::{QobuzLogin, QobuzProvider},
     providers::spotify::SpotifyProvider,
     providers::tidal::{PlaybackSource, TidalLogin, TidalProvider},
@@ -901,15 +904,6 @@ async fn search_tracks(
     Ok(Json(page))
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TrackPlaybackResponse {
-    quality: String,
-    maximum_sampling_rate_khz: Option<f64>,
-    maximum_bit_depth: Option<u32>,
-    playback: crate::models::PlaybackMetadata,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TrackPlaybackRequest {
@@ -949,7 +943,7 @@ async fn track_playback(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
     Query(request): Query<TrackPlaybackRequest>,
-) -> Result<Json<TrackPlaybackResponse>, ApiError> {
+) -> Result<Json<TrackPlaybackMetadata>, ApiError> {
     if provider != "tidal" {
         return Err(ApiError::bad_request(
             "Deferred playback inspection is only needed for Tidal",
@@ -969,17 +963,12 @@ async fn track_playback(
             .await
             .map_err(ApiError::upstream)?;
     }
-    let (playback, quality, maximum_sampling_rate_khz, maximum_bit_depth) = tidal_provider(&state)?
+    let playback = tidal_provider(&state)?
         .playback_metadata(&track_id)
         .await
         .map_err(ApiError::upstream)?;
 
-    Ok(Json(TrackPlaybackResponse {
-        quality,
-        maximum_sampling_rate_khz,
-        maximum_bit_depth,
-        playback,
-    }))
+    Ok(Json(playback))
 }
 
 #[derive(Deserialize)]

@@ -54,6 +54,18 @@ struct PlaybackStatus {
     buffering: bool,
     ended: bool,
     error: Option<String>,
+    audio_quality: Option<AudioQuality>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct AudioQuality {
+    codec: String,
+    sample_rate_hz: u32,
+    bit_depth: Option<u32>,
+    channels: usize,
+    bitrate_kbps: Option<f64>,
+    bitrate_is_estimate: bool,
 }
 
 #[derive(Serialize)]
@@ -66,6 +78,7 @@ pub struct NativeAudioStatus {
     buffering: bool,
     ended: bool,
     error: Option<String>,
+    audio_quality: Option<AudioQuality>,
 }
 
 #[derive(Clone, Serialize)]
@@ -239,6 +252,7 @@ pub async fn native_audio_status(
         buffering: status.buffering,
         ended: status.ended,
         error: status.error,
+        audio_quality: status.audio_quality,
     })
 }
 
@@ -778,7 +792,7 @@ impl PlaybackWorker {
         };
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
-        self.install_prepared(prepared)?;
+        let audio_quality = self.install_prepared(prepared)?;
         // Prioritize the selected song's initial download over preloading the next.
         self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
         let selected_device_id = self.selected_device_id.as_deref();
@@ -799,6 +813,7 @@ impl PlaybackWorker {
         update_status(&self.status, |status| {
             status.current_source = Some(source);
             status.current_time = position_seconds;
+            status.audio_quality = Some(audio_quality);
             status.duration = duration;
             status.is_playing = false;
             status.buffering = autoplay;
@@ -850,7 +865,10 @@ impl PlaybackWorker {
             let position_seconds = status.current_time;
             self.set_buffering(Some(source.clone()), position_seconds, status.duration);
             let prepared = prepare_source_at(source, position_seconds)?;
-            self.install_prepared(prepared)?;
+            let audio_quality = self.install_prepared(prepared)?;
+            update_status(&self.status, |status| {
+                status.audio_quality = Some(audio_quality);
+            });
         }
         if self.output.is_none() {
             let spec = self
@@ -902,7 +920,7 @@ impl PlaybackWorker {
         self.pcm.clear();
         self.reset_gain_buffer();
         let prepared = prepare_source_at(source, position_seconds)?;
-        self.install_prepared(prepared)?;
+        let audio_quality = self.install_prepared(prepared)?;
         if self.desired_playing && self.output.is_none() {
             self.output = Some(PlatformOutput::open_device_with_mode(
                 spec,
@@ -912,6 +930,7 @@ impl PlaybackWorker {
         }
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
+            status.audio_quality = Some(audio_quality);
             status.is_playing = false;
             status.buffering = self.desired_playing;
             status.ended = false;
@@ -1141,7 +1160,7 @@ impl PlaybackWorker {
             self.rendering = false;
         }
 
-        self.install_prepared(prepared)?;
+        let audio_quality = self.install_prepared(prepared)?;
         self.current_source = Some(source.clone());
         self.position_base = 0.0;
         self.rendered_frames = 0;
@@ -1149,6 +1168,7 @@ impl PlaybackWorker {
         update_status(&self.status, |status| {
             status.current_source = Some(source);
             status.current_time = 0.0;
+            status.audio_quality = Some(audio_quality);
             status.duration = duration;
             status.is_playing = false;
             status.buffering = false;
@@ -1161,7 +1181,7 @@ impl PlaybackWorker {
         Ok(())
     }
 
-    fn install_prepared(&mut self, prepared: PreparedSource) -> Result<(), String> {
+    fn install_prepared(&mut self, prepared: PreparedSource) -> Result<AudioQuality, String> {
         let PreparedSource {
             decoder,
             mut pcm,
@@ -1169,6 +1189,7 @@ impl PlaybackWorker {
             max_buffer_samples,
         } = prepared;
         let spec = decoder.spec();
+        let audio_quality = decoder.audio_quality();
         pcm.reserve(max_buffer_samples.saturating_sub(pcm.len()));
         let stream = (!decoder_ended)
             .then(|| DecoderStream::start(decoder))
@@ -1177,11 +1198,14 @@ impl PlaybackWorker {
         self.decoder = stream;
         self.spec = Some(spec);
         self.decoder_ended = decoder_ended;
-        Ok(())
+        Ok(audio_quality)
     }
 
     fn set_buffering(&self, source: Option<String>, current_time: f64, duration: f64) {
         update_status(&self.status, |status| {
+            if status.current_source != source {
+                status.audio_quality = None;
+            }
             status.current_source = source;
             status.current_time = current_time;
             status.duration = duration;
@@ -1223,9 +1247,10 @@ impl PlaybackWorker {
             .clone()
             .ok_or_else(|| "No native audio track is loaded".to_owned())?;
         let prepared = prepare_source_at(source, position_seconds)?;
-        self.install_prepared(prepared)?;
+        let audio_quality = self.install_prepared(prepared)?;
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
+            status.audio_quality = Some(audio_quality);
             status.is_playing = false;
             status.buffering = false;
         });
@@ -1282,7 +1307,7 @@ impl PlaybackWorker {
                     if self.spec != Some(spec) {
                         self.output = None;
                     }
-                    self.install_prepared(prepared)?;
+                    let audio_quality = self.install_prepared(prepared)?;
                     if self.output.is_none() {
                         self.output = Some(PlatformOutput::open_device_with_mode(
                             spec,
@@ -1294,6 +1319,7 @@ impl PlaybackWorker {
                     self.rendered_frames = 0;
                     update_status(&self.status, |status| {
                         status.current_time = position_seconds;
+                        status.audio_quality = Some(audio_quality);
                         status.duration = duration;
                         status.is_playing = false;
                         status.buffering = true;
@@ -1583,7 +1609,33 @@ mod tests {
             }
             worker.load(source.clone(), None, 0.0, false).unwrap();
             assert_eq!(worker.pcm.len(), 2);
+            let status = lock_status(&worker.status);
+            assert_eq!(status.current_source.as_deref(), Some(source.as_str()));
+            let quality = status.audio_quality.as_ref().unwrap();
+            assert_eq!(quality.sample_rate_hz, 44_100);
+            assert_eq!(quality.bit_depth, Some(16));
+            assert_eq!(quality.bitrate_kbps, Some(1411.2));
         }
+    }
+
+    #[test]
+    fn failed_track_load_does_not_keep_previous_audio_quality() {
+        use super::*;
+        let (source, prepared) = prepared_test_audio("quality-switch");
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        worker.ready_next = Some((source.clone(), prepared));
+        worker.load(source, None, 0.0, false).unwrap();
+        assert!(lock_status(&worker.status).audio_quality.is_some());
+        let missing = std::env::temp_dir()
+            .join(format!("ambra-missing-quality-{}.flac", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        assert!(worker.load(missing.clone(), None, 0.0, false).is_err());
+        let status = lock_status(&worker.status);
+        assert_eq!(status.current_source.as_deref(), Some(missing.as_str()));
+        assert!(status.audio_quality.is_none());
     }
 
     #[test]
