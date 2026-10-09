@@ -1,27 +1,25 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { AudioControlsMenu } from "./AudioControlsMenu";
+import { useAudioSettings } from "../hooks/AudioSettingsContext";
+import { visibleOutputs } from "../utils/audioSettings";
 import "./ExtraCtrls.css";
 
 type ExtraCtrlsProps = {
   onOpenQueue?: () => void;
 };
 
-type NativeAudioDevice = {
-  id: string;
-  name: string;
-  isDefault: boolean;
-};
-
 export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
+  const audio = useAudioSettings();
+  const selectedOutput = audio?.settings.outputs.find(output => output.id === audio.settings.selectedOutputId);
+  const exclusiveMode = selectedOutput?.exclusiveMode ?? null;
+  const isChangingMode = audio?.saving ?? false;
+  const isChangingDevice = audio?.saving ?? false;
+  const isLoadingDevices = audio?.loading ?? false;
+  const selectedDeviceId = audio?.settings.selectedOutputId ?? "";
+  const audioDevices = audio ? visibleOutputs(audio.settings, audio.devices) : [];
   const showAudioModeToggle = hasNativeAudio;
-  const [exclusiveMode, setExclusiveMode] = useState<boolean | null>(null);
-  const [isChangingMode, setIsChangingMode] = useState(false);
-  const [audioDevices, setAudioDevices] = useState<NativeAudioDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState("");
-  const [isLoadingDevices, setIsLoadingDevices] = useState(false);
-  const [isChangingDevice, setIsChangingDevice] = useState(false);
   const [volume, setVolume] = useState(100);
   const pendingVolume = useRef<number | null>(null);
   const isSendingVolume = useRef(false);
@@ -45,63 +43,15 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     };
   }, [hasNativeAudio]);
 
-  useEffect(() => {
-    if (!showAudioModeToggle) return;
-
-    let disposed = false;
-    setIsLoadingDevices(true);
-    void invoke<boolean>("native_audio_exclusive_mode")
-      .then((enabled) => {
-        if (!disposed) setExclusiveMode(enabled);
-      })
-      .catch((error) =>
-        console.warn("Could not read the native audio mode:", error),
-      );
-    void invoke<NativeAudioDevice[]>("list_native_audio_devices")
-      .then((devices) => {
-        if (!disposed) setAudioDevices(devices);
-      })
-      .catch((error) =>
-        console.warn("Could not list native audio devices:", error),
-      )
-      .finally(() => {
-        if (!disposed) setIsLoadingDevices(false);
-      });
-
-    return () => {
-      disposed = true;
-    };
-  }, [showAudioModeToggle]);
-
   const toggleExclusiveMode = async () => {
-    if (exclusiveMode === null || isChangingMode) return;
-
-    const enabled = !exclusiveMode;
-    setIsChangingMode(true);
-    try {
-      await invoke("set_native_audio_exclusive_mode", { enabled });
-      setExclusiveMode(enabled);
-    } catch (error) {
-      console.warn("Could not change the native audio mode:", error);
-    } finally {
-      setIsChangingMode(false);
-    }
+    if (!audio || !selectedOutput || audio.saving) return;
+    await audio.update(current => ({ ...current, outputs: current.outputs.map(output => output.id === current.selectedOutputId
+      ? { ...output, exclusiveMode: !output.exclusiveMode } : output) }));
   };
 
   const selectAudioDevice = async (deviceId: string) => {
-    if (isChangingDevice) return;
-
-    setIsChangingDevice(true);
-    try {
-      await invoke("select_native_audio_device", {
-        deviceId: deviceId || null,
-      });
-      setSelectedDeviceId(deviceId);
-    } catch (error) {
-      console.warn("Could not change the native audio device:", error);
-    } finally {
-      setIsChangingDevice(false);
-    }
+    if (!audio || audio.saving) return;
+    await audio.update(current => ({ ...current, selectedOutputId: deviceId }));
   };
 
   const sendPendingVolume = async () => {
@@ -162,7 +112,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
                   ) : (
-                    [{ id: "", name: "System Default", isDefault: false }, ...audioDevices].map((device) => (
+                    audioDevices.map((device) => (
                       <button
                         key={device.id || "system-default"}
                         className="audioDeviceOption"
@@ -175,7 +125,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                         <span className="audioDeviceCheck" aria-hidden="true" />
                         <span className="audioDeviceName" data-tooltip={device.name} data-tooltip-overflow="">
                           {device.name}
-                          {device.isDefault ? " (Default)" : ""}
+                          {audio?.devices.find(connected => connected.id === device.id)?.isDefault ? " (Default)" : ""}
                         </span>
                       </button>
                     ))
@@ -203,6 +153,9 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                 </button>
               </>
             )}
+            {audio?.error && <p className="audioControlsError" role="alert">{audio.error}</p>}
+            {audioDevices.length === 0 && !isLoadingDevices && <p className="audioControlsNote">Enable outputs in Settings.</p>}
+            {selectedOutput?.presetId && <span className="audioControlsNote">DSP: {audio?.settings.presets.find(preset => preset.id === selectedOutput.presetId)?.name}</span>}
             <input
               className="volumeSlider"
               type="range"
@@ -226,7 +179,10 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           aria-haspopup={hasNativeAudio ? "dialog" : undefined}
           aria-expanded={hasNativeAudio ? audioMenuOpen : undefined}
           onClick={() => {
-            if (hasNativeAudio) setAudioMenuOpen((open) => !open);
+            if (hasNativeAudio) {
+              if (!audioMenuOpen) void audio?.refresh();
+              setAudioMenuOpen((open) => !open);
+            }
           }}
         >
           <img src="/volumeIconHigh.svg" alt="" id="volumeImg" />

@@ -1,4 +1,5 @@
-import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
+import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { ArtistLinks } from "./ArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { musicProviderName } from "../utils/musicProviderName";
 import { useEffect, useState } from "react";
@@ -107,7 +108,7 @@ function SearchResult({
 
       <div className="searchResultInfo">
         <div className="searchResultName">{track.name}</div>
-        <div className="searchResultArtist">By <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "artist", artist: artistForTrack(track) }); }}>{track.artist}</button></div>
+        <div className="searchResultArtist">By <ArtistLinks track={track} onOpenEntity={onOpenEntity} /></div>
         <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button></div>
         <div className="searchResultMeta">
           <span className="searchResultQuality">

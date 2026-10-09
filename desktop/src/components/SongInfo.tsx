@@ -1,4 +1,5 @@
-import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
+import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { ArtistLinks } from "./ArtistLinks";
 import type { Track } from "../types/music";
 import "./SongInfo.css";
 
@@ -19,7 +20,7 @@ export function SongInfo({ track, onOpenEntity }: SongInfoProps) {
           </span>
           <span id="artistName">
             <span className="label">Performed by </span>
-            <button type="button" className="entityLink value" onClick={() => onOpenEntity({ kind: "artist", artist: artistForTrack(track) })}>{track.artist}</button>
+            <ArtistLinks track={track} onOpenEntity={onOpenEntity} className="entityLink value" />
           </span>
         </>
       )}

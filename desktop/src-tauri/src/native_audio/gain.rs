@@ -65,6 +65,22 @@ impl GainStage {
         self.ramp_frames_remaining = 0;
     }
 
+    pub fn process_in_place(&mut self, samples: &mut [f64], channels: usize) {
+        for frame in samples.chunks_exact_mut(channels) {
+            if self.ramp_frames_remaining > 0 {
+                self.current_amplitude += self.ramp_step;
+                self.ramp_frames_remaining -= 1;
+                if self.ramp_frames_remaining == 0 {
+                    self.current_amplitude = self.target_amplitude;
+                }
+            }
+            for sample in frame {
+                *sample *= self.current_amplitude;
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub fn process_interleaved(
         &mut self,
         input: impl IntoIterator<Item = f64>,

@@ -994,6 +994,10 @@ pub fn run() {
             native_audio::set_native_audio_exclusive_mode,
             native_audio::native_audio_volume,
             native_audio::set_native_audio_volume,
+            native_audio::native_audio_settings,
+            native_audio::set_native_audio_settings,
+            native_audio::native_dsp_status,
+            native_audio::import_dsp_impulse,
             media_controls::set_native_media_metadata,
             media_controls::set_native_media_playback,
             media_controls::set_native_media_commands_enabled
