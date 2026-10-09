@@ -14,6 +14,16 @@ export type QueueId = number;
 export type QueueSourceEntryId = number;
 export type ShufflePackageId = string;
 
+/** Source audio properties reported by the decoder, before output conversion. */
+export type AudioQuality = {
+  codec: string;
+  sampleRateHz: number;
+  bitDepth: number | null;
+  channels: number;
+  bitrateKbps: number | null;
+  bitrateIsEstimate: boolean;
+};
+
 export type Track = {
   globalId: GlobalTrackId;
   provider: MusicProvider;
@@ -43,6 +53,8 @@ export type Track = {
   genres: string[];
   upc: string | null;
   quality: string | null;
+  /** Encoded bitrate reported by the playback manifest, when available. */
+  bitrateKbps?: number | null;
   maximumSamplingRateKHz: number | null;
   maximumBitDepth: number | null;
 };

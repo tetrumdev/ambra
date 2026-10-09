@@ -30,7 +30,7 @@ use tokio::sync::{Mutex, RwLock};
 
 use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
-    TrackMetadata, search_next_offset,
+    TrackMetadata, TrackPlaybackMetadata, search_next_offset,
 };
 
 const PLAYBACK_SOURCE_TTL: Duration = Duration::from_secs(30 * 60);
@@ -258,8 +258,7 @@ impl TidalProvider {
                 .filter(|upc| !upc.is_empty()),
         });
 
-        let (playback, quality, sampling_rate_khz, bit_depth) =
-            self.playback_metadata(track_id).await?;
+        let playback = self.playback_metadata(track_id).await?;
 
         let metadata = TrackMetadata {
             id: format!("tidal:{track_id}"),
@@ -276,10 +275,10 @@ impl TidalProvider {
             explicit: track.explicit,
             isrc: track.isrc,
             copyright: track.copyright,
-            quality: Some(quality),
-            maximum_sampling_rate_khz: sampling_rate_khz,
-            maximum_bit_depth: bit_depth,
-            playback,
+            quality: Some(playback.quality),
+            maximum_sampling_rate_khz: playback.maximum_sampling_rate_khz,
+            maximum_bit_depth: playback.maximum_bit_depth,
+            playback: playback.playback,
         };
         self.track_metadata_cache
             .lock()
@@ -627,10 +626,7 @@ impl TidalProvider {
         })
     }
 
-    pub async fn playback_metadata(
-        &self,
-        track_id: &str,
-    ) -> ProviderResult<(PlaybackMetadata, String, Option<f64>, Option<u32>)> {
+    pub async fn playback_metadata(&self, track_id: &str) -> ProviderResult<TrackPlaybackMetadata> {
         validate_track_id(track_id)?;
 
         let playback = self.maximum_playback_info(track_id).await?;
@@ -640,6 +636,13 @@ impl TidalProvider {
             playback.bit_depth,
             &playback.audio_quality,
         );
+        let bitrate_kbps = match &playback.manifest {
+            MaximumPlaybackManifest::Dash(manifest) => manifest
+                .bitrate
+                .filter(|bitrate| *bitrate > 0)
+                .map(|bitrate| f64::from(bitrate) / 1000.0),
+            MaximumPlaybackManifest::Direct(_) => None,
+        };
         let metadata = match playback.manifest {
             MaximumPlaybackManifest::Direct(_) => PlaybackMetadata {
                 kind: PlaybackKind::Direct,
@@ -651,12 +654,13 @@ impl TidalProvider {
             },
         };
 
-        Ok((
-            metadata,
+        Ok(TrackPlaybackMetadata {
             quality,
-            playback.sampling_rate_khz,
-            playback.bit_depth,
-        ))
+            maximum_sampling_rate_khz: playback.sampling_rate_khz,
+            maximum_bit_depth: playback.bit_depth,
+            bitrate_kbps,
+            playback: metadata,
+        })
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
@@ -1651,6 +1655,7 @@ mod tests {
         let (manifest, sampling_rate_khz, bit_depth) = parse_dash_manifest(xml).unwrap();
 
         assert_eq!(manifest.codecs, "flac");
+        assert_eq!(manifest.bitrate, Some(5_607_961));
         assert_eq!(sampling_rate_khz, Some(192.0));
         assert_eq!(bit_depth, Some(24));
         assert_eq!(

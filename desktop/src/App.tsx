@@ -160,19 +160,20 @@ function App() {
   const isBigscreen =
     screen === "bigscreen" && player.currentTrack !== undefined;
   const isQueueView = screen === "queue";
+  const isSettingsView = screen === "settings";
   const isSearchView = screen === "search" && !browseEntity;
   const persistedPosition = player.isPlaying
     ? Math.floor(player.currentTime / 5) * 5
     : player.currentTime;
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const f11FullscreenRef = useRef(false);
-  const queueReturnScreenRef = useRef<"library" | "search">(
-    screen === "search" ? "search" : "library",
+  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "queue">>(
+    screen === "search" || screen === "settings" ? screen : "library",
   );
   const bigscreenReturnScreenRef =
     useRef<Exclude<AppScreen, "bigscreen">>("library");
   if (screen !== "bigscreen") bigscreenReturnScreenRef.current = screen;
-  if (screen === "library" || screen === "search") {
+  if (screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
   const latestSessionRef = useRef({ preferences, player });
@@ -204,6 +205,8 @@ function App() {
   });
   const activeViewKey = isQueueView
     ? "queue"
+    : isSettingsView
+      ? "settings"
     : browseEntity
       ? entityKey(browseEntity)
     : isSearchView
@@ -807,8 +810,8 @@ function App() {
       )}
 
       {!isBigscreen && (
-        <main id={isQueueView ? "queue" : isSearchView ? "search" : "library"}>
-          {!isQueueView && <SearchBar
+        <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
+          {!isQueueView && !isSettingsView && <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}
             provider={searchProvider}
@@ -819,10 +822,16 @@ function App() {
             }))}
             onConfirm={() => { setBrowseEntity(null); changeScreen(searchQuery.trim() ? "search" : "library"); }}
           />}
-          {!isQueueView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+          {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
           <Sidebar
-            activeLibrarySection={!isQueueView && !isSearchView && !selectedPlaylist ? librarySection : null}
-            activePlaylistId={!isQueueView && !isSearchView ? selectedPlaylist?.id ?? null : null}
+            isSettingsActive={isSettingsView}
+            onOpenSettings={() => {
+              setBrowseEntity(null); navigation.current = [];
+              setSelectedPlaylistId(null);
+              changeScreen("settings");
+            }}
+            activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !selectedPlaylist ? librarySection : null}
+            activePlaylistId={!isQueueView && !isSettingsView && !isSearchView ? selectedPlaylist?.id ?? null : null}
             onOpenLibrarySection={(section) => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(null);
@@ -849,7 +858,34 @@ function App() {
               changeScreen("library");
             }}
           />
-          {isQueueView ? (
+          {isSettingsView ? (
+            <div className="settingsView" role="region" aria-label="Settings" ref={registerScrollElement}>
+              <h1>Settings</h1>
+              <label className="settingsToggleRow">
+                <span>
+                  <span className="settingsToggleLabel">Show song specs</span>
+                  <span className="settingsToggleDescription" id="songSpecsDescription">
+                    Show audio quality, format, and bitrate in the playback bar.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  role="switch"
+                  className="settingsToggle"
+                  aria-label="Show song specs"
+                  aria-describedby="songSpecsDescription"
+                  checked={preferences.ui.showAudioQuality}
+                  onChange={(event) => {
+                    const showAudioQuality = event.currentTarget.checked;
+                    setPreferences((current) => ({
+                      ...current,
+                      ui: { ...current.ui, showAudioQuality },
+                    }));
+                  }}
+                />
+              </label>
+            </div>
+          ) : isQueueView ? (
             <Queue
               currentEntry={queue.currentEntry}
               upcomingEntries={queue.upcomingEntries}
@@ -922,6 +958,8 @@ function App() {
         onOpenEntity={openEntity}
         variant={isBigscreen ? "expanded" : "compact"}
         track={player.currentTrack}
+        audioQuality={player.audioQuality}
+        showAudioQuality={preferences.ui.showAudioQuality}
         currentTime={player.currentTime}
         duration={player.duration}
         isPlaying={player.isPlaying}

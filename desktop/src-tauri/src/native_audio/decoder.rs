@@ -23,7 +23,7 @@ use symphonia::core::{
     units::{Time, Timestamp},
 };
 
-use super::StreamSpec;
+use super::{AudioQuality, StreamSpec};
 
 const HTTP_INITIAL_CACHE_BYTES: u64 = 128 * 1024;
 const HTTP_STARTUP_WINDOW_BYTES: u64 = 1024 * 1024;
@@ -65,6 +65,7 @@ pub struct DecodedSource {
     track_id: u32,
     spec: StreamSpec,
     duration_seconds: f64,
+    audio_quality: AudioQuality,
     scratch: Vec<f64>,
     scratch_pending: bool,
 }
@@ -119,6 +120,7 @@ impl DecodedSource {
             )
         };
 
+        let source_bytes = media_source.byte_len();
         let stream = MediaSourceStream::new(media_source, Default::default());
         let format_options = FormatOptions::default().seek_index_fill_period_ms(100);
         let format = symphonia::default::get_probe()
@@ -172,6 +174,36 @@ impl DecodedSource {
         // The VOD playlist describes the complete track, including when seeking.
         let duration_seconds = duration_hint.unwrap_or(duration_seconds);
 
+        let codec = symphonia::default::get_codecs()
+            .get_audio_decoder(codec_parameters.codec)
+            .map(|registration| registration.codec.info.short_name)
+            .unwrap_or("unknown")
+            .to_owned();
+        // These are source properties. The output's fallback sample width is
+        // not evidence of the recording's bit depth.
+        let bit_depth = codec_parameters
+            .bits_per_coded_sample
+            .or(codec_parameters.bits_per_sample)
+            .filter(|depth| *depth > 0);
+        let is_pcm = codec.starts_with("pcm");
+        let bitrate_kbps = if is_pcm {
+            bit_depth
+                .map(|depth| f64::from(sample_rate) * f64::from(depth) * channels as f64 / 1000.0)
+        } else {
+            source_bytes
+                .filter(|bytes| *bytes > 0)
+                .filter(|_| duration_seconds.is_finite() && duration_seconds > 0.0)
+                .map(|bytes| bytes as f64 * 8.0 / duration_seconds / 1000.0)
+        };
+        let audio_quality = AudioQuality {
+            codec,
+            sample_rate_hz: sample_rate,
+            bit_depth,
+            channels,
+            bitrate_kbps,
+            bitrate_is_estimate: !is_pcm,
+        };
+
         let mut decoded = Self {
             source,
             format,
@@ -183,6 +215,7 @@ impl DecodedSource {
                 bits_per_sample,
             },
             duration_seconds,
+            audio_quality,
             scratch: Vec::with_capacity(16_384 * channels),
             scratch_pending: false,
         };
@@ -198,6 +231,10 @@ impl DecodedSource {
 
     pub fn duration_seconds(&self) -> f64 {
         self.duration_seconds
+    }
+
+    pub fn audio_quality(&self) -> AudioQuality {
+        self.audio_quality.clone()
     }
 
     pub fn seek(&mut self, position_seconds: f64) -> Result<(), String> {
@@ -948,6 +985,12 @@ mod tests {
         });
         let decoded = (|| {
             let mut decoder = DecodedSource::open_at(source, 5.0)?;
+            let quality = decoder.audio_quality();
+            assert_eq!(quality.codec, "flac");
+            assert_eq!(quality.sample_rate_hz, 44_100);
+            assert_eq!(quality.channels, 2);
+            // A segmented stream has no complete file length to estimate from.
+            assert_eq!(quality.bitrate_kbps, None);
             let mut samples = 0;
             while let Some(block) = decoder.decode_next()? {
                 samples += block.len();
@@ -994,6 +1037,13 @@ mod tests {
         fs::write(&path, wav).unwrap();
 
         let mut decoder = DecodedSource::open(path.to_string_lossy().into_owned()).unwrap();
+        let quality = decoder.audio_quality();
+        assert!(quality.codec.starts_with("pcm"));
+        assert_eq!(quality.sample_rate_hz, 48_000);
+        assert_eq!(quality.bit_depth, Some(16));
+        assert_eq!(quality.channels, 2);
+        assert_eq!(quality.bitrate_kbps, Some(1536.0));
+        assert!(!quality.bitrate_is_estimate);
         let decoded = decoder.decode_next().unwrap().unwrap();
         let expected = samples.map(|sample| f64::from(sample) / 32_768.0);
         assert_eq!(&decoded[..expected.len()], &expected);

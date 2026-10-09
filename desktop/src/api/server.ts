@@ -139,6 +139,7 @@ export type ArtworkQuality = {
 
 type TrackPlayback = {
   quality: string;
+  bitrateKbps?: number | null;
   maximumSamplingRateKHz: number | null;
   maximumBitDepth: number | null;
   playback: {
@@ -418,6 +419,7 @@ export async function resolveTrackPlayback(
     audio: `${serverBaseUrl}${details.playback.url}`,
     playbackKind: details.playback.kind,
     quality: details.quality,
+    bitrateKbps: details.bitrateKbps ?? null,
     maximumSamplingRateKHz: details.maximumSamplingRateKHz,
     maximumBitDepth: details.maximumBitDepth,
   };

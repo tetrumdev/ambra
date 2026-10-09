@@ -1,12 +1,13 @@
 import type { SearchProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
-export type AppScreen = "bigscreen" | "library" | "search" | "queue";
+export type AppScreen = "bigscreen" | "library" | "search" | "queue" | "settings";
 
 export type AppPreferences = {
   version: 4;
   ui: {
     screen: AppScreen;
+    showAudioQuality: boolean;
   };
   search: {
     query: string;
@@ -25,6 +26,7 @@ export const defaultPreferences: AppPreferences = {
   version: 4,
   ui: {
     screen: "library",
+    showAudioQuality: false,
   },
   search: {
     query: "",
@@ -45,7 +47,8 @@ function isAppScreen(value: unknown): value is AppScreen {
     value === "bigscreen" ||
     value === "library" ||
     value === "search" ||
-    value === "queue"
+    value === "queue" ||
+    value === "settings"
   );
 }
 
@@ -65,12 +68,15 @@ function migratePreferences(value: unknown): AppPreferences {
   const screen = isAppScreen(ui.screen)
     ? ui.screen
     : defaultPreferences.ui.screen;
+  const showAudioQuality = typeof ui.showAudioQuality === "boolean"
+    ? ui.showAudioQuality
+    : defaultPreferences.ui.showAudioQuality;
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -89,7 +95,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -113,6 +119,7 @@ function migratePreferences(value: unknown): AppPreferences {
         version: 4,
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
+          showAudioQuality,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -140,6 +147,7 @@ function migratePreferences(value: unknown): AppPreferences {
         version: 4,
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
+          showAudioQuality,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },
@@ -162,7 +170,7 @@ export function loadPreferences(): AppPreferences {
       removePersistentItem(legacyScreenKey);
       return {
         ...defaultPreferences,
-        ui: { screen: legacyScreen },
+        ui: { ...defaultPreferences.ui, screen: legacyScreen },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };

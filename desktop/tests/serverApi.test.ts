@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { artworkPalette, thumbnailArtwork, playableTrack, refreshTrackMetadata, type RemoteTrack } from "../src/api/server";
+import { artworkPalette, thumbnailArtwork, playableTrack, refreshTrackMetadata, resolveTrackPlayback, type RemoteTrack } from "../src/api/server";
 
 const spotifyTrack: RemoteTrack = {
   id: "spotify:4uLU6hMCjMI75M1A2tKUQC",
@@ -141,4 +141,22 @@ describe("refreshTrackMetadata", () => {
       globalThis.fetch = original;
     }
   });
+});
+
+test("Tidal playback resolution carries selected bitrate and source resolution into the playing track", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({
+    quality: "FLAC 24-bit/192 kHz", bitrateKbps: 5607.961,
+    maximumSamplingRateKHz: 192, maximumBitDepth: 24,
+    playback: { kind: "dash", url: "/api/providers/tidal/tracks/1/manifest.mpd" },
+  })) as unknown as typeof fetch;
+  try {
+    const resolved = await resolveTrackPlayback({ ...playableTrack(spotifyTrack), provider: "tidal", providerTrackId: "1" });
+    expect(resolved.bitrateKbps).toBe(5607.961);
+    expect(resolved.maximumSamplingRateKHz).toBe(192);
+    expect(resolved.maximumBitDepth).toBe(24);
+    expect(resolved.audio).toEndWith("/api/providers/tidal/tracks/1/manifest.mpd");
+  } finally {
+    globalThis.fetch = original;
+  }
 });
