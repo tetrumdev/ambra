@@ -190,3 +190,6 @@
     opacity: 0.5;
     cursor: wait;
 }
+
+.audioControlsError { color: #ffb7b7; max-width: 260px; font-size: 12px; overflow-wrap: anywhere; }
+.audioControlsNote { color: #aaa; font-size: 11px; margin: 4px 8px; max-width: 260px; }

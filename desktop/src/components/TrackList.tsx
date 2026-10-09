@@ -1,4 +1,4 @@
-import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
+import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
@@ -10,6 +10,7 @@ import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
+import { ArtistLinks, trackArtistNames } from "./ArtistLinks";
 import { PerfProfiler } from "./PerfProfiler";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
@@ -372,7 +373,7 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
           />
         )}
       </span>
-      <span className="artistName trackDescriptor">{onOpenEntity ? <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "artist", artist: artistForTrack(track) }); }}>{track.artist}</button> : track.artist}</span>
+      <span className="artistName trackDescriptor">{onOpenEntity ? <ArtistLinks track={track} onOpenEntity={onOpenEntity} /> : trackArtistNames(track)}</span>
       <span className="albumName trackDescriptor">{onOpenEntity ? <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button> : track.album}</span>
       <span
         className="trackDuration trackDescriptor"

@@ -71,6 +71,19 @@
     box-shadow: 0 0 0 2px #aaa;
 }
 
+.sidebarSettingsButton img {
+    display: block;
+    width: 18px;
+    height: 18px;
+    opacity: 0.7;
+}
+
+.sidebarSettingsButton:hover img,
+.sidebarSettingsButton:focus-visible img,
+.sidebarSettingsButton[aria-current="page"] img {
+    opacity: 1;
+}
+
 .sidebarBtn {
     cursor: default;
     width: fit-content;
