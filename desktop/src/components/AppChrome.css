@@ -13,8 +13,8 @@
     user-select: none;
     -webkit-user-select: none;
     z-index: 50;
+    /* Opaque, so a backdrop blur here would cost a pass per frame and show nothing. */
     background: rgb(30, 30, 30);
-    backdrop-filter: blur(10px);
 }
 
 .libraryTitlebar[data-content-layout="library"],

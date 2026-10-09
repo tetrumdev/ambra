@@ -3,7 +3,8 @@
     align-items: flex-start;
     gap: 20px;
 }
-.albumView {
+/* Album rows have no artwork; doubled class outranks .libraryView's 100px default. */
+.libraryView.albumView {
     --library-leading-width: 28px;
 }
 .entityView .libraryHeaderArtwork {

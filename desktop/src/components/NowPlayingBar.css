@@ -14,10 +14,41 @@
         minmax(0, 1fr);
     grid-template-rows: 75px 80px;
     column-gap: 24px;
-    background-color: rgba(59, 59, 59, 0.5);
     border-top: 1px solid rgba(122, 122, 122, 0.5);
-    backdrop-filter: blur(50px);
     z-index: 10;
+}
+
+/* A backdrop blur repeats its border pixels to fill the kernel, so a row divider
+   reaching the bar's top edge smears into a band. Sampling from 150px (3σ of the
+   50px blur) above the bar and masking that margin away keeps the visible edge
+   blurring real content instead. */
+#bottomInfoBar::before {
+    content: "";
+    position: absolute;
+    inset: -150px 0 0 0;
+    z-index: -1;
+    pointer-events: none;
+    background-color: rgba(59, 59, 59, 0.5);
+    backdrop-filter: blur(50px);
+    -webkit-backdrop-filter: blur(50px);
+    mask-image: linear-gradient(to bottom, transparent 150px, #000 150px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 150px, #000 150px);
+}
+
+/* The bar sits on the window's bottom edge, where there is nothing further to
+   sample, so the blur repeats the last rows of whatever scrolls there. Painting
+   a uniform strip beneath the blur layer gives it a steady edge instead. It is
+   thicker than a pixel because the blur works on a downscaled copy. */
+#bottomInfoBar::after {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 12px;
+    z-index: -2;
+    pointer-events: none;
+    background-color: #000;
 }
 
 #bottomInfoBar[data-variant="compact"] {

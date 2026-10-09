@@ -16,6 +16,25 @@
 .sidebarPlaylistActions:active,
 .searchResultMenuButton:active {
     filter: brightness(70%);
+}
+
+/* Animate the icon while the button keeps its full clickable area. */
+#volumeBtn > img,
+#queueBtn > img,
+.xContainer > img,
+.librarySourcesClose > img,
+.sidebarPlaylistActions > span,
+.searchResultMenuButton > img {
+    pointer-events: none;
+    transition: scale 0.15s;
+}
+
+#volumeBtn:active > img,
+#queueBtn:active > img,
+.xContainer:active > img,
+.librarySourcesClose:active > img,
+.sidebarPlaylistActions:active > span,
+.searchResultMenuButton:active > img {
     scale: 0.7;
 }
 

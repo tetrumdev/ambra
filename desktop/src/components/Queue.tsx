@@ -32,7 +32,7 @@ type DisplayEntry = {
   current?: boolean;
   played?: boolean;
 };
-type RowAction = "play" | "select" | "menu";
+type RowAction = "select" | "menu";
 type EntryAction = (action: RowAction, event: React.MouseEvent<HTMLElement>, entry: DisplayEntry) => void;
 
 function queueEntry(entry: QueueEntry, current = false): DisplayEntry {
@@ -57,8 +57,8 @@ export function Queue(props: QueueProps) {
   const selection = useRangeSelection(ids);
   const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const columnsRef = useRef<HTMLDivElement>(null);
-  const currentRef = useRef<HTMLDivElement>(null);
+  const currentRef = useRef<HTMLElement>(null);
+  const tailRef = useRef<HTMLDivElement>(null);
   const followCurrent = useRef(true);
   const [awayFromCurrent, setAwayFromCurrent] = useState(false);
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
@@ -70,7 +70,7 @@ export function Queue(props: QueueProps) {
     const anchor = currentRef.current;
     if (!scroller || !anchor) return 0;
     return Math.max(0, anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-      + scroller.scrollTop - (columnsRef.current?.getBoundingClientRect().height ?? 0));
+      + scroller.scrollTop);
   }, []);
   const jumpToCurrent = useCallback(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = currentScrollTop();
@@ -83,10 +83,19 @@ export function Queue(props: QueueProps) {
     const frame = requestAnimationFrame(jumpToCurrent);
     return () => cancelAnimationFrame(frame);
   }, [current?.id, history.length, jumpToCurrent]);
-  useEffect(() => {
-    const resize = () => { if (followCurrent.current) jumpToCurrent(); };
-    window.addEventListener("resize", resize);
-    return () => window.removeEventListener("resize", resize);
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const tail = tailRef.current;
+    if (!scroller || !tail) return;
+    // Like Roon, now playing can always scroll to the top, even when little or nothing follows it.
+    const fit = () => {
+      tail.style.minHeight = `${scroller.clientHeight}px`;
+      if (followCurrent.current) jumpToCurrent();
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(scroller);
+    return () => observer.disconnect();
   }, [jumpToCurrent]);
 
   function trackScrollPosition() {
@@ -180,22 +189,24 @@ export function Queue(props: QueueProps) {
             {upcoming.length > 0 && <><span className="separator">•</span><span>{formatTotalDuration(duration)}</span></>}
           </div>
         </header>
-        <div id="queueList" className="libraryView smoothScroll" ref={setScrollElement} onScroll={trackScrollPosition}>
-          <div className="columnInfo" ref={columnsRef}>
-            <span className="trackColumn">Track</span><span className="artistColumn">Artist</span>
-            <span className="albumColumn">Album</span><span className="durationColumn">Duration</span>
-          </div>
-          <section id="queueHistory" aria-label="Played tracks">
+        <div id="queueList" className="libraryView smoothScroll" ref={setScrollElement} onScroll={trackScrollPosition}
+          data-selecting={selection.isSelecting ? "true" : undefined}>
+          <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!history.length}>
+            <h2 className="queueSectionTitle">History</h2>
             <QueueRows entries={history} label="Queue history" {...rowProps} />
           </section>
-          <div id="currentQueueTrack" ref={currentRef}>
-            {current && <QueueRow entry={current} index={0} {...rowProps} selected={selection.selectedIds.has(current.id)} />}
+          <div className="queueTail" ref={tailRef}>
+            <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!current}>
+              <h2 className="queueSectionTitle">Now Playing</h2>
+              {current && <QueueRow entry={current} index={0} {...rowProps} selected={selection.selectedIds.has(current.id)} />}
+            </section>
+            <section id="upcomingQueueTracks" className="queueSection" aria-label="Upcoming tracks" hidden={!upcoming.length}>
+              <h2 className="queueSectionTitle">Up Next</h2>
+              <QueueRows entries={upcoming} label="Upcoming queue" {...rowProps} onPointerDown={onPointerDown}
+                draggedId={draggedTrackId} dropTarget={dropTarget} />
+            </section>
+            {!entries.length && <p className="queueEmpty">Queue is empty</p>}
           </div>
-          <section id="upcomingQueueTracks" aria-label="Upcoming tracks">
-            <QueueRows entries={upcoming} label="Upcoming queue" {...rowProps} onPointerDown={onPointerDown}
-              draggedId={draggedTrackId} dropTarget={dropTarget} />
-          </section>
-          {!entries.length && <p className="queueEmpty">Queue is empty</p>}
         </div>
       </div>
     </PerfProfiler>
@@ -253,22 +264,14 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, onA
       onContextMenu={event => onAction("select", event, entry)}
       onPointerDown={event => onPointerDown?.(event, index)} onDragStart={event => event.preventDefault()}>
       <div className="trackLeading">
-        <button type="button" className="trackPlayButton" aria-label={`Play ${entry.track.name}`} disabled={entry.current}
-          onClick={event => { event.stopPropagation(); onAction("play", event, entry); }}>
-          <img src="/Play.svg" alt="" aria-hidden="true" />
-        </button>
         <div className="coverImgContainer"><TrackArtwork track={entry.track} alt={`${entry.track.album} cover`} className="coverImg" draggable={false} /></div>
       </div>
-      <span className="trackName queueTrackName">{entry.current && <small className="queueNowPlaying">Now playing</small>}<span title={entry.track.name}>{entry.track.name}</span><small className="queueTrackArtist">{entry.track.artist}</small></span>
+      <span className="trackName queueTrackName"><span title={entry.track.name}>{entry.track.name}</span><small className="queueTrackArtist">{entry.track.artist}</small></span>
       <span className="artistName" title={entry.track.artist}>{entry.track.artist}</span>
-      <span className="albumName" title={entry.track.album}>{entry.track.album}</span>
       <span className="trackDuration">{Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}</span>
-      <button type="button" className="trackCollectionMenuTrigger" data-collection-menu-trigger
-        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${entry.track.name}`}
-        onClick={event => onAction("menu", event, entry)}>
-        <img src={selecting ? selected ? "/select.svg" : "/noSelect.svg" : "/menu.svg"}
-          className={selecting ? "selectionIndicator" : undefined} alt={selecting ? selected ? "Selected" : "Not selected" : "Menu"} />
-      </button>
+      {selecting && <span className="queueSelectionIndicator" aria-hidden="true">
+        <img src={selected ? "/select.svg" : "/noSelect.svg"} className="selectionIndicator" alt="" />
+      </span>}
     </div>
   );
 });

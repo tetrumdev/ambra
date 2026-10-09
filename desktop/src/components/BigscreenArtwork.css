@@ -16,29 +16,6 @@
     visibility: visible;
 }
 
-.albumCoverContrast {
-    position: absolute;
-    inset: -8%;
-    width: 116%;
-    height: 116%;
-    z-index: -1;
-    object-fit: cover;
-    filter: grayscale(1) contrast(1.8) invert(1) blur(18px);
-    opacity: 0.06;
-    -webkit-mask-image: radial-gradient(
-        closest-side,
-        #000 52%,
-        rgb(0 0 0 / 80%) 72%,
-        transparent 100%
-    );
-    mask-image: radial-gradient(
-        closest-side,
-        #000 52%,
-        rgb(0 0 0 / 80%) 72%,
-        transparent 100%
-    );
-}
-
 #albumCoverImg {
     position: absolute;
     inset: 0;

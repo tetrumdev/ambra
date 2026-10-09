@@ -33,11 +33,9 @@
     align-items: center;
 }
 
-.queueView .columnInfo {
-    background: black;
-}
-
 .queueView #queueList {
+    --library-leading-width: 56px;
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr) minmax(64px, auto);
     flex: 1;
     height: auto;
     width: 100%;
@@ -52,9 +50,64 @@
     height: 24px;
 }
 
+.queueView #queueList[data-selecting="true"] {
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr) minmax(64px, auto) 40px;
+}
+
+.queueSection {
+    padding-top: 28px;
+}
+
+.queueSection[hidden] {
+    display: none;
+}
+
+.queueSectionTitle {
+    margin: 0;
+    padding: 0 15px 10px;
+    border-bottom: 1px solid #535353;
+    color: #8a898a;
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+}
+
+.queueView .queueItem {
+    padding-right: 15px;
+}
+
+.queueView .queueItem[data-current="true"] {
+    background-color: #1c1c1c;
+}
+
+.queueView .queueItem[data-current="true"]:hover {
+    background-color: #242424;
+}
+
+.queueView .queueItem[data-current="true"] .queueTrackName > span:first-child {
+    color: white;
+    font-weight: 500;
+}
+
+.queueItem[data-played="true"] .coverImg {
+    opacity: 0.55;
+}
+
+.queueSelectionIndicator {
+    grid-column: 5;
+    display: grid;
+    place-items: center;
+}
+
+.queueSelectionIndicator .selectionIndicator {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+}
+
 .queueItem .trackName,
-.queueItem .artistName,
-.queueItem .albumName {
+.queueItem .artistName {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -71,15 +124,10 @@
     color: #a3a2a3;
 }
 
-.queueNowPlaying,
 .queueTrackArtist {
     color: #a3a2a3;
     font-size: 0.75rem;
     font-weight: 400;
-}
-
-.queueNowPlaying {
-    display: block;
 }
 
 .queueTrackArtist {
@@ -99,13 +147,14 @@
     }
 
     .queueView #queueList {
+        --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px;
+    }
+
+    .queueView #queueList[data-selecting="true"] {
         --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px 40px;
     }
 
-    .queueItem .artistName,
-    .queueItem .albumName,
-    .queueView .artistColumn,
-    .queueView .albumColumn {
+    .queueItem .artistName {
         display: none;
     }
 
@@ -113,12 +162,11 @@
         display: block;
     }
 
-    .queueItem .trackDuration,
-    .queueView .durationColumn {
+    .queueItem .trackDuration {
         grid-column: 3;
     }
 
-    .queueItem .trackCollectionMenuTrigger {
+    .queueSelectionIndicator {
         grid-column: 4;
     }
 }

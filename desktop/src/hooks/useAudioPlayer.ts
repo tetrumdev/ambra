@@ -20,6 +20,7 @@ import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
+import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
 
 export type AudioDeckController = {
   firstAudioRef: RefObject<HTMLAudioElement | null>;
@@ -42,7 +43,7 @@ export type AudioDeckController = {
 type AudioPlayer = {
   currentTrack: Track | undefined;
   audioQuality: AudioQuality | null;
-  currentTime: number;
+  clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
   isSessionRestored: boolean;
@@ -90,7 +91,6 @@ export function useAudioPlayer(
   const activeDeckRef = useRef<Deck>(0);
   const deckGenerationsRef = useRef<[number, number]>([0, 0]);
   const currentTrackIdRef = useRef<string | null>(null);
-  const currentTimeRef = useRef(0);
   const nativePlayIntentRef = useRef(false);
   const nativeCommandsRef = useRef(new NativePlaybackCommands(invoke));
   const initialPlaybackRef = useRef(initialPlayback);
@@ -108,7 +108,8 @@ export function useAudioPlayer(
   const nativeReadyGenerationRef = useRef<number | null>(null);
 
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
+  const [clock] = useState(createPlaybackClock);
+  const setCurrentTime = clock.set;
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
@@ -119,7 +120,6 @@ export function useAudioPlayer(
 
   tracksRef.current = tracks;
   queueNavigationRef.current = queueNavigation;
-  currentTimeRef.current = currentTime;
   const usesNativeAudio = isTauri();
   const currentTrack = tracks.find(
     (track) => track.globalId === currentTrackId,
@@ -176,7 +176,6 @@ export function useAudioPlayer(
     nativeLoadGenerationRef.current += 1;
     nativeReadyGenerationRef.current = null;
     currentTrackIdRef.current = null;
-    currentTimeRef.current = 0;
     nativePlayIntentRef.current = false;
     pendingRestoreTimeRef.current = null;
     pendingPlaybackDeckRef.current = null;
@@ -267,7 +266,6 @@ export function useAudioPlayer(
     if (committedTrack?.globalId !== advancedTrack.globalId) return false;
 
     currentTrackIdRef.current = advancedTrack.globalId;
-    currentTimeRef.current = 0;
     setCurrentTrackId(advancedTrack.globalId);
     setCurrentTime(0);
     setDuration(advancedTrack.durationSeconds);
@@ -323,7 +321,6 @@ export function useAudioPlayer(
         setCurrentTrackId(targetTrack.globalId);
         setCurrentTime(0);
         setDuration(targetTrack.durationSeconds);
-        currentTimeRef.current = 0;
         setIsPlaying(shouldPlay);
         setIsSessionRestored(false);
         loadNativeTrack(targetTrack, 0, shouldPlay);
@@ -474,7 +471,7 @@ export function useAudioPlayer(
 
   const previous = useCallback(() => {
     if (usesNativeAudio) {
-      if (currentTimeRef.current > 3) {
+      if (clock.get() > 3) {
         seek(0);
         return;
       }
@@ -989,17 +986,25 @@ export function useAudioPlayer(
     );
   }, [currentTrack, usesNativeAudio]);
 
-  const nativePositionSeconds = Math.floor(currentTime);
   useEffect(() => {
     if (!isTauri()) return;
 
-    void invoke("set_native_media_playback", {
-      isPlaying: currentTrack !== undefined && isPlaying,
-      positionSeconds: nativePositionSeconds,
-    }).catch((error) =>
-      console.warn("Could not update native playback state:", error),
-    );
-  }, [currentTrack, isPlaying, nativePositionSeconds]);
+    // Follows the clock directly so whole-second updates don't rerender the app.
+    let sentSeconds: number | null = null;
+    const update = () => {
+      const positionSeconds = Math.floor(clock.get());
+      if (positionSeconds === sentSeconds) return;
+      sentSeconds = positionSeconds;
+      void invoke("set_native_media_playback", {
+        isPlaying: currentTrack !== undefined && isPlaying,
+        positionSeconds,
+      }).catch((error) =>
+        console.warn("Could not update native playback state:", error),
+      );
+    };
+    update();
+    return clock.subscribe(update);
+  }, [clock, currentTrack, isPlaying]);
 
   return {
     playTrack,
@@ -1008,7 +1013,7 @@ export function useAudioPlayer(
     audioQuality: currentTrack && nativeQuality?.source === nativeAudioSource(currentTrack)
       ? nativeQuality.quality
       : null,
-    currentTime,
+    clock,
     duration,
     isPlaying,
     isSessionRestored,

@@ -5,7 +5,8 @@ import { ArtworkImage } from "./ArtworkImage";
 import "./AlbumArtwork.css";
 import "./AppChrome.css";
 
-export function AlbumArtwork({ src, title }: { src: string | null; title: string }) {
+// `noun` names the image for assistive labels; artist pages reuse this for portraits.
+export function AlbumArtwork({ src, title, noun = "cover" }: { src: string | null; title: string; noun?: "cover" | "portrait" }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [expanded, setExpanded] = useState(false);
   const [hasDragRegion, setHasDragRegion] = useState(false);
@@ -20,7 +21,7 @@ export function AlbumArtwork({ src, title }: { src: string | null; title: string
       <button
         type="button"
         className="albumArtworkTrigger"
-        aria-label={`Enlarge ${title} cover`}
+        aria-label={`Enlarge ${title} ${noun}`}
         aria-haspopup="dialog"
         onClick={() => {
           setExpanded(false);
@@ -30,12 +31,12 @@ export function AlbumArtwork({ src, title }: { src: string | null; title: string
           openDialog(dialog.current);
         }}
       >
-        <ArtworkImage src={src} alt={`${title} cover`} loading="eager" />
+        <ArtworkImage src={src} alt={`${title} ${noun}`} loading="eager" />
       </button>
       <dialog
         ref={dialog}
         className="albumArtworkDialog"
-        aria-label={`${title} cover`}
+        aria-label={`${title} ${noun}`}
         data-expanded={expanded ? "true" : undefined}
         onClick={returnOrClose}
         onCancel={(event) => {
@@ -51,7 +52,7 @@ export function AlbumArtwork({ src, title }: { src: string | null; title: string
         <button
           type="button"
           className="albumArtworkZoom"
-          aria-label={expanded ? "Return to large cover" : "Expand cover to window"}
+          aria-label={expanded ? `Return to large ${noun}` : `Expand ${noun} to window`}
           onClick={(event) => {
             event.stopPropagation();
             setExpanded((value) => !value);
@@ -59,7 +60,7 @@ export function AlbumArtwork({ src, title }: { src: string | null; title: string
         >
           <img
             src={src || whiteArtwork}
-            alt={`${title} cover`}
+            alt={`${title} ${noun}`}
             decoding="async"
             draggable={false}
             onError={(event) => {
