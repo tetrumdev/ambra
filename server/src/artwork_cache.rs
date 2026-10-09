@@ -13,7 +13,7 @@ use std::{
 use bytes::Bytes;
 use tokio::sync::{Mutex, OnceCell, Semaphore};
 
-use crate::artwork_quality::{dominant_colors, trusted_artwork_url};
+use crate::artwork_quality::{ArtworkPalette, dominant_palette, trusted_artwork_url};
 
 const CAPACITY: usize = 512;
 const MAX_DOWNLOAD: usize = 16 * 1024 * 1024;
@@ -26,7 +26,7 @@ static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct Artwork {
     pub bytes: Bytes,
-    colors: OnceCell<Vec<String>>,
+    colors: OnceCell<ArtworkPalette>,
     colors_path: Option<PathBuf>,
 }
 
@@ -34,13 +34,17 @@ impl Artwork {
     /// Palettes are derived once per cover and persisted beside the thumbnail,
     /// so a restart (or a cover seen weeks ago) never recomputes them.
     pub async fn colors(&self) -> Vec<String> {
+        self.palette().await.colors
+    }
+
+    pub async fn palette(&self) -> ArtworkPalette {
         self.colors
             .get_or_init(|| async {
                 let bytes = self.bytes.clone();
                 let path = self.colors_path.clone();
                 tokio::task::spawn_blocking(move || {
-                    let colors = dominant_colors(&bytes).unwrap_or_default();
-                    if let (Some(path), false) = (path, colors.is_empty())
+                    let colors = dominant_palette(&bytes).unwrap_or_default();
+                    if let (Some(path), false) = (path, colors.colors.is_empty())
                         && let Ok(encoded) = serde_json::to_vec(&colors)
                     {
                         let _ = write_atomic(&path, &encoded);
@@ -61,7 +65,7 @@ fn entry_paths(directory: &Path, url: &str) -> (PathBuf, PathBuf) {
     let key = format!("{:016x}-{:x}", hasher.finish(), url.len());
     (
         directory.join(format!("{key}.jpg")),
-        directory.join(format!("{key}.colors.json")),
+        directory.join(format!("{key}.colors-v2.json")),
     )
 }
 
@@ -101,8 +105,8 @@ fn read_from_disk(directory: &Path, url: &str) -> Option<Artwork> {
     }
     let colors = fs::read(&colors_path)
         .ok()
-        .and_then(|encoded| serde_json::from_slice::<Vec<String>>(&encoded).ok())
-        .filter(|colors| !colors.is_empty());
+        .and_then(|encoded| serde_json::from_slice::<ArtworkPalette>(&encoded).ok())
+        .filter(|palette| palette.colors.len() == 4 && palette.weights.len() == 4);
     Some(Artwork {
         bytes: Bytes::from(bytes),
         colors: OnceCell::new_with(colors),
@@ -392,6 +396,7 @@ mod tests {
         let first = ArtworkCache::with_disk(reqwest::Client::new(), directory.clone());
         let artwork = first.load(&url).await.unwrap();
         let colors = artwork.colors().await;
+        let palette = artwork.palette().await;
         assert_eq!(colors.len(), 4);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
@@ -404,12 +409,40 @@ mod tests {
         assert_eq!(restored.bytes, artwork.bytes);
         let started = std::time::Instant::now();
         assert_eq!(restored.colors().await, colors);
+        assert_eq!(restored.palette().await, palette);
         eprintln!(
             "Artwork after restart: thumbnail {load_time:?}, palette {:?}, upstream downloads {}",
             started.elapsed(),
             calls.load(Ordering::SeqCst)
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1, "no second download");
+        let _ = fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn old_palettes_refresh_using_the_existing_thumbnail() {
+        let directory = scratch("weighted-palette");
+        let url = "https://i.scdn.co/image/old-cover";
+        let (thumbnail, colors_path) = entry_paths(&directory, url);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(64, 64, image::Rgb([30, 90, 150]))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        fs::write(&thumbnail, encoded.into_inner()).unwrap();
+        let legacy_path = PathBuf::from(
+            colors_path
+                .to_string_lossy()
+                .replace(".colors-v2.json", ".colors.json"),
+        );
+        fs::write(
+            legacy_path,
+            br##"["#ffff00","#ffff00","#ffff00","#ffff00"]"##,
+        )
+        .unwrap();
+        let palette = read_from_disk(&directory, url).unwrap().palette().await;
+        assert_eq!(palette.colors, vec!["#1e5a96"; 4]);
+        assert_eq!(palette.weights, [1.0, 0.0, 0.0, 0.0]);
+        assert!(colors_path.exists());
         let _ = fs::remove_dir_all(directory);
     }
 

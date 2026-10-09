@@ -1,0 +1,64 @@
+.columnHeaderCell {
+    position: relative;
+    min-width: 0;
+    grid-row: 1;
+}
+
+.columnHeaderCell .columnSortButton {
+    max-width: calc(100% - 4px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.columnResizeHandle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: -13px;
+    width: 11px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: col-resize;
+    touch-action: none;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.columnResizeHandle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 5px;
+    width: 1px;
+    background: #535353;
+    opacity: 0;
+}
+
+.columnInfo:hover .columnResizeHandle {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.columnInfo:hover .columnResizeHandle::after {
+    opacity: 1;
+}
+
+.columnResizeHandle:hover::after {
+    background: #b6b6b6;
+}
+
+.columnResizeHandle:focus-visible {
+    outline: 1px solid white;
+    outline-offset: 2px;
+    opacity: 1;
+}
+
+:root[data-column-resizing="true"],
+:root[data-column-resizing="true"] * {
+    cursor: col-resize !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+}

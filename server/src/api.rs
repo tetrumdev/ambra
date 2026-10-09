@@ -564,6 +564,15 @@ async fn resolve_artwork_quality(
 struct ArtworkQuery {
     provider: String,
     url: String,
+    #[serde(default)]
+    weighted: bool,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum ArtworkPaletteResponse {
+    Colors(Vec<String>),
+    Weighted(crate::artwork_quality::ArtworkPalette),
 }
 
 async fn artwork_thumbnail(
@@ -585,13 +594,17 @@ async fn artwork_thumbnail(
 async fn artwork_palette(
     State(state): State<AppState>,
     Query(query): Query<ArtworkQuery>,
-) -> Result<Json<Vec<String>>, ApiError> {
+) -> Result<Json<ArtworkPaletteResponse>, ApiError> {
     let artwork = state
         .artwork
         .get(&query.provider, &query.url)
         .await
         .map_err(ApiError::upstream)?;
-    Ok(Json(artwork.colors().await))
+    Ok(Json(if query.weighted {
+        ArtworkPaletteResponse::Weighted(artwork.palette().await)
+    } else {
+        ArtworkPaletteResponse::Colors(artwork.colors().await)
+    }))
 }
 
 async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, u32)> {
@@ -651,7 +664,7 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .into_iter()
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
-    let (tracks, unavailable) = load_available_tracks(&state, &available_entries).await;
+    let (tracks, unavailable) = load_available_tracks(&state, &available_entries, LIBRARY_LOAD_CONCURRENCY).await;
 
     Ok(Json(LibraryResponse {
         tracks,
@@ -1230,8 +1243,39 @@ async fn album_tracks(
     State(state): State<AppState>,
     Path((provider, album_id)): Path<(MusicProvider, String)>,
 ) -> Result<Json<LibraryResponse>, ApiError> {
-    let entries = album_entries(&state, provider, &album_id).await?;
-    let (tracks, _) = load_available_tracks(&state, &entries).await;
+    let results = match provider {
+        MusicProvider::Tidal => tidal_provider(&state)?
+            .album_tracks(&album_id, ALBUM_LOAD_CONCURRENCY)
+            .await
+            .map_err(ApiError::upstream)?,
+        MusicProvider::Qobuz => qobuz_provider(&state)?
+            .album_tracks(&album_id, ALBUM_LOAD_CONCURRENCY)
+            .await
+            .map_err(ApiError::upstream)?,
+        // Spotify albums only list track IDs, so each track loads on its own.
+        MusicProvider::Spotify => {
+            let entries = album_entries(&state, provider, &album_id).await?;
+            let (tracks, _) =
+                load_available_tracks(&state, &entries, ALBUM_LOAD_CONCURRENCY).await;
+            if tracks.is_empty() {
+                return Err(ApiError::upstream(io::Error::other(format!(
+                    "No tracks on {} album {album_id} could be loaded",
+                    provider_name(provider)
+                ))));
+            }
+            return Ok(Json(LibraryResponse::new(tracks)));
+        }
+    };
+    let mut tracks = Vec::with_capacity(results.len());
+    for (track_id, result) in results {
+        match result {
+            Ok(track) => tracks.push(track),
+            Err(error) => eprintln!(
+                "Could not load {} track {track_id}: {error}",
+                provider_name(provider)
+            ),
+        }
+    }
     if tracks.is_empty() {
         return Err(ApiError::upstream(io::Error::other(format!(
             "No tracks on {} album {album_id} could be loaded",
@@ -1282,7 +1326,7 @@ async fn import_album(
 ) -> Result<Json<LibraryResponse>, ApiError> {
     let entries = album_entries(state, provider, &album_id).await?;
     // Region-locked or pulled tracks are skipped instead of failing the album.
-    let (tracks, unavailable) = load_available_tracks(state, &entries).await;
+    let (tracks, unavailable) = load_available_tracks(state, &entries, LIBRARY_LOAD_CONCURRENCY).await;
     if tracks.is_empty() {
         return Err(ApiError::upstream(io::Error::other(format!(
             "No tracks on {} album {album_id} could be loaded",
@@ -1321,9 +1365,15 @@ async fn load_tracks(
 
 /// Loads what it can, in order; one pulled or region-locked track must not hide
 /// the rest. Returns the entries that failed alongside the loaded tracks.
+// Whole-library loads stay gentle on provider rate limits. An open album page is
+// small and someone is waiting on it, so its uncached tracks load more widely.
+const LIBRARY_LOAD_CONCURRENCY: usize = 4;
+const ALBUM_LOAD_CONCURRENCY: usize = 12;
+
 async fn load_available_tracks(
     state: &AppState,
     entries: &[LibraryEntry],
+    concurrency: usize,
 ) -> (Vec<TrackMetadata>, Vec<LibraryEntry>) {
     let results = stream::iter(entries.iter().cloned())
         .map(|entry| {
@@ -1333,7 +1383,7 @@ async fn load_available_tracks(
                 (entry, result)
             }
         })
-        .buffered(4)
+        .buffered(concurrency)
         .collect::<Vec<_>>()
         .await;
     let mut tracks = Vec::with_capacity(results.len());

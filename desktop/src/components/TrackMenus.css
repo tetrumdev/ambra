@@ -17,6 +17,8 @@
     z-index: 20;
     position: fixed;
     color: white;
+    /* Menus are fixed-position and may render outside a view that sets the app's UI font. */
+    font-family: "Stack Sans Text", Inter, sans-serif;
     display: flex;
     flex-direction: column;
     overflow: hidden;

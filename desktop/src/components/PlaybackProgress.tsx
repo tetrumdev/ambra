@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
+import { usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
 import "./PlaybackProgress.css";
 
 type PlaybackProgressProps = {
-  currentTime: number;
+  clock: PlaybackClock;
   duration: number;
   onSeek: (time: number) => void;
   disabled?: boolean;
@@ -25,11 +26,12 @@ function formatTime(time: number) {
 }
 
 export function PlaybackProgress({
-  currentTime,
+  clock,
   duration,
   onSeek,
   disabled = false,
 }: PlaybackProgressProps) {
+  const currentTime = usePlaybackTime(clock);
   const [clockType, setClockType] = useState<Clock>("songLength");
   const songLength = Math.max(0, duration);
   const timeRemaining = Math.max(0, duration - currentTime);

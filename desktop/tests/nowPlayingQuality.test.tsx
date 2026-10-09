@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
+import { createPlaybackClock } from "../src/utils/playbackClock";
 import { NowPlayingBar } from "../src/components/NowPlayingBar";
 import type { AudioDeckController } from "../src/hooks/useAudioPlayer";
 import type { Track } from "../src/types/music";
@@ -15,7 +16,7 @@ const audioDecks: AudioDeckController = {
 function render(variant: "compact" | "expanded", currentTrack?: Track) {
   return renderToStaticMarkup(<NowPlayingBar
     variant={variant} track={currentTrack} onOpenEntity={noop} showAudioQuality={true}
-    currentTime={0} duration={180} isPlaying={false} audioDecks={audioDecks}
+    clock={createPlaybackClock()} duration={180} isPlaying={false} audioDecks={audioDecks}
     onPrevious={noop} onTogglePlayback={noop} onNext={noop} onSeek={noop}
     audioQuality={{ codec: "flac", bitDepth: 24, sampleRateHz: 96000, channels: 2, bitrateKbps: 2642, bitrateIsEstimate: true }}
   />);

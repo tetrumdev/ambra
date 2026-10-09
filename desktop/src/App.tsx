@@ -23,6 +23,8 @@ import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useStableCallback } from "./hooks/useStableCallback";
+import { usePlaybackTime } from "./utils/playbackClock";
 import {
   loadPreferences,
   savePreferences,
@@ -54,7 +56,13 @@ function App() {
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
   const navigation = useRef<Array<{ entity: BrowseEntity | null; screen: AppScreen; playlistId: string | null; section: LibrarySection }>>([]);
-  const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => [...new Map([...current, ...tracks].map(track => [track.globalId, track])).values()]), []);
+  const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => {
+    const known = new Map(current.map(track => [track.globalId, track]));
+    // Keep the same array when nothing changed so App and its memos don't rerun.
+    if (tracks.every(track => known.get(track.globalId) === track)) return current;
+    for (const track of tracks) known.set(track.globalId, track);
+    return [...known.values()];
+  }), []);
   const playlists = playlistStore.playlists;
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
@@ -162,9 +170,8 @@ function App() {
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
   const isSearchView = screen === "search" && !browseEntity;
-  const persistedPosition = player.isPlaying
-    ? Math.floor(player.currentTime / 5) * 5
-    : player.currentTime;
+  // Subscribes coarsely: App rerenders every 5 s while playing, not every tick.
+  const persistedPosition = usePlaybackTime(player.clock, time => player.isPlaying ? Math.floor(time / 5) * 5 : time);
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const f11FullscreenRef = useRef(false);
   const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "queue">>(
@@ -188,17 +195,19 @@ function App() {
     return playlistStore.create(name);
   }
 
-  const playlistOptions = {
-    playlists,
-    onAdd: async (playlistId: string, trackId: string) => {
-      const track = availableTracks.find(track => track.globalId === trackId);
-      return track ? playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
-    },
-    onCreate: async (name: string, trackId: string) => {
-      const track = availableTracks.find(track => track.globalId === trackId);
-      return track ? Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000)))) : false;
-    },
-  };
+  const addTrackToPlaylist = useStableCallback(async (playlistId: string, trackId: string) => {
+    const track = availableTracks.find(track => track.globalId === trackId);
+    return track ? playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
+  });
+  const createPlaylistWithTrack = useStableCallback(async (name: string, trackId: string) => {
+    const track = availableTracks.find(track => track.globalId === trackId);
+    return track ? Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000)))) : false;
+  });
+  // Stable so playback-clock renders don't invalidate memoized track views.
+  const playlistOptions = useMemo(
+    () => ({ playlists, onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack }),
+    [playlists, addTrackToPlaylist, createPlaylistWithTrack],
+  );
 
   const selectedPlaylist = playlists.find((playlist) => {
     return playlist.id === selectedPlaylistId;
@@ -561,7 +570,7 @@ function App() {
         playback: latest.player.currentTrack
           ? {
               trackId: latest.player.currentTrack.globalId,
-              positionSeconds: latest.player.currentTime,
+              positionSeconds: latest.player.clock.get(),
             }
           : { trackId: null, positionSeconds: 0 },
       });
@@ -584,18 +593,18 @@ function App() {
             : "library",
     },
   }));
-  const goBack = () => {
+  const goBack = useStableCallback(() => {
     const previous = navigation.current.pop();
     if (!previous) { setBrowseEntity(null); return; }
     setBrowseEntity(previous.entity); setSelectedPlaylistId(previous.playlistId); setLibrarySection(previous.section);
     setPreferences(current => ({ ...current, ui: { ...current.ui, screen: previous.screen } }));
-  };
-  const openEntity = (entity: BrowseEntity) => {
+  });
+  const openEntity = useStableCallback((entity: BrowseEntity) => {
     if (browseEntity && entityKey(entity) === entityKey(browseEntity)) return;
     navigation.current.push({ entity: browseEntity, screen, playlistId: selectedPlaylistId, section: librarySection });
     setBrowseEntity(entity); setSelectedPlaylistId(null);
     setPreferences(current => ({ ...current, ui: { ...current.ui, screen: "library" } }));
-  };
+  });
   const entityAction = async (action: EntityAction, tracks: Track[], id?: string) => {
     if (!tracks.length) return;
     const selected = tracks.find(track => track.globalId === id) ?? tracks[0];
@@ -618,6 +627,9 @@ function App() {
       if (start) player.playTrack(track.globalId, track);
     } catch (error) { console.warn("Could not play catalog tracks:", error); }
   };
+
+  const onEntityAction = useStableCallback((action: EntityAction, tracks: Track[], id?: string) => { void entityAction(action, tracks, id); });
+  const addEntityTrack = useStableCallback((track: Track) => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); });
 
   const changeScreen = (nextScreen: AppScreen) => {
     setPreferences((current) => ({
@@ -898,8 +910,8 @@ function App() {
               registerScrollElement={registerScrollElement}
             />
           ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
-            onBack={goBack} onOpenEntity={openEntity} onAction={(action, tracks, id) => { void entityAction(action, tracks, id); }}
-            onAddTrack={track => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); }}
+            onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
+            onAddTrack={addEntityTrack}
             rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
             <SearchView
               onOpenEntity={openEntity}
@@ -960,7 +972,7 @@ function App() {
         track={player.currentTrack}
         audioQuality={player.audioQuality}
         showAudioQuality={preferences.ui.showAudioQuality}
-        currentTime={player.currentTime}
+        clock={player.clock}
         duration={player.duration}
         isPlaying={player.isPlaying}
         audioDecks={player.audioDecks}

@@ -63,20 +63,18 @@ async function click(element: HTMLElement, shiftKey = false) {
   await act(async () => { element.dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey })); });
 }
 
-test("plain row and artwork clicks never skip; play button and menu actions are explicit", async () => {
+test("row clicks never skip; playing goes through the row menu", async () => {
   const props = await renderQueue();
   const row = mount.querySelector<HTMLElement>("#upcomingQueueTracks .queueItem")!;
-  await click(row);
-  await click(row.querySelector<HTMLElement>(".trackName")!);
+  expect(row.querySelector(".trackPlayButton")).toBeNull();
+  expect(row.querySelector(".trackCollectionMenuTrigger")).toBeNull();
+  expect(row.querySelector(".albumName")).toBeNull();
   await click(row.querySelector<HTMLElement>(".coverImg")!);
   expect(props.jumpTo).not.toHaveBeenCalled();
-  await click(row.querySelector<HTMLElement>(".trackPlayButton")!);
-  expect(props.jumpTo).toHaveBeenCalledWith(2);
-  await click(row.querySelector<HTMLElement>(".trackCollectionMenuTrigger")!);
   expect(mount.querySelector("#trackCollectionMenu")?.textContent).toContain("Play from here");
   const action = Array.from(mount.querySelectorAll<HTMLButtonElement>("#trackCollectionMenu button")).find(button => button.textContent === "Play from here")!;
   await click(action);
-  expect(props.jumpTo).toHaveBeenCalledTimes(2);
+  expect(props.jumpTo).toHaveBeenCalledWith(2);
 });
 
 test("right-click selection and Shift ranges remove queue occurrences without playing them", async () => {
@@ -92,18 +90,25 @@ test("right-click selection and Shift ranges remove queue occurrences without pl
   expect(mount.querySelector(".selectionActionMenu")).toBeNull();
 });
 
-test("history is visible after queue exhaustion and replays through its play button", async () => {
+test("history is visible after queue exhaustion and replays from its menu", async () => {
   const props = await renderQueue({ currentEntry: undefined, upcomingEntries: [] });
   const row = mount.querySelector<HTMLElement>("#queueHistory .queueItem")!;
   expect(row.textContent).toContain("Past song");
   await click(row);
   expect(props.replayHistory).not.toHaveBeenCalled();
-  await click(row.querySelector<HTMLElement>(".trackPlayButton")!);
+  await click(Array.from(mount.querySelectorAll<HTMLButtonElement>("#trackCollectionMenu button")).find(button => button.textContent === "Play from here")!);
   expect(props.replayHistory).toHaveBeenCalledWith("past");
   await act(async () => { row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true })); });
   await click(mount.querySelector<HTMLElement>(".selectionRemoveAction")!);
   expect(props.deleteHistoryEntries).toHaveBeenCalledWith(["past"]);
   expect(props.deleteEntries).not.toHaveBeenCalled();
+});
+
+test("queue sections are labelled and there is no column header", async () => {
+  await renderQueue();
+  expect(Array.from(mount.querySelectorAll(".queueSectionTitle"), element => element.textContent))
+    .toEqual(["History", "Now Playing", "Up Next"]);
+  expect(mount.querySelector(".columnInfo")).toBeNull();
 });
 
 test("played tracks precede now playing and History returns to them without changing playback", async () => {
@@ -114,17 +119,15 @@ test("played tracks precede now playing and History returns to them without chan
   expect(mount.querySelectorAll('[data-played="true"]').length).toBe(2);
   const scroller = mount.querySelector<HTMLElement>("#queueList")!;
   const anchor = mount.querySelector<HTMLElement>("#currentQueueTrack")!;
-  const columns = mount.querySelector<HTMLElement>(".columnInfo")!;
   const rect = (top: number, height: number) => ({ top, height } as DOMRect);
   scroller.getBoundingClientRect = () => rect(0, 500);
   anchor.getBoundingClientRect = () => rect(400 - scroller.scrollTop, 76);
-  columns.getBoundingClientRect = () => rect(0, 100);
   await click(Array.from(mount.querySelectorAll<HTMLButtonElement>(".librarySectionButton")).find(button => button.textContent?.startsWith("History"))!);
   expect(scroller.scrollTop).toBe(0);
   const jump = Array.from(mount.querySelectorAll<HTMLButtonElement>(".librarySectionButton")).find(button => button.textContent === "Jump to now playing")!;
   expect(jump).toBeTruthy();
   await click(jump);
-  expect(scroller.scrollTop).toBe(300);
+  expect(scroller.scrollTop).toBe(400);
   expect(mount.textContent).not.toContain("Jump to now playing");
   expect(props.jumpTo).not.toHaveBeenCalled();
   expect(props.replayHistory).not.toHaveBeenCalled();

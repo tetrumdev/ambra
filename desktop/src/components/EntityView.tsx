@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   loadAlbumTracks,
   type ArtistProfile,
@@ -40,20 +40,28 @@ export type EntityViewProps = {
   playlistOptions: PlaylistMenuOptions;
   registerScrollElement: (element: HTMLDivElement | null) => void;
 };
-export function EntityView(props: EntityViewProps) {
+// Memoized: App rerenders on every playback tick, which must not rebuild this page.
+export const EntityView = memo(function EntityView(props: EntityViewProps) {
   return props.entity.kind === "artist" ? (
     <ArtistView {...props} artist={props.entity.artist} />
   ) : (
     <AlbumView {...props} album={props.entity.album} />
   );
-}
+});
 function AlbumView({
   album,
   ...props
 }: EntityViewProps & { album: CatalogAlbum }) {
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
-  const saved = tracksForEntity(props.entity, props.libraryTracks);
+  const saved = useMemo(
+    () => tracksForEntity(props.entity, props.libraryTracks),
+    [props.entity, props.libraryTracks],
+  );
+  const savedTrackIds = useMemo(
+    () => new Set(saved.map((track) => track.globalId)),
+    [saved],
+  );
   const [entire, setEntire] = useState(cached?.entire ?? !saved.length);
   const [catalogTracks, setCatalogTracks] = useState<Track[] | undefined>(
     cached?.tracks,
@@ -183,7 +191,7 @@ function AlbumView({
       onOpenEntity={props.onOpenEntity}
       showTrackNumbers
       showArtwork={false}
-      savedTrackIds={new Set(saved.map((track) => track.globalId))}
+      savedTrackIds={savedTrackIds}
       registerScrollElement={props.registerScrollElement}
     />
   );
