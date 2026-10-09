@@ -22,7 +22,7 @@ export function AppChrome({
 
   return (
     <>
-      {(currentScreen === "library" || currentScreen === "search") &&
+      {(currentScreen === "library" || currentScreen === "search" || currentScreen === "settings") &&
         canDragWindow && (
           <div
             className="libraryTitlebar"
