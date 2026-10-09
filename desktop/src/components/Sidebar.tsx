@@ -6,6 +6,8 @@ import { librarySections, type LibrarySection } from "./LibraryView";
 import { closeDialog, openDialog } from "../utils/dialogs";
 
 type SidebarProps = {
+  onOpenSettings: () => void;
+  isSettingsActive: boolean;
   onOpenLibrary: () => void;
   activeLibrarySection: LibrarySection | null;
   activePlaylistId: string | null;
@@ -18,6 +20,8 @@ type SidebarProps = {
 };
 
 export function Sidebar({
+  onOpenSettings,
+  isSettingsActive,
   onOpenLibrary,
   activeLibrarySection,
   activePlaylistId,
@@ -87,6 +91,16 @@ export function Sidebar({
         </div>
         <button type="button" onClick={beginCreatingPlaylist} id="createPlaylistBtn">
           Create Playlist
+        </button>
+      </div>
+      <div className="sidebarFooter">
+        <button
+          type="button"
+          className="sidebarBtn sidebarLibraryButton"
+          onClick={onOpenSettings}
+          aria-current={isSettingsActive ? "page" : undefined}
+        >
+          Settings
         </button>
       </div>
     </div>

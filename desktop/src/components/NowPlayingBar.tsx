@@ -1,6 +1,7 @@
 import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
-import type { Track } from "../types/music";
+import type { AudioQuality, Track } from "../types/music";
+import { formatAudioQuality } from "../utils/audioQuality";
 import "./NowPlayingBar.css";
 import { AudioDecks } from "./AudioDecks";
 import { PlaybackProgress } from "./PlaybackProgress";
@@ -15,6 +16,8 @@ type NowPlayingBarProps = {
   variant: PlayerBarVariant;
   onOpenEntity: (entity: BrowseEntity) => void;
   track: Track | undefined;
+  audioQuality?: AudioQuality | null;
+  showAudioQuality?: boolean;
   currentTime: number;
   duration: number;
   isPlaying: boolean;
@@ -31,6 +34,8 @@ export function NowPlayingBar({
   variant,
   onOpenEntity,
   track,
+  audioQuality,
+  showAudioQuality = false,
   onOpenBigscreen,
   currentTime,
   duration,
@@ -43,6 +48,7 @@ export function NowPlayingBar({
   onOpenQueue,
 }: NowPlayingBarProps) {
   const isEmpty = track === undefined;
+  const quality = track && showAudioQuality ? formatAudioQuality(track, audioQuality) : null;
 
   return (
     <div id="bottomInfoBar" data-variant={variant}>
@@ -71,12 +77,20 @@ export function NowPlayingBar({
           onNext={onNext}
           disabled={isEmpty}
         />
-        <PlaybackProgress
-          currentTime={currentTime}
-          duration={duration}
-          onSeek={onSeek}
-          disabled={isEmpty}
-        />
+        <div className="playbackReadout">
+          <PlaybackProgress
+            currentTime={currentTime}
+            duration={duration}
+            onSeek={onSeek}
+            disabled={isEmpty}
+          />
+          {quality && (
+            <div className="playbackQuality" role="group" aria-label="Audio quality" data-tooltip={quality.description}>
+              <span className="playbackQualityName">{quality.name}</span>
+              <span className="playbackQualityDetails">{quality.details}</span>
+            </div>
+          )}
+        </div>
       </div>
       <div id="extraCtrlsCluster">
         <ExtraCtrls onOpenQueue={onOpenQueue} />

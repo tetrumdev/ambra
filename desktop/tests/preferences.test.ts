@@ -24,10 +24,10 @@ Object.defineProperty(globalThis, "localStorage", {
 describe("preferences", () => {
   beforeEach(() => storedValues.clear());
 
-  test("saves and restores the active search", () => {
+  test("saves and restores the active search and enabled song specs", () => {
     const preferences: AppPreferences = {
       version: 4,
-      ui: { screen: "search" },
+      ui: { screen: "search", showAudioQuality: true },
       search: { query: "Blackest Eyes", provider: "qobuz" },
       playback: { trackId: null, positionSeconds: 0 },
     };
@@ -49,7 +49,7 @@ describe("preferences", () => {
 
     expect(loadPreferences()).toEqual({
       version: 4,
-      ui: { screen: "library" },
+      ui: { screen: "library", showAudioQuality: false },
       search: { query: "", provider: "all" },
       playback: { trackId: "tidal:123", positionSeconds: 12 },
     });
