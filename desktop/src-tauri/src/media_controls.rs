@@ -35,6 +35,7 @@ pub struct NativeMediaMetadata {
     album: String,
     duration_seconds: f64,
     cover_source: Option<String>,
+    #[cfg(any(target_os = "macos", test))]
     asset_source: Option<String>,
 }
 
@@ -62,6 +63,8 @@ struct PublishedMediaMetadata {
     album: String,
     duration_seconds: f64,
     cover_url: Option<String>,
+    // Only macOS publishes asset identifiers; keep them in metadata regression tests.
+    #[cfg(any(target_os = "macos", test))]
     asset_url: Option<String>,
 }
 
@@ -127,6 +130,7 @@ pub fn set_native_media_metadata(
         .cover_source
         .as_deref()
         .and_then(|source| native_cover_url(&app, source));
+    #[cfg(any(target_os = "macos", test))]
     let asset_url = metadata.asset_source.as_deref().and_then(native_asset_url);
 
     {
@@ -140,6 +144,7 @@ pub fn set_native_media_metadata(
             album: metadata.album,
             duration_seconds: metadata.duration_seconds,
             cover_url,
+            #[cfg(any(target_os = "macos", test))]
             asset_url,
         });
         published.metadata_revision = published.metadata_revision.saturating_add(1);
@@ -164,6 +169,7 @@ fn native_cover_url(app: &AppHandle, source: &str) -> Option<String> {
         .map(|url| url.to_string())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn native_asset_url(source: &str) -> Option<String> {
     if source.starts_with("https://") || source.starts_with("http://") {
         return Some(source.to_owned());

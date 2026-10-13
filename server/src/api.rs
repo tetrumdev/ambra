@@ -3,7 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     env, fs, io,
     path::PathBuf,
-    sync::{Arc, OnceLock, Weak},
+    sync::{Arc, OnceLock, RwLock as SyncRwLock, Weak},
     time::{Duration, Instant},
 };
 
@@ -57,14 +57,18 @@ const PROVIDER_RESTORE_WAIT: Duration = Duration::from_secs(20);
 type ServerResult<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 type ArtistMetadataCache = HashMap<
     (MusicProvider, String),
-    (Instant, Arc<tokio::sync::OnceCell<crate::models::ArtistProfileMetadata>>),
+    (
+        Instant,
+        Arc<tokio::sync::OnceCell<crate::models::ArtistProfileMetadata>>,
+    ),
 >;
 
 #[derive(Clone)]
 struct AppState {
     tidal: Arc<OnceLock<TidalProvider>>,
     qobuz: Arc<OnceLock<QobuzProvider>>,
-    spotify: Arc<OnceLock<SpotifyProvider>>,
+    spotify: Arc<SyncRwLock<Option<SpotifyProvider>>>,
+    spotify_login: Arc<Mutex<()>>,
     pending_tidal_login: Arc<Mutex<Option<TidalLogin>>>,
     pending_qobuz_login: Arc<Mutex<Option<QobuzLogin>>>,
     http_client: reqwest::Client,
@@ -116,11 +120,12 @@ pub async fn serve() -> ServerResult<()> {
     let media_cache = Arc::new(RwLock::new(MediaCache::default()));
     let tidal_cell = Arc::new(OnceLock::new());
     let qobuz_cell = Arc::new(OnceLock::new());
-    let spotify_cell = Arc::new(OnceLock::new());
+    let spotify_cell = Arc::new(SyncRwLock::new(None));
     let state = AppState {
         tidal: tidal_cell,
         qobuz: qobuz_cell,
         spotify: spotify_cell,
+        spotify_login: Arc::new(Mutex::new(())),
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
         artwork: Arc::new(crate::artwork_cache::ArtworkCache::with_disk(
@@ -251,7 +256,10 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
         let _ = state.qobuz.set(provider);
     }
     if let Ok(Some(provider)) = spotify {
-        let _ = state.spotify.set(provider);
+        *state
+            .spotify
+            .write()
+            .unwrap_or_else(|error| error.into_inner()) = Some(provider);
     }
     let _ = ready.send(true);
     if env::var_os("AMBRA_PERF").is_some() {
@@ -288,8 +296,7 @@ async fn wait_for_providers(
         && path_needs_providers(request.uri().path())
         && !providers_restored(state.providers_ready.clone(), PROVIDER_RESTORE_WAIT).await
     {
-        return ApiError::service_unavailable("Music services are still starting")
-            .into_response();
+        return ApiError::service_unavailable("Music services are still starting").into_response();
     }
     next.run(request).await
 }
@@ -347,10 +354,16 @@ struct CompleteAuthRequest {
 }
 
 async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> {
+    let spotify = match current_spotify(&state) {
+        Some(provider) => tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
+            .await
+            .unwrap_or_else(|_| provider.is_connected()),
+        None => false,
+    };
     Json(AuthStatusResponse {
         tidal: state.tidal.get().is_some(),
         qobuz: state.qobuz.get().is_some(),
-        spotify: state.spotify.get().is_some(),
+        spotify,
     })
 }
 
@@ -390,14 +403,35 @@ async fn start_auth(
             }))
         }
         "spotify" => {
-            if state.spotify.get().is_none() {
+            // Only one OAuth listener may own the callback port at a time.
+            let _login = state.spotify_login.lock().await;
+            let connected = match current_spotify(&state) {
+                Some(provider) => provider.check_connection().await,
+                None => false,
+            };
+            if !connected {
                 let provider = SpotifyProvider::authenticate_if_configured(true)
                     .await
                     .map_err(ApiError::upstream)?
                     .ok_or_else(|| {
                         ApiError::service_unavailable("Spotify login did not complete")
                     })?;
-                let _ = state.spotify.set(provider);
+                // Replace a revoked session. OnceLock prevented reconnecting a
+                // service that had ever connected during this server lifetime.
+                *state
+                    .spotify
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner()) = Some(provider);
+                state
+                    .search_cache
+                    .write()
+                    .await
+                    .retain(|key, _| key.provider != MusicProvider::Spotify);
+                state
+                    .catalog_cache
+                    .write()
+                    .await
+                    .retain(|key, _| key.provider != MusicProvider::Spotify);
             }
             Ok(Json(AuthStartResponse {
                 status: "connected",
@@ -664,13 +698,20 @@ async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>,
         .into_iter()
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
-    let (tracks, unavailable) = load_available_tracks(&state, &available_entries, LIBRARY_LOAD_CONCURRENCY).await;
+    let (tracks, unavailable) =
+        load_available_tracks(&state, &available_entries, LIBRARY_LOAD_CONCURRENCY).await;
 
     Ok(Json(LibraryResponse {
         tracks,
         unavailable_track_ids: unavailable
             .iter()
-            .map(|entry| format!("{}:{}", provider_slug(entry.provider), entry.provider_track_id))
+            .map(|entry| {
+                format!(
+                    "{}:{}",
+                    provider_slug(entry.provider),
+                    entry.provider_track_id
+                )
+            })
             .collect(),
     }))
 }
@@ -1255,8 +1296,7 @@ async fn album_tracks(
         // Spotify albums only list track IDs, so each track loads on its own.
         MusicProvider::Spotify => {
             let entries = album_entries(&state, provider, &album_id).await?;
-            let (tracks, _) =
-                load_available_tracks(&state, &entries, ALBUM_LOAD_CONCURRENCY).await;
+            let (tracks, _) = load_available_tracks(&state, &entries, ALBUM_LOAD_CONCURRENCY).await;
             if tracks.is_empty() {
                 return Err(ApiError::upstream(io::Error::other(format!(
                     "No tracks on {} album {album_id} could be loaded",
@@ -1326,7 +1366,8 @@ async fn import_album(
 ) -> Result<Json<LibraryResponse>, ApiError> {
     let entries = album_entries(state, provider, &album_id).await?;
     // Region-locked or pulled tracks are skipped instead of failing the album.
-    let (tracks, unavailable) = load_available_tracks(state, &entries, LIBRARY_LOAD_CONCURRENCY).await;
+    let (tracks, unavailable) =
+        load_available_tracks(state, &entries, LIBRARY_LOAD_CONCURRENCY).await;
     if tracks.is_empty() {
         return Err(ApiError::upstream(io::Error::other(format!(
             "No tracks on {} album {album_id} could be loaded",
@@ -1461,9 +1502,7 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
                 .await
         }
         MusicProvider::Spotify => {
-            state
-                .spotify
-                .get()
+            current_spotify(state)
                 .ok_or_else(|| io::Error::other("Spotify login is not configured"))?
                 .track_metadata(&entry.provider_track_id)
                 .await
@@ -1966,8 +2005,16 @@ fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
     })
 }
 
-fn spotify_provider(state: &AppState) -> Result<&SpotifyProvider, ApiError> {
-    state.spotify.get().ok_or_else(|| {
+fn current_spotify(state: &AppState) -> Option<SpotifyProvider> {
+    state
+        .spotify
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone()
+}
+
+fn spotify_provider(state: &AppState) -> Result<SpotifyProvider, ApiError> {
+    current_spotify(state).ok_or_else(|| {
         ApiError::service_unavailable(
             "Spotify is not connected. Sign in from the Library services menu.",
         )
@@ -1978,7 +2025,7 @@ fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
     match provider {
         MusicProvider::Tidal => state.tidal.get().is_some(),
         MusicProvider::Qobuz => state.qobuz.get().is_some(),
-        MusicProvider::Spotify => state.spotify.get().is_some(),
+        MusicProvider::Spotify => current_spotify(state).is_some(),
     }
 }
 

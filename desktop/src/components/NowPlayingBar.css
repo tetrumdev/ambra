@@ -83,6 +83,20 @@
     margin-top: 0;
 }
 
+.playbackError {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 20px;
+    right: 20px;
+    padding: 10px 14px;
+    border: 1px solid #bf7777;
+    border-radius: 8px;
+    background: #281c1c;
+    color: #ffe0e0;
+    font: 0.8rem/1.4 "Stack Sans Text", sans-serif;
+    overflow-wrap: anywhere;
+}
+
 .playbackQuality {
     display: flex;
     flex-wrap: wrap;

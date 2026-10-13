@@ -65,6 +65,9 @@ Run the client separately from `desktop` with `tauri dev`. Building or running
 the client does not require a server binary. Closing the client leaves a
 separately running server alone; stop the server with Ctrl+C in its terminal.
 
+From the repository root, `bun run dev` installs the desktop dependencies and
+launches the client. `bun run build` builds the standalone client.
+
 The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
 

@@ -5,9 +5,9 @@ import { newPreset, parseAutoEq, validatePreset, type DspPreset, type DspStatus,
 import type { SettingsTab } from "./SettingsSidebar";
 import "./SettingsView.css";
 
-type Props = { tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
-export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, registerScrollElement }: Props) {
+export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DspPreset | null>(null);
@@ -73,7 +73,7 @@ export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onSho
   };
   const connected = new Set(["", ...audio.devices.map(device => device.id)]);
   const updateOutput = (id: string, change: Partial<(typeof audio.settings.outputs)[number]>) => {
-    void audio.update(current => ({ ...current, outputs: current.outputs.map(output => output.id === id ? { ...output, ...change } : output) }));
+    return audio.update(current => ({ ...current, outputs: current.outputs.map(output => output.id === id ? { ...output, ...change } : output) }));
   };
   return <div className="settingsView" role="region" aria-label="Settings" ref={registerScrollElement}>
     {audio.error && <p className="settingsError" role="alert">{audio.error}</p>}
@@ -92,7 +92,15 @@ export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onSho
             onChange={e => updateOutput(output.id, { presetId: e.currentTarget.value || null })}>
             <option value="">No DSP</option>{audio.settings.presets.map(p => <option key={p.id} value={p.id}>{p.name}{p.enabled ? "" : " (bypassed)"}</option>)}</select></label>
           <label>Output mode<select aria-label={`Output mode for ${output.name}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={audio.saving}
-            onChange={e => updateOutput(output.id, { exclusiveMode: e.currentTarget.value === "exclusive" })}><option value="shared">System / shared</option><option value="exclusive">Exclusive</option></select></label></div>
+            onChange={e => updateOutput(output.id, { exclusiveMode: e.currentTarget.value === "exclusive" })}><option value="shared">System / shared</option><option value="exclusive">Exclusive</option></select></label>
+          <label>Resync delay (ms)<input type="number" aria-label={`Resync delay for ${output.name}`} min={0} max={10000} step={1} required
+            key={`${output.id}:${output.resyncDelayMs}`} defaultValue={output.resyncDelayMs} disabled={audio.saving}
+            onBlur={async e => {
+              const input = e.currentTarget;
+              const delay = input.valueAsNumber;
+              if (!input.checkValidity()) { input.reportValidity(); input.value = String(output.resyncDelayMs); return; }
+              if (delay !== output.resyncDelayMs && !await updateOutput(output.id, { resyncDelayMs: delay })) input.value = String(output.resyncDelayMs);
+            }} /><span className="settingsFieldHelp">Silence before a new stream or format change. Same-format tracks stay gapless. 0 disables; up to 10,000 ms.</span></label></div>
         <div className="settingsOutputActions"><button className="settingsButton" disabled={!audio.native || audio.saving || !output.enabled || !connected.has(output.id) || audio.settings.selectedOutputId === output.id}
           onClick={() => void audio.update(current => ({ ...current, selectedOutputId: output.id }))}>Use this output</button>
           {output.presetId && <button className="settingsTextButton" onClick={() => { choosePreset(output.presetId); setTab("dsp"); }}>Edit preset</button>}</div>
@@ -140,6 +148,8 @@ export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onSho
       <div className="settingsSectionHeading"><div><h2>Playback display</h2><p>Choose what appears in your player.</p></div></div>
       <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Show song specs</span><span className="settingsToggleDescription" id="songSpecsDescription">Show audio quality, format, and bitrate in the playback bar.</span></span>
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Show song specs" aria-describedby="songSpecsDescription" checked={showAudioQuality} onChange={e => onShowAudioQuality(e.currentTarget.checked)} /></label>
+      <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Animate swirl</span><span className="settingsToggleDescription" id="swirlMotionDescription">Keep the bigscreen background moving, independently of system UI animations.</span></span>
+        <input type="checkbox" role="switch" className="settingsToggle" aria-label="Animate swirl" aria-describedby="swirlMotionDescription" checked={animateSwirl} onChange={e => onAnimateSwirl(e.currentTarget.checked)} /></label>
     </section>
   </div>;
 }

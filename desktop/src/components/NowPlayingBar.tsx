@@ -22,6 +22,7 @@ type NowPlayingBarProps = {
   clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
+  playbackError?: string | null;
   audioDecks: AudioDeckController;
   onPrevious: () => void;
   onTogglePlayback: () => void | Promise<void>;
@@ -41,6 +42,7 @@ export function NowPlayingBar({
   clock,
   duration,
   isPlaying,
+  playbackError,
   audioDecks,
   onPrevious,
   onTogglePlayback,
@@ -79,6 +81,9 @@ export function NowPlayingBar({
           disabled={isEmpty}
         />
         <div className="playbackReadout">
+          {track && playbackError && (
+            <div className="playbackError" role="alert">{playbackError}</div>
+          )}
           <PlaybackProgress
             clock={clock}
             duration={duration}

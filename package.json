@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "dev": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri dev",
+    "build": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri build"
+  },
   "dependencies": {
     "dashjs": "^5.2.1"
   }
