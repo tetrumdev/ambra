@@ -13,10 +13,11 @@ const audioDecks: AudioDeckController = {
   onCanPlay: noop, onPlaying: noop, onPause: noop, onEnded: noop,
 };
 
-function render(variant: "compact" | "expanded", currentTrack?: Track) {
+function render(variant: "compact" | "expanded", currentTrack?: Track, playbackError?: string) {
   return renderToStaticMarkup(<NowPlayingBar
     variant={variant} track={currentTrack} onOpenEntity={noop} showAudioQuality={true}
     clock={createPlaybackClock()} duration={180} isPlaying={false} audioDecks={audioDecks}
+    playbackError={playbackError}
     onPrevious={noop} onTogglePlayback={noop} onNext={noop} onSeek={noop}
     audioQuality={{ codec: "flac", bitDepth: 24, sampleRateHz: 96000, channels: 2, bitrateKbps: 2642, bitrateIsEstimate: true }}
   />);
@@ -34,5 +35,12 @@ for (const variant of ["compact", "expanded"] as const) {
     const markup = render(variant);
     expect(markup).not.toContain('aria-label="Audio quality"');
     expect(markup).toContain("Nothing Playing");
+  });
+  test(`${variant} player shows service failures instead of silently waiting`, () => {
+    const message = "Tidal is not connected. Sign in from the Library services menu.";
+    const markup = render(variant, track("tidal:1", "tidal"), message);
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain(message);
+    expect(render(variant, undefined, message)).not.toContain('role="alert"');
   });
 }

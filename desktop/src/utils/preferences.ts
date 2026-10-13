@@ -8,6 +8,7 @@ export type AppPreferences = {
   ui: {
     screen: AppScreen;
     showAudioQuality: boolean;
+    animateSwirl: boolean;
   };
   search: {
     query: string;
@@ -27,6 +28,7 @@ export const defaultPreferences: AppPreferences = {
   ui: {
     screen: "library",
     showAudioQuality: false,
+    animateSwirl: true,
   },
   search: {
     query: "",
@@ -71,12 +73,15 @@ function migratePreferences(value: unknown): AppPreferences {
   const showAudioQuality = typeof ui.showAudioQuality === "boolean"
     ? ui.showAudioQuality
     : defaultPreferences.ui.showAudioQuality;
+  const animateSwirl = typeof ui.animateSwirl === "boolean"
+    ? ui.animateSwirl
+    : defaultPreferences.ui.animateSwirl;
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -95,7 +100,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -120,6 +125,7 @@ function migratePreferences(value: unknown): AppPreferences {
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
+          animateSwirl,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -148,6 +154,7 @@ function migratePreferences(value: unknown): AppPreferences {
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
+          animateSwirl,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },

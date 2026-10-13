@@ -27,7 +27,7 @@ describe("preferences", () => {
   test("saves and restores the active search and enabled song specs", () => {
     const preferences: AppPreferences = {
       version: 4,
-      ui: { screen: "search", showAudioQuality: true },
+      ui: { screen: "search", showAudioQuality: true, animateSwirl: false },
       search: { query: "Blackest Eyes", provider: "qobuz" },
       playback: { trackId: null, positionSeconds: 0 },
     };
@@ -49,7 +49,7 @@ describe("preferences", () => {
 
     expect(loadPreferences()).toEqual({
       version: 4,
-      ui: { screen: "library", showAudioQuality: false },
+      ui: { screen: "library", showAudioQuality: false, animateSwirl: true },
       search: { query: "", provider: "all" },
       playback: { trackId: "tidal:123", positionSeconds: 12 },
     });
@@ -70,6 +70,23 @@ describe("preferences", () => {
       query: "Deadman Karnivool",
       provider: "all",
     });
+  });
+
+  test("defaults existing version 4 preferences to an animated swirl", () => {
+    localStorage.setItem("ambra.preferences", JSON.stringify({
+      version: 4,
+      ui: { screen: "library", showAudioQuality: true },
+    }));
+    expect(loadPreferences().ui).toEqual({
+      screen: "library", showAudioQuality: true, animateSwirl: true,
+    });
+  });
+
+  test("ignores malformed swirl preferences without disabling animation", () => {
+    localStorage.setItem("ambra.preferences", JSON.stringify({
+      version: 4, ui: { animateSwirl: "false" },
+    }));
+    expect(loadPreferences().ui.animateSwirl).toBe(true);
   });
 
 });

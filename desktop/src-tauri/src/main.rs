@@ -1,5 +1,5 @@
-// Prevents additional console window on Windows in release, DO NOT REMOVE!!
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// Standalone builds are windowed apps, including fast local debug builds.
+#![cfg_attr(all(target_os = "windows", not(dev)), windows_subsystem = "windows")]
 
 fn main() {
     ambra_lib::run()

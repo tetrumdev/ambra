@@ -815,7 +815,7 @@ function App() {
 
       {player.currentTrack && (
         <>
-          <BackgroundArtwork track={player.currentTrack} active={isBigscreen} />
+          <BackgroundArtwork track={player.currentTrack} active={isBigscreen} animate={preferences.ui.animateSwirl} />
           <AlbumArtwork
             key={player.currentTrack.nativeCover ?? player.currentTrack.cover}
             track={player.currentTrack}
@@ -875,7 +875,9 @@ function App() {
           />}
           {isSettingsView ? (
             <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
-              onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))} />
+              onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
+              animateSwirl={preferences.ui.animateSwirl}
+              onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
           ) : isQueueView ? (
             <Queue
               currentEntry={queue.currentEntry}
@@ -954,6 +956,7 @@ function App() {
         clock={player.clock}
         duration={player.duration}
         isPlaying={player.isPlaying}
+        playbackError={player.playbackError}
         audioDecks={player.audioDecks}
         onPrevious={player.previous}
         onTogglePlayback={player.togglePlayback}

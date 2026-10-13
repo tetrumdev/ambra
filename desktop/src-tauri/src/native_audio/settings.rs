@@ -9,6 +9,8 @@ pub struct OutputSettings {
     pub name: String,
     pub enabled: bool,
     pub exclusive_mode: bool,
+    #[serde(default)]
+    pub resync_delay_ms: u32,
     pub preset_id: Option<String>,
 }
 
@@ -30,6 +32,7 @@ impl Default for AudioSettings {
                 name: "System Default".into(),
                 enabled: true,
                 exclusive_mode: false,
+                resync_delay_ms: 0,
                 preset_id: None,
             }],
             presets: Vec::new(),
@@ -56,6 +59,9 @@ impl AudioSettings {
                 || output.name.len() > 200
             {
                 return Err("Output IDs must be unique and each output needs a name".into());
+            }
+            if output.resync_delay_ms > 10_000 {
+                return Err("Resync delay must be between 0 and 10000 ms".into());
             }
             if output
                 .preset_id
@@ -109,6 +115,7 @@ impl AudioSettings {
                     name: device.name.clone(),
                     enabled: true,
                     exclusive_mode: false,
+                    resync_delay_ms: 0,
                     preset_id: None,
                 });
             }
@@ -138,6 +145,7 @@ mod tests {
             name: "My DAC".into(),
             enabled: false,
             exclusive_mode: true,
+            resync_delay_ms: 725,
             preset_id: Some("headphones".into()),
         });
         settings.save(&directory).unwrap();
@@ -148,5 +156,26 @@ mod tests {
         assert!(restored.save(&directory).is_err());
         assert_eq!(AudioSettings::load(&directory).unwrap(), settings);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn old_settings_default_to_no_delay_without_losing_presets() {
+        let mut old = serde_json::to_value(AudioSettings::default()).unwrap();
+        old["outputs"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("resyncDelayMs");
+        let settings: AudioSettings = serde_json::from_value(old).unwrap();
+        assert_eq!(settings.outputs[0].resync_delay_ms, 0);
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn validates_each_devices_independent_delay() {
+        let mut settings = AudioSettings::default();
+        settings.outputs[0].resync_delay_ms = 10_000;
+        settings.validate().unwrap();
+        settings.outputs[0].resync_delay_ms = 10_001;
+        assert!(settings.validate().is_err());
     }
 }
