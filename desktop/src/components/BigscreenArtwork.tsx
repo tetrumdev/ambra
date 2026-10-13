@@ -26,6 +26,7 @@ type ArtworkProps = {
 
 type BackgroundArtworkProps = ArtworkProps & {
   active: boolean;
+  animate?: boolean;
 };
 
 const EDGE_SAMPLE_SIZE = 16;
@@ -85,7 +86,7 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   );
 }
 
-export function BackgroundArtwork({ track, active }: BackgroundArtworkProps) {
+export function BackgroundArtwork({ track, active, animate }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
     colors: ["#000000", "#000000", "#000000", "#000000"],
     weights: [1, 0, 0, 0],
@@ -126,6 +127,7 @@ export function BackgroundArtwork({ track, active }: BackgroundArtworkProps) {
         coverId="albumCover"
         seed={track.globalId}
         active={active}
+        animate={animate}
       />
     </div>
   );

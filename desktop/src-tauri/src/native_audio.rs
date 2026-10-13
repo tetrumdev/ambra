@@ -5,7 +5,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError, bounded, unbounded};
@@ -16,12 +16,14 @@ mod decoder;
 mod dsp;
 mod gain;
 mod output;
+mod resync;
 mod settings;
 
 use decoder::DecodedSource;
 use dsp::{DspEngine, DspStatus, ImpulseFile};
 use gain::GainStage;
 use output::{AudioOutput, PlatformOutput};
+use resync::ResyncDelay;
 use settings::AudioSettings;
 
 const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
@@ -31,10 +33,14 @@ const NETWORK_PRELOAD_MILLISECONDS: usize = 6_000;
 const NETWORK_MAX_BUFFER_MILLISECONDS: usize = 12_000;
 const STREAM_RECOVERY_ATTEMPTS: usize = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const AUDIO_PREPARE_TIMEOUT: Duration = Duration::from_secs(20);
 const PAUSED_DEVICE_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const DECODE_BLOCKS: usize = 8;
 const GAIN_BLOCK_FRAMES: usize = 1_024;
 const SOURCE_CHANGED_EVENT: &str = "native-audio-source-changed";
+const END_PRELOAD_TIMEOUT: Duration = Duration::from_secs(3);
+const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
+const MAX_OUTPUT_DRAIN_WAIT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StreamSpec {
@@ -438,11 +444,18 @@ fn valid_position(position_seconds: f64) -> Result<f64, String> {
         .ok_or_else(|| "The requested playback position is invalid".to_owned())
 }
 
-struct PlaybackWorker {
+type PlaybackWorker = PlaybackEngine<PlatformOutput>;
+
+// Keep the entire playback loop testable against real device behaviours,
+// including partial writes, stale padding and end-of-track transitions.
+struct PlaybackEngine<O: AudioOutput> {
     command_rx: Receiver<WorkerCommand>,
     status: Arc<Mutex<PlaybackStatus>>,
     decoder: Option<DecoderStream>,
-    output: Option<PlatformOutput>,
+    output: Option<O>,
+    resync: ResyncDelay,
+    end_preload_started_at: Option<Instant>,
+    output_drain_deadline: Option<Instant>,
     pcm: VecDeque<f64>,
     spec: Option<StreamSpec>,
     next_source: Option<QueuedSource>,
@@ -545,6 +558,10 @@ impl QueuedSource {
     }
 
     fn prepare_with_buffer(source: String, preload: bool) -> Result<Self, String> {
+        Self::prepare_at(source, 0.0, preload)
+    }
+
+    fn prepare_at(source: String, position_seconds: f64, preload: bool) -> Result<Self, String> {
         let (sender, receiver) = bounded(1);
         let decoder_source = source.clone();
         let foreground = Arc::new(AtomicBool::new(false));
@@ -556,7 +573,7 @@ impl QueuedSource {
             .spawn(move || {
                 let _ = sender.send(prepare_source_with_control(
                     decoder_source,
-                    0.0,
+                    position_seconds,
                     preload,
                     Some(&worker_foreground),
                     Some(&worker_cancelled),
@@ -571,14 +588,33 @@ impl QueuedSource {
         })
     }
 
-    fn into_foreground(self) -> Option<PreparedSource> {
+    fn wait_for_preparation(&self, timeout: Duration) -> Result<PreparedSource, String> {
         // A click needs the startup buffer, not the entire speculative buffer.
         self.foreground.store(true, Ordering::Release);
-        self.receiver.recv().ok().and_then(Result::ok)
+        match self.receiver.recv_timeout(timeout) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => {
+                self.cancelled.store(true, Ordering::Release);
+                Err("Audio loading timed out. Check the streaming service connection or try another track.".into())
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("The native audio preloader stopped unexpectedly".into())
+            }
+        }
+    }
+
+    fn into_foreground(self, timeout: Duration) -> Result<Option<PreparedSource>, String> {
+        match self.wait_for_preparation(timeout) {
+            Ok(prepared) => Ok(Some(prepared)),
+            // A failed speculative load can be retried, but a timed-out load
+            // must release the playback worker rather than start another wait.
+            Err(_) if !self.cancelled.load(Ordering::Acquire) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 }
 
-impl PlaybackWorker {
+impl<O: AudioOutput> PlaybackEngine<O> {
     fn new(
         command_rx: Receiver<WorkerCommand>,
         status: Arc<Mutex<PlaybackStatus>>,
@@ -589,6 +625,9 @@ impl PlaybackWorker {
             status,
             decoder: None,
             output: None,
+            resync: ResyncDelay::default(),
+            end_preload_started_at: None,
+            output_drain_deadline: None,
             pcm: VecDeque::new(),
             spec: None,
             next_source: None,
@@ -615,7 +654,7 @@ impl PlaybackWorker {
             match crate::persistent_data_directory(app).and_then(|path| AudioSettings::load(&path))
             {
                 Ok(mut settings) => {
-                    if let Ok(devices) = PlatformOutput::list_devices() {
+                    if let Ok(devices) = O::list_devices() {
                         settings.discover(&devices);
                         if !settings.selected_output_id.is_empty()
                             && !devices.iter().any(|d| d.id == settings.selected_output_id)
@@ -738,7 +777,7 @@ impl PlaybackWorker {
                 let _ = reply.send(result);
             }
             WorkerCommand::ListDevices { reply } => {
-                let _ = reply.send(PlatformOutput::list_devices());
+                let _ = reply.send(O::list_devices());
             }
             WorkerCommand::SelectDevice { device_id, reply } => {
                 let result = self.select_device(device_id);
@@ -767,7 +806,7 @@ impl PlaybackWorker {
                 let _ = reply.send(result);
             }
             WorkerCommand::GetAudioSettings { reply } => {
-                let result = PlatformOutput::list_devices().map(|devices| {
+                let result = O::list_devices().map(|devices| {
                     self.audio_settings.discover(&devices);
                     self.audio_settings.clone()
                 });
@@ -809,7 +848,7 @@ impl PlaybackWorker {
                 return Err("Enable this output in Settings before selecting it".into());
             }
             if let Some(id) = device_id.as_ref() {
-                if !PlatformOutput::list_devices()?.iter().any(|d| &d.id == id) {
+                if !O::list_devices()?.iter().any(|d| &d.id == id) {
                     return Err("This output is disconnected".into());
                 }
             }
@@ -877,7 +916,7 @@ impl PlaybackWorker {
 
     fn select_device(&mut self, device_id: Option<String>) -> Result<(), String> {
         let mut settings = self.audio_settings.clone();
-        settings.discover(&PlatformOutput::list_devices()?);
+        settings.discover(&O::list_devices()?);
         settings.selected_output_id = device_id.unwrap_or_default();
         self.apply_audio_settings(settings)
     }
@@ -891,6 +930,19 @@ impl PlaybackWorker {
         self.apply_audio_settings(settings)
     }
 
+    // A new device stream needs time to lock. Reusing an already-open output
+    // (including gapless, same-format track advance) never calls this helper.
+    fn open_output(&mut self, spec: StreamSpec) -> Result<(), String> {
+        self.output = Some(O::open_device_with_mode(
+            spec,
+            self.selected_device_id.as_deref(),
+            self.exclusive_mode,
+        )?);
+        self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
+        self.rendering = false;
+        Ok(())
+    }
+
     fn load(
         &mut self,
         source: String,
@@ -898,22 +950,26 @@ impl PlaybackWorker {
         position_seconds: f64,
         autoplay: bool,
     ) -> Result<(), String> {
+        let preparation_deadline = Instant::now() + AUDIO_PREPARE_TIMEOUT;
         let previous_spec = self.spec;
+        let was_resyncing = self.resync.is_active();
         let mut previous_output = self.output.take();
         if let Some(output) = previous_output.as_mut() {
             output.reset()?;
         }
+        self.resync = ResyncDelay::default();
         let prepared_next = if position_seconds == 0.0 {
             self.ready_next
                 .take()
                 .filter(|(ready_source, _)| ready_source == &source)
                 .map(|(_, prepared)| prepared)
-                .or_else(|| {
-                    self.next_source
-                        .take()
-                        .filter(|queued| queued.source == source)
-                        .and_then(QueuedSource::into_foreground)
-                })
+        } else {
+            None
+        };
+        let queued_next = if prepared_next.is_none() && position_seconds == 0.0 {
+            self.next_source
+                .take()
+                .filter(|queued| queued.source == source)
         } else {
             None
         };
@@ -932,42 +988,51 @@ impl PlaybackWorker {
 
         // Reuse an in-flight hover preparation as well as completed queue audio.
         let warmed = if prepared_next.is_none()
+            && queued_next.is_none()
             && position_seconds == 0.0
             && self
                 .warm_source
                 .as_ref()
                 .is_some_and(|warm| warm.source == source)
         {
-            self.warm_source
-                .take()
-                .and_then(QueuedSource::into_foreground)
+            self.warm_source.take()
         } else {
             None
         };
         // Drop unrelated hover work when a user selects another song.
         self.warm_source = None;
-        let prepared = match prepared_next.or(warmed) {
+        let reused = queued_next
+            .or(warmed)
+            .map(|queued| {
+                queued
+                    .into_foreground(preparation_deadline.saturating_duration_since(Instant::now()))
+            })
+            .transpose()?
+            .flatten();
+        let prepared = match prepared_next.or(reused) {
             Some(prepared) => prepared,
-            None => prepare_source_at(source.clone(), position_seconds)?,
+            None => prepare_source_at_with_timeout(
+                source.clone(),
+                position_seconds,
+                preparation_deadline.saturating_duration_since(Instant::now()),
+            )?,
         };
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         let audio_quality = self.install_prepared(prepared)?;
         // Prioritize the selected song's initial download over preloading the next.
         self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
-        let selected_device_id = self.selected_device_id.as_deref();
-
         if autoplay && previous_spec == Some(spec) {
             self.output = previous_output.take();
+            if self.output.is_some() && was_resyncing {
+                self.resync =
+                    ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
+            }
         }
         // Release incompatible output formats before opening the replacement.
         drop(previous_output);
         if autoplay && self.output.is_none() {
-            self.output = Some(PlatformOutput::open_device_with_mode(
-                spec,
-                selected_device_id,
-                self.exclusive_mode,
-            )?);
+            self.open_output(spec)?;
         }
 
         update_status(&self.status, |status| {
@@ -1034,11 +1099,7 @@ impl PlaybackWorker {
             let spec = self
                 .spec
                 .ok_or_else(|| "No native audio track is loaded".to_owned())?;
-            self.output = Some(PlatformOutput::open_device_with_mode(
-                spec,
-                self.selected_device_id.as_deref(),
-                self.exclusive_mode,
-            )?);
+            self.open_output(spec)?;
         }
         self.desired_playing = true;
         update_status(&self.status, |status| {
@@ -1069,6 +1130,11 @@ impl PlaybackWorker {
         if let Some(output) = self.output.as_mut() {
             output.reset()?;
         }
+        if self.resync.is_active() {
+            // Seeking during startup discards queued silence; restart that
+            // pending lock-in period. Ordinary seeks do not add any delay.
+            self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
+        }
         self.rendering = false;
         self.position_base = position_seconds;
         self.rendered_frames = 0;
@@ -1082,11 +1148,7 @@ impl PlaybackWorker {
         let prepared = prepare_source_at(source, position_seconds)?;
         let audio_quality = self.install_prepared(prepared)?;
         if self.desired_playing && self.output.is_none() {
-            self.output = Some(PlatformOutput::open_device_with_mode(
-                spec,
-                self.selected_device_id.as_deref(),
-                self.exclusive_mode,
-            )?);
+            self.open_output(spec)?;
         }
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
@@ -1115,6 +1177,28 @@ impl PlaybackWorker {
             return Ok(());
         }
 
+        if self.resync.is_active() {
+            let output = self
+                .output
+                .as_mut()
+                .ok_or_else(|| "The native audio output is unavailable".to_owned())?;
+            output.set_gain(self.gain.amplitude())?;
+            if !self.rendering {
+                output.start()?;
+                self.rendering = true;
+            }
+            if self.resync.pump(output)? {
+                update_status(&self.status, |status| {
+                    status.is_playing = false;
+                    status.buffering = true;
+                });
+                // The song buffer, playhead and DSP are untouched; the worker
+                // can still handle pause/skip commands between silence writes.
+                thread::sleep(Duration::from_millis(1));
+                return Ok(());
+            }
+        }
+
         if self.rendering && self.pcm.is_empty() && !self.decoder_ended {
             let output = self
                 .output
@@ -1141,6 +1225,12 @@ impl PlaybackWorker {
 
         if self.pcm.is_empty() && self.decoder_ended {
             self.poll_next_source();
+            if let Some(queued) = self.next_source.as_ref() {
+                // The next song is no longer speculative. It needs the startup
+                // buffer now, not six seconds of background preloading.
+                queued.foreground.store(true, Ordering::Release);
+                self.end_preload_started_at.get_or_insert_with(Instant::now);
+            }
             if let Some((_, prepared)) = self.ready_next.as_ref()
                 && self.spec == Some(prepared.decoder.spec())
             {
@@ -1155,18 +1245,52 @@ impl PlaybackWorker {
                 self.draining_dsp_tail = true;
                 return Ok(());
             }
-            let output = self
-                .output
-                .as_mut()
-                .ok_or_else(|| "The native audio output is unavailable".to_owned())?;
-            if !output.is_drained()? {
-                return Ok(());
+            if let Some(output) = self.output.as_mut() {
+                // Resume an existing paused buffer so its final frames can
+                // drain. Do not repeatedly start an empty stream while waiting
+                // for a network preload.
+                if !self.rendering && output.queued_frames()? > 0 {
+                    output.start()?;
+                    self.rendering = true;
+                }
+                if !output.is_drained()? {
+                    let now = Instant::now();
+                    let deadline = match self.output_drain_deadline {
+                        Some(deadline) => deadline,
+                        None => {
+                            let queued = output.queued_frames()?;
+                            let queued_time = Duration::from_secs_f64(
+                                queued as f64 / f64::from(spec.sample_rate),
+                            );
+                            let deadline =
+                                now + queued_time.min(MAX_OUTPUT_DRAIN_WAIT) + OUTPUT_DRAIN_GRACE;
+                            self.output_drain_deadline = Some(deadline);
+                            deadline
+                        }
+                    };
+                    if now < deadline {
+                        thread::sleep(Duration::from_millis(1));
+                        return Ok(());
+                    }
+                    // A driver that never reports an empty buffer must not trap the
+                    // queue at EOF. Release the stuck stream and open a fresh one.
+                    output.reset()?;
+                    self.output = None;
+                    self.rendering = false;
+                }
             }
+            self.output_drain_deadline = None;
             if let Some((source, prepared)) = self.ready_next.take() {
                 return self.advance(source, prepared);
             }
-            if self.next_source.is_some() {
-                output.pause()?;
+            if self.next_source.is_some()
+                && self
+                    .end_preload_started_at
+                    .is_some_and(|started| started.elapsed() < END_PRELOAD_TIMEOUT)
+            {
+                if let Some(output) = self.output.as_mut() {
+                    output.pause()?;
+                }
                 self.rendering = false;
                 update_status(&self.status, |status| {
                     status.is_playing = false;
@@ -1175,7 +1299,13 @@ impl PlaybackWorker {
                 thread::sleep(Duration::from_millis(1));
                 return Ok(());
             }
-            output.pause()?;
+            // Cancel a stalled speculative load and publish a normal ended
+            // event. The queue can retry the next track through foreground load.
+            self.next_source = None;
+            self.end_preload_started_at = None;
+            if let Some(output) = self.output.as_mut() {
+                output.pause()?;
+            }
             self.rendering = false;
             self.output = None;
             self.desired_playing = false;
@@ -1324,17 +1454,13 @@ impl PlaybackWorker {
         let next_spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         let format_changed = self.spec != Some(next_spec);
-        if format_changed {
+        if format_changed || self.output.is_none() {
             if let Some(output) = self.output.as_mut() {
                 output.reset()?;
             }
-            self.output = Some(PlatformOutput::open_device_with_mode(
-                next_spec,
-                self.selected_device_id.as_deref(),
-                self.exclusive_mode,
-            )?);
-
-            self.rendering = false;
+            // Release the previous exclusive handle before opening a new format.
+            self.output = None;
+            self.open_output(next_spec)?;
         }
 
         let audio_quality = self.install_prepared(prepared)?;
@@ -1342,13 +1468,18 @@ impl PlaybackWorker {
         self.position_base = 0.0;
         self.rendered_frames = 0;
         let event_source = source.clone();
+        // A gapless handoff leaves the device running. Publishing a paused
+        // snapshot here makes the new track appear stopped even though audio
+        // is still queued. A reopened stream is buffering, not user-paused,
+        // even when its configured resync delay is zero.
+        let is_playing = self.desired_playing && self.rendering && !self.resync.is_active();
         update_status(&self.status, |status| {
             status.current_source = Some(source);
             status.current_time = 0.0;
             status.audio_quality = Some(audio_quality);
             status.duration = duration;
-            status.is_playing = false;
-            status.buffering = false;
+            status.is_playing = is_playing;
+            status.buffering = self.desired_playing && !is_playing;
             status.ended = false;
             status.error = None;
         });
@@ -1383,6 +1514,8 @@ impl PlaybackWorker {
         self.decoder = stream;
         self.spec = Some(spec);
         self.decoder_ended = decoder_ended;
+        self.end_preload_started_at = None;
+        self.output_drain_deadline = None;
         Ok(audio_quality)
     }
 
@@ -1473,6 +1606,12 @@ impl PlaybackWorker {
         if let Some(output) = self.output.as_mut() {
             let _ = output.reset();
         }
+        if self.resync.is_active() {
+            if let Some(spec) = self.spec {
+                self.resync =
+                    ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
+            }
+        }
         self.rendering = false;
         self.decoder = None;
         self.pcm.clear();
@@ -1494,11 +1633,7 @@ impl PlaybackWorker {
                     }
                     let audio_quality = self.install_prepared(prepared)?;
                     if self.output.is_none() {
-                        self.output = Some(PlatformOutput::open_device_with_mode(
-                            spec,
-                            self.selected_device_id.as_deref(),
-                            self.exclusive_mode,
-                        )?);
+                        self.open_output(spec)?;
                     }
                     self.position_base = position_seconds;
                     self.rendered_frames = 0;
@@ -1522,6 +1657,8 @@ impl PlaybackWorker {
     }
 
     fn reset_gain_buffer(&mut self) {
+        self.end_preload_started_at = None;
+        self.output_drain_deadline = None;
         self.gain_buffer.clear();
         self.gain_buffer_offset = 0;
         self.gain.settle();
@@ -1539,9 +1676,20 @@ fn prepare_source(source: String, preload: bool) -> Result<PreparedSource, Strin
 }
 
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {
-    prepare_source_with_buffer(source, position_seconds, false)
+    prepare_source_at_with_timeout(source, position_seconds, AUDIO_PREPARE_TIMEOUT)
 }
 
+fn prepare_source_at_with_timeout(
+    source: String,
+    position_seconds: f64,
+    timeout: Duration,
+) -> Result<PreparedSource, String> {
+    // Keep slow decoding/network reads off the playback worker and bound the
+    // complete preparation, not just each individual HTTP retry.
+    QueuedSource::prepare_at(source, position_seconds, false)?.wait_for_preparation(timeout)
+}
+
+#[cfg(test)]
 fn prepare_source_with_buffer(
     source: String,
     position_seconds: f64,
@@ -1637,6 +1785,10 @@ mod tests {
     use super::{StreamSpec, max_buffer_samples, prebuffer_samples, valid_position};
 
     fn prepared_test_audio(name: &str) -> (String, super::PreparedSource) {
+        prepared_test_audio_at_rate(name, 44100)
+    }
+
+    fn prepared_test_audio_at_rate(name: &str, rate: u32) -> (String, super::PreparedSource) {
         use super::*;
         let path = std::env::temp_dir().join(format!("ambra-{name}-{}.wav", std::process::id()));
         let mut wav = b"RIFF".to_vec();
@@ -1645,8 +1797,8 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
         wav.extend_from_slice(&1u16.to_le_bytes());
         wav.extend_from_slice(&2u16.to_le_bytes());
-        wav.extend_from_slice(&44100u32.to_le_bytes());
-        wav.extend_from_slice(&176400u32.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * 4).to_le_bytes());
         wav.extend_from_slice(&4u16.to_le_bytes());
         wav.extend_from_slice(&16u16.to_le_bytes());
         wav.extend_from_slice(b"data");
@@ -1657,6 +1809,293 @@ mod tests {
         let prepared = prepare_source(source.clone(), false).unwrap();
         std::fs::remove_file(path).unwrap();
         (source, prepared)
+    }
+
+    #[derive(Default)]
+    struct TestOutputState {
+        samples: Vec<f64>,
+        started: bool,
+        stale_padding: usize,
+    }
+    struct TestOutput {
+        channels: usize,
+        state: std::sync::Arc<std::sync::Mutex<TestOutputState>>,
+    }
+    impl super::output::AudioOutput for TestOutput {
+        fn list_devices() -> Result<Vec<super::NativeAudioDevice>, String> {
+            Ok(vec![])
+        }
+        fn open(spec: StreamSpec) -> Result<Self, String> {
+            Ok(Self {
+                channels: spec.channels,
+                state: Default::default(),
+            })
+        }
+        fn open_device_with_mode(
+            spec: StreamSpec,
+            _device: Option<&str>,
+            _exclusive: bool,
+        ) -> Result<Self, String> {
+            Self::open(spec)
+        }
+        fn start(&mut self) -> Result<(), String> {
+            self.state.lock().unwrap().started = true;
+            Ok(())
+        }
+        fn pause(&mut self) -> Result<(), String> {
+            self.state.lock().unwrap().started = false;
+            Ok(())
+        }
+        fn reset(&mut self) -> Result<(), String> {
+            self.pause()?;
+            self.state.lock().unwrap().stale_padding = 0;
+            Ok(())
+        }
+        fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String> {
+            let mut state = self.state.lock().unwrap();
+            if !state.started {
+                return Ok(0);
+            }
+            let frames = 7.min((first.len() + second.len()) / self.channels);
+            state
+                .samples
+                .extend(first.iter().chain(second).take(frames * self.channels));
+            Ok(frames)
+        }
+        fn queued_frames(&mut self) -> Result<usize, String> {
+            Ok(self.state.lock().unwrap().stale_padding)
+        }
+        fn is_drained(&mut self) -> Result<bool, String> {
+            Ok(self.queued_frames()? == 0)
+        }
+    }
+
+    fn test_worker(name: &str) -> super::PlaybackEngine<TestOutput> {
+        use super::*;
+        let (source, mut prepared) = prepared_test_audio(name);
+        prepared.pcm = VecDeque::from([0.25, -0.25]);
+        let spec = prepared.decoder.spec();
+        let (_tx, rx) = unbounded();
+        let mut worker = PlaybackEngine::<TestOutput>::new(
+            rx,
+            Arc::new(Mutex::new(PlaybackStatus::default())),
+            None,
+        );
+        worker.current_source = Some(source);
+        worker.install_prepared(prepared).unwrap();
+        worker.open_output(spec).unwrap();
+        worker.desired_playing = true;
+        worker
+    }
+
+    #[test]
+    fn convolution_tail_finishes_after_short_device_writes() {
+        use super::*;
+        let mut worker = test_worker("tail-short-writes");
+        let directory =
+            std::env::temp_dir().join(format!("ambra-tail-short-writes-{}", std::process::id()));
+        std::fs::create_dir_all(directory.join("dsp-impulses")).unwrap();
+        let path = dsp::impulse_path(&directory, "tail").unwrap();
+        let mut writer = hound::WavWriter::create(
+            &path,
+            hound::WavSpec {
+                channels: 1,
+                sample_rate: 44100,
+                bits_per_sample: 32,
+                sample_format: hound::SampleFormat::Float,
+            },
+        )
+        .unwrap();
+        for index in 0..2049 {
+            writer
+                .write_sample(if index == 0 { 1.0_f32 } else { 0.0 })
+                .unwrap();
+        }
+        writer.finalize().unwrap();
+        let preset = dsp::DspPreset {
+            id: "tail".into(),
+            name: "Tail".into(),
+            enabled: true,
+            headroom_db: 0.0,
+            output_gain_db: 0.0,
+            bands: vec![],
+            convolution: vec![dsp::ImpulseFile {
+                id: "tail".into(),
+                name: "tail.wav".into(),
+                sample_rate: 44100,
+                channels: 1,
+                frames: 2049,
+            }],
+        };
+        worker.dsp = Some(DspEngine::build(Some(&preset), 44100, 2, &directory).unwrap());
+        let log = worker.output.as_ref().unwrap().state.clone();
+        for _ in 0..1000 {
+            if lock_status(&worker.status).ended {
+                break;
+            }
+            worker.pump().unwrap();
+        }
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory.join("dsp-impulses")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+        assert!(
+            lock_status(&worker.status).ended,
+            "convolution tail never ended"
+        );
+        assert_eq!(log.lock().unwrap().samples.len(), (1 + 2048) * 2);
+    }
+
+    #[test]
+    fn queued_song_is_promoted_to_foreground_when_current_song_ends() {
+        use super::*;
+        let mut worker = test_worker("end-preload");
+        let (_sender, receiver) = bounded(1);
+        let foreground = Arc::new(AtomicBool::new(false));
+        worker.next_source = Some(QueuedSource {
+            source: "next.flac".into(),
+            receiver,
+            foreground: foreground.clone(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        });
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert!(foreground.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn stalled_preload_publishes_end_instead_of_buffering_forever() {
+        use super::*;
+        let mut worker = test_worker("stalled-preload");
+        let (_sender, receiver) = bounded(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        worker.next_source = Some(QueuedSource {
+            source: "next.flac".into(),
+            receiver,
+            foreground: Arc::new(AtomicBool::new(false)),
+            cancelled: cancelled.clone(),
+        });
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert!(lock_status(&worker.status).buffering);
+        worker.end_preload_started_at =
+            Some(Instant::now() - END_PRELOAD_TIMEOUT - Duration::from_millis(1));
+        worker.pump().unwrap();
+        assert!(lock_status(&worker.status).ended);
+        assert!(!lock_status(&worker.status).buffering);
+        assert!(cancelled.load(Ordering::Acquire));
+        assert!(worker.output.is_none());
+        assert!(!worker.desired_playing);
+    }
+
+    #[test]
+    fn full_playback_loop_keeps_same_format_gapless_and_finishes_last_song() {
+        use super::*;
+        let mut worker = test_worker("gapless-loop");
+        worker.audio_settings.outputs[0].resync_delay_ms = 1000;
+        let (source, mut next) = prepared_test_audio("gapless-loop-next");
+        next.pcm = VecDeque::from([0.5, -0.5]);
+        let log = worker.output.as_ref().unwrap().state.clone();
+        worker.ready_next = Some((source.clone(), next));
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert_eq!(worker.current_source.as_deref(), Some(source.as_str()));
+        assert!(!worker.resync.is_active());
+        assert!(lock_status(&worker.status).is_playing);
+        assert!(!lock_status(&worker.status).buffering);
+        assert!(Arc::ptr_eq(&log, &worker.output.as_ref().unwrap().state));
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert!(lock_status(&worker.status).ended);
+        assert_eq!(log.lock().unwrap().samples, [0.25, -0.25, 0.5, -0.5]);
+    }
+
+    #[test]
+    fn format_change_queues_only_the_configured_silence_then_song_and_end() {
+        use super::*;
+        let mut worker = test_worker("format-loop");
+        worker.audio_settings.outputs[0].resync_delay_ms = 1;
+        let (source, mut next) = prepared_test_audio_at_rate("format-loop-next", 48000);
+        next.pcm = VecDeque::from([0.5, -0.5]);
+        worker.ready_next = Some((source.clone(), next));
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert_eq!(worker.current_source.as_deref(), Some(source.as_str()));
+        assert!(worker.resync.is_active());
+        let log = worker.output.as_ref().unwrap().state.clone();
+        for _ in 0..20 {
+            if lock_status(&worker.status).ended {
+                break;
+            }
+            worker.pump().unwrap();
+        }
+        assert!(lock_status(&worker.status).ended);
+        let state = log.lock().unwrap();
+        assert_eq!(state.samples.len(), 48 * 2 + 2);
+        assert!(state.samples[..96].iter().all(|sample| *sample == 0.0));
+        assert_eq!(&state.samples[96..], [0.5, -0.5]);
+    }
+
+    #[test]
+    fn zero_delay_format_change_reports_buffering_not_paused_until_audio_starts() {
+        use super::*;
+        let mut worker = test_worker("zero-delay-status");
+        let (source, next) = prepared_test_audio_at_rate("zero-delay-status-next", 48000);
+        worker.ready_next = Some((source.clone(), next));
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert_eq!(worker.current_source.as_deref(), Some(source.as_str()));
+        assert!(!worker.resync.is_active());
+        assert!(!lock_status(&worker.status).is_playing);
+        assert!(lock_status(&worker.status).buffering);
+        assert!(worker.desired_playing);
+        worker.pump().unwrap();
+        assert!(lock_status(&worker.status).is_playing);
+        assert!(!lock_status(&worker.status).buffering);
+    }
+
+    #[test]
+    fn stale_device_padding_cannot_trap_end_of_queue() {
+        use super::*;
+        let mut worker = test_worker("stale-padding-last");
+        worker
+            .output
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .stale_padding = 64;
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        assert!(!lock_status(&worker.status).ended);
+        assert!(worker.output_drain_deadline.is_some());
+        worker.output_drain_deadline = Some(Instant::now() - Duration::from_millis(1));
+        worker.pump().unwrap();
+        assert!(lock_status(&worker.status).ended);
+        assert!(worker.output.is_none());
+    }
+
+    #[test]
+    fn format_switch_recovers_when_previous_device_never_reports_drained() {
+        use super::*;
+        let mut worker = test_worker("stale-padding-switch");
+        worker
+            .output
+            .as_ref()
+            .unwrap()
+            .state
+            .lock()
+            .unwrap()
+            .stale_padding = 64;
+        let (source, next) = prepared_test_audio_at_rate("stale-padding-switch-next", 48000);
+        worker.ready_next = Some((source.clone(), next));
+        worker.pump().unwrap();
+        worker.pump().unwrap();
+        worker.output_drain_deadline = Some(Instant::now() - Duration::from_millis(1));
+        worker.pump().unwrap();
+        assert_eq!(worker.current_source.as_deref(), Some(source.as_str()));
+        assert!(worker.output.is_some());
+        assert!(worker.output_drain_deadline.is_none());
     }
 
     #[test]
@@ -1800,6 +2239,45 @@ mod tests {
     }
 
     #[test]
+    fn stalled_foreground_preparation_is_bounded_and_cancelled() {
+        use super::*;
+        let (_sender, receiver) = bounded(1);
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let queued = QueuedSource {
+            source: "stalled.flac".into(),
+            receiver,
+            foreground: Arc::new(AtomicBool::new(false)),
+            cancelled: cancelled.clone(),
+        };
+        let error = queued
+            .wait_for_preparation(Duration::from_millis(1))
+            .err()
+            .unwrap();
+        assert!(error.contains("Audio loading timed out"));
+        assert!(queued.foreground.load(Ordering::Acquire));
+        assert!(cancelled.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn foreground_preparation_preserves_service_errors_without_waiting() {
+        use super::*;
+        let (sender, receiver) = bounded(1);
+        sender
+            .send(Err(
+                "Tidal is not connected. Sign in from the Library services menu.".into(),
+            ))
+            .unwrap();
+        let queued = QueuedSource {
+            source: "unavailable.flac".into(),
+            receiver,
+            foreground: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        };
+        let error = queued.wait_for_preparation(Duration::ZERO).err().unwrap();
+        assert!(error.contains("Tidal is not connected"));
+    }
+
+    #[test]
     fn selecting_prepared_audio_does_not_reopen_its_source() {
         use super::*;
         let path = std::env::temp_dir().join(format!("ambra-prepared-{}.wav", std::process::id()));
@@ -1880,6 +2358,48 @@ mod tests {
         assert!(valid_position(f64::NAN).is_err());
         assert!(valid_position(f64::INFINITY).is_err());
         assert_eq!(valid_position(-2.0).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn same_format_gapless_advance_never_arms_resync_or_consumes_song_samples() {
+        use super::*;
+        let (source, prepared) = prepared_test_audio("gapless-resync");
+        let spec = prepared.decoder.spec();
+        let samples = prepared.pcm.clone();
+        let (_tx, rx) = unbounded();
+        let mut worker = PlaybackEngine::<TestOutput>::new(
+            rx,
+            Arc::new(Mutex::new(PlaybackStatus::default())),
+            None,
+        );
+        worker.audio_settings.outputs[0].resync_delay_ms = 2000;
+        worker.spec = Some(spec);
+        worker.output = Some(TestOutput::open(spec).unwrap());
+        worker.output.as_mut().unwrap().start().unwrap();
+        worker.rendering = true;
+        worker.advance(source, prepared).unwrap();
+        assert!(!worker.resync.is_active());
+        assert!(worker.rendering);
+        assert_eq!(worker.pcm, samples);
+        assert_eq!(worker.rendered_frames, 0);
+        assert!(!lock_status(&worker.status).buffering);
+    }
+
+    #[test]
+    fn editing_resync_delay_does_not_interrupt_playback_or_replace_dsp() {
+        use super::*;
+        let (_tx, rx) = unbounded();
+        let mut worker =
+            PlaybackWorker::new(rx, Arc::new(Mutex::new(PlaybackStatus::default())), None);
+        worker.rendering = true;
+        worker.rendered_frames = 12345;
+        let mut settings = worker.audio_settings.clone();
+        settings.outputs[0].resync_delay_ms = 1250;
+        worker.apply_audio_settings(settings).unwrap();
+        assert!(worker.rendering);
+        assert_eq!(worker.rendered_frames, 12345);
+        assert!(!worker.resync.is_active());
+        assert_eq!(worker.audio_settings.selected().resync_delay_ms, 1250);
     }
 
     #[test]

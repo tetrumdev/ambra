@@ -3,7 +3,10 @@ use std::{
     env, fs,
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime},
 };
 
@@ -31,6 +34,7 @@ const DEFAULT_OAUTH_PORT: u16 = 8898;
 const AUDIO_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const OAUTH_REFRESH_MARGIN: Duration = Duration::from_secs(60);
 const SESSION_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const OAUTH_TOKEN_ENDPOINT: &str = "https://accounts.spotify.com/api/token";
 const SEARCH_ENDPOINT: &str = "https://api-partner.spotify.com/pathfinder/v2/query";
 const SEARCH_OPERATION: &str = "findTracks";
 const SEARCH_QUERY_HASH: &str = "903df2a65d8121e27d73a2be03c01e88ebe6021bb6d4eb82a389e35d87e51d27";
@@ -44,6 +48,7 @@ pub struct SpotifyProvider {
     session: Session,
     http_client: reqwest::Client,
     search_auth: Arc<Mutex<SpotifySearchAuth>>,
+    connected: Arc<AtomicBool>,
     oauth_refresh_path: Arc<PathBuf>,
     oauth_client_id: Arc<String>,
     quality: SpotifyQuality,
@@ -60,6 +65,15 @@ enum SpotifySearchAuth {
 #[derive(Deserialize, Serialize)]
 struct SavedSpotifyOAuth {
     refresh_token: String,
+}
+
+#[derive(Deserialize)]
+struct SpotifyOAuthResponse {
+    access_token: String,
+    refresh_token: Option<String>,
+    expires_in: u64,
+    token_type: String,
+    scope: Option<String>,
 }
 
 pub struct PreparedSpotifyStream {
@@ -134,18 +148,28 @@ impl SpotifyProvider {
             ap_port: Some(443),
             ..SessionConfig::default()
         };
+        let http_client = crate::http_client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(20))
+            .build()?;
         let (credentials, search_auth) = if let Some(token) = environment_access_token {
             (
                 Credentials::with_access_token(token.clone()),
                 SpotifySearchAuth::Static(token),
             )
         } else if let Some(refresh_token) = load_spotify_refresh_token(&oauth_refresh_path) {
-            let mut token = spotify_oauth_client(&session_config.client_id, false)?
-                .refresh_token_async(&refresh_token)
-                .await?;
-            if token.refresh_token.is_empty() {
-                token.refresh_token = refresh_token;
-            }
+            let token = match refresh_oauth_token(
+                &http_client,
+                OAUTH_TOKEN_ENDPOINT,
+                &session_config.client_id,
+                &refresh_token,
+            )
+            .await
+            {
+                Ok(token) => token,
+                Err(_) if interactive => interactive_oauth_token(&session_config).await?,
+                Err(error) => return Err(error),
+            };
             save_spotify_refresh_token(&oauth_refresh_path, &token.refresh_token)?;
             (
                 Credentials::with_access_token(token.access_token.clone()),
@@ -182,8 +206,9 @@ impl SpotifyProvider {
 
         Ok(Some(Self {
             session,
-            http_client: crate::http_client::builder().build()?,
+            http_client,
             search_auth: Arc::new(Mutex::new(search_auth)),
+            connected: Arc::new(AtomicBool::new(true)),
             oauth_refresh_path: Arc::new(oauth_refresh_path),
             oauth_client_id: Arc::new(oauth_client_id),
             quality: configured_quality(),
@@ -193,7 +218,19 @@ impl SpotifyProvider {
         }))
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Acquire)
+    }
+
+    /// Refresh expired credentials when showing service status. Transient network
+    /// failures do not disconnect an account; a rejected sign-in does.
+    pub async fn check_connection(&self) -> bool {
+        let _ = self.access_token(None).await;
+        self.is_connected()
+    }
+
     pub async fn album_track_ids(&self, album_id: &str) -> ProviderResult<Vec<String>> {
+        self.access_token(None).await?;
         let album_uri = spotify_uri("album", album_id)?;
         let album = Album::get(&self.session, &album_uri).await?;
         album
@@ -206,6 +243,7 @@ impl SpotifyProvider {
         &self,
         artist_id: &str,
     ) -> ProviderResult<crate::models::CatalogArtist> {
+        self.access_token(None).await?;
         let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
         Ok(crate::models::CatalogArtist {
             id: format!("spotify:{}", artist.id.to_id()?),
@@ -220,6 +258,7 @@ impl SpotifyProvider {
         artist_id: &str,
     ) -> ProviderResult<crate::models::ArtistProfileMetadata> {
         use crate::models::{ArtistProfileMetadata, CatalogArtist};
+        self.access_token(None).await?;
         let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
         Ok(ArtistProfileMetadata {
             artist: CatalogArtist {
@@ -248,6 +287,7 @@ impl SpotifyProvider {
         limit: u32,
     ) -> ProviderResult<crate::models::CatalogAlbumsPage> {
         use crate::models::{CatalogAlbum, CatalogAlbumsPage, search_next_offset};
+        self.access_token(None).await?;
         let artist = Artist::get(&self.session, &spotify_uri("artist", artist_id)?).await?;
         let ids: Vec<_> = artist
             .albums_current()
@@ -301,7 +341,7 @@ impl SpotifyProvider {
             return Ok(Vec::new());
         }
 
-        let access_token = self.search_access_token().await?;
+        let mut access_token = self.access_token(None).await?;
         let client_token = self.session.spclient().client_token().await?;
         let mut track_ids = Vec::new();
         let mut page_offset = offset;
@@ -311,28 +351,32 @@ impl SpotifyProvider {
         while track_ids.len() < limit && pages < 5 {
             pages += 1;
             let page_limit = (limit - track_ids.len()).min(SEARCH_PAGE_SIZE);
-            let response = self
-                .http_client
-                .post(SEARCH_ENDPOINT)
-                .bearer_auth(&access_token)
-                .header("client-token", &client_token)
-                .header("app-platform", "WebPlayer")
-                .json(&serde_json::json!({
-                    "operationName": SEARCH_OPERATION,
-                    "variables": {
-                        "query": query.trim(),
-                        "limit": page_limit,
-                        "offset": page_offset,
-                    },
-                    "extensions": {
-                        "persistedQuery": {
-                            "version": 1,
-                            "sha256Hash": SEARCH_QUERY_HASH,
+            let request = || {
+                self.http_client
+                    .post(SEARCH_ENDPOINT)
+                    .header("client-token", &client_token)
+                    .header("app-platform", "WebPlayer")
+                    .json(&serde_json::json!({
+                        "operationName": SEARCH_OPERATION,
+                        "variables": {
+                            "query": query.trim(),
+                            "limit": page_limit,
+                            "offset": page_offset,
+                        },
+                        "extensions": {
+                            "persistedQuery": {
+                                "version": 1,
+                                "sha256Hash": SEARCH_QUERY_HASH,
+                            }
                         }
-                    }
-                }))
-                .send()
-                .await?
+                    }))
+            };
+            let mut response = request().bearer_auth(&access_token).send().await?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                access_token = self.access_token(Some(&access_token)).await?;
+                response = request().bearer_auth(&access_token).send().await?;
+            }
+            let response = response
                 .error_for_status()?
                 .json::<serde_json::Value>()
                 .await?;
@@ -373,26 +417,57 @@ impl SpotifyProvider {
         Ok(track_ids.into_iter().take(limit).collect())
     }
 
-    async fn search_access_token(&self) -> ProviderResult<String> {
-        let refresh_token = {
-            let auth = self.search_auth.lock().await;
-            match &*auth {
-                SpotifySearchAuth::Static(access_token) => return Ok(access_token.clone()),
-                SpotifySearchAuth::Refreshable(token)
-                    if token.expires_at > Instant::now() + OAUTH_REFRESH_MARGIN =>
-                {
-                    return Ok(token.access_token.clone());
+    // Seed librespot before every operation that can use spclient. Otherwise its
+    // expired cache falls back to login5's stored-credential exchange, which can
+    // reject a session established with OAuth. Keep the lock through refresh so
+    // concurrent search/playback requests cannot rotate the same token twice.
+    async fn access_token(&self, rejected_token: Option<&str>) -> ProviderResult<String> {
+        self.access_token_from(OAUTH_TOKEN_ENDPOINT, rejected_token)
+            .await
+    }
+
+    async fn access_token_from(
+        &self,
+        endpoint: &str,
+        rejected_token: Option<&str>,
+    ) -> ProviderResult<String> {
+        let mut auth = self.search_auth.lock().await;
+        if !self.is_connected() {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied,
+                "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from My Library.").into());
+        }
+        let refresh_token = match &*auth {
+            SpotifySearchAuth::Static(access_token) => {
+                if rejected_token == Some(access_token.as_str()) {
+                    self.connected.store(false, Ordering::Release);
+                    return Err(io::Error::other("Spotify access token was rejected. Replace AMBRA_SPOTIFY_ACCESS_TOKEN or reconnect Spotify from My Library.").into());
                 }
-                SpotifySearchAuth::Refreshable(token) => token.refresh_token.clone(),
+                return Ok(access_token.clone());
             }
+            SpotifySearchAuth::Refreshable(token)
+                if token.expires_at > Instant::now() + OAUTH_REFRESH_MARGIN
+                    && rejected_token != Some(token.access_token.as_str()) =>
+            {
+                return Ok(token.access_token.clone());
+            }
+            SpotifySearchAuth::Refreshable(token) => token.refresh_token.clone(),
         };
 
-        let mut refreshed = spotify_oauth_client(&self.oauth_client_id, false)?
-            .refresh_token_async(&refresh_token)
-            .await?;
-        if refreshed.refresh_token.is_empty() {
-            refreshed.refresh_token = refresh_token;
-        }
+        let refreshed = refresh_oauth_token(
+            &self.http_client,
+            endpoint,
+            &self.oauth_client_id,
+            &refresh_token,
+        )
+        .await
+        .inspect_err(|error| {
+            if error
+                .downcast_ref::<io::Error>()
+                .is_some_and(|error| error.kind() == io::ErrorKind::PermissionDenied)
+            {
+                self.connected.store(false, Ordering::Release);
+            }
+        })?;
         save_spotify_refresh_token(&self.oauth_refresh_path, &refreshed.refresh_token)?;
         let access_token = refreshed.access_token.clone();
         self.session
@@ -400,7 +475,7 @@ impl SpotifyProvider {
             .set_auth_token(librespot_token_for_search(&SpotifySearchAuth::Refreshable(
                 refreshed.clone(),
             )));
-        *self.search_auth.lock().await = SpotifySearchAuth::Refreshable(refreshed);
+        *auth = SpotifySearchAuth::Refreshable(refreshed);
         Ok(access_token)
     }
 
@@ -486,6 +561,7 @@ impl SpotifyProvider {
     }
 
     pub async fn prepare_stream(&self, track_id: &str) -> ProviderResult<PreparedSpotifyStream> {
+        self.access_token(None).await?;
         let track = self.track(track_id).await?;
         let playable_track = self.playable_track(&track).await?;
         let (format, file_id) = self
@@ -533,6 +609,7 @@ impl SpotifyProvider {
             return Ok(track);
         }
 
+        self.access_token(None).await?;
         let uri = spotify_uri("track", track_id)?;
         let track = Track::get(&self.session, &uri).await?;
         self.tracks
@@ -639,6 +716,53 @@ impl PreparedSpotifyStream {
 async fn interactive_oauth_token(config: &SessionConfig) -> ProviderResult<OAuthToken> {
     let client = spotify_oauth_client(&config.client_id, true)?;
     Ok(tokio::task::spawn_blocking(move || client.get_access_token()).await??)
+}
+
+async fn refresh_oauth_token(
+    client: &reqwest::Client,
+    endpoint: &str,
+    client_id: &str,
+    refresh_token: &str,
+) -> ProviderResult<OAuthToken> {
+    let response = client
+        .post(endpoint)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", client_id),
+        ])
+        .send()
+        .await?;
+    if matches!(response.status().as_u16(), 400 | 401) {
+        // Do not include OAuth response bodies: they can contain credentials.
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from My Library.",
+        )
+        .into());
+    }
+    let token = response
+        .error_for_status()?
+        .json::<SpotifyOAuthResponse>()
+        .await?;
+    if token.access_token.is_empty() || token.expires_in == 0 {
+        return Err(io::Error::other("Spotify returned an empty or expired OAuth token").into());
+    }
+    Ok(OAuthToken {
+        access_token: token.access_token,
+        refresh_token: token
+            .refresh_token
+            .and_then(|value| nonempty(&value))
+            .unwrap_or_else(|| refresh_token.to_owned()),
+        expires_at: Instant::now()
+            .checked_add(Duration::from_secs(token.expires_in))
+            .ok_or_else(|| io::Error::other("Spotify returned an invalid token lifetime"))?,
+        token_type: token.token_type,
+        scopes: token
+            .scope
+            .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
+            .unwrap_or_else(|| vec!["streaming".to_owned(), "user-read-private".to_owned()]),
+    })
 }
 
 fn spotify_oauth_client(client_id: &str, open_in_browser: bool) -> ProviderResult<OAuthClient> {
@@ -890,15 +1014,16 @@ fn save_spotify_refresh_token(path: &Path, refresh_token: &str) -> ProviderResul
     file.write_all(&serde_json::to_vec(&SavedSpotifyOAuth {
         refresh_token: refresh_token.to_owned(),
     })?)?;
+    drop(file);
     fs::rename(temporary_path, path)?;
     Ok(())
 }
 
-fn make_cache_private(path: &Path) -> io::Result<()> {
+fn make_cache_private(_path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
 }
@@ -932,14 +1057,227 @@ fn save_track_metadata_cache(
     }
     let mut file = options.open(&temporary_path)?;
     file.write_all(&serde_json::to_vec(cache)?)?;
+    drop(file);
     fs::rename(temporary_path, path)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_quality, spotify_track_ids_from_search, validate_spotify_id};
+    use super::*;
     use librespot_metadata::audio::AudioFileFormat;
+
+    struct TestProvider(SpotifyProvider);
+
+    impl TestProvider {
+        fn new(expired: bool) -> Self {
+            let directory = env::temp_dir().join(format!(
+                "ambra-spotify-test-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir(&directory).unwrap();
+            let path = directory.join("oauth.json");
+            save_spotify_refresh_token(&path, "old-refresh").unwrap();
+            let session = Session::new(SessionConfig::default(), None);
+            session.set_auth_data(&[1]);
+            Self(SpotifyProvider {
+                session,
+                http_client: reqwest::Client::builder()
+                    .timeout(Duration::from_secs(2))
+                    .build()
+                    .unwrap(),
+                search_auth: Arc::new(Mutex::new(SpotifySearchAuth::Refreshable(OAuthToken {
+                    access_token: "test-old-access".to_owned(),
+                    refresh_token: "old-refresh".to_owned(),
+                    expires_at: Instant::now()
+                        + if expired {
+                            Duration::ZERO
+                        } else {
+                            Duration::from_secs(3600)
+                        },
+                    token_type: "Bearer".to_owned(),
+                    scopes: vec!["streaming".to_owned()],
+                }))),
+                connected: Arc::new(AtomicBool::new(true)),
+                oauth_refresh_path: Arc::new(path),
+                oauth_client_id: Arc::new("test-client".to_owned()),
+                quality: SpotifyQuality::Kbps320,
+                tracks: Arc::new(Mutex::new(HashMap::new())),
+                track_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
+                track_metadata_cache_path: Arc::new(directory.join("metadata.json")),
+            })
+        }
+    }
+
+    impl Drop for TestProvider {
+        fn drop(&mut self) {
+            let _ = fs::remove_file(self.0.oauth_refresh_path.as_ref());
+            let _ = fs::remove_dir(self.0.oauth_refresh_path.parent().unwrap());
+        }
+    }
+
+    async fn oauth_server(
+        status: axum::http::StatusCode,
+        body: serde_json::Value,
+    ) -> (
+        String,
+        Arc<std::sync::atomic::AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = calls.clone();
+        let app = axum::Router::new().route(
+            "/token",
+            axum::routing::post(
+                move |axum::Form(form): axum::Form<HashMap<String, String>>| {
+                    let count = count.clone();
+                    let body = body.clone();
+                    async move {
+                        assert_eq!(
+                            form.get("grant_type").map(String::as_str),
+                            Some("refresh_token")
+                        );
+                        assert_eq!(
+                            form.get("refresh_token").map(String::as_str),
+                            Some("old-refresh")
+                        );
+                        count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        (status, axum::Json(body))
+                    }
+                },
+            ),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}/token", listener.local_addr().unwrap());
+        let task = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (endpoint, calls, task)
+    }
+
+    async fn assert_refresh_coalesces(expired: bool, rejected: Option<&str>) {
+        let fixture = TestProvider::new(expired);
+        let (endpoint, calls, server) = oauth_server(
+            axum::http::StatusCode::OK,
+            serde_json::json!({
+                "access_token": "test-new-access", "refresh_token": "new-refresh",
+                "expires_in": 3600, "token_type": "Bearer", "scope": "streaming user-read-private",
+            }),
+        )
+        .await;
+        let (first, second) = tokio::join!(
+            fixture.0.access_token_from(&endpoint, rejected),
+            fixture.0.access_token_from(&endpoint, rejected),
+        );
+        assert_eq!(first.unwrap(), "test-new-access");
+        assert_eq!(second.unwrap(), "test-new-access");
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            load_spotify_refresh_token(&fixture.0.oauth_refresh_path).as_deref(),
+            Some("new-refresh")
+        );
+        // Playback/metadata use this same librespot cache, without a login5 request.
+        let seeded = fixture.0.session.login5().auth_token().await.unwrap();
+        assert_eq!(seeded.access_token, "test-new-access");
+        assert!(!seeded.is_expired());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn expired_token_refreshes_once_and_seeds_playback() {
+        assert_refresh_coalesces(true, None).await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_unauthorized_responses_only_refresh_the_rejected_token_once() {
+        assert_refresh_coalesces(false, Some("test-old-access")).await;
+    }
+
+    #[tokio::test]
+    async fn refresh_preserves_saved_token_when_spotify_does_not_rotate_it() {
+        let fixture = TestProvider::new(true);
+        let (endpoint, _, server) = oauth_server(
+            axum::http::StatusCode::OK,
+            serde_json::json!({
+                "access_token": "test-new-access", "expires_in": 3600, "token_type": "Bearer",
+            }),
+        )
+        .await;
+        fixture.0.access_token_from(&endpoint, None).await.unwrap();
+        assert_eq!(
+            load_spotify_refresh_token(&fixture.0.oauth_refresh_path).as_deref(),
+            Some("old-refresh")
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn revoked_login_gives_reconnect_instructions_without_response_credentials() {
+        let fixture = TestProvider::new(true);
+        let (endpoint, calls, server) = oauth_server(axum::http::StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "invalid_grant", "error_description": "test-secret-do-not-log"})).await;
+        let error = fixture
+            .0
+            .access_token_from(&endpoint, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Reconnect Spotify from My Library"));
+        assert!(!error.contains("test-secret-do-not-log"));
+        assert!(!fixture.0.is_connected());
+        assert!(!fixture.0.clone().check_connection().await);
+        assert!(fixture.0.access_token_from(&endpoint, None).await.is_err());
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            load_spotify_refresh_token(&fixture.0.oauth_refresh_path).as_deref(),
+            Some("old-refresh")
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn temporary_refresh_failure_does_not_disconnect_account() {
+        let fixture = TestProvider::new(true);
+        let (endpoint, _, server) = oauth_server(
+            axum::http::StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({"error": "temporarily_unavailable"}),
+        )
+        .await;
+        assert!(fixture.0.access_token_from(&endpoint, None).await.is_err());
+        assert!(fixture.0.is_connected());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn replacing_a_revoked_connection_restores_access_without_server_restart() {
+        let old = TestProvider::new(true);
+        let replacement = TestProvider::new(false);
+        let slot = std::sync::RwLock::new(Some(old.0.clone()));
+        let (endpoint, _, server) = oauth_server(
+            axum::http::StatusCode::BAD_REQUEST,
+            serde_json::json!({"error": "invalid_grant"}),
+        )
+        .await;
+        assert!(old.0.access_token_from(&endpoint, None).await.is_err());
+        assert!(!slot.read().unwrap().as_ref().unwrap().is_connected());
+        *slot.write().unwrap() = Some(replacement.0.clone());
+        let reconnected = slot.read().unwrap().as_ref().unwrap().clone();
+        assert!(reconnected.check_connection().await);
+        assert_eq!(
+            reconnected
+                .access_token_from(&endpoint, None)
+                .await
+                .unwrap(),
+            "test-old-access"
+        );
+        assert!(!old.0.is_connected());
+        server.abort();
+    }
 
     #[test]
     fn validates_base62_spotify_ids() {

@@ -11,6 +11,7 @@ type FluidGradientBackgroundProps = {
   coverId: string;
   seed: string;
   active: boolean;
+  animate?: boolean;
 };
 
 const COLOR_TRANSITION_MS = 1800;
@@ -198,6 +199,7 @@ export function FluidGradientBackground({
   coverId,
   seed,
   active,
+  animate = true,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteKey = [
@@ -215,6 +217,7 @@ export function FluidGradientBackground({
   const drawRef = useRef<((now: number) => void) | null>(null);
   const animationFrameRef = useRef(0);
   const activeRef = useRef(active);
+  const animateRef = useRef(animate);
   const reducedMotionRef = useRef(false);
   const [contextVersion, setContextVersion] = useState(0);
 
@@ -232,12 +235,13 @@ export function FluidGradientBackground({
 
   useEffect(() => {
     activeRef.current = active;
+    animateRef.current = animate;
     cancelAnimationFrame(animationFrameRef.current);
     animationFrameRef.current = 0;
     if (drawRef.current) {
       animationFrameRef.current = requestAnimationFrame(drawRef.current);
     }
-  }, [active]);
+  }, [active, animate]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -382,7 +386,7 @@ export function FluidGradientBackground({
       if (document.hidden || gl.isContextLost()) return;
       if (
         now - lastDrawnAt < MIN_FRAME_INTERVAL_MS
-        && !reducedMotionRef.current
+        && animateRef.current
         && activeRef.current
       ) {
         animationFrameRef.current = requestAnimationFrame(draw);
@@ -403,9 +407,11 @@ export function FluidGradientBackground({
       gl.uniform4fv(shaderEdgeLuma, palette.slice(16, 20));
       gl.uniform4fv(shaderEdgeDirection, palette.slice(20, 24));
       gl.uniform2f(resolution, width, height);
-      gl.uniform1f(time, reducedMotionRef.current ? 0 : (now - startedAt) / 1000);
+      // Swirl motion has its own app preference. Windows can disable UI
+      // transitions without disabling this explicitly selected background.
+      gl.uniform1f(time, animateRef.current ? (now - startedAt) / 1000 : 0);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (!reducedMotionRef.current && activeRef.current) {
+      if (animateRef.current && activeRef.current) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };

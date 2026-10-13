@@ -46,6 +46,7 @@ type AudioPlayer = {
   clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
+  playbackError: string | null;
   isSessionRestored: boolean;
   togglePlayback: () => Promise<void>;
   previous: () => void;
@@ -112,6 +113,7 @@ export function useAudioPlayer(
   const setCurrentTime = clock.set;
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
   const [nativeQuality, setNativeQuality] = useState<{
     source: string;
@@ -172,6 +174,7 @@ export function useAudioPlayer(
 
   const clearPlayback = useCallback(() => {
     setNativeQuality(null);
+    setPlaybackError(null);
     restoreStartedRef.current = true;
     nativeLoadGenerationRef.current += 1;
     nativeReadyGenerationRef.current = null;
@@ -231,6 +234,7 @@ export function useAudioPlayer(
       setNativeQuality(null);
       nativeReadyGenerationRef.current = null;
       nativePlayIntentRef.current = autoplay;
+      setPlaybackError(null);
 
       void nativeCommandsRef.current.run("load_native_audio", {
         source: nativeAudioSource(track),
@@ -247,6 +251,7 @@ export function useAudioPlayer(
           if (nativeLoadGenerationRef.current !== loadGeneration) return;
           nativeReadyGenerationRef.current = loadGeneration;
           nativePlayIntentRef.current = false;
+          setPlaybackError(String(error));
           setIsPlaying(false);
           setIsSessionRestored(true);
           console.error("Could not load native audio:", error);
@@ -396,10 +401,14 @@ export function useAudioPlayer(
   const playActive = useCallback(() => {
     if (usesNativeAudio) {
       nativePlayIntentRef.current = true;
+      setPlaybackError(null);
       setIsPlaying(true);
-      void nativeCommandsRef.current.run("play_native_audio").catch((error) =>
-        console.warn("Could not play native audio:", error),
-      );
+      void nativeCommandsRef.current.run("play_native_audio").catch((error) => {
+        nativePlayIntentRef.current = false;
+        setIsPlaying(false);
+        setPlaybackError(String(error));
+        console.warn("Could not play native audio:", error);
+      });
       return;
     }
     requestDeckPlayback(activeDeckRef.current);
@@ -753,6 +762,8 @@ export function useAudioPlayer(
         if (playback.ended || playback.error) {
           nativePlayIntentRef.current = false;
         }
+        if (playback.error) setPlaybackError(playback.error);
+        else if (playback.isPlaying) setPlaybackError(null);
         // Keep the pause control active through a short rebuffer. The native
         // worker still intends to play and will resume by itself.
         setIsPlaying(
@@ -1016,6 +1027,7 @@ export function useAudioPlayer(
     clock,
     duration,
     isPlaying,
+    playbackError,
     isSessionRestored,
     togglePlayback,
     previous,
