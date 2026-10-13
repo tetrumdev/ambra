@@ -956,10 +956,25 @@ mod tests {
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .unwrap();
-                let mut request = [0; 4096];
-                let count = stream.read(&mut request).unwrap();
-                let request = String::from_utf8_lossy(&request[..count]);
-                let path = request.split_whitespace().nth(1).unwrap().to_owned();
+                let mut request = Vec::new();
+                let mut chunk = [0; 4096];
+                // TCP reads may split a request, and abandoned speculative
+                // connections aren't requests. Read the complete HTTP header.
+                while request.len() < 16_384 && !request.windows(4).any(|part| part == b"\r\n\r\n")
+                {
+                    let Ok(count) = stream.read(&mut chunk) else {
+                        break;
+                    };
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..count]);
+                }
+                let request = String::from_utf8_lossy(&request);
+                let Some(path) = request.split_whitespace().nth(1) else {
+                    continue;
+                };
+                let path = path.to_owned();
                 let playlist = format!(
                     "#EXTM3U\n#EXT-X-MAP:URI=\"init\"\n#EXTINF:{0},\nfirst\n#EXTINF:{0},\nsecond\n#EXTINF:{1},\nthird\n#EXT-X-ENDLIST\n",
                     179712.0 / 44100.0,
