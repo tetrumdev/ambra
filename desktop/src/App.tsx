@@ -19,6 +19,8 @@ import { SettingsSidebar, type SettingsTab } from "./components/SettingsSidebar"
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
+import { useStartupWindow } from "./hooks/useStartupWindow";
+import { useAudioSettings } from "./hooks/AudioSettingsContext";
 import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
@@ -176,6 +178,8 @@ function App() {
   // Subscribes coarsely: App rerenders every 5 s while playing, not every tick.
   const persistedPosition = usePlaybackTime(player.clock, time => player.isPlaying ? Math.floor(time / 5) * 5 : time);
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
+  const audioSettings = useAudioSettings();
+  useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
   const f11FullscreenRef = useRef(false);
   const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "queue">>(
     screen === "search" || screen === "settings" ? screen : "library",
@@ -321,6 +325,7 @@ function App() {
         }
       } catch (error) {
         console.error("Could not read fullscreen state:", error);
+        if (!disposed) setIsFullscreen(false);
       }
     };
 
