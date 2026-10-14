@@ -138,14 +138,6 @@ button img {
     }
 }
 
-#test {
-    width: 100px;
-    height: 100px;
-    position: absolute;
-    left: --clientX;
-    top: --clientY;
-}
-
 #library,
 #search,
 #settings,
