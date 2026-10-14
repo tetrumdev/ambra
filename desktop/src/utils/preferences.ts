@@ -1,7 +1,7 @@
 import type { SearchProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
-export type AppScreen = "bigscreen" | "library" | "search" | "queue" | "settings";
+export type AppScreen = "bigscreen" | "lyrics" | "library" | "search" | "queue" | "settings";
 
 export type AppPreferences = {
   version: 4;
@@ -47,6 +47,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isAppScreen(value: unknown): value is AppScreen {
   return (
     value === "bigscreen" ||
+    value === "lyrics" ||
     value === "library" ||
     value === "search" ||
     value === "queue" ||

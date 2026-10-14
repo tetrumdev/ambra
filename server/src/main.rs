@@ -8,6 +8,7 @@ mod api;
 mod artwork_cache;
 mod artwork_quality;
 mod http_client;
+mod lyrics;
 mod media_cache;
 mod models;
 mod providers;

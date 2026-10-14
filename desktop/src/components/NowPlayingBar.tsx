@@ -30,6 +30,8 @@ type NowPlayingBarProps = {
   onSeek: (time: number) => void;
   onOpenBigscreen?: () => void;
   onOpenQueue?: () => void;
+  onToggleLyrics?: () => void;
+  lyricsActive?: boolean;
 };
 
 export function NowPlayingBar({
@@ -49,6 +51,8 @@ export function NowPlayingBar({
   onNext,
   onSeek,
   onOpenQueue,
+  onToggleLyrics,
+  lyricsActive,
 }: NowPlayingBarProps) {
   const isEmpty = track === undefined;
   const quality = track && showAudioQuality ? formatAudioQuality(track, audioQuality) : null;
@@ -99,7 +103,7 @@ export function NowPlayingBar({
         </div>
       </div>
       <div id="extraCtrlsCluster">
-        <ExtraCtrls onOpenQueue={onOpenQueue} />
+        <ExtraCtrls onOpenQueue={onOpenQueue} onToggleLyrics={onToggleLyrics} lyricsActive={lyricsActive} />
       </div>
     </div>
   );

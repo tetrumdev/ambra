@@ -1,6 +1,7 @@
 /* Shared press feedback for icon buttons. */
 
 #volumeBtn,
+#lyricsBtn,
 #queueBtn,
 .xContainer,
 .librarySourcesClose,
@@ -10,6 +11,7 @@
 }
 
 #volumeBtn:active,
+#lyricsBtn:active,
 #queueBtn:active,
 .xContainer:active,
 .librarySourcesClose:active,

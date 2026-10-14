@@ -31,7 +31,7 @@ export function AppChrome({
           />
         )}
 
-      {currentScreen === "bigscreen" && (
+      {(currentScreen === "bigscreen" || currentScreen === "lyrics") && (
         <>
           {canDragWindow && (
             <div className="bigscreenTitlebar" data-tauri-drag-region />
