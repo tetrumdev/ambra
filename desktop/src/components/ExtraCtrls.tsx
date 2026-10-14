@@ -1,5 +1,11 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+} from "react";
 import { AudioControlsMenu } from "./AudioControlsMenu";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { visibleOutputs } from "../utils/audioSettings";
@@ -12,13 +18,17 @@ type ExtraCtrlsProps = {
 export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
   const audio = useAudioSettings();
-  const selectedOutput = audio?.settings.outputs.find(output => output.id === audio.settings.selectedOutputId);
+  const selectedOutput = audio?.settings.outputs.find(
+    (output) => output.id === audio.settings.selectedOutputId,
+  );
   const exclusiveMode = selectedOutput?.exclusiveMode ?? null;
   const isChangingMode = audio?.saving ?? false;
   const isChangingDevice = audio?.saving ?? false;
   const isLoadingDevices = audio?.loading ?? false;
   const selectedDeviceId = audio?.settings.selectedOutputId ?? "";
-  const audioDevices = audio ? visibleOutputs(audio.settings, audio.devices) : [];
+  const audioDevices = audio
+    ? visibleOutputs(audio.settings, audio.devices)
+    : [];
   const showAudioModeToggle = hasNativeAudio;
   const [volume, setVolume] = useState(100);
   const pendingVolume = useRef<number | null>(null);
@@ -45,13 +55,22 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
 
   const toggleExclusiveMode = async () => {
     if (!audio || !selectedOutput || audio.saving) return;
-    await audio.update(current => ({ ...current, outputs: current.outputs.map(output => output.id === current.selectedOutputId
-      ? { ...output, exclusiveMode: !output.exclusiveMode } : output) }));
+    await audio.update((current) => ({
+      ...current,
+      outputs: current.outputs.map((output) =>
+        output.id === current.selectedOutputId
+          ? { ...output, exclusiveMode: !output.exclusiveMode }
+          : output,
+      ),
+    }));
   };
 
   const selectAudioDevice = async (deviceId: string) => {
     if (!audio || audio.saving) return;
-    await audio.update(current => ({ ...current, selectedOutputId: deviceId }));
+    await audio.update((current) => ({
+      ...current,
+      selectedOutputId: deviceId,
+    }));
   };
 
   const sendPendingVolume = async () => {
@@ -79,10 +98,16 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   // Up/Down move between devices, as in a native menu.
   const moveDeviceFocus = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>(".audioDeviceOption:not(:disabled)")];
+    const options = [
+      ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+        ".audioDeviceOption:not(:disabled)",
+      ),
+    ];
     if (options.length === 0) return;
     event.preventDefault();
-    const current = options.indexOf(document.activeElement as HTMLButtonElement);
+    const current = options.indexOf(
+      document.activeElement as HTMLButtonElement,
+    );
     const step = event.key === "ArrowDown" ? 1 : -1;
     options[(current + step + options.length) % options.length]?.focus();
   };
@@ -105,9 +130,17 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                   aria-label="Audio output device"
                   onKeyDown={moveDeviceFocus}
                 >
-                  <span className="audioDeviceHeading" aria-hidden="true">Output</span>
+                  <span className="audioDeviceHeading" aria-hidden="true">
+                    Output
+                  </span>
                   {isLoadingDevices ? (
-                    <button className="audioDeviceOption" type="button" role="radio" aria-checked={false} disabled>
+                    <button
+                      className="audioDeviceOption"
+                      type="button"
+                      role="radio"
+                      aria-checked={false}
+                      disabled
+                    >
                       <span className="audioDeviceCheck" aria-hidden="true" />
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
@@ -123,39 +156,42 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                         onClick={() => void selectAudioDevice(device.id)}
                       >
                         <span className="audioDeviceCheck" aria-hidden="true" />
-                        <span className="audioDeviceName" data-tooltip={device.name} data-tooltip-overflow="">
+                        <span
+                          className="audioDeviceName"
+                          data-tooltip={device.name}
+                          data-tooltip-overflow=""
+                        >
                           {device.name}
-                          {audio?.devices.find(connected => connected.id === device.id)?.isDefault ? " (Default)" : ""}
+                          {audio?.devices.find(
+                            (connected) => connected.id === device.id,
+                          )?.isDefault
+                            ? " (Default)"
+                            : ""}
                         </span>
                       </button>
                     ))
                   )}
                 </div>
-                <button
-                  className="devAudioModeToggle"
-                  type="button"
-                  aria-pressed={exclusiveMode === true}
-                  disabled={exclusiveMode === null || isChangingMode}
-                  aria-label={
-                    exclusiveMode === null
-                      ? "Reading the audio output mode…"
-                      : exclusiveMode
-                        ? "Exclusive audio mode is on. Click for system output."
-                        : "System output is on. Click for exclusive audio mode."
-                  }
-                  onClick={() => void toggleExclusiveMode()}
-                >
-                  {exclusiveMode === null
-                    ? "…"
-                    : exclusiveMode
-                      ? "EXCLUSIVE"
-                      : "SYSTEM OUTPUT"}
-                </button>
               </>
             )}
-            {audio?.error && <p className="audioControlsError" role="alert">{audio.error}</p>}
-            {audioDevices.length === 0 && !isLoadingDevices && <p className="audioControlsNote">Enable outputs in Settings.</p>}
-            {selectedOutput?.presetId && <span className="audioControlsNote">DSP: {audio?.settings.presets.find(preset => preset.id === selectedOutput.presetId)?.name}</span>}
+            {audio?.error && (
+              <p className="audioControlsError" role="alert">
+                {audio.error}
+              </p>
+            )}
+            {audioDevices.length === 0 && !isLoadingDevices && (
+              <p className="audioControlsNote">Enable outputs in Settings.</p>
+            )}
+            {selectedOutput?.presetId && (
+              <span className="audioControlsNote">
+                DSP:{" "}
+                {
+                  audio?.settings.presets.find(
+                    (preset) => preset.id === selectedOutput.presetId,
+                  )?.name
+                }
+              </span>
+            )}
             <input
               className="volumeSlider"
               type="range"
@@ -191,7 +227,12 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           {Math.round(volume)}%
         </span>
       </div>
-      <button id="queueBtn" type="button" onClick={onOpenQueue} data-tooltip="Queue">
+      <button
+        id="queueBtn"
+        type="button"
+        onClick={onOpenQueue}
+        data-tooltip="Queue"
+      >
         <img src="/queue.svg" alt="Queue" id="queueImg" />
       </button>
     </div>

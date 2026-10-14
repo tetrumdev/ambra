@@ -76,23 +76,29 @@ export function separateCollapsedPalette(colors: string[]) {
   );
 }
 
+// Each side of the cover is measured in this many zones along its length.
+export const COVER_EDGE_ZONES = 8;
+
 export type CoverSeparation = {
-  // Per side, in shader order: top, right, bottom, left.
+  // Zone-major, each zone in shader order: top, right, bottom, left. Zones run
+  // left to right along the top and bottom, top to bottom along the sides.
   edges: number[];
-  // -1 darkens the background beside that side, 1 lightens it.
+  // -1 darkens the background beside that zone, 1 lightens it.
   directions: number[];
 };
 
 export const neutralCoverSeparation: CoverSeparation = {
-  edges: [0.5, 0.5, 0.5, 0.5],
-  directions: [0, 0, 0, 0],
+  edges: Array(COVER_EDGE_ZONES * 4).fill(0.5),
+  directions: Array(COVER_EDGE_ZONES * 4).fill(0),
 };
 
-// Averages the outer band of a small, square RGBA sample of the cover per side.
+// Averages the outer band of a small, square RGBA sample of the cover per zone.
 export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
   const band = Math.max(1, Math.round(size / 8));
-  const sides = [0, 0, 0, 0];
-  const counts = [0, 0, 0, 0];
+  const zones = Array(COVER_EDGE_ZONES * 4).fill(0);
+  const counts = Array(COVER_EDGE_ZONES * 4).fill(0);
+  const zoneOf = (position: number) =>
+    Math.min(COVER_EDGE_ZONES - 1, Math.floor((position / size) * COVER_EDGE_ZONES));
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const offset = (y * size + x) * 4;
@@ -101,17 +107,18 @@ export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
         pixels[offset + 1] / 255,
         pixels[offset + 2] / 255,
       ]);
-      const add = (side: number) => {
-        sides[side] += value;
-        counts[side] += 1;
+      const add = (side: number, position: number) => {
+        const index = zoneOf(position) * 4 + side;
+        zones[index] += value;
+        counts[index] += 1;
       };
-      if (y < band) add(0);
-      if (x >= size - band) add(1);
-      if (y >= size - band) add(2);
-      if (x < band) add(3);
+      if (y < band) add(0, x);
+      if (x >= size - band) add(1, y);
+      if (y >= size - band) add(2, x);
+      if (x < band) add(3, y);
     }
   }
-  return sides.map((sum, side) => counts[side] ? sum / counts[side] : 0.5);
+  return zones.map((sum, index) => counts[index] ? sum / counts[index] : 0.5);
 }
 
 export function coverSeparation(
@@ -125,14 +132,20 @@ export function coverSeparation(
     .slice(0, 4)
     .reduce((sum, color, index) => sum + luminance(parseColor(color)) * influence[index], 0);
   // Without a readable cover, its palette is the best guess for every edge.
-  const sides = edges?.length === 4 ? edges : [background, background, background, background];
+  const zones = edges?.length === COVER_EDGE_ZONES * 4
+    ? edges
+    : Array(COVER_EDGE_ZONES * 4).fill(background);
   return {
-    edges: sides,
-    directions: sides.map((edge) => {
-      // Push the way the background already leans; when it doesn't, use the headroom.
+    edges: zones,
+    directions: zones.map((edge) => {
+      // Edges too near either extreme leave room to move only one way.
+      if (edge < 0.14) return 1;
+      if (edge > 0.86) return -1;
+      // Push the way the background already leans; when it doesn't, cast a shadow
+      // unless the edge is too dark for one to show.
       const difference = background - edge;
       if (Math.abs(difference) >= 0.08) return Math.sign(difference);
-      return edge > 0.5 ? -1 : 1;
+      return edge > 0.2 ? -1 : 1;
     }),
   };
 }

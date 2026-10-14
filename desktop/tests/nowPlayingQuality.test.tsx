@@ -37,7 +37,7 @@ for (const variant of ["compact", "expanded"] as const) {
     expect(markup).toContain("Nothing Playing");
   });
   test(`${variant} player shows service failures instead of silently waiting`, () => {
-    const message = "Tidal is not connected. Sign in from the Library services menu.";
+    const message = "Tidal is not connected. Sign in from Settings → Services.";
     const markup = render(variant, track("tidal:1", "tidal"), message);
     expect(markup).toContain('role="alert"');
     expect(markup).toContain(message);

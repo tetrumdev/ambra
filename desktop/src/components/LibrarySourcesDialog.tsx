@@ -1,56 +1,23 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { useEffect, useRef, useState } from "react";
 import { closeDialog, openDialog } from "../utils/dialogs";
-import {
-  completeServiceAuth,
-  serviceAuthStatus,
-  startServiceAuth,
-  type ServiceAuthStatus,
-  type StreamingProvider,
-} from "../api/server";
-
-type CallbackProvider = Exclude<StreamingProvider, "spotify">;
 
 type Props = {
   onRescanLocalMusic: () => Promise<number>;
-  onServiceConnected: () => void;
 };
 
-const services: Array<{ id: StreamingProvider; name: string; detail: string }> = [
-  { id: "tidal", name: "Tidal", detail: "Lossless and hi-res streaming" },
-  { id: "qobuz", name: "Qobuz", detail: "Lossless and hi-res streaming" },
-  { id: "spotify", name: "Spotify", detail: "Connect with Spotify in your browser" },
-];
-
-const disconnected: ServiceAuthStatus = {
-  tidal: false,
-  qobuz: false,
-  spotify: false,
-};
-
-export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }: Props) {
+export function LibrarySourcesDialog({ onRescanLocalMusic }: Props) {
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const [status, setStatus] = useState<ServiceAuthStatus>(disconnected);
-  const [busy, setBusy] = useState<StreamingProvider | "local" | null>(null);
-  const [callbackProvider, setCallbackProvider] = useState<CallbackProvider | null>(null);
-  const [callbackUrl, setCallbackUrl] = useState("");
+  const [busy, setBusy] = useState<"local" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) openDialog(dialog.current);
     else closeDialog(dialog.current);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    setError(null);
-    void serviceAuthStatus()
-      .then(setStatus)
-      .catch((reason: unknown) => setError(String(reason)));
   }, [open]);
 
   function close() {
@@ -88,55 +55,14 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
     }
   }
 
-  async function signIn(provider: StreamingProvider) {
-    setBusy(provider);
-    setError(null);
-    setMessage(null);
-    try {
-      const result = await startServiceAuth(provider);
-      if (result.status === "connected") {
-        setStatus((current) => ({ ...current, [provider]: true }));
-        setMessage(`${services.find((service) => service.id === provider)?.name} connected.`);
-        onServiceConnected();
-      } else if (result.loginUrl && provider !== "spotify") {
-        setCallbackProvider(provider);
-        setCallbackUrl("");
-        await openUrl(result.loginUrl);
-      }
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function finishSignIn() {
-    if (!callbackProvider || !callbackUrl.trim()) return;
-    const provider = callbackProvider;
-    setBusy(provider);
-    setError(null);
-    try {
-      await completeServiceAuth(provider, callbackUrl.trim());
-      setStatus((current) => ({ ...current, [provider]: true }));
-      setCallbackProvider(null);
-      setCallbackUrl("");
-      setMessage(`${services.find((service) => service.id === provider)?.name} connected.`);
-      onServiceConnected();
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(null);
-    }
-  }
-
   return (
     <>
       <button
         ref={trigger}
         type="button"
         className="librarySourcesTrigger"
-        aria-label="Add music and connect services"
-        data-tooltip="Add music and connect services"
+        aria-label="Add local music"
+        data-tooltip="Add local music"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen(true)}
@@ -160,7 +86,7 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
           <div className="librarySourcesHeading">
             <div>
               <h2 id="library-sources-title">Add to your library</h2>
-              <p>Import local music or connect a streaming service.</p>
+              <p>Import local music into your library.</p>
             </div>
             <button type="button" className="librarySourcesClose" aria-label="Close" onClick={close}><img src="/x.svg" alt="" /></button>
           </div>
@@ -179,53 +105,6 @@ export function LibrarySourcesDialog({ onRescanLocalMusic, onServiceConnected }:
               </button>
             </div>
           </section>
-
-          {services.map((service) => (
-            <section className="librarySourceRow" key={service.id}>
-              <div>
-                <h3>{service.name}</h3>
-                <p>{service.detail}</p>
-              </div>
-              <button
-                type="button"
-                className="libraryServiceButton"
-                disabled={status[service.id] || busy !== null}
-                onClick={() => void signIn(service.id)}
-              >
-                {status[service.id]
-                  ? "Connected"
-                  : busy === service.id
-                    ? service.id === "spotify" ? "Waiting…" : "Opening…"
-                    : "Sign in"}
-              </button>
-            </section>
-          ))}
-
-          {callbackProvider && (
-            <form
-              className="libraryCallbackForm"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void finishSignIn();
-              }}
-            >
-              <label htmlFor="library-callback-url">
-                Paste the full {callbackProvider === "tidal" ? "Tidal" : "Qobuz"} callback URL
-              </label>
-              <p>The page may fail to load after sign-in. Copy its full address from the browser.</p>
-              <div>
-                <input
-                  spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
-                  id="library-callback-url"
-                  autoFocus
-                  value={callbackUrl}
-                  onChange={(event) => setCallbackUrl(event.target.value)}
-                  placeholder="http://…"
-                />
-                <button type="submit" disabled={!callbackUrl.trim() || busy !== null}>Connect</button>
-              </div>
-            </form>
-          )}
 
           {message && <p className="librarySourcesMessage" role="status">{message}</p>}
           {error && <p className="librarySourcesError" role="alert">{error}</p>}

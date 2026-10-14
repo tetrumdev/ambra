@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  COVER_EDGE_ZONES,
   softenedPaletteWeights,
   type CoverSeparation,
 } from "../utils/backgroundPalette";
@@ -15,6 +16,7 @@ type FluidGradientBackgroundProps = {
 };
 
 const COLOR_TRANSITION_MS = 1800;
+const EDGE_COMPONENTS = COVER_EDGE_ZONES * 4;
 // The field drifts far too slowly for frames beyond 60 fps to differ, so
 // high-refresh displays draw every other frame instead of doubling the work.
 const MIN_FRAME_INTERVAL_MS = 1000 / 60 - 2;
@@ -36,8 +38,9 @@ uniform float u_seed;
 uniform vec3 u_colors[4];
 uniform vec4 u_weights;
 uniform vec4 u_cover;
-uniform vec4 u_edgeLuma;
-uniform vec4 u_edgeDirection;
+// Per zone along the cover's sides (top, right, bottom, left per entry).
+uniform vec4 u_edgeLuma[${COVER_EDGE_ZONES}];
+uniform vec4 u_edgeDirection[${COVER_EDGE_ZONES}];
 
 // Arithmetic hash (Dave Hoskins, "Hash without Sine"): every pixel evaluates
 // this ~180 times a frame, and sin() is far slower than multiply-adds on GPUs.
@@ -71,8 +74,10 @@ float fbm(vec2 point) {
   return value;
 }
 
-// Quietly lifts or deepens the field right around the cover, mostly where it
-// would otherwise match the cover's own edge, so the art never sits flush.
+// Lifts or deepens the field right around the cover wherever it would
+// otherwise come close to the cover's own edge, so the art never sits flush. Each side
+// is measured in zones and blended between zone centers, so the treatment
+// follows the cover's edge rather than one average per side.
 vec3 separateFromCover(vec3 color) {
   if (u_cover.z <= 0.0) return color;
   vec2 offset = gl_FragCoord.xy - u_cover.xy;
@@ -87,14 +92,33 @@ vec3 separateFromCover(vec3 color) {
   side *= side;
   side *= side;
   side /= max(dot(side, vec4(1.0)), 0.0001);
-  float edge = dot(side, u_edgeLuma);
-  float direction = dot(side, u_edgeDirection);
 
+  // Position along each side in zone units; top and bottom run left to right,
+  // the sides top to bottom (cover image space, so GL's y is flipped).
+  vec2 along = clamp((vec2(offset.x, -offset.y) / u_cover.z + 1.0) * 0.5, 0.0, 1.0)
+    * ${COVER_EDGE_ZONES}.0 - 0.5;
+  vec4 position = vec4(along, along);
+  vec4 zoneLuma = vec4(0.0);
+  vec4 zoneDirection = vec4(0.0);
+  vec4 total = vec4(0.0);
+  for (int zone = 0; zone < ${COVER_EDGE_ZONES}; zone++) {
+    vec4 weight = max(1.0 - abs(position - float(zone)), 0.0);
+    zoneLuma += u_edgeLuma[zone] * weight;
+    zoneDirection += u_edgeDirection[zone] * weight;
+    total += weight;
+  }
+  float edge = dot(side, zoneLuma / total);
+  float direction = dot(side, zoneDirection / total);
+
+  // Hold the field at least this far in brightness from the edge, fading out
+  // with distance. Field that already contrasts is left untouched; anything
+  // else is pulled past the edge in the zone's direction, never onto it.
   float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-  float similarity = 1.0 - smoothstep(0.03, 0.22, abs(luma - edge));
-  float amount = nearby * (0.15 + 0.85 * similarity);
-  vec3 deeper = color * (1.0 - 0.07 * amount);
-  vec3 lifted = 1.0 - (1.0 - color) * (1.0 - 0.04 * amount);
+  float reach = 0.14 * nearby;
+  float darkTarget = max(min(luma, edge - reach), 0.0);
+  float lightTarget = min(max(luma, edge + reach), 1.0);
+  vec3 deeper = color * (darkTarget / max(luma, 0.0001));
+  vec3 lifted = mix(color, vec3(1.0), (lightTarget - luma) / max(1.0 - luma, 0.0001));
   return mix(color, direction < 0.0 ? deeper : lifted, abs(direction));
 }
 
@@ -303,8 +327,8 @@ export function FluidGradientBackground({
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
     const shaderWeights = gl.getUniformLocation(program, "u_weights");
     const shaderCover = gl.getUniformLocation(program, "u_cover");
-    const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma");
-    const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection");
+    const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
+    const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
     if (
       !buffer || position < 0 || !resolution || !time || !shaderSeed || !shaderColors
       || !shaderWeights || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
@@ -404,8 +428,8 @@ export function FluidGradientBackground({
       // The cover may mount after the canvas; keep looking until it appears.
       if (!observedCover) measureCover();
       gl.uniform4fv(shaderCover, cover);
-      gl.uniform4fv(shaderEdgeLuma, palette.slice(16, 20));
-      gl.uniform4fv(shaderEdgeDirection, palette.slice(20, 24));
+      gl.uniform4fv(shaderEdgeLuma, palette.slice(16, 16 + EDGE_COMPONENTS));
+      gl.uniform4fv(shaderEdgeDirection, palette.slice(16 + EDGE_COMPONENTS, 16 + EDGE_COMPONENTS * 2));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
       // transitions without disabling this explicitly selected background.

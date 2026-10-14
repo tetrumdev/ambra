@@ -56,16 +56,6 @@ export function Sidebar({
   return (
     <>
       <div id="sidebarMain">
-        <div className="mainLogoContainer">
-          <button
-            type="button"
-            className="mainLogo"
-            onClick={onOpenLibrary}
-            aria-label="Open My Library"
-          >
-            <img src="/ambra.svg" id="logoImg" alt="" />
-          </button>
-        </div>
         <div id="libraryContainer">
           <button
             type="button"

@@ -44,23 +44,18 @@
 .playlistView {
     --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
         minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
-    --playlist-artwork-progress: 0;
+    --playlist-artwork-scale: 1;
     --playlist-title-progress: 0;
-    --playlist-title-lag: 0;
+    --playlist-title-scale: 1;
+    --playlist-title-shift: 0px;
     --playlist-actions-progress: 0;
-    --playlist-details-progress: 0;
-    --playlist-sticky-header-height: 60px;
+    --playlist-actions-shift: 0px;
+    --playlist-details-shift: 0px;
+    --playlist-expanded-header-height: 165px;
     --playlist-current-header-height: 165px;
-    --playlist-artwork-size: calc(
-        145px - 18px * var(--playlist-title-progress) - 70px *
-            var(--playlist-details-progress) - 13px *
-            var(--playlist-artwork-progress)
-    );
-    --playlist-title-offset: calc(
-        var(--playlist-artwork-size) + 14px + 6px *
-            (1 - var(--playlist-artwork-progress)) + 15px *
-            var(--playlist-title-lag)
-    );
+    --playlist-background-scale: 1;
+    /* The collapse already holds the layout still; anchoring would fight it. */
+    overflow-anchor: none;
 }
 
 .playlistHeaderAnchor {
@@ -69,28 +64,44 @@
 
 .playlistView .libraryHeader {
     position: sticky;
-    top: 0;
+    top: 16px;
     z-index: 9;
-    grid-template-columns: var(--playlist-title-offset) minmax(0, 1fr);
+    grid-template-columns: 165px minmax(0, 1fr);
     align-items: start;
     display: grid;
-    min-height: var(--playlist-sticky-header-height);
+    height: var(--playlist-expanded-header-height);
     padding-top: 0;
     padding-bottom: 0;
+    /* Keeps the expanded footprint while the visible header shrinks. */
+    clip-path: inset(-16px 0 calc(var(--playlist-expanded-header-height) - var(--playlist-current-header-height)) 0);
+}
+
+.playlistView .libraryHeader::before {
+    position: absolute;
+    inset: -16px 0 0;
+    content: "";
     background: #000;
+    transform: scaleY(var(--playlist-background-scale));
+    transform-origin: top;
+    pointer-events: none;
 }
 
 .libraryHeaderArtwork {
-    width: var(--playlist-artwork-size);
-    height: var(--playlist-artwork-size);
+    width: 145px;
+    height: 145px;
     position: absolute;
     top: 0;
     left: 30px;
     min-width: 0;
     overflow: hidden;
-    margin-top: calc(16px * var(--playlist-title-progress));
-    border-radius: calc(8px - 5px * var(--playlist-title-progress));
+    border-radius: 8px;
     background: #000;
+}
+
+.playlistView .libraryHeaderArtwork {
+    transform: scale(var(--playlist-artwork-scale));
+    transform-origin: left top;
+    border-radius: calc((8px - 5px * var(--playlist-title-progress)) / var(--playlist-artwork-scale));
 }
 
 .playlistArtworkGrid {
@@ -117,45 +128,68 @@
     box-sizing: border-box;
     grid-column: 2;
     min-width: 0;
-    padding-top: calc(16px * var(--playlist-title-progress));
-    padding-bottom: calc(4px * (1 - var(--playlist-title-progress)));
+}
+
+.playlistView .libraryHeaderBody {
+    padding-bottom: 4px;
+    transform: translateX(calc(-1 * var(--playlist-title-shift)));
 }
 
 .playlistView .libraryTitle {
     margin-top: 0;
-    margin-bottom: calc(8px * (1 - var(--playlist-title-progress)));
-    font-size: calc(4rem - 1.5rem * var(--playlist-title-progress));
+    margin-bottom: 8px;
+    font-size: 4rem;
     line-height: 1.08;
+    /* Width follows the scaled text inside the fixed header footprint. */
+    width: calc((100% + var(--playlist-title-shift)) / var(--playlist-title-scale));
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transform: scale(var(--playlist-title-scale));
     transform-origin: left top;
 }
 
 .playlistView .libraryPlayActions {
-    max-height: calc(47px * (1 - var(--playlist-details-progress)));
-    margin-top: calc(6px * (1 - var(--playlist-details-progress)));
-    margin-bottom: calc(4px * (1 - var(--playlist-details-progress)));
+    max-height: 47px;
+    margin-top: 6px;
+    margin-bottom: 4px;
     overflow: hidden;
     opacity: calc(1 - var(--playlist-actions-progress));
+    transform: translateY(calc(-1 * var(--playlist-actions-shift)));
     pointer-events: auto;
 }
 
 .playlistView[data-playlist-actions-hidden] .libraryPlayActions {
     pointer-events: none;
+    visibility: hidden;
 }
 
 .playlistView .libraryInfo {
-    max-height: calc(24px * (1 - var(--playlist-details-progress)));
-    margin-top: calc(4px * (1 - var(--playlist-details-progress)));
+    max-height: 24px;
+    margin-top: 4px;
     overflow: hidden;
     opacity: calc(1 - var(--playlist-actions-progress));
+    transform: translateY(calc(-1 * var(--playlist-details-shift)));
 }
 
 .playlistView .columnInfo {
-    top: var(--playlist-current-header-height);
+    /* Both fixed boxes stick together; only the painted edge follows the collapse. */
+    top: calc(var(--playlist-expanded-header-height) + 16px);
+    transform: translateY(calc(var(--playlist-current-header-height) - var(--playlist-expanded-header-height)));
     padding-top: 10px;
     padding-bottom: 24px;
+}
+
+.playlistView .columnInfo::before {
+    /* Cover fractional clipping and compositing seams without moving either box. */
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 3px;
+    content: "";
+    background: #000;
+    pointer-events: none;
 }
 
 .librarySourcesTrigger {
@@ -236,8 +270,7 @@
 }
 
 .librarySourcesHeading p,
-.librarySourceRow p,
-.libraryCallbackForm p {
+.librarySourceRow p {
     margin: 5px 0 0;
     color: #aaa;
     font-size: 0.8rem;
@@ -288,8 +321,7 @@
     gap: 8px;
 }
 
-.librarySourceRow button,
-.libraryCallbackForm button {
+.librarySourceRow button {
     min-width: 86px;
     height: 34px;
     padding: 0 14px;
@@ -302,59 +334,15 @@
     cursor: default;
 }
 
-.librarySourceRow button:hover:not(:disabled),
-.libraryCallbackForm button:hover:not(:disabled) {
+.librarySourceRow button:hover:not(:disabled) {
     border-color: white;
     background: white;
     color: black;
 }
 
-.librarySourceRow button:disabled,
-.libraryCallbackForm button:disabled {
+.librarySourceRow button:disabled {
     color: #777;
     cursor: default;
-}
-
-.libraryServiceButton {
-    flex: none;
-}
-
-.libraryCallbackForm {
-    padding: 18px;
-    border: 1px solid #535353;
-    border-radius: 12px;
-    background: #090909;
-}
-
-.libraryCallbackForm label {
-    display: block;
-    font-size: 0.9rem;
-    font-weight: 600;
-}
-
-.libraryCallbackForm > div {
-    display: flex;
-    gap: 8px;
-    margin-top: 12px;
-}
-
-.libraryCallbackForm input {
-    box-sizing: border-box;
-    min-width: 0;
-    height: 36px;
-    flex: 1;
-    padding: 0 12px;
-    border: 1px solid #535353;
-    border-radius: 999px;
-    outline: none;
-    background: #181818;
-    color: white;
-    font: inherit;
-    font-size: 0.8rem;
-}
-
-.libraryCallbackForm input:focus {
-    border-color: #999;
 }
 
 .librarySourcesMessage,
