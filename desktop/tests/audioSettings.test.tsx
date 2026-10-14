@@ -1,14 +1,18 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup } from "react-dom/server";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Window as HappyWindow } from "happy-dom";
 import { AudioSettingsProvider, useAudioSettings, type AudioSettingsApi } from "../src/hooks/AudioSettingsContext";
 import { SettingsSidebar, type SettingsTab } from "../src/components/SettingsSidebar";
 import { SettingsView } from "../src/components/SettingsView";
+import { LibrarySourcesDialog } from "../src/components/LibrarySourcesDialog";
 import { defaultAudioSettings, loadAudioSettings, parseAutoEq, saveAudioSettings, visibleOutputs } from "../src/utils/audioSettings";
 
 const keys = ["window", "document", "HTMLElement", "HTMLInputElement", "Event", "MouseEvent", "IS_REACT_ACT_ENVIRONMENT"] as const;
 const saved = new Map<string, PropertyDescriptor | undefined>();
+const originalFetch = globalThis.fetch;
 let root: Root | null = null;
 let mount: HTMLDivElement;
 beforeAll(() => {
@@ -17,7 +21,7 @@ beforeAll(() => {
   Object.assign(globalThis, { window: browser, document: browser.document, HTMLElement: browser.HTMLElement,
     HTMLInputElement: browser.HTMLInputElement, Event: browser.Event, MouseEvent: browser.MouseEvent, IS_REACT_ACT_ENVIRONMENT: true });
 });
-afterEach(async () => { await act(async () => root?.unmount()); root = null; mount?.remove(); });
+afterEach(async () => { await act(async () => root?.unmount()); root = null; mount?.remove(); globalThis.fetch = originalFetch; clearMocks(); });
 afterAll(() => keys.forEach(key => { const descriptor = saved.get(key); if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); }));
 function apiFor() {
   let stored = defaultAudioSettings();
@@ -26,11 +30,11 @@ function apiFor() {
     save: async next => { if (reject) throw new Error("Device refused settings"); stored = structuredClone(next); } };
   return { api, stored: () => stored, reject: () => { reject = true; } };
 }
-function Settings() {
+function Settings({ onServiceConnected = () => {} }: { onServiceConnected?: () => void }) {
   const [tab, setTab] = useState<SettingsTab>("outputs");
   const [animateSwirl, setAnimateSwirl] = useState(true);
   return <><SettingsSidebar tab={tab} onSelect={setTab} onBack={() => {}} />
-    <SettingsView tab={tab} onTabChange={setTab} showAudioQuality={false} onShowAudioQuality={() => {}} animateSwirl={animateSwirl} onAnimateSwirl={setAnimateSwirl} registerScrollElement={() => {}} /></>;
+    <SettingsView onServiceConnected={onServiceConnected} tab={tab} onTabChange={setTab} showAudioQuality={false} onShowAudioQuality={() => {}} animateSwirl={animateSwirl} onAnimateSwirl={setAnimateSwirl} registerScrollElement={() => {}} /></>;
 }
 async function render(api: AudioSettingsApi, children = <Settings />) {
   mount = document.createElement("div"); document.body.append(mount); root = createRoot(mount);
@@ -83,6 +87,95 @@ test("general settings allow turning swirl motion off and back on", async () => 
   expect(mount.querySelector<HTMLInputElement>(selector)!.checked).toBe(false);
   await click(selector);
   expect(mount.querySelector<HTMLInputElement>(selector)!.checked).toBe(true);
+});
+
+test("Services checks connection status on entry and Spotify connects from Settings", async () => {
+  const requests: string[] = [];
+  let connected = 0;
+  let spotify = false;
+  globalThis.fetch = (async (url: string) => {
+    requests.push(new URL(url).pathname);
+    if (url.endsWith("/api/auth/status")) return Response.json({ tidal: true, qobuz: false, spotify });
+    expect(url).toEndWith("/api/auth/spotify/start");
+    spotify = true;
+    return Response.json({ status: "connected", loginUrl: null });
+  }) as typeof fetch;
+  await render(apiFor().api, <Settings onServiceConnected={() => { connected++; }} />);
+  expect(requests).toEqual([]);
+  await click("#settings-tab-services");
+  expect(mount.querySelector<HTMLElement>("#settings-panel-services")!.hidden).toBe(false);
+  expect(mount.querySelector<HTMLButtonElement>('[aria-label="Tidal connected"]')!.disabled).toBe(true);
+  await click('[aria-label="Sign in to Spotify"]');
+  expect(mount.querySelector<HTMLButtonElement>('[aria-label="Spotify connected"]')!.disabled).toBe(true);
+  expect(mount.querySelector("#settings-callback-url") === null).toBe(true);
+  expect(connected).toBe(1);
+  await click("#settings-tab-general");
+  await click("#settings-tab-services");
+  expect(requests).toEqual(["/api/auth/status", "/api/auth/spotify/start", "/api/auth/status"]);
+});
+
+for (const provider of ["tidal", "qobuz"] as const) {
+  test(`${provider} browser callback connects through Services and survives switching settings tabs`, async () => {
+    const loginUrl = `https://login.example/${provider}`;
+    const callbackUrl = "http://localhost/callback?code=test-code";
+    let connected = 0;
+    const opened: unknown[] = [];
+    mockIPC((command, payload) => {
+      expect(command).toBe("plugin:opener|open_url");
+      opened.push((payload as Record<string, unknown>)?.url);
+    });
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/api/auth/status")) return Response.json({ tidal: false, qobuz: false, spotify: false });
+      expect(init?.method).toBe("POST");
+      if (url.endsWith(`/api/auth/${provider}/start`)) return Response.json({ status: "callbackRequired", loginUrl });
+      expect(url).toEndWith(`/api/auth/${provider}/complete`);
+      expect(JSON.parse(String(init?.body))).toEqual({ callbackUrl });
+      return new Response(null, { status: 204 });
+    }) as typeof fetch;
+    await render(apiFor().api, <Settings onServiceConnected={() => { connected++; }} />);
+    await click("#settings-tab-services");
+    await click(`[aria-label="Sign in to ${provider === "tidal" ? "Tidal" : "Qobuz"}"]`);
+    expect(opened).toEqual([loginUrl]);
+    await click("#settings-tab-general");
+    await click("#settings-tab-services");
+    await act(async () => {
+      const input = mount.querySelector<HTMLInputElement>("#settings-callback-url")!;
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+      // React's input-event fallback is selected when modules load before the test DOM.
+      Object.assign(input, { attachEvent: () => {}, detachEvent: () => {} });
+      input.dispatchEvent(new window.FocusEvent("focusin", { bubbles: true }));
+      setter.call(input, callbackUrl);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new window.KeyboardEvent("keyup", { bubbles: true, key: "e" }));
+    });
+    await act(async () => mount.querySelector(".settingsCallbackForm")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+    expect(mount.querySelector("#settings-callback-url") === null).toBe(true);
+    expect(connected).toBe(1);
+  });
+}
+
+test("failed service sign-in stays disconnected and can be retried", async () => {
+  let connected = 0;
+  globalThis.fetch = (async (url: string) => url.endsWith("/api/auth/status")
+    ? Response.json({ tidal: false, qobuz: false, spotify: false })
+    : Response.json({ error: "Spotify login failed" }, { status: 503 })) as typeof fetch;
+  await render(apiFor().api, <Settings onServiceConnected={() => { connected++; }} />);
+  await click("#settings-tab-services");
+  await click('[aria-label="Sign in to Spotify"]');
+  expect(mount.querySelector("#settings-panel-services [role=alert]")?.textContent).toContain("Spotify login failed");
+  expect(mount.querySelector<HTMLButtonElement>('[aria-label="Sign in to Spotify"]')!.disabled).toBe(false);
+  expect(connected).toBe(0);
+});
+
+test("Library's add dialog contains local import and scanning only", () => {
+  const html = renderToStaticMarkup(<LibrarySourcesDialog onRescanLocalMusic={async () => 0} />);
+  expect(html).toContain('aria-label="Add local music"');
+  expect(html).toContain("Open folder");
+  expect(html).toContain("Scan now");
+  expect(html).not.toContain("Sign in");
+  expect(html).not.toContain("Spotify");
+  expect(html).not.toContain("Tidal");
+  expect(html).not.toContain("Qobuz");
 });
 
 test("concurrent updates and device refresh preserve every accepted change", async () => {

@@ -64,7 +64,7 @@ afterAll(() => keys.forEach(key => {
 async function render(active = true, animate = true) {
   await act(async () => root!.render(<FluidGradientBackground
     colors={["#225588", "#aa3344"]} weights={[0.5, 0.5]}
-    separation={{ edges: [0.2, 0.2, 0.2, 0.2], directions: [1, 1, 1, 1] }}
+    separation={{ edges: Array(32).fill(0.2), directions: Array(32).fill(1) }}
     coverId="test-cover" seed="test" active={active} animate={animate}
   />));
 }

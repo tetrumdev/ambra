@@ -72,9 +72,8 @@ The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
 
 Ambra restores working saved sessions when the server starts. To connect a
-missing service, open **My Library** in the desktop app and choose the `+`
-button in the upper-right corner. Tidal and Qobuz open their login page and ask
-you to paste the resulting callback URL into Ambra. Spotify opens its login
+missing service, open **Settings → Services** in the desktop app. Tidal and Qobuz
+open their login page and ask you to paste the resulting callback URL into Ambra. Spotify opens its login
 page and completes its local callback automatically.
 
 Ambra never stores runtime data in the source tree. Provider sessions are

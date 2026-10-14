@@ -48,6 +48,15 @@
 .settingsDspStatus { display: grid; gap: 8px; font-size: 12px; border-top: 1px solid #333; padding-top: 16px; margin-top: 30px; }
 .settingsError { color: #ffb7b7 !important; overflow-wrap: anywhere; }
 .settingsSrOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.settingsServiceRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 0; border-bottom: 1px solid #333; }
+.settingsServiceRow > div { min-width: 0; }
+.settingsServiceRow h3 { margin-bottom: 6px; }
+.settingsServiceRow p { margin: 0; }
+.settingsServiceRow button { flex: none; min-width: 86px; }
+.settingsCallbackForm { margin-top: 24px; }
+.settingsCallbackForm > div { display: flex; gap: 10px; }
+.settingsCallbackForm button { flex: none; }
+.settingsView .settingsServiceMessage { color: #b9d7b9; }
 @media (max-width: 1050px) {
   .settingsOutputFields { grid-template-columns: 1fr; }
   .settingsDspLayout { grid-template-columns: 1fr; }

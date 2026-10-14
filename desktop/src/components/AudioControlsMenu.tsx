@@ -35,11 +35,17 @@ export function AudioControlsMenu({
       const menuBounds = panelElement.getBoundingClientRect();
       const left = Math.max(
         4,
-        Math.min(anchorBounds.right - menuBounds.width, window.innerWidth - menuBounds.width - 4),
+        Math.min(
+          anchorBounds.right - menuBounds.width,
+          window.innerWidth - menuBounds.width - 4,
+        ),
       );
       const top = Math.max(
         4,
-        Math.min(anchorBounds.top - menuBounds.height - 10, window.innerHeight - menuBounds.height - 4),
+        Math.min(
+          anchorBounds.top - menuBounds.height - 10,
+          window.innerHeight - menuBounds.height - 4,
+        ),
       );
       setPosition((current) =>
         current.left === left && current.top === top && current.ready
