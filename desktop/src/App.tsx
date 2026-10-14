@@ -11,6 +11,7 @@ import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
+import { LyricsView } from "./components/LyricsView";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -172,6 +173,8 @@ function App() {
   const screen = preferences.ui.screen;
   const isBigscreen =
     screen === "bigscreen" && player.currentTrack !== undefined;
+  const isLyricsView = screen === "lyrics";
+  const isPlayerView = isBigscreen || isLyricsView;
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
   const isSearchView = screen === "search" && !browseEntity;
@@ -181,12 +184,12 @@ function App() {
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
   const f11FullscreenRef = useRef(false);
-  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "queue">>(
+  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue">>(
     screen === "search" || screen === "settings" ? screen : "library",
   );
-  const bigscreenReturnScreenRef =
-    useRef<Exclude<AppScreen, "bigscreen">>("library");
-  if (screen !== "bigscreen") bigscreenReturnScreenRef.current = screen;
+  const playerReturnScreenRef =
+    useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>("library");
+  if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
   if (screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
@@ -427,7 +430,7 @@ function App() {
       event.stopPropagation();
 
       if (event.repeat) return;
-      if (browseEntity && screen !== "bigscreen" && screen !== "queue") { goBack(); return; }
+      if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") { goBack(); return; }
       leaveScreen();
 
       if (f11FullscreenRef.current && isTauri()) {
@@ -448,7 +451,7 @@ function App() {
       if (event.button !== 3 && event.button !== 4) return;
       event.preventDefault();
       if (event.type !== "mouseup" || event.button !== 3) return;
-      if (browseEntity && screen !== "bigscreen" && screen !== "queue") goBack();
+      if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") goBack();
       else if (screen !== "library") leaveScreen();
     };
 
@@ -477,8 +480,8 @@ function App() {
 
       const toggleBigscreen = () => {
         setPreferences((current) => {
-          if (current.ui.screen !== "bigscreen") {
-            bigscreenReturnScreenRef.current = current.ui.screen;
+          if (current.ui.screen !== "bigscreen" && current.ui.screen !== "lyrics") {
+            playerReturnScreenRef.current = current.ui.screen;
           }
 
           return {
@@ -487,7 +490,7 @@ function App() {
               ...current.ui,
               screen:
                 current.ui.screen === "bigscreen"
-                  ? bigscreenReturnScreenRef.current
+                  ? playerReturnScreenRef.current
                   : "bigscreen",
             },
           };
@@ -588,14 +591,14 @@ function App() {
     return () => window.removeEventListener("beforeunload", saveLatestSession);
   }, []);
 
-  // Bigscreen and queue return to where they were opened from; search returns to the library.
+  // Player views and queue return to where they were opened from; search returns to the library.
   const leaveScreen = () => setPreferences((current) => ({
     ...current,
     ui: {
       ...current.ui,
       screen:
-        current.ui.screen === "bigscreen"
-          ? bigscreenReturnScreenRef.current
+        (current.ui.screen === "bigscreen" || current.ui.screen === "lyrics")
+          ? playerReturnScreenRef.current
           : current.ui.screen === "queue"
             ? queueReturnScreenRef.current
             : "library",
@@ -779,10 +782,10 @@ function App() {
   };
 
   const closeCurrentScreen = () => {
-    if (browseEntity && screen !== "bigscreen" && screen !== "queue") { goBack(); return; }
+    if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") { goBack(); return; }
     changeScreen(
-      screen === "bigscreen"
-        ? bigscreenReturnScreenRef.current
+      (screen === "bigscreen" || screen === "lyrics")
+        ? playerReturnScreenRef.current
         : screen === "queue"
           ? queueReturnScreenRef.current
           : "library",
@@ -829,7 +832,9 @@ function App() {
         </>
       )}
 
-      {!isBigscreen && (
+      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"} track={player.currentTrack} clock={player.clock} />}
+
+      {!isPlayerView && (
         <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
           {!isQueueView && !isSettingsView && <SearchBar
             query={searchQuery}
@@ -954,7 +959,7 @@ function App() {
 
       <NowPlayingBar
         onOpenEntity={openEntity}
-        variant={isBigscreen ? "expanded" : "compact"}
+        variant={isPlayerView ? "expanded" : "compact"}
         track={player.currentTrack}
         audioQuality={player.audioQuality}
         showAudioQuality={preferences.ui.showAudioQuality}
@@ -969,9 +974,11 @@ function App() {
         onSeek={player.seek}
         onOpenBigscreen={() => changeScreen("bigscreen")}
         onOpenQueue={openQueue}
+        onToggleLyrics={() => isLyricsView ? closeCurrentScreen() : changeScreen("lyrics")}
+        lyricsActive={isLyricsView}
       />
 
-      {!isBigscreen && <AppScrollbar scrollElement={activeScrollElement} />}
+      {!isPlayerView && <AppScrollbar scrollElement={activeScrollElement} />}
     </>
   );
 }
