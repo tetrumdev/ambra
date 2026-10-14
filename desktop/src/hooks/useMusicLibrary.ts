@@ -32,6 +32,7 @@ type MusicLibrary = {
   tracks: LibraryTrack[];
   catalogTracks: Track[];
   isLoading: boolean;
+  isRestoring: boolean;
   isServerReachable: boolean;
   error: string | null;
   isAddingAlbum: boolean;
@@ -112,6 +113,8 @@ export function useMusicLibrary(): MusicLibrary {
   );
   const [isLocalLoading, setIsLocalLoading] = useState(true);
   const [isServerLoading, setIsServerLoading] = useState(true);
+  const [isLocalCacheLoading, setIsLocalCacheLoading] = useState(true);
+  const [isStreamingCacheLoading, setIsStreamingCacheLoading] = useState(true);
   const [isServerReachable, setIsServerReachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
@@ -164,7 +167,10 @@ export function useMusicLibrary(): MusicLibrary {
           return cached;
         });
       })
-      .catch((reason) => console.warn("Could not load the streaming library cache:", reason));
+      .catch((reason) => console.warn("Could not load the streaming library cache:", reason))
+      .finally(() => {
+        if (!cancelled) setIsStreamingCacheLoading(false);
+      });
 
     // Thumbnails are generated in the background after a scan; pick them up as
     // they land without rescanning the disk.
@@ -192,9 +198,8 @@ export function useMusicLibrary(): MusicLibrary {
 
     let hasCachedLibrary = false;
     const loadLocalTracks = async () => {
-      if (!isTauri()) return [];
-
       try {
+        if (!isTauri()) return [];
         const cachedTracks = await invoke<ScannedTrack[]>("load_cached_music");
         if (!cancelled && cachedTracks.length > 0) {
           setLocalTracks(cachedTracks.map(localTrack));
@@ -204,6 +209,8 @@ export function useMusicLibrary(): MusicLibrary {
         }
       } catch (reason) {
         console.warn("Could not load cached local library:", reason);
+      } finally {
+        if (!cancelled) setIsLocalCacheLoading(false);
       }
 
       // With the cache on screen the rescan is only a background refresh, so let
@@ -379,6 +386,7 @@ export function useMusicLibrary(): MusicLibrary {
     tracks,
     catalogTracks,
     isLoading,
+    isRestoring: isLocalCacheLoading || isStreamingCacheLoading,
     isServerReachable,
     error,
     isAddingAlbum,

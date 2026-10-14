@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect } from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
@@ -26,21 +26,13 @@ document.documentElement.dataset.platform = navigator.userAgent.includes(
   ? "windows"
   : "other";
 
-// The UI renders immediately from WebView storage. Reconciling with the durable
-// copy happens in the background; only if that copy turns out to be newer (a
-// fresh WebView profile, or another installation sharing the data directory)
-// is the app remounted so it re-reads the restored state.
+// Restore durable state before mounting so startup never renders an older session.
 function Root() {
-  const [restoreEpoch, setRestoreEpoch] = useState(0);
   useEffect(() => {
     mark("first-commit");
     requestAnimationFrame(() => setTimeout(() => mark("interactive"), 0));
-    void hydratePersistentStorage().then((restored) => {
-      mark("state-hydrated");
-      if (restored) setRestoreEpoch((epoch) => epoch + 1);
-    });
   }, []);
-  return <AudioSettingsProvider key={restoreEpoch}><App /></AudioSettingsProvider>;
+  return <AudioSettingsProvider><App /></AudioSettingsProvider>;
 }
 
 installTooltips();
@@ -51,9 +43,12 @@ if (!import.meta.env.DEV) {
   }, true);
 }
 
-mark("first-render");
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <Root />
-  </React.StrictMode>,
-);
+void hydratePersistentStorage().then(() => {
+  mark("state-hydrated");
+  mark("first-render");
+  ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+    <React.StrictMode>
+      <Root />
+    </React.StrictMode>,
+  );
+});
