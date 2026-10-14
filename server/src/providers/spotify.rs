@@ -434,13 +434,13 @@ impl SpotifyProvider {
         let mut auth = self.search_auth.lock().await;
         if !self.is_connected() {
             return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-                "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from My Library.").into());
+                "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from Settings → Services.").into());
         }
         let refresh_token = match &*auth {
             SpotifySearchAuth::Static(access_token) => {
                 if rejected_token == Some(access_token.as_str()) {
                     self.connected.store(false, Ordering::Release);
-                    return Err(io::Error::other("Spotify access token was rejected. Replace AMBRA_SPOTIFY_ACCESS_TOKEN or reconnect Spotify from My Library.").into());
+                    return Err(io::Error::other("Spotify access token was rejected. Replace AMBRA_SPOTIFY_ACCESS_TOKEN or reconnect Spotify from Settings → Services.").into());
                 }
                 return Ok(access_token.clone());
             }
@@ -737,7 +737,7 @@ async fn refresh_oauth_token(
         // Do not include OAuth response bodies: they can contain credentials.
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from My Library.",
+            "Spotify saved sign-in has expired or was revoked. Reconnect Spotify from Settings → Services.",
         )
         .into());
     }
@@ -1227,7 +1227,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("Reconnect Spotify from My Library"));
+        assert!(error.contains("Reconnect Spotify from Settings → Services"));
         assert!(!error.contains("test-secret-do-not-log"));
         assert!(!fixture.0.is_connected());
         assert!(!fixture.0.clone().check_connection().await);

@@ -1992,7 +1992,7 @@ fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
 fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
     state.tidal.get().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Tidal is not connected. Sign in from the Library services menu.",
+            "Tidal is not connected. Sign in from Settings → Services.",
         )
     })
 }
@@ -2000,7 +2000,7 @@ fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
 fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
     state.qobuz.get().ok_or_else(|| {
         ApiError::service_unavailable(
-            "Qobuz is not connected. Sign in from the Library services menu.",
+            "Qobuz is not connected. Sign in from Settings → Services.",
         )
     })
 }
@@ -2016,7 +2016,7 @@ fn current_spotify(state: &AppState) -> Option<SpotifyProvider> {
 fn spotify_provider(state: &AppState) -> Result<SpotifyProvider, ApiError> {
     current_spotify(state).ok_or_else(|| {
         ApiError::service_unavailable(
-            "Spotify is not connected. Sign in from the Library services menu.",
+            "Spotify is not connected. Sign in from Settings → Services.",
         )
     })
 }

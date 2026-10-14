@@ -1,7 +1,7 @@
 import "./LibraryView.css";
 import {
   useCallback,
-  useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   type ReactNode,
@@ -9,6 +9,31 @@ import {
 import { TrackList, type TrackListProps } from "./TrackList";
 import { secureRandomInt } from "../utils/queueModel";
 import { formatTotalDuration } from "../utils/totalDuration";
+
+// Gap between the stuck playlist header's contents and the top of the view.
+const COLLAPSED_HEADER_INSET = 16;
+// Everything the collapse sets on the scroll element; cleared when it detaches.
+const COLLAPSE_PROPERTIES = [
+  "--playlist-artwork-scale",
+  "--playlist-title-progress",
+  "--playlist-title-scale",
+  "--playlist-title-shift",
+  "--playlist-actions-progress",
+  "--playlist-actions-shift",
+  "--playlist-details-shift",
+  "--playlist-expanded-header-height",
+  "--playlist-current-header-height",
+  "--playlist-background-scale",
+];
+
+type HeaderGeometry = {
+  expandedHeight: number;
+  bodyHeight: number;
+  titleHeight: number;
+  actionsHeight: number;
+  detailsHeight: number;
+  actions: HTMLElement | null;
+};
 
 export type TrackCollectionViewProps = TrackListProps & {
   title: string;
@@ -59,10 +84,15 @@ export function TrackCollectionView({
   const firstTrack = tracks[0];
   const isEmpty = tracks.length === 0;
   const scrollElementRef = useRef<HTMLDivElement | null>(null);
+  const headerGeometryRef = useRef<HeaderGeometry | null>(null);
+  const collapseFrameRef = useRef<number | null>(null);
 
   const updateCollapsibleHeader = useCallback((element: HTMLDivElement) => {
-    if (!collapsibleHeader) return;
+    const geometry = headerGeometryRef.current;
+    if (!collapsibleHeader || !geometry) return;
 
+    // The header keeps its expanded footprint in the layout and only its visible
+    // box shrinks, so collapsing never moves the content being scrolled.
     const collapseDistance = 280;
     const rawProgress = Math.min(
       1,
@@ -87,58 +117,105 @@ export function TrackCollectionView({
     const actionsProgress = ease(segment(0, 0.48));
     const detailsProgress = smooth(segment(0.48, 1));
 
+    const artworkSize =
+      145 - 18 * titleProgress - 70 * detailsProgress - 13 * artworkProgress;
+    const titleScale = 1 - 0.375 * titleProgress;
+    const titleShift =
+      165 - (artworkSize + 14 + 6 * (1 - artworkProgress) + 15 * titleLag);
+    const actionsShift =
+      geometry.titleHeight * (1 - titleScale) + 8 * titleProgress + 6 * detailsProgress;
+    const detailsShift = actionsShift + (geometry.actionsHeight + 8) * detailsProgress;
+    const bodyHeight = geometry.bodyHeight
+      - geometry.titleHeight * (1 - titleScale)
+      - 12 * titleProgress
+      - (geometry.actionsHeight + geometry.detailsHeight + 14) * detailsProgress;
+    const currentHeight = Math.max(44, artworkSize, bodyHeight);
+
+    element.style.setProperty("--playlist-artwork-scale", String(artworkSize / 145));
+    element.style.setProperty("--playlist-title-progress", String(titleProgress));
+    element.style.setProperty("--playlist-title-scale", String(titleScale));
+    element.style.setProperty("--playlist-title-shift", `${titleShift}px`);
+    element.style.setProperty("--playlist-actions-progress", String(actionsProgress));
+    element.style.setProperty("--playlist-actions-shift", `${actionsShift}px`);
+    element.style.setProperty("--playlist-details-shift", `${detailsShift}px`);
+    element.style.setProperty("--playlist-current-header-height", `${currentHeight}px`);
     element.style.setProperty(
-      "--playlist-artwork-progress",
-      String(artworkProgress),
+      "--playlist-background-scale",
+      String(
+        (currentHeight + COLLAPSED_HEADER_INSET) /
+        (geometry.expandedHeight + COLLAPSED_HEADER_INSET),
+      ),
     );
-    element.style.setProperty(
-      "--playlist-title-progress",
-      String(titleProgress),
-    );
-    element.style.setProperty("--playlist-title-lag", String(titleLag));
-    element.style.setProperty(
-      "--playlist-actions-progress",
-      String(actionsProgress),
-    );
-    element.style.setProperty(
-      "--playlist-details-progress",
-      String(detailsProgress),
-    );
-    const header = element.querySelector<HTMLElement>(".libraryHeader");
-    if (header) {
-      element.style.setProperty(
-        "--playlist-current-header-height",
-        `${header.getBoundingClientRect().height}px`,
-      );
-    }
-    element.toggleAttribute(
-      "data-playlist-actions-hidden",
-      actionsProgress >= 0.999,
-    );
+    const actionsHidden = actionsProgress >= 0.999;
+    element.toggleAttribute("data-playlist-actions-hidden", actionsHidden);
+    if (geometry.actions) geometry.actions.inert = actionsHidden;
   }, [collapsibleHeader]);
+
+  const scheduleCollapsibleHeader = useCallback((element: HTMLDivElement) => {
+    if (collapseFrameRef.current !== null) return;
+    collapseFrameRef.current = requestAnimationFrame(() => {
+      collapseFrameRef.current = null;
+      updateCollapsibleHeader(element);
+    });
+  }, [updateCollapsibleHeader]);
 
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
     scrollElementRef.current = element;
     registerScrollElement(element);
-    if (element) updateCollapsibleHeader(element);
-  }, [registerScrollElement, updateCollapsibleHeader]);
+  }, [registerScrollElement]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = scrollElementRef.current;
     if (!element || !collapsibleHeader) return;
+    const header = element.querySelector<HTMLElement>(".libraryHeader");
+    const body = header?.querySelector<HTMLElement>(".libraryHeaderBody");
+    const titleElement = header?.querySelector<HTMLElement>(".libraryTitle");
+    if (!header || !body || !titleElement) return;
+    const actions = body.querySelector<HTMLElement>(".libraryPlayActions");
+    const details = body.querySelector<HTMLElement>(".libraryInfo");
+    let measureFrame: number | null = null;
 
-    const update = () => updateCollapsibleHeader(element);
-    const resizeObserver = new ResizeObserver(update);
+    const measure = () => {
+      measureFrame = null;
+      // Contents retain their intrinsic dimensions; transforms never trigger this observer.
+      const bodyHeight = body.getBoundingClientRect().height;
+      const expandedHeight = Math.max(145, bodyHeight);
+      headerGeometryRef.current = {
+        expandedHeight,
+        bodyHeight,
+        titleHeight: titleElement.offsetHeight,
+        actionsHeight: actions?.offsetHeight ?? 0,
+        detailsHeight: details?.offsetHeight ?? 0,
+        actions,
+      };
+      element.style.setProperty("--playlist-expanded-header-height", `${expandedHeight}px`);
+      updateCollapsibleHeader(element);
+    };
+    const scheduleMeasure = () => {
+      if (measureFrame === null) measureFrame = requestAnimationFrame(measure);
+    };
+    measure();
+    const resizeObserver = new ResizeObserver(scheduleMeasure);
     resizeObserver.observe(element);
-    window.addEventListener("resize", update);
-    const updateFrame = requestAnimationFrame(update);
+    resizeObserver.observe(body);
+    // Native sticky positioning includes the top spacer and navigation automatically.
+    for (let sibling = header.previousElementSibling; sibling; sibling = sibling.previousElementSibling) {
+      resizeObserver.observe(sibling);
+    }
+    window.addEventListener("resize", scheduleMeasure);
 
     return () => {
-      cancelAnimationFrame(updateFrame);
+      if (measureFrame !== null) cancelAnimationFrame(measureFrame);
+      if (collapseFrameRef.current !== null) cancelAnimationFrame(collapseFrameRef.current);
+      collapseFrameRef.current = null;
+      headerGeometryRef.current = null;
       resizeObserver.disconnect();
-      window.removeEventListener("resize", update);
+      window.removeEventListener("resize", scheduleMeasure);
+      for (const property of COLLAPSE_PROPERTIES) element.style.removeProperty(property);
+      element.removeAttribute("data-playlist-actions-hidden");
+      if (actions) actions.inert = false;
     };
-  }, [collapsibleHeader, updateCollapsibleHeader]);
+  }, [collapsibleHeader, updateCollapsibleHeader, title, headerNavigation, showPlaybackActions, summary === null]);
 
   function handlePlay() {
     if (firstTrack) playTrack(firstTrack.globalId);
@@ -161,7 +238,7 @@ export function TrackCollectionView({
       ref={setScrollElement}
       onScroll={
         collapsibleHeader
-          ? (event) => updateCollapsibleHeader(event.currentTarget)
+          ? (event) => scheduleCollapsibleHeader(event.currentTarget)
           : undefined
       }
     >
@@ -173,7 +250,7 @@ export function TrackCollectionView({
         {headerArtwork && (
           <div className="libraryHeaderArtwork">{headerArtwork}</div>
         )}
-        <div className={headerArtwork ? "libraryHeaderBody" : undefined}>
+        <div className={headerArtwork || collapsibleHeader ? "libraryHeaderBody" : undefined}>
           <h1 className="libraryTitle">{title}</h1>
           {headerContent}
           {showPlaybackActions && (

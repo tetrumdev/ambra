@@ -875,6 +875,11 @@ function App() {
           />}
           {isSettingsView ? (
             <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
+              onServiceConnected={() => {
+                refreshSearchProviders();
+                search.retry();
+                void library.refreshStreamingMusic();
+              }}
               onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
               animateSwirl={preferences.ui.animateSwirl}
               onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
@@ -937,11 +942,6 @@ function App() {
               section={librarySection}
               onSectionChange={setLibrarySection}
               onRescanLocalMusic={library.rescanLocalMusic}
-              onServiceConnected={() => {
-                refreshSearchProviders();
-                search.retry();
-                void library.refreshStreamingMusic();
-              }}
             />
           )}
         </main>
