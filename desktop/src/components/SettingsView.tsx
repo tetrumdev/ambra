@@ -3,11 +3,12 @@ import { useEffect, useRef, useState, type RefCallback } from "react";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { newPreset, parseAutoEq, validatePreset, type DspPreset, type DspStatus, type EqBand, type ImpulseFile } from "../utils/audioSettings";
 import type { SettingsTab } from "./SettingsSidebar";
+import { ServiceSettings } from "./ServiceSettings";
 import "./SettingsView.css";
 
-type Props = { tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
-export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, registerScrollElement }: Props) {
+export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DspPreset | null>(null);
@@ -77,7 +78,7 @@ export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onSho
   };
   return <div className="settingsView" role="region" aria-label="Settings" ref={registerScrollElement}>
     {audio.error && <p className="settingsError" role="alert">{audio.error}</p>}
-    {!audio.native && tab !== "general" && <p className="settingsNotice">Native DSP and device selection are available in the desktop app. You can prepare presets here.</p>}
+    {!audio.native && (tab === "outputs" || tab === "dsp") && <p className="settingsNotice">Native DSP and device selection are available in the desktop app. You can prepare presets here.</p>}
     <section id="settings-panel-outputs" role="region" aria-labelledby="settings-tab-outputs" hidden={tab !== "outputs"}>
       <div className="settingsSectionHeading"><div><h2>Audio outputs</h2><p>Choose which devices appear in the player and give each its own sound.</p></div>
         <button className="settingsButton" onClick={() => void audio.refresh()} disabled={audio.loading || audio.saving}>Refresh devices</button></div>
@@ -143,6 +144,9 @@ export function SettingsView({ tab, onTabChange: setTab, showAudioQuality, onSho
       {status && <div className="settingsDspStatus" role="status"><strong>Current playback</strong><span>{status.presetName ?? "No preset"} · {status.active ? "DSP active" : "DSP bypassed"}{status.sampleRate ? ` · ${status.sampleRate / 1000} kHz` : ""}
         {status.peakDbfs !== null ? ` · Peak ${status.peakDbfs.toFixed(1)} dBFS` : ""} · {status.clippedSamples.toLocaleString()} samples over full scale</span>{status.warnings.map(w => <p key={w}>{w}</p>)}</div>}
       <p className="settingsNotice">Bit-perfect playback requires DSP bypass, 100% volume, and a compatible direct output path.</p>
+    </section>
+    <section id="settings-panel-services" role="region" aria-labelledby="settings-tab-services" hidden={tab !== "services"}>
+      <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected} />
     </section>
     <section id="settings-panel-general" role="region" aria-labelledby="settings-tab-general" hidden={tab !== "general"}>
       <div className="settingsSectionHeading"><div><h2>Playback display</h2><p>Choose what appears in your player.</p></div></div>

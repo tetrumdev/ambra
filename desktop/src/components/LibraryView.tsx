@@ -29,7 +29,6 @@ type LibraryViewProps = Omit<
   section: LibrarySection;
   onSectionChange: (section: LibrarySection) => void;
   onRescanLocalMusic: () => Promise<number>;
-  onServiceConnected: () => void;
 };
 
 export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; label: string }> = [
@@ -168,7 +167,6 @@ export function LibraryView({
   section,
   onSectionChange,
   onRescanLocalMusic,
-  onServiceConnected,
   ...props
 }: LibraryViewProps) {
   const artists = useMemo(() => libraryArtists(props.tracks), [props.tracks]);
@@ -182,7 +180,6 @@ export function LibraryView({
           <h1 className="libraryTitle">My Library</h1>
           <LibrarySourcesDialog
             onRescanLocalMusic={onRescanLocalMusic}
-            onServiceConnected={onServiceConnected}
           />
         </div>
         <nav className="libraryOverview" aria-label="Library sections">
@@ -214,7 +211,6 @@ export function LibraryView({
       headerContent={
         <LibrarySourcesDialog
           onRescanLocalMusic={onRescanLocalMusic}
-          onServiceConnected={onServiceConnected}
         />
       }
       removalLabel="Remove from Library"

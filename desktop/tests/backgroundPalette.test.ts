@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  COVER_EDGE_ZONES,
   coverEdgeLuminances,
   coverSeparation,
   neutralCoverSeparation,
@@ -78,31 +79,56 @@ describe("bigscreen cover separation", () => {
 
   test("measures each side of the cover separately", () => {
     // White top half, black bottom half.
-    const [top, right, bottom, left] = coverEdgeLuminances(
-      sample(16, (_, y) => y < 8 ? 255 : 0),
-      16,
-    );
-    expect(top).toBeCloseTo(1);
-    expect(bottom).toBeCloseTo(0);
-    expect(right).toBeCloseTo(0.5);
-    expect(left).toBeCloseTo(0.5);
+    const edges = coverEdgeLuminances(sample(16, (_, y) => y < 8 ? 255 : 0), 16);
+    expect(edges).toHaveLength(COVER_EDGE_ZONES * 4);
+    const side = (index: number) => edges.filter((_, entry) => entry % 4 === index);
+    const [top, right, bottom, left] = [0, 1, 2, 3].map(side);
+    top.forEach(zone => expect(zone).toBeCloseTo(1));
+    bottom.forEach(zone => expect(zone).toBeCloseTo(0));
+    // The sides run top to bottom, so they cross from white to black.
+    for (const edge of [right, left]) {
+      expect(edge.slice(0, COVER_EDGE_ZONES / 2).every(zone => zone > 0.99)).toBe(true);
+      expect(edge.slice(COVER_EDGE_ZONES / 2).every(zone => zone < 0.01)).toBe(true);
+    }
   });
 
+  test("measures zones along a side separately", () => {
+    // White left half, black right half: the top edge changes partway along.
+    const edges = coverEdgeLuminances(sample(16, x => x < 8 ? 255 : 0), 16);
+    const top = edges.filter((_, entry) => entry % 4 === 0);
+    expect(top[0]).toBeCloseTo(1);
+    expect(top[COVER_EDGE_ZONES - 1]).toBeCloseTo(0);
+  });
+
+  const zones = (value: number) => Array(COVER_EDGE_ZONES * 4).fill(value);
+
   test("deepens a dark field beside a light edge and lifts a light one beside a dark edge", () => {
-    expect(coverSeparation([0.9, 0.9, 0.9, 0.9], ["#202020", "#202020", "#202020", "#202020"], [1, 1, 1, 1]).directions)
-      .toEqual([-1, -1, -1, -1]);
-    expect(coverSeparation([0.05, 0.05, 0.05, 0.05], ["#d0d0d0", "#d0d0d0", "#d0d0d0", "#d0d0d0"], [1, 1, 1, 1]).directions)
-      .toEqual([1, 1, 1, 1]);
+    expect(coverSeparation(zones(0.9), ["#202020", "#202020", "#202020", "#202020"], [1, 1, 1, 1]).directions)
+      .toEqual(zones(-1));
+    expect(coverSeparation(zones(0.05), ["#d0d0d0", "#d0d0d0", "#d0d0d0", "#d0d0d0"], [1, 1, 1, 1]).directions)
+      .toEqual(zones(1));
   });
 
   test("uses headroom when the field matches the edge", () => {
     const dark = ["#151515", "#151515", "#151515", "#151515"];
     const light = ["#eeeeee", "#eeeeee", "#eeeeee", "#eeeeee"];
-    expect(coverSeparation(null, dark, [1, 0, 0, 0]).directions).toEqual([1, 1, 1, 1]);
-    expect(coverSeparation(null, light, [1, 0, 0, 0]).directions).toEqual([-1, -1, -1, -1]);
+    expect(coverSeparation(null, dark, [1, 0, 0, 0]).directions).toEqual(zones(1));
+    expect(coverSeparation(null, light, [1, 0, 0, 0]).directions).toEqual(zones(-1));
+  });
+
+  test("never pushes past black or white beside an extreme edge", () => {
+    const white = ["#ffffff", "#ffffff", "#ffffff", "#ffffff"];
+    const black = ["#000000", "#000000", "#000000", "#000000"];
+    expect(coverSeparation(zones(0.95), white, [1, 1, 1, 1]).directions).toEqual(zones(-1));
+    expect(coverSeparation(zones(0.05), black, [1, 1, 1, 1]).directions).toEqual(zones(1));
+  });
+
+  test("shadows a mid-tone cover that matches its field", () => {
+    const red = ["#9a4639", "#9a4639", "#9a4639", "#9a4639"];
+    expect(coverSeparation(null, red, [1, 0, 0, 0]).directions).toEqual(zones(-1));
   });
 
   test("stays neutral without a palette", () => {
-    expect(coverSeparation([1, 1, 1, 1], [], [])).toBe(neutralCoverSeparation);
+    expect(coverSeparation(zones(1), [], [])).toBe(neutralCoverSeparation);
   });
 });
