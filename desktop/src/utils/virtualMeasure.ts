@@ -67,13 +67,6 @@ export const domMeasurer: Measurer = {
   },
 };
 
-let measurer: Measurer = domMeasurer;
-
 export function activeMeasurer() {
-  return measurer;
-}
-
-/** Test seam: substitute geometry. Pass nothing to restore real layout reads. */
-export function setMeasurerForTests(replacement: Measurer = domMeasurer) {
-  measurer = replacement;
+  return domMeasurer;
 }
