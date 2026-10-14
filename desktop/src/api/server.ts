@@ -85,6 +85,38 @@ async function responseError(response: Response) {
   return body || `HTTP ${response.status}`;
 }
 
+export type LyricWord = {
+  text: string;
+  startMs: number;
+  endMs: number | null;
+};
+
+export type LyricLine = LyricWord & { words: LyricWord[] };
+
+export type TrackLyrics = {
+  status: "lyrics" | "instrumental" | "unavailable";
+  instrumental: boolean | null;
+  sync: "none" | "line" | "word";
+  hasWordSync: boolean;
+  plainLyrics: string | null;
+  lines: LyricLine[];
+};
+
+export async function trackLyrics(track: Track, signal: AbortSignal): Promise<TrackLyrics> {
+  const query = new URLSearchParams({
+    trackName: track.name,
+    artistName: track.artist,
+    albumName: track.album,
+    durationSeconds: String(track.durationSeconds),
+  });
+  const response = await fetch(`${serverBaseUrl}/api/lyrics?${query}`, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json();
+}
+
 export async function serviceAuthStatus(): Promise<ServiceAuthStatus> {
   const response = await fetch(`${serverBaseUrl}/api/auth/status`);
   if (!response.ok) throw new Error(await responseError(response));

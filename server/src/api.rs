@@ -156,6 +156,7 @@ pub async fn serve() -> ServerResult<()> {
 
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/lyrics", get(lyrics))
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/{provider}/start", post(start_auth))
         .route("/api/auth/{provider}/complete", post(complete_auth))
@@ -273,7 +274,26 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
 /// Routes that need no provider state answer immediately, even while saved
 /// sessions are still being restored.
 fn path_needs_providers(path: &str) -> bool {
-    path != "/api/health" && !path.starts_with("/api/artwork/")
+    path != "/api/health" && path != "/api/lyrics" && !path.starts_with("/api/artwork/")
+}
+
+async fn lyrics(
+    State(state): State<AppState>,
+    Query(request): Query<crate::lyrics::LyricsRequest>,
+) -> Response {
+    let result = if let Err(message) = request.validate() {
+        Err(ApiError::bad_request(message))
+    } else {
+        crate::lyrics::fetch(&state.http_client, &request)
+            .await
+            .map(Json)
+            .map_err(ApiError::upstream)
+    };
+    let mut response = result.into_response();
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// Wait for provider restoration. Returns `false` if it did not finish in time.
