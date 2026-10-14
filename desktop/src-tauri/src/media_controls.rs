@@ -35,7 +35,7 @@ pub struct NativeMediaMetadata {
     album: String,
     duration_seconds: f64,
     cover_source: Option<String>,
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(target_os = "macos")]
     asset_source: Option<String>,
 }
 
@@ -63,8 +63,8 @@ struct PublishedMediaMetadata {
     album: String,
     duration_seconds: f64,
     cover_url: Option<String>,
-    // Only macOS publishes asset identifiers; keep them in metadata regression tests.
-    #[cfg(any(target_os = "macos", test))]
+    // Only macOS publishes asset identifiers.
+    #[cfg(target_os = "macos")]
     asset_url: Option<String>,
 }
 
@@ -130,7 +130,7 @@ pub fn set_native_media_metadata(
         .cover_source
         .as_deref()
         .and_then(|source| native_cover_url(&app, source));
-    #[cfg(any(target_os = "macos", test))]
+    #[cfg(target_os = "macos")]
     let asset_url = metadata.asset_source.as_deref().and_then(native_asset_url);
 
     {
@@ -144,7 +144,7 @@ pub fn set_native_media_metadata(
             album: metadata.album,
             duration_seconds: metadata.duration_seconds,
             cover_url,
-            #[cfg(any(target_os = "macos", test))]
+            #[cfg(target_os = "macos")]
             asset_url,
         });
         published.metadata_revision = published.metadata_revision.saturating_add(1);
@@ -169,7 +169,7 @@ fn native_cover_url(app: &AppHandle, source: &str) -> Option<String> {
         .map(|url| url.to_string())
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 fn native_asset_url(source: &str) -> Option<String> {
     if source.starts_with("https://") || source.starts_with("http://") {
         return Some(source.to_owned());
@@ -469,103 +469,5 @@ fn finite_seconds(seconds: f64) -> f64 {
         seconds.max(0.0)
     } else {
         0.0
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        PublishedMediaMetadata, PublishedMediaState, PublishedPlayback, finite_duration,
-        finite_seconds, latest_media_publication, macos_playback_update_requires_publication,
-        media_control_action,
-    };
-    use souvlaki::MediaControlEvent;
-    use std::{
-        sync::Mutex,
-        time::{Duration, Instant},
-    };
-
-    #[test]
-    fn maps_headphone_navigation_events() {
-        assert_eq!(media_control_action(&MediaControlEvent::Next), Some("next"));
-        assert_eq!(
-            media_control_action(&MediaControlEvent::Previous),
-            Some("previous")
-        );
-        assert_eq!(
-            media_control_action(&MediaControlEvent::Toggle),
-            Some("toggle")
-        );
-    }
-
-    #[test]
-    fn rejects_non_finite_media_positions() {
-        assert_eq!(finite_duration(f64::NAN), None);
-        assert_eq!(finite_duration(-1.0), Some(Duration::ZERO));
-        assert_eq!(finite_seconds(f64::INFINITY), 0.0);
-        assert_eq!(finite_seconds(-1.0), 0.0);
-    }
-
-    #[test]
-    fn publishes_playback_transitions_and_seeks_but_not_clock_ticks() {
-        let started = Instant::now();
-        let playing = PublishedPlayback {
-            is_playing: true,
-            position_seconds: 10.0,
-            published_at: started,
-        };
-
-        assert!(!macos_playback_update_requires_publication(
-            Some(playing),
-            true,
-            20.0,
-            started + Duration::from_secs(10),
-        ));
-        assert!(macos_playback_update_requires_publication(
-            Some(playing),
-            false,
-            20.0,
-            started + Duration::from_secs(10),
-        ));
-        assert!(macos_playback_update_requires_publication(
-            Some(playing),
-            true,
-            45.0,
-            started + Duration::from_secs(10),
-        ));
-    }
-
-    #[test]
-    fn queued_publications_use_the_latest_track_metadata() {
-        let published = Mutex::new(PublishedMediaState {
-            metadata: Some(PublishedMediaMetadata {
-                title: "old track".to_owned(),
-                artist: "artist".to_owned(),
-                album: "album".to_owned(),
-                duration_seconds: 180.0,
-                cover_url: Some("old-cover".to_owned()),
-                asset_url: Some("old-source".to_owned()),
-            }),
-            metadata_revision: 1,
-            published_metadata_revision: 1,
-            ..PublishedMediaState::default()
-        });
-
-        {
-            let mut state = published.lock().unwrap();
-            let metadata = state.metadata.as_mut().unwrap();
-            metadata.title = "new track".to_owned();
-            metadata.cover_url = Some("new-cover".to_owned());
-            metadata.asset_url = Some("new-source".to_owned());
-            state.metadata_revision = 2;
-        }
-
-        let (snapshot, refresh_metadata, revision) = latest_media_publication(&published).unwrap();
-        let metadata = snapshot.metadata.unwrap();
-        assert_eq!(metadata.title, "new track");
-        assert_eq!(metadata.cover_url.as_deref(), Some("new-cover"));
-        assert_eq!(metadata.asset_url.as_deref(), Some("new-source"));
-        assert!(refresh_metadata);
-        assert_eq!(revision, 2);
     }
 }

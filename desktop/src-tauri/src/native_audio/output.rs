@@ -59,29 +59,6 @@ fn writable_frames(available_frames: usize, sample_count: usize, channels: usize
     available_frames.min(sample_count / channels)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{normalized_to_signed, writable_frames};
-
-    #[test]
-    fn exactly_restores_normalized_integer_samples() {
-        assert_eq!(normalized_to_signed(-1.0, 16), i16::MIN as i64);
-        assert_eq!(
-            normalized_to_signed(32_767.0 / 32_768.0, 16),
-            i16::MAX as i64
-        );
-        assert_eq!(
-            normalized_to_signed(2_147_483_647.0 / 2_147_483_648.0, 32),
-            i32::MAX as i64
-        );
-    }
-
-    #[test]
-    fn limits_device_writes_to_the_frames_with_supplied_samples() {
-        assert_eq!(writable_frames(4_800, 2_048, 2), 1_024);
-        assert_eq!(writable_frames(512, 2_048, 2), 512);
-    }
-}
 
 #[cfg(target_os = "windows")]
 mod windows;

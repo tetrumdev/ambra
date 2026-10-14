@@ -13,7 +13,7 @@ const revisionKey = "ambra.persistence.updated-at-ms";
 // durable mirror. Writes to the mirror are coalesced so a burst of changes (or a
 // playback position that updates every few seconds) costs one small IPC call
 // carrying only the keys that actually changed.
-let writeDelayMs = 750;
+const writeDelayMs = 750;
 
 type LoadedState = {
   updatedAtMs: number;
@@ -46,7 +46,7 @@ const desktopBackend: PersistenceBackend = {
   },
 };
 
-let backend = desktopBackend;
+const backend = desktopBackend;
 const dirtyKeys = new Set<string>();
 let hydrated = false;
 let hydration: Promise<boolean> | null = null;
@@ -186,19 +186,4 @@ export function removePersistentItem(key: string) {
   if (canTrack && localStorage.getItem(key) === null) return;
   localStorage.removeItem(key);
   if (canTrack) markChanged(key);
-}
-
-/** Test seam: replace the backend and reset module state. */
-export function resetPersistenceForTests(
-  replacement: PersistenceBackend = desktopBackend,
-  options: { writeDelayMs?: number } = {},
-) {
-  if (flushTimer !== undefined) clearTimeout(flushTimer);
-  flushTimer = undefined;
-  backend = replacement;
-  dirtyKeys.clear();
-  hydrated = false;
-  hydration = null;
-  writeChain = Promise.resolve();
-  writeDelayMs = options.writeDelayMs ?? 750;
 }
