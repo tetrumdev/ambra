@@ -11,7 +11,7 @@ import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
 
-const serverBaseUrl = (
+export const serverBaseUrl = (
   import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147"
 ).replace(/\/$/, "");
 

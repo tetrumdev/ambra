@@ -22,8 +22,9 @@ use std::{
     },
 };
 
-pub const PERSISTENT_STATE_KEYS: [&str; 7] = [
+pub const PERSISTENT_STATE_KEYS: [&str; 8] = [
     "ambra.preferences",
+    "ambra.ui-preferences.v1",
     "ambra.current-screen",
     "ambra.playlists.v1",
     "ambra.streaming-library.v1",
@@ -181,7 +182,13 @@ pub fn load(
 
 pub fn save(data_dir: &Path, patch: StatePatch) -> Result<(), String> {
     for (key, value) in &patch.changes {
-        check_key(key)?;
+        // Legacy keys remain readable for migration/rollback, never writable.
+        if !matches!(
+            key.as_str(),
+            "ambra.ui-preferences.v1" | "ambra.current-screen" | "ambra.streaming-library.v1"
+        ) {
+            return Err(format!("The server now owns this desktop-state key: {key}"));
+        }
         if value
             .as_ref()
             .is_some_and(|value| value.len() > MAX_VALUE_BYTES)
