@@ -17,6 +17,7 @@ The <i><b>perfect</b></i> music player built with performance in mind.
 - [ ] Playback Sync
 - [x] Equalizer with Rust Libraries
 - [ ] Mobile Apps
+- [ ] Server UI
 - [ ] Home Page
 
 <b>Future Features</b>
