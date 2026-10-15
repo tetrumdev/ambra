@@ -16,6 +16,9 @@ export function AudioDecks({ controller }: AudioDecksProps) {
         onCanPlay={() => controller.onCanPlay(0)}
         onPlaying={() => controller.onPlaying(0)}
         onPause={() => controller.onPause(0)}
+        onWaiting={() => controller.onWaiting(0)}
+        onSeeking={(event) => controller.onTimeUpdate(0, event)}
+        onSeeked={(event) => controller.onTimeUpdate(0, event)}
         onEnded={() => controller.onEnded(0)}
       />
       <audio
@@ -27,6 +30,9 @@ export function AudioDecks({ controller }: AudioDecksProps) {
         onCanPlay={() => controller.onCanPlay(1)}
         onPlaying={() => controller.onPlaying(1)}
         onPause={() => controller.onPause(1)}
+        onWaiting={() => controller.onWaiting(1)}
+        onSeeking={(event) => controller.onTimeUpdate(1, event)}
+        onSeeked={(event) => controller.onTimeUpdate(1, event)}
         onEnded={() => controller.onEnded(1)}
       />
     </>

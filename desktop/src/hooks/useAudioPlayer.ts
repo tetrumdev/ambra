@@ -37,6 +37,7 @@ export type AudioDeckController = {
   onCanPlay: (deck: Deck) => void;
   onPlaying: (deck: Deck) => void;
   onPause: (deck: Deck) => void;
+  onWaiting: (deck: Deck) => void;
   onEnded: (deck: Deck) => void;
 };
 
@@ -138,6 +139,14 @@ export function useAudioPlayer(
     [audioForDeck],
   );
 
+  useEffect(() => {
+    if (usesNativeAudio) return;
+    // The browser exposes its media clock directly, including buffering and seeks.
+    const interpolated = clock.getSmooth;
+    clock.getSmooth = () => activeAudio()?.currentTime ?? clock.get();
+    return () => { clock.getSmooth = interpolated; };
+  }, [clock, activeAudio, usesNativeAudio]);
+
   const runRemoteAction = useCallback((action: string, handler: () => void) => {
     const timestamp = performance.now();
     const previous = lastRemoteActionRef.current;
@@ -173,6 +182,7 @@ export function useAudioPlayer(
   );
 
   const clearPlayback = useCallback(() => {
+    clock.setRunning(false);
     setNativeQuality(null);
     setPlaybackError(null);
     restoreStartedRef.current = true;
@@ -322,6 +332,7 @@ export function useAudioPlayer(
       restoreStartedRef.current = true;
 
       if (usesNativeAudio) {
+        clock.setRunning(false);
         currentTrackIdRef.current = targetTrack.globalId;
         setCurrentTrackId(targetTrack.globalId);
         setCurrentTime(0);
@@ -416,6 +427,7 @@ export function useAudioPlayer(
 
   const pauseActive = useCallback(() => {
     if (usesNativeAudio) {
+      clock.setRunning(false);
       nativePlayIntentRef.current = false;
       setIsPlaying(false);
       void nativeCommandsRef.current.run("pause_native_audio").catch((error) =>
@@ -615,13 +627,26 @@ export function useAudioPlayer(
 
   const onPlaying = useCallback((deck: Deck) => {
     if (deck === activeDeckRef.current) {
+      clock.set(activeAudio()?.currentTime ?? clock.get());
+      clock.setRunning(true);
       pendingPlaybackDeckRef.current = null;
       setIsPlaying(true);
     }
   }, []);
 
   const onPause = useCallback((deck: Deck) => {
-    if (deck === activeDeckRef.current) setIsPlaying(false);
+    if (deck === activeDeckRef.current) {
+      clock.setRunning(false);
+      clock.set(activeAudio()?.currentTime ?? clock.get());
+      setIsPlaying(false);
+    }
+  }, []);
+
+  const onWaiting = useCallback((deck: Deck) => {
+    if (deck === activeDeckRef.current) {
+      clock.setRunning(false);
+      clock.set(activeAudio()?.currentTime ?? clock.get());
+    }
   }, []);
 
   const onEnded = useCallback(
@@ -757,6 +782,7 @@ export function useAudioPlayer(
           ) return previous;
           return { source: playback.currentSource, quality: playback.audioQuality };
         });
+        clock.setRunning(playback.isPlaying && !playback.buffering);
         setCurrentTime(playback.currentTime);
         if (playback.duration > 0) setDuration(playback.duration);
         if (playback.ended || playback.error) {
@@ -1042,6 +1068,7 @@ export function useAudioPlayer(
       onCanPlay,
       onPlaying,
       onPause,
+      onWaiting,
       onEnded,
     },
   };
