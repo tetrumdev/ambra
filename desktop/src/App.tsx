@@ -824,7 +824,8 @@ function App() {
 
       {player.currentTrack && (
         <>
-          <BackgroundArtwork track={player.currentTrack} active={isBigscreen} animate={preferences.ui.animateSwirl} />
+          <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
+            coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} />
           <AlbumArtwork
             key={player.currentTrack.nativeCover ?? player.currentTrack.cover}
             track={player.currentTrack}
@@ -833,7 +834,10 @@ function App() {
         </>
       )}
 
-      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"} track={player.currentTrack} clock={player.clock} playing={player.isPlaying} />}
+      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"}
+        track={player.currentTrack} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
+        motion={preferences.ui.lyricMotion}
+        onMotionChange={lyricMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricMotion } }))} />}
 
       {!isPlayerView && (
         <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
