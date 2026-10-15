@@ -13,6 +13,7 @@ mod media_cache;
 mod models;
 mod providers;
 mod storage;
+mod user_state;
 mod write_behind;
 
 #[tokio::main]

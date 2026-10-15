@@ -5,7 +5,7 @@
 The <i><b>perfect</b></i> music player built with performance in mind.
 
 ## To-Do
-
+<b>For Initial Release</b>
 - [x] Create Functional UI
 - [x] Add streaming support
   - [x] Tidal
@@ -13,22 +13,26 @@ The <i><b>perfect</b></i> music player built with performance in mind.
   - [x] Spotify
   - [ ] Local Files
 - [ ] Finish UI
-- [ ] Add download support
-  - [ ] Tidal
-  - [ ] Qobuz
-  - [ ] Spotify
+- [x] Lyrics Support
 - [ ] Playback Sync
-- [ ] Spotify Connect with all services
-- [ ] Equalizer with CamillaDSP
-- [ ] Room Autocorrection
+- [x] Equalizer with Rust Libraries
 - [ ] Mobile Apps
-- [ ] P2P Support
+- [ ] Server UI
+- [ ] Home Page
 
 <b>Future Features</b>
 
 - [ ] Serverless Streaming and Downloading
   - [ ] P2P Sync
+- [ ] Multi-User Support
+- [ ] P2P Support
+- [ ] Spotify Connect with all services
+- [ ] Room Autocorrection
 - [ ] Stats
+- [ ] Add download support
+  - [ ] Tidal
+  - [ ] Qobuz
+  - [ ] Spotify
 - [ ] Visualizer
 - [ ] Add additional streaming and downloading support
   - [ ] Youtube Music
@@ -52,9 +56,10 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ### Streaming service login
 
-The desktop app runs by itself for local music. It does not bundle or start
-the Ambra server. Streaming features require the separate server; start it
-in its own terminal when needed:
+The desktop app uses the separate Ambra server for playlists, queue and playback
+history, playback track and position, library ordering, and hidden tracks. Start
+the server before opening the client, including when playing local music. The
+client does not bundle or start the server:
 
 ```sh
 cd server
@@ -72,8 +77,9 @@ The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
 
 Ambra restores working saved sessions when the server starts. To connect a
-missing service, open **Settings → Services** in the desktop app. Tidal and Qobuz
-open their login page and ask you to paste the resulting callback URL into Ambra. Spotify opens its login
+missing service, open **My Library** in the desktop app and choose the `+`
+button in the upper-right corner. Tidal and Qobuz open their login page and ask
+you to paste the resulting callback URL into Ambra. Spotify opens its login
 page and completes its local callback automatically.
 
 Ambra never stores runtime data in the source tree. Provider sessions are
@@ -81,9 +87,25 @@ private files in the operating system's application-config directory, durable
 libraries and desktop state use its application-data directory, and metadata
 and audio caches use its cache directory. Set `AMBRA_CONFIG_DIR`,
 `AMBRA_DATA_DIR`, or `AMBRA_CACHE_DIR` to override those locations when running
-the server directly. A stable or synchronized `AMBRA_DATA_DIR` lets another
-installation restore the library, playlists, preferences, queue, and ordering;
-provider login material remains separate and must be authorized per machine.
+the server directly. The server saves listening state in
+`AMBRA_DATA_DIR/user-state.v1.json`; clients connected to that server restore the
+same state. UI and search preferences, audio output/DSP settings, window bounds,
+local audio files, and rebuildable client caches remain on each client.
+
+On the first connection to a server without listening state, the client imports
+its previous local playlists, queue/history, playback position, ordering, and
+hidden-track IDs. Existing server state always takes precedence over another
+client's legacy data. Old client state stays untouched for rollback; it is no
+longer updated. Back up the server data directory before downgrading. An older
+client reads its old local snapshot, not subsequent server changes.
+
+The client loads server state before opening the library. Failed saves remain
+pending in memory and retry while the client is open; normal desktop window
+closure waits for a successful save. Force-quitting can lose pending changes.
+Concurrent edits from stale clients are rejected and require explicitly
+reloading server state. This shares durable state, not live playback control or
+automatic playback handoff. Local track paths still require the corresponding
+files on the playback machine. Provider login material remains on the server.
 
 Repository hooks and CI reject credential/session files and recognizable secret
 values. Enable the versioned hooks after cloning with:

@@ -25,7 +25,8 @@ export type AppPreferences = {
   };
 };
 
-const preferencesKey = "ambra.preferences";
+const preferencesKey = "ambra.ui-preferences.v1";
+const playbackKey = "ambra.playback.v1";
 const legacyScreenKey = "ambra.current-screen";
 
 export const defaultPreferences: AppPreferences = {
@@ -181,9 +182,9 @@ function migratePreferences(value: unknown): AppPreferences {
   }
 }
 
-export function loadPreferences(): AppPreferences {
+function loadLocalPreferences(): AppPreferences {
   try {
-    const savedPreferences = getPersistentItem(preferencesKey);
+    const savedPreferences = getPersistentItem(preferencesKey) ?? getPersistentItem("ambra.preferences");
     if (savedPreferences !== null) {
       return migratePreferences(JSON.parse(savedPreferences));
     }
@@ -205,9 +206,17 @@ export function loadPreferences(): AppPreferences {
   return defaultPreferences;
 }
 
+export function loadPreferences(): AppPreferences {
+  const preferences = loadLocalPreferences();
+  const playback = JSON.parse(getPersistentItem(playbackKey) ?? "null") as AppPreferences["playback"] | null;
+  return { ...preferences, playback: playback ?? { ...defaultPreferences.playback } };
+}
+
 export function savePreferences(preferences: AppPreferences) {
   try {
-    setPersistentItem(preferencesKey, JSON.stringify(preferences));
+    const { playback, ...localPreferences } = preferences;
+    setPersistentItem(preferencesKey, JSON.stringify(localPreferences));
+    setPersistentItem(playbackKey, JSON.stringify(playback));
   } catch (error) {
     console.warn("Could not save preferences:", error);
   }
