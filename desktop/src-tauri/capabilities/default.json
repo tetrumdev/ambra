@@ -8,6 +8,7 @@
     "core:webview:allow-set-webview-focus",
     "core:window:allow-set-focus",
     "core:window:allow-show",
+    "core:window:allow-destroy",
     "core:window:allow-start-dragging",
     "core:window:allow-set-fullscreen",
     "opener:default"

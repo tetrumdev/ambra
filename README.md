@@ -55,9 +55,10 @@ Tauri, Vite, React, Bun, and NodeJS
 
 ### Streaming service login
 
-The desktop app runs by itself for local music. It does not bundle or start
-the Ambra server. Streaming features require the separate server; start it
-in its own terminal when needed:
+The desktop app uses the separate Ambra server for playlists, queue and playback
+history, playback track and position, library ordering, and hidden tracks. Start
+the server before opening the client, including when playing local music. The
+client does not bundle or start the server:
 
 ```sh
 cd server
@@ -85,9 +86,25 @@ private files in the operating system's application-config directory, durable
 libraries and desktop state use its application-data directory, and metadata
 and audio caches use its cache directory. Set `AMBRA_CONFIG_DIR`,
 `AMBRA_DATA_DIR`, or `AMBRA_CACHE_DIR` to override those locations when running
-the server directly. A stable or synchronized `AMBRA_DATA_DIR` lets another
-installation restore the library, playlists, preferences, queue, and ordering;
-provider login material remains separate and must be authorized per machine.
+the server directly. The server saves listening state in
+`AMBRA_DATA_DIR/user-state.v1.json`; clients connected to that server restore the
+same state. UI and search preferences, audio output/DSP settings, window bounds,
+local audio files, and rebuildable client caches remain on each client.
+
+On the first connection to a server without listening state, the client imports
+its previous local playlists, queue/history, playback position, ordering, and
+hidden-track IDs. Existing server state always takes precedence over another
+client's legacy data. Old client state stays untouched for rollback; it is no
+longer updated. Back up the server data directory before downgrading. An older
+client reads its old local snapshot, not subsequent server changes.
+
+The client loads server state before opening the library. Failed saves remain
+pending in memory and retry while the client is open; normal desktop window
+closure waits for a successful save. Force-quitting can lose pending changes.
+Concurrent edits from stale clients are rejected and require explicitly
+reloading server state. This shares durable state, not live playback control or
+automatic playback handoff. Local track paths still require the corresponding
+files on the playback machine. Provider login material remains on the server.
 
 Repository hooks and CI reject credential/session files and recognizable secret
 values. Enable the versioned hooks after cloning with:
