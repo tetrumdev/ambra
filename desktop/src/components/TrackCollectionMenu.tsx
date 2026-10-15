@@ -3,6 +3,8 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
+import { musicProviderName } from "../utils/musicProviderName";
+import { DropdownChevron } from "./DropdownChevron";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -36,8 +38,8 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     try {
       if (await action()) onClose();
       else setError("Could not save this playlist. Please try again.");
-    } catch {
-      setError("Could not prepare this song. Please try again.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not save this song. Please try again.");
     } finally {
       setSaving(false);
     }
@@ -74,18 +76,25 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
           <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(false)}>← Back</button>
           <div className="playlistMenuList">
             {playlistOptions.playlists.length === 0 && <p>No playlists yet. Create one below.</p>}
-            {playlistOptions.playlists.map(playlist => {
+            {([undefined, "spotify", "qobuz", "tidal"] as const).map(provider => {
+              const playlists = playlistOptions.playlists.filter(playlist => playlist.provider === provider);
+              if (!playlists.length) return null;
+              return <details className="playlistMenuGroup playlistDropdown" key={provider ?? "ambra"} open>
+                <summary><DropdownChevron />{provider ? musicProviderName(provider) : "AMBRA"}</summary>
+                {playlists.map(playlist => {
               const added = playlist.trackIds.includes(trackId);
               return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving} onClick={() => {
                 void save(() => playlistOptions.onAdd(playlist.id, trackId));
               }}>{playlist.name}{added ? " ✓" : ""}</button>;
+                })}
+              </details>;
             })}
           </div>
           <form className="playlistMenuCreate" onSubmit={event => {
             event.preventDefault();
             void save(() => playlistOptions.onCreate(name, trackId));
           }}>
-            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New playlist name" placeholder="New playlist name" value={name} onChange={event => setName(event.target.value)} />
+            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New AMBRA playlist name" value={name} onChange={event => setName(event.target.value)} />
             <button type="submit" disabled={!name.trim() || saving}>{saving ? "Saving…" : "Create & add"}</button>
             {error && <span role="alert">{error}</span>}
           </form>

@@ -48,6 +48,8 @@ dependencies = [
  "librespot-core",
  "librespot-metadata",
  "librespot-oauth",
+ "librespot-protocol",
+ "protobuf",
  "qbz-models",
  "qbz-qobuz",
  "quick-xml 0.41.0",

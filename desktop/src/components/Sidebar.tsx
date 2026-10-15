@@ -4,6 +4,10 @@ import type { Playlist } from "../types/music.ts";
 import { PlaylistActions } from "./PlaylistActions";
 import { librarySections, type LibrarySection } from "./LibraryView";
 import { closeDialog, openDialog } from "../utils/dialogs";
+import type { PlaylistServiceGroup } from "../hooks/useServicePlaylists";
+import { musicProviderName } from "../utils/musicProviderName";
+import { DropdownChevron } from "./DropdownChevron";
+import type { PlaylistGroup } from "../utils/preferences";
 
 type SidebarProps = {
   onOpenSettings: () => void;
@@ -17,6 +21,9 @@ type SidebarProps = {
   onSelectPlaylist: (playlistId: string) => void;
   onRenamePlaylist: (id: string, name: string) => boolean;
   onDeletePlaylist: (id: string) => boolean;
+  serviceGroups: PlaylistServiceGroup[];
+  playlistGroups: Record<PlaylistGroup, boolean>;
+  onTogglePlaylistGroup: (group: PlaylistGroup, expanded: boolean) => void;
 };
 
 export function Sidebar({
@@ -31,6 +38,9 @@ export function Sidebar({
   onSelectPlaylist,
   onRenamePlaylist,
   onDeletePlaylist,
+  serviceGroups,
+  playlistGroups,
+  onTogglePlaylistGroup,
 }: SidebarProps) {
   const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
@@ -81,11 +91,14 @@ export function Sidebar({
             ))}
           </nav>
           <div id="playlistContainer">
+            <details className="sidebarPlaylistGroup playlistDropdown" open={playlistGroups.ambra} onToggle={event => onTogglePlaylistGroup("ambra", event.currentTarget.open)}>
+              <summary><DropdownChevron />AMBRA</summary>
+              <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label="AMBRA playlists">
             {playlists.map((playlist) => (
               <div key={playlist.id} className="sidebarPlaylistRow">
                 <button
                   type="button"
-                  className="sidebarBtn sidebarPlaylistName"
+                  className="sidebarBtn sidebarLibraryButton sidebarPlaylistName"
                   onClick={() => onSelectPlaylist(playlist.id)}
                   aria-current={
                     activePlaylistId === playlist.id ? "page" : undefined
@@ -100,16 +113,25 @@ export function Sidebar({
                 />
               </div>
             ))}
+              </nav>
+            </details>
+            {(["spotify", "qobuz", "tidal"] as const).map(provider => {
+              const group = serviceGroups.find(group => group.provider === provider);
+              if (!group) return null;
+              return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
+                <summary><DropdownChevron />{musicProviderName(provider)}</summary>
+                <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
+                {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
+                  <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
+                </div>)}
+                {group.error && <p className="sidebarSyncMessage" role="alert">{group.error}</p>}
+                </nav>
+              </details>;
+            })}
           </div>
-          <button
-            type="button"
-            onClick={beginCreatingPlaylist}
-            id="createPlaylistBtn"
-          >
-            Create Playlist
-          </button>
         </div>
         <div className="sidebarFooter">
+          <button type="button" onClick={beginCreatingPlaylist} id="createPlaylistBtn">Create Playlist</button>
           <button
             type="button"
             className="sidebarBtn sidebarLibraryButton sidebarSettingsButton"

@@ -31,7 +31,7 @@
     pointer-events: none;
 }
 
-@media screen and (width <= 1250px) {
+@media screen and (width <= 799px) {
     .libraryTitlebar[data-content-layout="library"] {
         --titlebar-content-left: 0px;
     }
