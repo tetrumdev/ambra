@@ -5,7 +5,7 @@
 The <i><b>perfect</b></i> music player built with performance in mind.
 
 ## To-Do
-
+<b>For Initial Release</b>
 - [x] Create Functional UI
 - [x] Add streaming support
   - [x] Tidal
@@ -13,22 +13,25 @@ The <i><b>perfect</b></i> music player built with performance in mind.
   - [x] Spotify
   - [ ] Local Files
 - [ ] Finish UI
-- [ ] Add download support
-  - [ ] Tidal
-  - [ ] Qobuz
-  - [ ] Spotify
+- [x] Lyrics Support
 - [ ] Playback Sync
-- [ ] Spotify Connect with all services
-- [ ] Equalizer with CamillaDSP
-- [ ] Room Autocorrection
+- [x] Equalizer with Rust Libraries
 - [ ] Mobile Apps
-- [ ] P2P Support
+- [ ] Home Page
 
 <b>Future Features</b>
 
 - [ ] Serverless Streaming and Downloading
   - [ ] P2P Sync
+- [ ] Multi-User Support
+- [ ] P2P Support
+- [ ] Spotify Connect with all services
+- [ ] Room Autocorrection
 - [ ] Stats
+- [ ] Add download support
+  - [ ] Tidal
+  - [ ] Qobuz
+  - [ ] Spotify
 - [ ] Visualizer
 - [ ] Add additional streaming and downloading support
   - [ ] Youtube Music
@@ -72,8 +75,9 @@ The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
 
 Ambra restores working saved sessions when the server starts. To connect a
-missing service, open **Settings → Services** in the desktop app. Tidal and Qobuz
-open their login page and ask you to paste the resulting callback URL into Ambra. Spotify opens its login
+missing service, open **My Library** in the desktop app and choose the `+`
+button in the upper-right corner. Tidal and Qobuz open their login page and ask
+you to paste the resulting callback URL into Ambra. Spotify opens its login
 page and completes its local callback automatically.
 
 Ambra never stores runtime data in the source tree. Provider sessions are
