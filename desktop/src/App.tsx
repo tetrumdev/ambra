@@ -121,7 +121,7 @@ function App() {
     () => libraryQueueContext(library.tracks),
     [library.tracks],
   );
-  const queue = useQueue(availableTracks, preferences.playback.trackId);
+  const queue = useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
   const playbackTracks = useMemo(() => {
     const tracksById = new Map(
       availableTracks.map((track) => [track.globalId, track]),
@@ -597,7 +597,11 @@ function App() {
     };
 
     window.addEventListener("beforeunload", saveLatestSession);
-    return () => window.removeEventListener("beforeunload", saveLatestSession);
+    window.addEventListener("ambra:save-session", saveLatestSession);
+    return () => {
+      window.removeEventListener("beforeunload", saveLatestSession);
+      window.removeEventListener("ambra:save-session", saveLatestSession);
+    };
   }, []);
 
   // Player views and queue return to where they were opened from; search returns to the library.

@@ -89,6 +89,7 @@ function replaceActiveQueue(state: QueueState, entries: QueueItem[]): QueueState
 export function useQueue(
   availableTracks: Track[],
   restoredTrackId: GlobalTrackId | null,
+  ready: boolean,
 ): QueueController {
   const [state, setState] = useState<QueueState>(emptyQueue);
   const [isRestored, setIsRestored] = useState(false);
@@ -97,12 +98,13 @@ export function useQueue(
   const restoredTrackIdRef = useRef(restoredTrackId);
 
   const commitState = useCallback((nextState: QueueState) => {
+    saveQueueSnapshot(queueSnapshot(nextState.history, nextState.current, nextState.upcoming));
     stateRef.current = nextState;
     setState(nextState);
   }, []);
 
   useEffect(() => {
-    if (restoreAttemptedRef.current || availableTracks.length === 0) return;
+    if (restoreAttemptedRef.current || !ready) return;
     restoreAttemptedRef.current = true;
 
     const savedQueue = loadQueueSnapshot();
@@ -128,22 +130,21 @@ export function useQueue(
       }
     }
 
-    commitState(restored);
+    // Restoring on a machine without some local files must not erase their IDs
+    // from the server. Persist only subsequent queue actions.
+    stateRef.current = restored;
+    setState(restored);
     setIsRestored(true);
-  }, [availableTracks, commitState]);
-
-  useEffect(() => {
-    if (!isRestored) return;
-    saveQueueSnapshot(
-      queueSnapshot(state.history, state.current, state.upcoming),
-    );
-  }, [isRestored, state]);
+  }, [availableTracks, ready]);
 
   useEffect(() => {
     if (!isRestored) return;
     const refreshed = refreshQueueTracks(stateRef.current, availableTracks);
-    if (refreshed !== stateRef.current) commitState(refreshed);
-  }, [availableTracks, commitState, isRestored]);
+    if (refreshed !== stateRef.current) {
+      stateRef.current = refreshed;
+      setState(refreshed);
+    }
+  }, [availableTracks, isRestored]);
 
   const playFromContext = useCallback(
     (context: QueueContext, startTrackId: GlobalTrackId) => {

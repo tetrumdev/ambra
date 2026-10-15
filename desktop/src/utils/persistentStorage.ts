@@ -1,11 +1,20 @@
-const persistentKeys = new Set([
+import { getServerItem, serverStateKeys, setServerItem } from "./serverState";
+
+const restoreKeys = new Set([
   "ambra.preferences",
+  "ambra.ui-preferences.v1",
   "ambra.current-screen",
   "ambra.playlists.v1",
   "ambra.streaming-library.v1",
   "ambra.removed-library-tracks.v1",
   "ambra.library-order.v1",
   "ambra.queue.v1",
+]);
+// Old server-owned keys are read only for migration and retained for rollback.
+const persistentKeys = new Set([
+  "ambra.ui-preferences.v1",
+  "ambra.current-screen",
+  "ambra.streaming-library.v1",
 ]);
 const revisionKey = "ambra.persistence.updated-at-ms";
 
@@ -141,7 +150,7 @@ export function hydratePersistentStorage(): Promise<boolean> {
       // The durable copy wins. Discard pre-hydration writes, which were derived
       // from the older state that was just replaced.
       dirtyKeys.clear();
-      for (const key of persistentKeys) {
+      for (const key of restoreKeys) {
         const value = saved.values[key];
         if (typeof value === "string") localStorage.setItem(key, value);
         else localStorage.removeItem(key);
@@ -149,13 +158,15 @@ export function hydratePersistentStorage(): Promise<boolean> {
       localStorage.setItem(revisionKey, String(saved.updatedAtMs));
       return true;
     } catch (error) {
-      console.warn("Could not restore Ambra state:", error);
-      return false;
+      throw new Error(`Could not restore local state for migration: ${String(error)}`);
     } finally {
       hydrated = true;
       if (dirtyKeys.size > 0) scheduleFlush();
     }
-  })();
+  })().catch(error => {
+    hydration = null;
+    throw error;
+  });
   return hydration;
 }
 
@@ -169,10 +180,12 @@ function markChanged(key: string) {
 }
 
 export function getPersistentItem(key: string) {
+  if (serverStateKeys.has(key)) return getServerItem(key);
   return localStorage.getItem(key);
 }
 
 export function setPersistentItem(key: string, value: string) {
+  if (serverStateKeys.has(key)) return setServerItem(key, value);
   const canTrack = persistentKeys.has(key) && storageAvailable();
   // Rewriting an identical value would bump the revision and trigger a backend
   // write for no reason; providers and effects do this routinely on startup.
@@ -182,6 +195,7 @@ export function setPersistentItem(key: string, value: string) {
 }
 
 export function removePersistentItem(key: string) {
+  if (serverStateKeys.has(key)) return setServerItem(key, null);
   const canTrack = persistentKeys.has(key) && storageAvailable();
   if (canTrack && localStorage.getItem(key) === null) return;
   localStorage.removeItem(key);
