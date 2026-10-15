@@ -13,11 +13,9 @@ import "./ExtraCtrls.css";
 
 type ExtraCtrlsProps = {
   onOpenQueue?: () => void;
-  onToggleLyrics?: () => void;
-  lyricsActive?: boolean;
 };
 
-export function ExtraCtrls({ onOpenQueue, onToggleLyrics, lyricsActive = false }: ExtraCtrlsProps) {
+export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
   const audio = useAudioSettings();
   const selectedOutput = audio?.settings.outputs.find(
@@ -215,21 +213,6 @@ export function ExtraCtrls({ onOpenQueue, onToggleLyrics, lyricsActive = false }
           {Math.round(volume)}%
         </span>
       </div>
-      <button
-        id="lyricsBtn"
-        type="button"
-        onClick={onToggleLyrics}
-        aria-label="Lyrics"
-        aria-pressed={lyricsActive}
-        aria-controls="lyricsPage"
-        data-tooltip="Lyrics"
-      >
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
-          <path d="M4 5h12M4 10h9M4 15h6M18 10v8M18 10l4-1v7" />
-          <ellipse cx="16" cy="18" rx="2" ry="1.5" />
-          <ellipse cx="20" cy="16" rx="2" ry="1.5" />
-        </svg>
-      </button>
       <button
         id="queueBtn"
         type="button"
