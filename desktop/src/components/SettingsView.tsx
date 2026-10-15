@@ -152,7 +152,7 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
       <div className="settingsSectionHeading"><div><h2>Playback display</h2><p>Choose what appears in your player.</p></div></div>
       <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Show song specs</span><span className="settingsToggleDescription" id="songSpecsDescription">Show audio quality, format, and bitrate in the playback bar.</span></span>
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Show song specs" aria-describedby="songSpecsDescription" checked={showAudioQuality} onChange={e => onShowAudioQuality(e.currentTarget.checked)} /></label>
-      <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Animate swirl</span><span className="settingsToggleDescription" id="swirlMotionDescription">Keep the bigscreen background moving, independently of system UI animations.</span></span>
+      <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Animate swirl</span><span className="settingsToggleDescription" id="swirlMotionDescription">Keep the player background moving, independently of system UI animations.</span></span>
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Animate swirl" aria-describedby="swirlMotionDescription" checked={animateSwirl} onChange={e => onAnimateSwirl(e.currentTarget.checked)} /></label>
     </section>
   </div>;
