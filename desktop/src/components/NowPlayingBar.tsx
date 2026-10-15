@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { AudioQuality, Track } from "../types/music";
@@ -12,6 +13,51 @@ import { ExtraCtrls } from "./ExtraCtrls.tsx";
 import { TrackArtwork } from "./TrackArtwork";
 
 type PlayerBarVariant = "expanded" | "compact";
+
+function PlaybackErrorPill({ error }: { error: string }) {
+  const [dismissed, setDismissed] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "failed">("idle");
+
+  const copyError = async () => {
+    try {
+      await navigator.clipboard.writeText(error);
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  };
+
+  if (dismissed) return null;
+
+  return (
+    <div className="playbackError" role="alert">
+      <button
+        type="button"
+        className="playbackErrorCopy"
+        onClick={copyError}
+        aria-label="Copy playback error details"
+        title={`${error}\nClick to copy full error details`}
+      >
+        <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+          <path d="M10.5 3.5v-1a1 1 0 0 0-1-1h-7a1 1 0 0 0-1 1v7a1 1 0 0 0 1 1h1" />
+        </svg>
+        <span>{copyStatus === "copied" ? "Error copied" : copyStatus === "failed" ? "Copy failed · Retry" : "Playback error"}</span>
+      </button>
+      <button
+        type="button"
+        className="playbackErrorDismiss"
+        onClick={() => setDismissed(true)}
+        aria-label="Dismiss playback error"
+        title="Dismiss error"
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+          <path d="m3 3 6 6m0-6-6 6" />
+        </svg>
+      </button>
+    </div>
+  );
+}
 
 type NowPlayingBarProps = {
   variant: PlayerBarVariant;
@@ -56,6 +102,9 @@ export function NowPlayingBar({
   return (
     <div id="bottomInfoBar" data-variant={variant}>
       <AudioDecks controller={audioDecks} />
+      {track && playbackError && (
+        <PlaybackErrorPill key={JSON.stringify([track.globalId, playbackError])} error={playbackError} />
+      )}
       {variant === "compact" && (
         <button
           id="compactArtwork"
@@ -81,9 +130,6 @@ export function NowPlayingBar({
           disabled={isEmpty}
         />
         <div className="playbackReadout">
-          {track && playbackError && (
-            <div className="playbackError" role="alert">{playbackError}</div>
-          )}
           <PlaybackProgress
             clock={clock}
             duration={duration}

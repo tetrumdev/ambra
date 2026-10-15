@@ -123,10 +123,8 @@ export function BackgroundArtwork({ track, active, animate, coverId = "albumCove
     <div id="backgroundFX" aria-hidden="true" data-active={active}>
       <FluidGradientBackground
         colors={palette.colors}
-        weights={palette.weights}
         separation={separation}
         coverId={coverId}
-        seed={track.globalId}
         active={active}
         animate={animate}
       />

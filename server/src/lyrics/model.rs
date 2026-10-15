@@ -104,7 +104,11 @@ impl LyricsResponse {
         self.plain_lyrics = self
             .plain_lyrics
             .take()
-            .filter(|text| !text.trim().is_empty() && text.lines().count() <= MAX_LINES);
+            .filter(|text| !text.trim().is_empty() && text.lines().count() <= MAX_LINES)
+            .map(|text| uncensor(&text).unwrap_or(text));
+        for line in &mut self.lines {
+            uncensor_line(line);
+        }
         self.lines
             .retain(|line| valid_range(line.start_ms, line.end_ms));
         self.lines.sort_by_key(|line| line.start_ms);
@@ -179,6 +183,98 @@ impl LyricsResponse {
         if self.status == "lyrics" {
             self.instrumental = Some(false);
         }
+    }
+}
+
+/// Providers mask one slur with asterisks; restore it so lyrics match the recording.
+/// Each asterisk stands for one letter, so the result keeps the original length.
+fn uncensor(text: &str) -> Option<String> {
+    if !text.contains('*') {
+        return None;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut restored_text = chars.clone();
+    let mut changed = false;
+    let mut index = 0;
+    let in_word = |c: char| c.is_alphanumeric() || c == '*';
+    while index < chars.len() {
+        if !in_word(chars[index]) {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < chars.len() && in_word(chars[index]) {
+            index += 1;
+        }
+        if let Some(word) = restored_word(&chars[start..index]) {
+            restored_text[start..index].copy_from_slice(&word);
+            changed = true;
+        }
+    }
+    changed.then(|| restored_text.into_iter().collect())
+}
+
+fn restored_word(token: &[char]) -> Option<Vec<char>> {
+    // Ambiguous all-asterisk forms resolve to the earliest, most common spelling.
+    const WORDS: [&str; 6] = ["nigga", "niggas", "niggaz", "nigger", "niggah", "niggers"];
+    if !token.contains(&'*') || !matches!(token.first(), Some('n' | 'N')) {
+        return None;
+    }
+    let word = WORDS.iter().find(|word| {
+        word.len() == token.len()
+            && word
+                .chars()
+                .zip(token)
+                .all(|(letter, &masked)| masked == '*' || masked.eq_ignore_ascii_case(&letter))
+    })?;
+    let visible: Vec<char> = token.iter().copied().filter(|c| *c != '*').collect();
+    let shouting = visible.len() > 1 && visible.iter().all(|c| c.is_uppercase());
+    Some(
+        word.chars()
+            .enumerate()
+            .map(|(index, letter)| {
+                if shouting || (index == 0 && token[0].is_uppercase()) {
+                    letter.to_ascii_uppercase()
+                } else {
+                    letter
+                }
+            })
+            .collect(),
+    )
+}
+
+fn uncensor_segments(segments: &mut [Segment]) {
+    for segment in segments {
+        if let Some(text) = uncensor(&segment.text) {
+            segment.text = text;
+        }
+    }
+}
+
+fn uncensor_line(line: &mut LyricLine) {
+    let joined: String = line.segments.iter().map(|segment| segment.text.as_str()).collect();
+    match uncensor(&line.text) {
+        // Restoring keeps byte lengths, so a word masked across syllables maps back onto the same segment boundaries.
+        Some(text) if joined == line.text => {
+            let mut offset = 0;
+            for segment in &mut line.segments {
+                let end = offset + segment.text.len();
+                segment.text = text[offset..end].to_owned();
+                offset = end;
+            }
+            line.text = text;
+        }
+        Some(text) => {
+            line.text = text;
+            uncensor_segments(&mut line.segments);
+        }
+        None => uncensor_segments(&mut line.segments),
+    }
+    for annotation in line.translations.iter_mut().chain(&mut line.romanization) {
+        uncensor_segments(&mut annotation.segments);
+    }
+    for background in &mut line.background_vocals {
+        uncensor_line(background);
     }
 }
 

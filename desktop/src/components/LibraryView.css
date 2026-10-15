@@ -83,7 +83,8 @@
     background: #000;
     transform: scaleY(var(--playlist-background-scale));
     transform-origin: top;
-    pointer-events: none;
+    /* The painted strip above the sticky box must also block covered tracks. */
+    pointer-events: auto;
 }
 
 .libraryHeaderArtwork {

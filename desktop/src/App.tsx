@@ -170,11 +170,14 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
+  const lastPlayerTrackRef = useRef<Track | undefined>(undefined);
+  if (player.currentTrack) lastPlayerTrackRef.current = player.currentTrack;
   const screen = preferences.ui.screen;
   const isBigscreen =
-    screen === "bigscreen" && player.currentTrack !== undefined;
+    screen === "bigscreen" && lastPlayerTrackRef.current !== undefined;
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
+  const playerArtworkTrack = player.currentTrack ?? (isPlayerView ? lastPlayerTrackRef.current : undefined);
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
   const isSearchView = screen === "search" && !browseEntity;
@@ -481,6 +484,7 @@ function App() {
       const toggleBigscreen = () => {
         setPreferences((current) => {
           if (current.ui.screen !== "bigscreen" && current.ui.screen !== "lyrics") {
+            if (!latestSessionRef.current.player.currentTrack) return current;
             playerReturnScreenRef.current = current.ui.screen;
           }
 
@@ -489,9 +493,9 @@ function App() {
             ui: {
               ...current.ui,
               screen:
-                current.ui.screen === "bigscreen"
+                current.ui.screen === "bigscreen" || current.ui.screen === "lyrics"
                   ? playerReturnScreenRef.current
-                  : "bigscreen",
+                  : current.ui.playerView,
             },
           };
         });
@@ -519,7 +523,7 @@ function App() {
 
   useEffect(() => {
     const root = document.documentElement;
-    if (!isBigscreen) {
+    if (!isPlayerView) {
       root.removeAttribute("data-bigscreen-idle");
       return;
     }
@@ -543,7 +547,12 @@ function App() {
       window.removeEventListener("pointerdown", markActive);
       root.removeAttribute("data-bigscreen-idle");
     };
-  }, [isBigscreen]);
+  }, [isPlayerView]);
+
+  useEffect(() => {
+    if ((screen === "bigscreen" || screen === "lyrics") && preferences.ui.playerView !== screen)
+      setPreferences((current) => ({ ...current, ui: { ...current.ui, playerView: screen } }));
+  }, [screen, preferences.ui.playerView]);
 
   useEffect(() => {
     savePreferences(preferences);
@@ -643,6 +652,7 @@ function App() {
   const addEntityTrack = useStableCallback((track: Track) => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); });
 
   const changeScreen = (nextScreen: AppScreen) => {
+    if ((nextScreen === "bigscreen" || nextScreen === "lyrics") && !isPlayerView && !player.currentTrack) return;
     setPreferences((current) => ({
       ...current,
       ui: {
@@ -822,13 +832,13 @@ function App() {
         onSelectPlayerView={changeScreen}
       />
 
-      {player.currentTrack && (
+      {playerArtworkTrack && (
         <>
-          <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
+          <BackgroundArtwork track={playerArtworkTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
             coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} />
           <AlbumArtwork
-            key={player.currentTrack.nativeCover ?? player.currentTrack.cover}
-            track={player.currentTrack}
+            key={playerArtworkTrack.nativeCover ?? playerArtworkTrack.cover}
+            track={playerArtworkTrack}
             active={isBigscreen}
           />
         </>
@@ -977,7 +987,7 @@ function App() {
         onTogglePlayback={player.togglePlayback}
         onNext={player.next}
         onSeek={player.seek}
-        onOpenBigscreen={() => changeScreen("bigscreen")}
+        onOpenBigscreen={() => changeScreen(preferences.ui.playerView)}
         onOpenQueue={openQueue}
       />
 
