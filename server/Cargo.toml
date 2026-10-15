@@ -8,6 +8,7 @@ axum = "0.8.9"
 base64 = "0.22.1"
 bytes = "1"
 futures-util = "0.3.33"
+httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 librespot-audio = "0.8.0"
 librespot-core = "0.8.0"

@@ -832,7 +832,7 @@ function App() {
         </>
       )}
 
-      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"} track={player.currentTrack} clock={player.clock} />}
+      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"} track={player.currentTrack} clock={player.clock} playing={player.isPlaying} />}
 
       {!isPlayerView && (
         <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>

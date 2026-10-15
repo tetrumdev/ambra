@@ -9,6 +9,7 @@ import type {
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
+import { parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
 
 const serverBaseUrl = (
   import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147"
@@ -85,22 +86,7 @@ async function responseError(response: Response) {
   return body || `HTTP ${response.status}`;
 }
 
-export type LyricWord = {
-  text: string;
-  startMs: number;
-  endMs: number | null;
-};
-
-export type LyricLine = LyricWord & { words: LyricWord[] };
-
-export type TrackLyrics = {
-  status: "lyrics" | "instrumental" | "unavailable";
-  instrumental: boolean | null;
-  sync: "none" | "line" | "word";
-  hasWordSync: boolean;
-  plainLyrics: string | null;
-  lines: LyricLine[];
-};
+export type { LyricSegment as LyricWord, LyricLine, TrackLyrics } from "../types/lyrics";
 
 export async function trackLyrics(track: Track, signal: AbortSignal): Promise<TrackLyrics> {
   const query = new URLSearchParams({
@@ -109,12 +95,15 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
     albumName: track.album,
     durationSeconds: String(track.durationSeconds),
   });
+  if (track.isrc) query.set("isrc", track.isrc);
+  if (track.version) query.set("version", track.version);
+  if (track.provider === "spotify") query.set("spotifyId", track.providerTrackId);
   const response = await fetch(`${serverBaseUrl}/api/lyrics?${query}`, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
     cache: "no-store",
   });
   if (!response.ok) throw new Error(await responseError(response));
-  return response.json();
+  return parseTrackLyrics(await response.json());
 }
 
 export async function serviceAuthStatus(): Promise<ServiceAuthStatus> {
