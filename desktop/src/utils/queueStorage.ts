@@ -5,6 +5,7 @@ import type {
   Track,
 } from "../types/music";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
+import { isSavedTrack } from "./playlistStorage";
 
 const QUEUE_STORAGE_KEY = "ambra.queue.v1";
 
@@ -24,6 +25,8 @@ export type PersistedQueue = {
   history: PersistedHistoryEntry[];
   current: PersistedQueueItem | null;
   upcoming: PersistedQueueItem[];
+  /** Keeps queued search results and history restorable on another client. */
+  tracks?: Track[];
 };
 
 export type RestoredQueue = {
@@ -54,6 +57,11 @@ export function queueSnapshot(
     })),
     current: current ? persistedItem(current) : null,
     upcoming: upcoming.map(persistedItem),
+    tracks: [...new Map([
+      ...history.map(entry => entry.track),
+      ...(current ? [current.track] : []),
+      ...upcoming.map(entry => entry.track),
+    ].map(track => [track.globalId, track])).values()],
   };
 }
 
@@ -111,6 +119,7 @@ export function parseQueueSnapshot(value: string | null): PersistedQueue | null 
       return null;
     }
 
+    if (parsed.tracks !== undefined && (!Array.isArray(parsed.tracks) || !parsed.tracks.every(isSavedTrack))) return null;
     return parsed as PersistedQueue;
   } catch {
     return null;
@@ -121,7 +130,7 @@ export function resolveQueueSnapshot(
   snapshot: PersistedQueue,
   tracks: Track[],
 ): RestoredQueue {
-  const tracksById = new Map(tracks.map((track) => [track.globalId, track]));
+  const tracksById = new Map([...(snapshot.tracks ?? []), ...tracks].map((track) => [track.globalId, track]));
   const resolveItem = (item: PersistedQueueItem): QueueItem | null => {
     const track = tracksById.get(item.globalTrackId);
     return track
