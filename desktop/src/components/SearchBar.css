@@ -9,7 +9,7 @@
     border: none;
     outline: none;
     color: white;
-    background: linear-gradient(90deg, black, #161616);
+    background: black;
     border: 1px solid #535353;
     font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
     transition: 0.25s ease;

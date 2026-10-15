@@ -64,10 +64,11 @@
     border: none;
     border-radius: 100px;
     background: rgba(22, 22, 22, 0.4);
+    border: 1px solid rgba(100, 100, 100, 0.4);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     align-items: center;
-    box-shadow: 0 0 20px 0 rgba(255, 255, 255, 0.2);
+    box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
 }
 
 .bigscreenClose,
