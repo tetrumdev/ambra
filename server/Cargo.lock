@@ -42,6 +42,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "httpdate",
  "image",
  "librespot-audio",
  "librespot-core",
