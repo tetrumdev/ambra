@@ -1,12 +1,11 @@
 #lyricsPage {
+    --lyrics-top-padding: clamp(75px, 10vh, 100px);
+    --lyrics-column-padding: clamp(24px, 4vw, 80px);
     position: absolute;
     inset: 0;
     display: grid;
-    grid-template-columns: minmax(230px, 0.8fr) minmax(0, 1.4fr);
-    gap: clamp(40px, 6vw, 110px);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     /* Covers the titlebar strip too; the controls and drag region sit above it. */
-    padding: calc(var(--library-titlebar-height) + 100px)
-        clamp(40px, 7vw, 130px) 150px;
     box-sizing: border-box;
     min-height: 0;
     overflow: hidden;
@@ -21,16 +20,28 @@
 }
 
 .lyricsHeading {
-    align-self: center;
+    position: absolute;
+    top: calc((100vh - 150px) / 2);
+    left: 25%;
+    transform: translate(-50%, -50%);
+    display: grid;
+    place-items: center;
+    align-content: center;
     min-width: 0;
-    width: 100%;
-    max-width: 500px;
-    margin: -45px auto 0;
+    width: calc(50% - 2 * var(--lyrics-column-padding));
+    margin: 0;
 }
 
 .lyricsArtwork {
     display: block;
-    width: 100%;
+    width: min(
+        100%,
+        680px,
+        calc(
+            100vh - var(--library-titlebar-height) - var(--lyrics-top-padding) -
+                150px
+        )
+    );
     aspect-ratio: 1;
     object-fit: cover;
     -webkit-user-drag: none;
@@ -38,10 +49,16 @@
 
 .lyricsStage {
     position: relative;
+    grid-column: 2;
     display: flex;
     flex-direction: column;
     min-width: 0;
     min-height: 0;
+    margin-block: calc(
+            var(--library-titlebar-height) + var(--lyrics-top-padding)
+        )
+        150px;
+    padding-inline: var(--lyrics-column-padding);
 }
 
 .lyricsViewport {
@@ -411,7 +428,7 @@ button.lyricLine:focus-visible {
     }
 }
 
-@media (max-width: 999px) {
+@media (max-width: 799px) {
     #lyricsPage {
         display: flex;
         flex-direction: column;
@@ -423,6 +440,8 @@ button.lyricLine:focus-visible {
     }
     .lyricsStage {
         flex: 1;
+        margin-block: 0;
+        padding-inline: 0;
     }
     .lyricsLines {
         max-width: 660px;
@@ -449,16 +468,6 @@ button.lyricLine:focus-visible {
     }
     .lyricGroup {
         margin-bottom: 26px;
-    }
-}
-
-@media (max-height: 700px) and (min-width: 1000px) {
-    #lyricsPage {
-        padding-top: calc(var(--library-titlebar-height) + 75px);
-    }
-    .lyricsHeading {
-        max-width: 220px;
-        margin-top: -25px;
     }
 }
 

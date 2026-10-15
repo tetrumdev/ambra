@@ -1,3 +1,5 @@
+mod playlists;
+
 use std::{
     collections::HashMap,
     env, fs,

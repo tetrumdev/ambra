@@ -11,6 +11,7 @@ mod http_client;
 mod lyrics;
 mod media_cache;
 mod models;
+mod playlists;
 mod providers;
 mod storage;
 mod user_state;

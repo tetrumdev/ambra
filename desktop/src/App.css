@@ -179,6 +179,7 @@ button img {
     background: black;
     text-align: left;
     grid-template-columns: 230px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
     width: 100%;
     height: 100%;
     display: grid;
@@ -187,7 +188,7 @@ button img {
     overflow: hidden;
 }
 
-@media screen and (width <= 1250px) {
+@media screen and (width <= 799px) {
     #library,
     #search,
     #settings {

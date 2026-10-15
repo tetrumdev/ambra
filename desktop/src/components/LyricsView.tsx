@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { thumbnailArtwork, trackLyrics } from "../api/server";
+import { thumbnailArtwork } from "../api/server";
 import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import type { PlaybackClock } from "../utils/playbackClock";
@@ -9,6 +9,7 @@ import {
   preloadBigscreenArtwork,
 } from "../utils/artworkImages";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
+import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import {
   detailedLine,
   focusLyric,
@@ -779,7 +780,9 @@ export function LyricsView({
   onSeek,
   motion = "system",
 }: LyricsViewProps) {
-  const [lyrics, setLyrics] = useState<TrackLyrics | null>(null);
+  const [lyrics, setLyrics] = useState<TrackLyrics | null>(
+    () => track ? cachedLyrics(track) ?? null : null,
+  );
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
@@ -798,10 +801,10 @@ export function LyricsView({
 
   useEffect(() => {
     const controller = new AbortController();
-    setLyrics(null);
+    setLyrics(track ? cachedLyrics(track) ?? null : null);
     setError(false);
     if (track) {
-      void trackLyrics(track, controller.signal)
+      void loadLyrics(track)
         .then((result) => {
           if (!controller.signal.aborted) setLyrics(result);
         })
@@ -818,6 +821,7 @@ export function LyricsView({
     track?.durationSeconds,
     track?.isrc,
     track?.version,
+    track?.provider,
     track?.providerTrackId,
     attempt,
   ]);

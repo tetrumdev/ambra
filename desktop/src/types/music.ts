@@ -67,6 +67,10 @@ export type Playlist = {
   id: string;
   name: string;
   trackIds: GlobalTrackId[];
+  provider?: Exclude<MusicProvider, "local">;
+  remoteId?: string;
+  editable?: boolean;
+  trackCount?: number;
 };
 
 export type QueueSource = {

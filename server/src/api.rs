@@ -1,3 +1,5 @@
+mod playlists;
+
 use crate::media_cache::MediaCache;
 use std::{
     collections::{HashMap, HashSet},
@@ -84,6 +86,7 @@ struct AppState {
     artwork_dimensions_cache: Arc<RwLock<HashMap<String, (Instant, (u32, u32))>>>,
     artwork: Arc<crate::artwork_cache::ArtworkCache>,
     artist_metadata: Arc<Mutex<ArtistMetadataCache>>,
+    playlist_mutations: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -143,6 +146,7 @@ pub async fn serve() -> ServerResult<()> {
         artwork_quality_cache: Arc::new(RwLock::new(HashMap::new())),
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
         artist_metadata: Arc::new(Mutex::new(HashMap::new())),
+        playlist_mutations: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let address = env::var("AMBRA_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
@@ -164,6 +168,8 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/auth/{provider}/start", post(start_auth))
         .route("/api/auth/{provider}/complete", post(complete_auth))
         .route("/api/library", get(library))
+        .route("/api/providers/{provider}/playlists", get(playlists::list))
+        .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change))
         .route("/api/library/tracks", post(add_track))
         .route("/api/library/tracks/remove", post(remove_tracks))
         .route("/api/search/tracks", get(search_tracks))

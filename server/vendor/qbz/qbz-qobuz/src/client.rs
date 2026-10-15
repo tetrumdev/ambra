@@ -2546,6 +2546,24 @@ impl QobuzClient {
         Ok(response)
     }
 
+    /// Access playlist pages and mutations with the existing authenticated signing path.
+    pub async fn playlist_api(&self, operation: &str, params: &[(&str, String)]) -> Result<Value> {
+        if !["getUserPlaylists", "get", "addTracks", "deleteTracks"].contains(&operation) {
+            return Err(ApiError::ApiResponse("Unsupported playlist operation".to_string()));
+        }
+        let url = format!("https://www.qobuz.com/api.json/0.2/playlist/{operation}");
+        let response = self.signed_get_auth(&url, &format!("playlist{operation}"), params).await?;
+        let value: Value = response.error_for_status()?.json().await?;
+        if value.get("status").and_then(Value::as_str) == Some("error") {
+            return Err(ApiError::ApiResponse(value.get("message").and_then(Value::as_str).unwrap_or("Qobuz playlist request failed").to_owned()));
+        }
+        Ok(value)
+    }
+
+    pub async fn playlist_user_id(&self) -> Option<u64> {
+        self.session.read().await.as_ref().map(|session| session.user_id)
+    }
+
     /// Get user's playlists
     pub async fn get_user_playlists(&self) -> Result<Vec<Playlist>> {
         let url = endpoints::build_url(paths::PLAYLIST_GET_USER_PLAYLISTS);

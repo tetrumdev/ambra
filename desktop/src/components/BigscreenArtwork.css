@@ -16,13 +16,28 @@
     visibility: visible;
 }
 
-#albumCoverImg {
+#albumCoverImg,
+.albumCoverPlaceholder {
     position: absolute;
     inset: 0;
     width: calc(100% + 2px);
     height: calc(100% + 2px);
     object-fit: cover;
     clip-path: inset(0);
+    transition: opacity 600ms ease;
+}
+
+.albumCoverPlaceholder {
+    opacity: 0;
+    object-fit: contain;
+}
+
+#albumCover[data-empty="true"] #albumCoverImg {
+    opacity: 0;
+}
+
+#albumCover[data-empty="true"] .albumCoverPlaceholder {
+    opacity: 1;
 }
 
 #backgroundFX {
@@ -32,10 +47,24 @@
     z-index: 0;
     inset: 0;
     visibility: hidden;
+    opacity: 1;
+    transition: opacity 600ms ease;
 }
 
 #backgroundFX[data-active="true"] {
     visibility: visible;
+}
+
+#backgroundFX[data-empty="true"] {
+    opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #albumCoverImg,
+    .albumCoverPlaceholder,
+    #backgroundFX {
+        transition: none;
+    }
 }
 
 #backgroundFXCanvas {

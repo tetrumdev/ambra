@@ -89,6 +89,14 @@
     padding: 0 15px;
     font-size: 0.85rem;
 }
+
+.playlistMenuGroup > summary {
+    padding: 8px 15px;
+    color: #b3b3b3;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: default;
+}
 .playlistMenuCreate {
     display: grid;
     gap: 8px;
