@@ -84,7 +84,6 @@ vec3 separateFromCover(vec3 color) {
   vec2 outside = abs(offset) - u_cover.z;
   float gap = length(max(outside, 0.0));
   float nearby = exp(-(gap * gap) / (u_cover.w * u_cover.w));
-  if (nearby < 0.004) return color;
 
   // Corners blend their two sides' edge measurements.
   vec4 side = max(vec4(offset.y, offset.x, -offset.y, -offset.x), 0.0)
@@ -103,6 +102,7 @@ vec3 separateFromCover(vec3 color) {
   vec4 total = vec4(0.0);
   for (int zone = 0; zone < ${COVER_EDGE_ZONES}; zone++) {
     vec4 weight = max(1.0 - abs(position - float(zone)), 0.0);
+    weight = weight * weight * (3.0 - 2.0 * weight);
     zoneLuma += u_edgeLuma[zone] * weight;
     zoneDirection += u_edgeDirection[zone] * weight;
     total += weight;
@@ -110,16 +110,15 @@ vec3 separateFromCover(vec3 color) {
   float edge = dot(side, zoneLuma / total);
   float direction = dot(side, zoneDirection / total);
 
-  // Hold the field at least this far in brightness from the edge, fading out
-  // with distance. Field that already contrasts is left untouched; anything
-  // else is pulled past the edge in the zone's direction, never onto it.
+  // Keep existing contrast and gently separate similar colors. Bounded
+  // adjustments preserve the moving field instead of forcing it to match
+  // brightness targets from the stationary cover zones.
   float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
-  float reach = 0.14 * nearby;
-  float darkTarget = max(min(luma, edge - reach), 0.0);
-  float lightTarget = min(max(luma, edge + reach), 1.0);
-  vec3 deeper = color * (darkTarget / max(luma, 0.0001));
-  vec3 lifted = mix(color, vec3(1.0), (lightTarget - luma) / max(1.0 - luma, 0.0001));
-  return mix(color, direction < 0.0 ? deeper : lifted, abs(direction));
+  float similarity = 1.0 - smoothstep(0.03, 0.22, abs(luma - edge));
+  float amount = nearby * similarity * abs(direction);
+  vec3 deeper = color * (1.0 - 0.07 * amount);
+  vec3 lifted = mix(color, vec3(1.0), 0.04 * amount);
+  return direction < 0.0 ? deeper : lifted;
 }
 
 void main() {

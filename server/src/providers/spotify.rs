@@ -219,7 +219,11 @@ impl SpotifyProvider {
     }
 
     pub fn is_connected(&self) -> bool {
-        self.connected.load(Ordering::Acquire)
+        self.connected.load(Ordering::Acquire) && !self.session.is_invalid()
+    }
+
+    pub fn needs_reconnect(&self) -> bool {
+        self.connected.load(Ordering::Acquire) && self.session.is_invalid()
     }
 
     /// Refresh expired credentials when showing service status. Transient network
@@ -580,8 +584,7 @@ impl SpotifyProvider {
             .session
             .audio_key()
             .request(playable_track_id, file_id)
-            .await
-            .ok();
+            .await?;
         let header_offset = if AudioFiles::is_ogg_vorbis(format) {
             SPOTIFY_OGG_HEADER_END
         } else {
@@ -595,7 +598,7 @@ impl SpotifyProvider {
         }
 
         Ok(PreparedSpotifyStream {
-            reader: AudioDecrypt::new(key, encrypted_file),
+            reader: AudioDecrypt::new(Some(key), encrypted_file),
             controller,
             content_length,
             header_offset,

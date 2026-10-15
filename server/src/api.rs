@@ -815,7 +815,8 @@ async fn search_catalog(
             MusicProvider::Spotify => {
                 // Librespot exposes track search. Reuse returned metadata for entity cards
                 // instead of introducing a separate Spotify developer-app requirement.
-                let ids = spotify_provider(&state)?
+                let ids = spotify_provider(&state)
+                    .await?
                     .search_track_ids(query, limit as usize, 0)
                     .await
                     .map_err(ApiError::upstream)?;
@@ -934,7 +935,8 @@ async fn search_tracks(
                 .await
                 .map_err(ApiError::upstream),
             MusicProvider::Spotify => {
-                let mut ids = spotify_provider(&state)?
+                let mut ids = spotify_provider(&state)
+                    .await?
                     .search_track_ids(query, limit as usize + 1, request.offset as usize)
                     .await
                     .map_err(ApiError::upstream)?;
@@ -1188,7 +1190,8 @@ async fn cached_artist_metadata(
                 .artist_profile(artist_id)
                 .await
                 .map_err(ApiError::upstream),
-            MusicProvider::Spotify => spotify_provider(state)?
+            MusicProvider::Spotify => spotify_provider(state)
+                .await?
                 .artist_profile(artist_id)
                 .await
                 .map_err(ApiError::upstream),
@@ -1231,7 +1234,10 @@ async fn artist_metadata(
         match provider {
             MusicProvider::Tidal => tidal_provider(&state)?.artist_details(&artist_id).await,
             MusicProvider::Qobuz => qobuz_provider(&state)?.artist_details(&artist_id).await,
-            MusicProvider::Spotify => spotify_provider(&state)?.artist_details(&artist_id).await,
+            MusicProvider::Spotify => spotify_provider(&state)
+                .await?
+                .artist_details(&artist_id)
+                .await,
         }
         .map_err(ApiError::upstream)
     };
@@ -1286,7 +1292,8 @@ async fn artist_albums(
                 .artist_albums(&artist_id, request.offset, limit)
                 .await
                 .map_err(ApiError::upstream),
-            MusicProvider::Spotify => spotify_provider(&state)?
+            MusicProvider::Spotify => spotify_provider(&state)
+                .await?
                 .artist_albums(&artist_id, request.offset, limit)
                 .await
                 .map_err(ApiError::upstream),
@@ -1359,7 +1366,8 @@ async fn album_entries(
             .album_track_ids(album_id)
             .await
             .map_err(ApiError::upstream)?,
-        MusicProvider::Spotify => spotify_provider(state)?
+        MusicProvider::Spotify => spotify_provider(state)
+            .await?
             .album_track_ids(album_id)
             .await
             .map_err(ApiError::upstream)?,
@@ -1522,8 +1530,9 @@ async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<Trac
                 .await
         }
         MusicProvider::Spotify => {
-            current_spotify(state)
-                .ok_or_else(|| io::Error::other("Spotify login is not configured"))?
+            spotify_provider(state)
+                .await
+                .map_err(|error| io::Error::other(error.message))?
                 .track_metadata(&entry.provider_track_id)
                 .await
         }
@@ -1726,7 +1735,8 @@ async fn stream_spotify_track(
     track_id: &str,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
-    let prepared = spotify_provider(state)?
+    let prepared = spotify_provider(state)
+        .await?
         .prepare_stream(track_id)
         .await
         .map_err(ApiError::upstream)?;
@@ -2033,12 +2043,33 @@ fn current_spotify(state: &AppState) -> Option<SpotifyProvider> {
         .clone()
 }
 
-fn spotify_provider(state: &AppState) -> Result<SpotifyProvider, ApiError> {
-    current_spotify(state).ok_or_else(|| {
+async fn spotify_provider(state: &AppState) -> Result<SpotifyProvider, ApiError> {
+    let unavailable = || {
         ApiError::service_unavailable(
             "Spotify is not connected. Sign in from Settings → Services.",
         )
-    })
+    };
+    let provider = current_spotify(state).ok_or_else(unavailable)?;
+    if !provider.needs_reconnect() {
+        return Ok(provider);
+    }
+
+    // Librespot sessions cannot be reused after a dropped connection. Serialize
+    // replacement with interactive sign-in so concurrent requests share it.
+    let _login = state.spotify_login.lock().await;
+    let provider = current_spotify(state).ok_or_else(unavailable)?;
+    if !provider.needs_reconnect() {
+        return Ok(provider);
+    }
+    let provider = SpotifyProvider::authenticate_if_configured(false)
+        .await
+        .map_err(ApiError::upstream)?
+        .ok_or_else(unavailable)?;
+    *state
+        .spotify
+        .write()
+        .unwrap_or_else(|error| error.into_inner()) = Some(provider.clone());
+    Ok(provider)
 }
 
 fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
