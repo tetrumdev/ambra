@@ -14,6 +14,8 @@ librespot-audio = "0.8.0"
 librespot-core = "0.8.0"
 librespot-metadata = "0.8.0"
 librespot-oauth = "0.8.0"
+librespot-protocol = "0.8.0"
+protobuf = "3.7"
 qbz-models = { path = "vendor/qbz/qbz-models" }
 qbz-qobuz = { path = "vendor/qbz/qbz-qobuz" }
 # Unify gzip into QBZ's reqwest 0.12 client; its defaults omit response compression.

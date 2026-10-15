@@ -45,6 +45,7 @@ import {
 import { isUnmodifiedKey } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
+import { preloadLyrics } from "./utils/lyricsCache";
 
 import { playlistTracks } from "./utils/playlists";
 import {
@@ -53,6 +54,7 @@ import {
 } from "./utils/trackCollectionOrder";
 
 import { usePlaylists } from "./hooks/usePlaylists";
+import { useServicePlaylists } from "./hooks/useServicePlaylists";
 
 function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
@@ -69,10 +71,11 @@ function App() {
     for (const track of tracks) known.set(track.globalId, track);
     return [...known.values()];
   }), []);
-  const playlists = playlistStore.playlists;
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
+  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId);
+  const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
     useState<LibrarySection>("overview");
   const [collectionSorts, setCollectionSorts] = useState<
@@ -110,13 +113,13 @@ function App() {
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
-      [...browseTracks, ...playlistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
+      [...browseTracks, ...playlistStore.tracks, ...servicePlaylistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
     );
     for (const track of search.knownTracks) {
       tracksById.set(track.globalId, track);
     }
     return [...tracksById.values()];
-  }, [browseTracks, playlistStore.tracks, library.catalogTracks, search.knownTracks]);
+  }, [browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
@@ -155,6 +158,12 @@ function App() {
   }, [queue.upcomingEntries]);
 
   useEffect(() => {
+    const tracks = queue.upcomingEntries.slice(0, 2).map((entry) => entry.track);
+    if (player.currentTrack) tracks.unshift(player.currentTrack);
+    void preloadLyrics(tracks);
+  }, [player.currentTrack, queue.upcomingEntries]);
+
+  useEffect(() => {
     if (library.isServerReachable || library.isLoading) return;
 
     const retryStreamingMusic = () => {
@@ -170,14 +179,10 @@ function App() {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
-  const lastPlayerTrackRef = useRef<Track | undefined>(undefined);
-  if (player.currentTrack) lastPlayerTrackRef.current = player.currentTrack;
   const screen = preferences.ui.screen;
-  const isBigscreen =
-    screen === "bigscreen" && lastPlayerTrackRef.current !== undefined;
+  const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
-  const playerArtworkTrack = player.currentTrack ?? (isPlayerView ? lastPlayerTrackRef.current : undefined);
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
   const isSearchView = screen === "search" && !browseEntity;
@@ -210,6 +215,8 @@ function App() {
 
   const addTrackToPlaylist = useStableCallback(async (playlistId: string, trackId: string) => {
     const track = availableTracks.find(track => track.globalId === trackId);
+    if (playlists.find(playlist => playlist.id === playlistId)?.provider)
+      return track ? servicePlaylistStore.addTrack(playlistId, track) : false;
     return track ? playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
   });
   const createPlaylistWithTrack = useStableCallback(async (name: string, trackId: string) => {
@@ -218,13 +225,15 @@ function App() {
   });
   // Stable so playback-clock renders don't invalidate memoized track views.
   const playlistOptions = useMemo(
-    () => ({ playlists, onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack }),
+    () => ({ playlists: playlists.filter(playlist => playlist.editable !== false), onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack }),
     [playlists, addTrackToPlaylist, createPlaylistWithTrack],
   );
 
   const selectedPlaylist = playlists.find((playlist) => {
     return playlist.id === selectedPlaylistId;
   });
+  const servicePlaylistError = servicePlaylistStore.error
+    ?? (selectedPlaylist ? servicePlaylistStore.errors[selectedPlaylist.id] : null);
   const activeViewKey = isQueueView
     ? "queue"
     : isSettingsView
@@ -291,7 +300,8 @@ function App() {
 
   const removeFromCollection = (trackIds: GlobalTrackId[]) => {
     if (selectedPlaylist) {
-      playlistStore.removeTracks(selectedPlaylist.id, trackIds);
+      if (selectedPlaylist.provider) void servicePlaylistStore.removeTracks(selectedPlaylist.id, trackIds).catch(() => {});
+      else playlistStore.removeTracks(selectedPlaylist.id, trackIds);
     } else {
       library.removeTracks(trackIds);
     }
@@ -306,6 +316,7 @@ function App() {
 
   const reorderCollectionTracks = (orderedTrackIds: GlobalTrackId[]) => {
     if (selectedPlaylist) {
+      if (selectedPlaylist.provider) return;
       if (!playlistStore.reorderTracks(selectedPlaylist.id, orderedTrackIds)) return;
     } else {
       library.reorderTracks(orderedTrackIds);
@@ -819,8 +830,8 @@ function App() {
       addToQueue(activeCollectionContext, trackId),
     playNext: (trackId: GlobalTrackId) =>
       playNext(activeCollectionContext, trackId),
-    removeTracks: removeFromCollection,
-    reorderTracks: reorderCollectionTracks,
+    removeTracks: selectedPlaylist?.provider && (!selectedPlaylist.editable || servicePlaylistStore.busy.has(selectedPlaylist.id)) ? undefined : removeFromCollection,
+    reorderTracks: selectedPlaylist?.provider ? undefined : reorderCollectionTracks,
     sort: collectionSort,
     onSortChange: changeCollectionSort,
     shuffleCollection,
@@ -836,13 +847,12 @@ function App() {
         onSelectPlayerView={changeScreen}
       />
 
-      {playerArtworkTrack && (
+      {(player.currentTrack || isPlayerView) && (
         <>
-          <BackgroundArtwork track={playerArtworkTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
+          <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
             coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} />
           <AlbumArtwork
-            key={playerArtworkTrack.nativeCover ?? playerArtworkTrack.cover}
-            track={playerArtworkTrack}
+            track={player.currentTrack}
             active={isBigscreen}
           />
         </>
@@ -867,6 +877,7 @@ function App() {
             onConfirm={() => { setBrowseEntity(null); changeScreen(searchQuery.trim() ? "search" : "library"); }}
           />}
           {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+          {!isQueueView && !isSettingsView && servicePlaylistError && <p className="playlistSyncError" role="alert">{servicePlaylistError}</p>}
           {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
             isSettingsActive={isSettingsView}
             onOpenSettings={() => {
@@ -895,7 +906,12 @@ function App() {
               if (selectedPlaylistId === id) setSelectedPlaylistId(null);
               return true;
             }}
-            playlists={playlists}
+            playlists={playlistStore.playlists}
+            serviceGroups={servicePlaylistStore.groups}
+            playlistGroups={preferences.ui.playlistGroups}
+            onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {
+              ...current, ui: { ...current.ui, playlistGroups: { ...current.ui.playlistGroups, [group]: expanded } },
+            })}
             onSelectPlaylist={(id) => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(id);
@@ -906,6 +922,7 @@ function App() {
             <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
               onServiceConnected={() => {
                 refreshSearchProviders();
+                void servicePlaylistStore.refresh();
                 search.retry();
                 void library.refreshStreamingMusic();
               }}
