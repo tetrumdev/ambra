@@ -139,7 +139,6 @@
 }
 
 #volumeBtn,
-#lyricsBtn,
 #queueBtn {
     display: grid;
     place-items: center;
@@ -152,10 +151,6 @@
     line-height: 0;
     cursor: default;
 }
-
-#lyricsBtn { color: white; border-radius: 6px; }
-#lyricsBtn[aria-pressed="true"] { background: rgba(255, 255, 255, 0.16); }
-#lyricsBtn:focus-visible { box-shadow: 0 0 0 2px white; }
 
 #extraCtrls #queueBtn {
     align-self: flex-start;
