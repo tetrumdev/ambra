@@ -88,10 +88,25 @@ button img {
     cursor: none !important;
 }
 
-:root[data-bigscreen-idle="true"] .xContainer,
+/* Idle controls fade as one group; visibility flips only once the fade ends. */
+.bigscreenCtrls,
+.volumeControlContainer,
+.devAudioControls,
+#extraCtrls #queueBtn {
+    transition: opacity 0.25s ease, visibility 0.25s, filter 0.15s;
+}
+
+/* Children inherit visibility, so their own transitions must not include it. */
+.bigscreenCtrls .xContainer,
+.volumeControlContainer #volumeBtn {
+    transition-property: filter;
+}
+
+:root[data-bigscreen-idle="true"] .bigscreenCtrls,
 :root[data-bigscreen-idle="true"] #queueBtn,
 :root[data-bigscreen-idle="true"] .volumeControlContainer,
 :root[data-bigscreen-idle="true"] .devAudioControls {
+    opacity: 0;
     visibility: hidden;
     pointer-events: none;
 }
