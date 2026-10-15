@@ -155,6 +155,9 @@ pub async fn serve() -> ServerResult<()> {
         .allow_private_network(true);
 
     let app = Router::new()
+        .merge(crate::user_state::router(Arc::new(
+            crate::user_state::UserState::new(),
+        )))
         .route("/api/health", get(health))
         .route("/api/lyrics", get(lyrics))
         .route("/api/auth/status", get(auth_status))
@@ -274,7 +277,10 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
 /// Routes that need no provider state answer immediately, even while saved
 /// sessions are still being restored.
 fn path_needs_providers(path: &str) -> bool {
-    path != "/api/health" && path != "/api/lyrics" && !path.starts_with("/api/artwork/")
+    path != "/api/health"
+        && path != "/api/state"
+        && path != "/api/lyrics"
+        && !path.starts_with("/api/artwork/")
 }
 
 async fn lyrics(

@@ -45,6 +45,48 @@ body,
     overflow-x: hidden;
 }
 
+.stateStartup {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    box-sizing: border-box;
+}
+
+.stateStartup h1 { font-size: 24px; }
+.stateStartup p { max-width: 640px; overflow-wrap: anywhere; }
+.stateTitlebar { position: fixed; top: 0; left: 0; right: 0; height: 32px; }
+.stateStartup button, .stateSaveError button {
+    color: white;
+    background: #333;
+    border: 1px solid #888;
+    border-radius: 6px;
+    padding: 8px 16px;
+    font: inherit;
+}
+.stateStartup button:focus-visible, .stateSaveError button:focus-visible {
+    outline: 2px solid white !important;
+    outline-offset: 3px;
+}
+.stateSaveError {
+    position: fixed;
+    top: 36px;
+    left: 16px;
+    right: 16px;
+    z-index: 10000;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    justify-content: center;
+    padding: 12px;
+    border: 1px solid #cf9d62;
+    border-radius: 8px;
+    background: #382818;
+}
+.stateSaveError button { flex-shrink: 0; }
+
 :root:has([data-tauri-drag-region]) {
     --library-titlebar-height: 32px;
 }

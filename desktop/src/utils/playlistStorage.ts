@@ -9,7 +9,7 @@ function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function isTrack(value: unknown): value is Track {
+export function isSavedTrack(value: unknown): value is Track {
   if (!record(value)) return false;
   return ["globalId", "providerTrackId", "audio", "cover", "name", "album", "artist"].every(key => typeof value[key] === "string")
     && ["local", "tidal", "qobuz", "spotify"].includes(String(value.provider))
@@ -32,7 +32,7 @@ export function parsePlaylistSnapshot(raw: string | null): PlaylistSnapshot {
     ids.add(item.id);
     return { id: item.id, name: item.name, trackIds: [...new Set(item.trackIds as string[])] };
   });
-  if (!value.tracks.every(isTrack)) throw new Error("Invalid saved playlist track");
+  if (!value.tracks.every(isSavedTrack)) throw new Error("Invalid saved playlist track");
   return { version: 1, playlists, tracks: value.tracks };
 }
 
