@@ -3,6 +3,7 @@ import { getPersistentItem, removePersistentItem, setPersistentItem } from "./pe
 
 export type AppScreen = "bigscreen" | "lyrics" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
+export type PlayerView = Extract<AppScreen, "bigscreen" | "lyrics">;
 
 export type AppPreferences = {
   version: 4;
@@ -11,6 +12,8 @@ export type AppPreferences = {
     showAudioQuality: boolean;
     animateSwirl: boolean;
     lyricMotion: LyricMotion;
+    /** The player view to reopen: whichever of album art or lyrics was shown last. */
+    playerView: PlayerView;
   };
   search: {
     query: string;
@@ -32,6 +35,7 @@ export const defaultPreferences: AppPreferences = {
     showAudioQuality: false,
     animateSwirl: true,
     lyricMotion: "system",
+    playerView: "bigscreen",
   },
   search: {
     query: "",
@@ -83,12 +87,13 @@ function migratePreferences(value: unknown): AppPreferences {
   const lyricMotion = ui.lyricMotion === "full" || ui.lyricMotion === "reduced"
     ? ui.lyricMotion
     : "system";
+  const playerView: PlayerView = ui.playerView === "lyrics" ? "lyrics" : "bigscreen";
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -107,7 +112,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -134,6 +139,7 @@ function migratePreferences(value: unknown): AppPreferences {
           showAudioQuality,
           animateSwirl,
           lyricMotion,
+          playerView,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -164,6 +170,7 @@ function migratePreferences(value: unknown): AppPreferences {
           showAudioQuality,
           animateSwirl,
           lyricMotion,
+          playerView,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },
