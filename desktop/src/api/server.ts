@@ -98,12 +98,30 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   if (track.isrc) query.set("isrc", track.isrc);
   if (track.version) query.set("version", track.version);
   if (track.provider === "spotify") query.set("spotifyId", track.providerTrackId);
-  const response = await fetch(`${serverBaseUrl}/api/lyrics?${query}`, {
-    signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
-    cache: "no-store",
-  });
-  if (!response.ok) throw new Error(await responseError(response));
-  return parseTrackLyrics(await response.json());
+  for (let attempt = 0; ; attempt++) {
+    // Give temporary connection/upstream failures one automatic retry before
+    // asking the listener to retry. Each attempt gets its own timeout.
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 1000));
+    signal.throwIfAborted();
+    let response: Response;
+    try {
+      response = await fetch(`${serverBaseUrl}/api/lyrics?${query}`, {
+        signal: AbortSignal.any([signal, AbortSignal.timeout(25_000)]),
+        cache: "no-store",
+      });
+    } catch (error) {
+      const temporary = error instanceof TypeError
+        || (error instanceof DOMException && error.name === "TimeoutError");
+      if (signal.aborted || attempt > 0 || !temporary) throw error;
+      continue;
+    }
+    if (!response.ok) {
+      const message = await responseError(response);
+      if (attempt === 0 && [502, 503, 504].includes(response.status)) continue;
+      throw new Error(message);
+    }
+    return parseTrackLyrics(await response.json());
+  }
 }
 
 export async function serviceAuthStatus(): Promise<ServiceAuthStatus> {
