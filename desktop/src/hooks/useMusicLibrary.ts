@@ -330,7 +330,7 @@ export function useMusicLibrary(): MusicLibrary {
     const idsToRemove = new Set(trackIds);
     if (idsToRemove.size === 0) return;
 
-    // The local tombstones hide the rows immediately; the server forgets them so
+    // Presentation tombstones hide the rows immediately; the server forgets them so
     // its saved library stops growing and stops loading removed tracks.
     const streamingTracks = serverTracksRef.current.filter((track) => idsToRemove.has(track.globalId));
     if (streamingTracks.length > 0) {
@@ -386,7 +386,9 @@ export function useMusicLibrary(): MusicLibrary {
     tracks,
     catalogTracks,
     isLoading,
-    isRestoring: isLocalCacheLoading || isStreamingCacheLoading,
+    isRestoring: isLocalCacheLoading || isStreamingCacheLoading
+      || (localTracks.length === 0 && isLocalLoading)
+      || (serverTracks.length === 0 && isServerLoading),
     isServerReachable,
     error,
     isAddingAlbum,
