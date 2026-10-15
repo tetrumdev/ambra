@@ -819,6 +819,7 @@ function App() {
         currentScreen={screen}
         isFullscreen={isFullscreen}
         onExit={closeCurrentScreen}
+        onSelectPlayerView={changeScreen}
       />
 
       {player.currentTrack && (
@@ -974,8 +975,6 @@ function App() {
         onSeek={player.seek}
         onOpenBigscreen={() => changeScreen("bigscreen")}
         onOpenQueue={openQueue}
-        onToggleLyrics={() => isLyricsView ? closeCurrentScreen() : changeScreen("lyrics")}
-        lyricsActive={isLyricsView}
       />
 
       {!isPlayerView && <AppScrollbar scrollElement={activeScrollElement} />}
