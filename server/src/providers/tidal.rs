@@ -17,10 +17,7 @@ use tidlers::{
     auth::TidalAuth,
     client::models::{
         album::AlbumResponse,
-        search::{
-            SearchTrackHit,
-            config::{SearchConfig, SearchType},
-        },
+        search::{SearchAlbumHit, SearchArtistHit, SearchArtistSummary, SearchResultSection},
         track::{
             Track as TidalTrack,
             playback::{DashManifest, JsonTrackManifest},
@@ -94,6 +91,45 @@ struct CachedMaximumPlayback {
 struct RawPlaybackInfo {
     audio_quality: String,
     manifest: String,
+}
+
+// Search album summaries can omit artwork, including an explicit null cover.
+// Model only the metadata we consume rather than the library's required cover.
+#[derive(Deserialize)]
+struct SearchResponse {
+    tracks: Option<SearchResultSection<SearchTrackHit>>,
+    artists: Option<SearchResultSection<SearchArtistHit>>,
+    albums: Option<SearchResultSection<SearchAlbumHit>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchTrackHit {
+    id: u64,
+    title: String,
+    album: Option<SearchAlbumSummary>,
+    artists: Vec<SearchArtistSummary>,
+    version: Option<String>,
+    duration: u64,
+    track_number: Option<u32>,
+    volume_number: Option<u32>,
+    explicit: bool,
+    audio_quality: Option<String>,
+    allow_streaming: Option<bool>,
+    stream_ready: Option<bool>,
+    genres: Option<Vec<String>>,
+    isrc: Option<String>,
+    copyright: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchAlbumSummary {
+    id: u64,
+    title: String,
+    version: Option<String>,
+    cover: Option<String>,
+    release_date: Option<String>,
 }
 
 enum MaximumPlaybackManifest {
@@ -566,20 +602,7 @@ impl TidalProvider {
     ) -> ProviderResult<crate::models::CatalogSearchPage> {
         use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
         let response = self
-            .authenticated_request(|client| async move {
-                client
-                    .search(SearchConfig {
-                        query: query.to_owned(),
-                        types: vec![SearchType::Tracks, SearchType::Artists, SearchType::Albums],
-                        include_contributors: false,
-                        include_user_playlists: false,
-                        supports_user_data: false,
-                        include_did_you_mean: true,
-                        limit,
-                        offset: 0,
-                    })
-                    .await
-            })
+            .search_response(query, "TRACKS,ARTISTS,ALBUMS", limit, 0)
             .await?;
         Ok(CatalogSearchPage {
             tracks: response
@@ -645,20 +668,7 @@ impl TidalProvider {
         offset: u32,
     ) -> ProviderResult<SearchPage> {
         let results = self
-            .authenticated_request(|client| async move {
-                client
-                    .search(SearchConfig {
-                        query: query.to_owned(),
-                        include_contributors: false,
-                        include_user_playlists: false,
-                        supports_user_data: false,
-                        types: vec![SearchType::Tracks],
-                        limit,
-                        offset,
-                        ..Default::default()
-                    })
-                    .await
-            })
+            .search_response(query, "TRACKS", limit, offset)
             .await?;
 
         let Some(section) = results.tracks else {
@@ -680,6 +690,55 @@ impl TidalProvider {
             tracks,
             next_offset,
         })
+    }
+
+    async fn search_response(
+        &self,
+        query: &str,
+        types: &str,
+        limit: u32,
+        offset: u32,
+    ) -> ProviderResult<SearchResponse> {
+        self.authenticated_request(|client| async move {
+            let token = client
+                .session
+                .auth
+                .access_token
+                .as_deref()
+                .ok_or(TidalError::NotAuthenticated)?;
+            let country = &client
+                .user_info
+                .as_ref()
+                .ok_or(TidalError::NotAuthenticated)?
+                .country_code;
+            let response = self
+                .http_client
+                .get("https://tidal.com/v2/search")
+                // The web search endpoint requires the library's browser user agent.
+                .header(
+                    reqwest::header::USER_AGENT,
+                    "Mozilla/5.0 (Linux; Android 12; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/91.0.4472.114 Safari/537.36",
+                )
+                .bearer_auth(token)
+                .query(&[
+                    ("query", query),
+                    ("types", types),
+                    ("countryCode", country.as_str()),
+                    ("locale", client.session.locale.as_str()),
+                    ("includeContributors", "false"),
+                    ("includeUserPlaylists", "false"),
+                    ("supportsUserData", "false"),
+                    ("includeDidYouMean", "true"),
+                ])
+                .query(&[("limit", limit), ("offset", offset)])
+                .send()
+                .await?;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+                return Err(TidalError::RequestClient(RequestClientError::Unauthorized));
+            }
+            Ok(response.error_for_status()?.json().await?)
+        })
+        .await
     }
 
     pub async fn playback_metadata(&self, track_id: &str) -> ProviderResult<TrackPlaybackMetadata> {
@@ -1103,7 +1162,10 @@ fn search_track_metadata(track: SearchTrackHit) -> TrackMetadata {
         title: album.title,
         version: album.version,
         artists: artists.clone(),
-        cover_url: (!album.cover.is_empty()).then(|| uuid_to_url_with_size(&album.cover, 1280)),
+        cover_url: album
+            .cover
+            .filter(|cover| !cover.is_empty())
+            .map(|cover| uuid_to_url_with_size(&cover, 1280)),
         release_date: album.release_date,
         label: None,
         genres: track.genres.clone().unwrap_or_default(),

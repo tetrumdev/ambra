@@ -69,7 +69,7 @@ export function AppChrome({
               onClick={onExit}
               aria-label="Close player"
             >
-              <img src="/x.svg" alt="" className="bigscreenBtn" />
+              <img src="/x.svg" alt="" className="bigscreenBtn" id="closeBtn" />
             </button>
           </div>
         </>

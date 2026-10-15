@@ -2,6 +2,7 @@ import { categoryOrder, rankArtists, rankAlbums } from "./catalogRanking";
 import type { CatalogArtist, CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
 import type { Track } from "../types/music";
 import { deduplicateSearchResults, rankSearchResults } from "./searchRanking";
+import { musicProviderName } from "./musicProviderName";
 
 export type SearchSnapshot = {
   results: Track[];
@@ -60,7 +61,7 @@ export class SearchSession {
     const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : results);
     const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : results);
     const errors = [...this.sources].filter(([, source]) => source.error)
-      .map(([provider, source]) => `${provider}: ${source.error}`);
+      .map(([provider]) => musicProviderName(provider));
     return {
       candidates,
       artists,
@@ -68,7 +69,7 @@ export class SearchSession {
       results,
       isSearching: sources.some(source => source.pending),
       hasMore: sources.some(source => source.nextOffset !== null && !source.error),
-      error: this.sources.size === 0 ? "No music services are connected." : errors.length ? `Some services could not be searched (${errors.join("; ")}).` : null,
+      error: this.sources.size === 0 ? "No music services are connected." : errors.length ? `Some services could not be searched: ${errors.join(", ")}. Please try again.` : null,
       canRetry: errors.length > 0,
     };
   }

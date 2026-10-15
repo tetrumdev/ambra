@@ -2,6 +2,7 @@ import type { SearchProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
 export type AppScreen = "bigscreen" | "lyrics" | "library" | "search" | "queue" | "settings";
+export type LyricMotion = "system" | "full" | "reduced";
 
 export type AppPreferences = {
   version: 4;
@@ -9,6 +10,7 @@ export type AppPreferences = {
     screen: AppScreen;
     showAudioQuality: boolean;
     animateSwirl: boolean;
+    lyricMotion: LyricMotion;
   };
   search: {
     query: string;
@@ -29,6 +31,7 @@ export const defaultPreferences: AppPreferences = {
     screen: "library",
     showAudioQuality: false,
     animateSwirl: true,
+    lyricMotion: "system",
   },
   search: {
     query: "",
@@ -77,12 +80,15 @@ function migratePreferences(value: unknown): AppPreferences {
   const animateSwirl = typeof ui.animateSwirl === "boolean"
     ? ui.animateSwirl
     : defaultPreferences.ui.animateSwirl;
+  const lyricMotion = ui.lyricMotion === "full" || ui.lyricMotion === "reduced"
+    ? ui.lyricMotion
+    : "system";
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -101,7 +107,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -127,6 +133,7 @@ function migratePreferences(value: unknown): AppPreferences {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
           animateSwirl,
+          lyricMotion,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -156,6 +163,7 @@ function migratePreferences(value: unknown): AppPreferences {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
           animateSwirl,
+          lyricMotion,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },
