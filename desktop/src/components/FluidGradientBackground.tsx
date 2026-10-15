@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import {
   COVER_EDGE_ZONES,
-  softenedPaletteWeights,
   type CoverSeparation,
 } from "../utils/backgroundPalette";
 
 type FluidGradientBackgroundProps = {
   colors: string[];
-  weights: number[];
   separation: CoverSeparation;
   coverId: string;
-  seed: string;
   active: boolean;
   animate?: boolean;
 };
@@ -30,13 +27,12 @@ void main() {
 `;
 
 const fragmentShaderSource = `
-precision mediump float;
+precision highp float;
 
 uniform vec2 u_resolution;
 uniform float u_time;
 uniform float u_seed;
 uniform vec3 u_colors[4];
-uniform vec4 u_weights;
 uniform vec4 u_cover;
 // Per zone along the cover's sides (top, right, bottom, left per entry).
 uniform vec4 u_edgeLuma[${COVER_EDGE_ZONES}];
@@ -143,7 +139,6 @@ void main() {
     fbm(fluidPoint * 1.38 + vec2(2.6 - time * 0.52, -7.4 + time * 0.35))
   );
   fields = exp((fields - max(max(fields.x, fields.y), max(fields.z, fields.w))) * 9.0);
-  fields *= u_weights;
   fields /= fields.x + fields.y + fields.z + fields.w;
 
   vec3 color = u_colors[0] * fields.x
@@ -181,15 +176,13 @@ function colorComponents(color: string) {
 
 function paletteComponents(
   colors: string[],
-  weights: number[],
   separation: CoverSeparation,
 ) {
   const palette = colors.slice(0, 4);
   while (palette.length < 4) palette.push(palette[0] ?? "#000000");
-  // Transition colors, their influence, and the cover separation together.
+  // Transition colors and cover separation without changing the field's shape.
   return [
     ...palette.flatMap(colorComponents),
-    ...softenedPaletteWeights(weights, colors.length),
     ...separation.edges,
     ...separation.directions,
   ];
@@ -206,35 +199,29 @@ function easedProgress(progress: number) {
   return clamped * clamped * (3 - 2 * clamped);
 }
 
-function seedNumber(seed: string) {
-  let value = 2166136261;
-  for (const character of seed) {
-    value ^= character.charCodeAt(0);
-    value = Math.imul(value, 16777619);
-  }
-  return (value >>> 0) / 4294967295;
-}
-
 export function FluidGradientBackground({
   colors,
-  weights,
   separation,
   coverId,
-  seed,
   active,
   animate = true,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteKey = [
     ...colors.slice(0, 4),
-    ...weights.slice(0, 4),
     ...separation.edges,
     ...separation.directions,
   ].join(":");
-  const initialSeedRef = useRef(seed);
+  const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number } | null>(null);
+  if (journeyRef.current === null) {
+    journeyRef.current = { seed: Math.random() * 64, seconds: 0, updatedAt: performance.now() };
+  }
+  const journey = journeyRef.current;
+  const coverIdRef = useRef(coverId);
+  const resizeRef = useRef<(() => void) | null>(null);
   const transitionRef = useRef({
-    from: paletteComponents(colors, weights, separation),
-    to: paletteComponents(colors, weights, separation),
+    from: paletteComponents(colors, separation),
+    to: paletteComponents(colors, separation),
     startedAt: 0,
   });
   const drawRef = useRef<((now: number) => void) | null>(null);
@@ -248,15 +235,25 @@ export function FluidGradientBackground({
     const now = performance.now();
     const previous = transitionRef.current;
     const progress = easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS);
-    const target = paletteComponents(colors, weights, separation);
+    const target = paletteComponents(colors, separation);
     const current = mixPalette(previous.from, previous.to, progress);
     transitionRef.current = reducedMotionRef.current || !activeRef.current
       ? { from: target, to: target, startedAt: now }
       : { from: current, to: target, startedAt: now };
-    if (reducedMotionRef.current || !activeRef.current) drawRef.current?.(now);
+    if (drawRef.current && !animationFrameRef.current) {
+      animationFrameRef.current = requestAnimationFrame(drawRef.current);
+    }
   }, [paletteKey]);
 
   useEffect(() => {
+    coverIdRef.current = coverId;
+    resizeRef.current?.();
+  }, [coverId]);
+
+  useEffect(() => {
+    const now = performance.now();
+    if (animateRef.current) journey.seconds += (now - journey.updatedAt) / 1000;
+    journey.updatedAt = now;
     activeRef.current = active;
     animateRef.current = animate;
     cancelAnimationFrame(animationFrameRef.current);
@@ -324,13 +321,12 @@ export function FluidGradientBackground({
     const time = gl.getUniformLocation(program, "u_time");
     const shaderSeed = gl.getUniformLocation(program, "u_seed");
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
-    const shaderWeights = gl.getUniformLocation(program, "u_weights");
     const shaderCover = gl.getUniformLocation(program, "u_cover");
     const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
     const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
     if (
       !buffer || position < 0 || !resolution || !time || !shaderSeed || !shaderColors
-      || !shaderWeights || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
+      || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
     ) {
       gl.deleteProgram(program);
       return;
@@ -348,23 +344,24 @@ export function FluidGradientBackground({
 
     // The hash offsets lattice coordinates by the seed; a small range keeps
     // full precision even where mediump floats are 16-bit.
-    gl.uniform1f(shaderSeed, seedNumber(initialSeedRef.current) * 64);
+    gl.uniform1f(shaderSeed, journey.seed);
 
     const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotionRef.current = motionPreference.matches;
-    const startedAt = performance.now();
     // This soft color field has no fine detail. Bound fragment work separately
     // from display density, and measure layout only when the canvas changes size.
     let width = 1;
     let height = 1;
+    let layoutDirty = true;
     // The cover, in canvas pixels: center (GL y-up), half size, glow falloff.
     let cover = [0, 0, 0, 1];
     let observedCover: HTMLElement | null = null;
     const measureCover = () => {
-      const element = document.getElementById(coverId);
-      if (element && element !== observedCover) {
+      const element = document.getElementById(coverIdRef.current);
+      if (element !== observedCover) {
+        if (observedCover) resizeObserver.unobserve(observedCover);
         observedCover = element;
-        resizeObserver.observe(element);
+        if (element) resizeObserver.observe(element);
       }
       const bounds = canvas.getBoundingClientRect();
       const rect = element?.getBoundingClientRect();
@@ -383,21 +380,13 @@ export function FluidGradientBackground({
       ];
     };
     const resize = () => {
-      const cssWidth = canvas.clientWidth;
-      const cssHeight = canvas.clientHeight;
-      const scale = Math.min(1, 960 / Math.max(1, cssWidth, cssHeight));
-      width = Math.max(1, Math.round(cssWidth * scale));
-      height = Math.max(1, Math.round(cssHeight * scale));
-      if (canvas.width !== width || canvas.height !== height) {
-        canvas.width = width;
-        canvas.height = height;
-      }
-      measureCover();
+      layoutDirty = true;
       scheduleDraw();
     };
     const scheduleDraw = () => {
-      cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = document.hidden ? 0 : requestAnimationFrame(draw);
+      if (!document.hidden && !animationFrameRef.current) {
+        animationFrameRef.current = requestAnimationFrame(draw);
+      }
     };
     const motionChanged = () => {
       reducedMotionRef.current = motionPreference.matches;
@@ -409,6 +398,7 @@ export function FluidGradientBackground({
       if (document.hidden || gl.isContextLost()) return;
       if (
         now - lastDrawnAt < MIN_FRAME_INTERVAL_MS
+        && !layoutDirty
         && animateRef.current
         && activeRef.current
       ) {
@@ -416,6 +406,19 @@ export function FluidGradientBackground({
         return;
       }
       lastDrawnAt = now;
+      if (layoutDirty) {
+        const cssWidth = canvas.clientWidth;
+        const cssHeight = canvas.clientHeight;
+        const scale = Math.min(1, 960 / Math.max(1, cssWidth, cssHeight));
+        width = Math.max(1, Math.round(cssWidth * scale));
+        height = Math.max(1, Math.round(cssHeight * scale));
+        // Resizing clears WebGL's buffer. Redraw in this callback so a blank
+        // buffer cannot reach the compositor, even when animation is paused.
+        if (canvas.width !== width) canvas.width = width;
+        if (canvas.height !== height) canvas.height = height;
+        measureCover();
+        layoutDirty = false;
+      }
       gl.viewport(0, 0, width, height);
       const transition = transitionRef.current;
       const progress = easedProgress(
@@ -423,22 +426,22 @@ export function FluidGradientBackground({
       );
       const palette = mixPalette(transition.from, transition.to, progress);
       gl.uniform3fv(shaderColors, palette.slice(0, 12));
-      gl.uniform4fv(shaderWeights, palette.slice(12, 16));
       // The cover may mount after the canvas; keep looking until it appears.
-      if (!observedCover) measureCover();
+      if (!observedCover || !observedCover.isConnected) measureCover();
       gl.uniform4fv(shaderCover, cover);
-      gl.uniform4fv(shaderEdgeLuma, palette.slice(16, 16 + EDGE_COMPONENTS));
-      gl.uniform4fv(shaderEdgeDirection, palette.slice(16 + EDGE_COMPONENTS, 16 + EDGE_COMPONENTS * 2));
+      gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
+      gl.uniform4fv(shaderEdgeDirection, palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
       // transitions without disabling this explicitly selected background.
-      gl.uniform1f(time, animateRef.current ? (now - startedAt) / 1000 : 0);
+      gl.uniform1f(time, journey.seconds + (animateRef.current ? (now - journey.updatedAt) / 1000 : 0));
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (animateRef.current && activeRef.current) {
+      if (activeRef.current && (animateRef.current || progress < 1)) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };
     drawRef.current = draw;
+    resizeRef.current = resize;
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
     document.addEventListener("visibilitychange", scheduleDraw);
@@ -450,6 +453,7 @@ export function FluidGradientBackground({
       document.removeEventListener("visibilitychange", scheduleDraw);
       motionPreference.removeEventListener("change", motionChanged);
       drawRef.current = null;
+      resizeRef.current = null;
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = 0;
       gl.deleteBuffer(buffer);
@@ -457,7 +461,7 @@ export function FluidGradientBackground({
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);
     };
-  }, [contextVersion, coverId]);
+  }, [contextVersion]);
 
   return (
     <canvas
