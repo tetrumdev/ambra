@@ -4,6 +4,7 @@ import { getPersistentItem, removePersistentItem, setPersistentItem } from "./pe
 export type AppScreen = "bigscreen" | "lyrics" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
 export type PlayerView = Extract<AppScreen, "bigscreen" | "lyrics">;
+export type PlaylistGroup = "ambra" | "spotify" | "qobuz" | "tidal";
 
 export type AppPreferences = {
   version: 4;
@@ -14,6 +15,7 @@ export type AppPreferences = {
     lyricMotion: LyricMotion;
     /** The player view to reopen: whichever of album art or lyrics was shown last. */
     playerView: PlayerView;
+    playlistGroups: Record<PlaylistGroup, boolean>;
   };
   search: {
     query: string;
@@ -37,6 +39,7 @@ export const defaultPreferences: AppPreferences = {
     animateSwirl: true,
     lyricMotion: "system",
     playerView: "bigscreen",
+    playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
   },
   search: {
     query: "",
@@ -89,12 +92,18 @@ function migratePreferences(value: unknown): AppPreferences {
     ? ui.lyricMotion
     : "system";
   const playerView: PlayerView = ui.playerView === "lyrics" ? "lyrics" : "bigscreen";
+  const playlistGroups = { ...defaultPreferences.ui.playlistGroups };
+  if (isRecord(ui.playlistGroups)) {
+    for (const group of ["ambra", "spotify", "qobuz", "tidal"] as const) {
+      if (typeof ui.playlistGroups[group] === "boolean") playlistGroups[group] = ui.playlistGroups[group];
+    }
+  }
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView, playlistGroups },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -113,7 +122,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView, playlistGroups },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -141,6 +150,7 @@ function migratePreferences(value: unknown): AppPreferences {
           animateSwirl,
           lyricMotion,
           playerView,
+          playlistGroups,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -172,6 +182,7 @@ function migratePreferences(value: unknown): AppPreferences {
           animateSwirl,
           lyricMotion,
           playerView,
+          playlistGroups,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },

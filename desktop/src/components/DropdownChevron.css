@@ -1,0 +1,29 @@
+.playlistDropdown > summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    list-style: none;
+}
+
+.playlistDropdown > summary::-webkit-details-marker {
+    display: none;
+}
+
+.dropdownChevron {
+    flex: none;
+    width: 10px;
+    height: 10px;
+    color: white;
+    transform: rotate(-90deg);
+    transition: transform 150ms ease;
+}
+
+.playlistDropdown[open] > summary .dropdownChevron {
+    transform: rotate(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .dropdownChevron {
+        transition: none;
+    }
+}

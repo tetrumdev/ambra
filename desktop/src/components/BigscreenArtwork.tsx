@@ -21,7 +21,7 @@ import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
 
 type ArtworkProps = {
-  track: Track;
+  track: Track | undefined;
 };
 
 type BackgroundArtworkProps = ArtworkProps & {
@@ -53,10 +53,11 @@ function sampleCoverEdges(source: string): Promise<number[] | null> {
 
 export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   const [cover, setCover] = useState<string>(() =>
-    cachedBigscreenArtwork(track) ?? whiteArtwork,
+    track ? cachedBigscreenArtwork(track) ?? whiteArtwork : whiteArtwork,
   );
 
   useEffect(() => {
+    if (!track) return;
     let cancelled = false;
     setCover(cachedBigscreenArtwork(track) ?? whiteArtwork);
 
@@ -68,20 +69,27 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
       cancelled = true;
     };
   }, [
-    track.albumId,
-    track.cover,
-    track.nativeCover,
-    track.provider,
-    track.upc,
+    track?.albumId,
+    track?.cover,
+    track?.nativeCover,
+    track?.provider,
+    track?.upc,
   ]);
 
   return (
-    <div id="albumCover" data-active={active} aria-hidden={!active}>
+    <div id="albumCover" data-active={active} data-empty={!track} aria-hidden={!active}>
       <img
         src={cover}
-        alt={`${track.album} album cover`}
+        alt={track ? `${track.album} album cover` : ""}
         id="albumCoverImg"
+        aria-hidden={!track}
         onError={() => setCover(whiteArtwork)}
+      />
+      <img
+        src="/ambra.png"
+        alt="Ambra"
+        className="albumCoverPlaceholder"
+        aria-hidden={!!track}
       />
     </div>
   );
@@ -95,6 +103,7 @@ export function BackgroundArtwork({ track, active, animate, coverId = "albumCove
   const [separation, setSeparation] = useState<CoverSeparation>(neutralCoverSeparation);
 
   useEffect(() => {
+    if (!track) return;
     let cancelled = false;
 
     void Promise.all([
@@ -112,21 +121,21 @@ export function BackgroundArtwork({ track, active, animate, coverId = "albumCove
       cancelled = true;
     };
   }, [
-    track.albumId,
-    track.cover,
-    track.nativeCover,
-    track.provider,
-    track.upc,
+    track?.albumId,
+    track?.cover,
+    track?.nativeCover,
+    track?.provider,
+    track?.upc,
   ]);
 
   return (
-    <div id="backgroundFX" aria-hidden="true" data-active={active}>
+    <div id="backgroundFX" aria-hidden="true" data-active={active} data-empty={!track}>
       <FluidGradientBackground
         colors={palette.colors}
         separation={separation}
         coverId={coverId}
-        active={active}
-        animate={animate}
+        active={active && !!track}
+        animate={track ? animate : false}
       />
     </div>
   );
