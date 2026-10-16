@@ -7,9 +7,9 @@ import { ServiceSettings } from "./ServiceSettings";
 import type { LyricMotion } from "../utils/preferences";
 import "./SettingsView.css";
 
-type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
-export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, registerScrollElement }: Props) {
+export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DspPreset | null>(null);
@@ -159,6 +159,9 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
         <select className="settingsMotionSelect" aria-label="Lyric motion" aria-describedby="lyricMotionDescription" value={lyricMotion} onChange={e => onLyricMotionChange(e.currentTarget.value as LyricMotion)}>
           <option value="system">Follow system</option><option value="full">Full</option><option value="reduced">Reduced</option>
         </select></label>
+      <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Auto-sync lyrics</span><span className="settingsToggleDescription" id="autoSyncLyricsDescription">
+        {audio.native ? "Match synced lyrics to the song's vocals when they were timed for a different version. Analyzes each song once, which downloads streamed tracks again." : "Available in the desktop app."}</span></span>
+        <input type="checkbox" role="switch" className="settingsToggle" aria-label="Auto-sync lyrics" aria-describedby="autoSyncLyricsDescription" checked={autoSyncLyrics} disabled={!audio.native} onChange={e => onAutoSyncLyrics(e.currentTarget.checked)} /></label>
     </section>
   </div>;
 }

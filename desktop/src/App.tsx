@@ -860,7 +860,7 @@ function App() {
 
       {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"}
         track={player.currentTrack} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
-        motion={preferences.ui.lyricMotion} />}
+        motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} />}
 
       {!isPlayerView && (
         <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
@@ -928,6 +928,8 @@ function App() {
               onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
               animateSwirl={preferences.ui.animateSwirl}
               lyricMotion={preferences.ui.lyricMotion}
+              autoSyncLyrics={preferences.ui.autoSyncLyrics}
+              onAutoSyncLyrics={autoSyncLyrics => setPreferences(current => ({ ...current, ui: { ...current.ui, autoSyncLyrics } }))}
               onLyricMotionChange={lyricMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricMotion } }))}
               onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
           ) : isQueueView ? (
