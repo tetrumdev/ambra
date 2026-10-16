@@ -8,6 +8,7 @@ import type { PlaylistServiceGroup } from "../hooks/useServicePlaylists";
 import { musicProviderName } from "../utils/musicProviderName";
 import { DropdownChevron } from "./DropdownChevron";
 import type { PlaylistGroup } from "../utils/preferences";
+import type { StreamingProvider } from "../api/server";
 
 type SidebarProps = {
   onOpenHome: () => void;
@@ -24,6 +25,7 @@ type SidebarProps = {
   onRenamePlaylist: (id: string, name: string) => boolean;
   onDeletePlaylist: (id: string) => boolean;
   serviceGroups: PlaylistServiceGroup[];
+  servicePlaylistVisibility: Record<StreamingProvider, boolean>;
   playlistGroups: Record<PlaylistGroup, boolean>;
   onTogglePlaylistGroup: (group: PlaylistGroup, expanded: boolean) => void;
 };
@@ -43,6 +45,7 @@ export function Sidebar({
   onRenamePlaylist,
   onDeletePlaylist,
   serviceGroups,
+  servicePlaylistVisibility,
   playlistGroups,
   onTogglePlaylistGroup,
 }: SidebarProps) {
@@ -129,7 +132,7 @@ export function Sidebar({
             </details>
             {(["spotify", "qobuz", "tidal"] as const).map(provider => {
               const group = serviceGroups.find(group => group.provider === provider);
-              if (!group) return null;
+              if (!group || !servicePlaylistVisibility[provider]) return null;
               return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
                 <summary><DropdownChevron />{musicProviderName(provider)}</summary>
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>

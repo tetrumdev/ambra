@@ -94,7 +94,7 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
   ];
 }
 
-export function useMusicLibrary(): MusicLibrary {
+export function useMusicLibrary(localOnly: boolean): MusicLibrary {
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
   const savedLibraryOrder = useRef(libraryOrder);
   useEffect(() => {
@@ -106,15 +106,15 @@ export function useMusicLibrary(): MusicLibrary {
   }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
   const [serverTracks, setServerTracks] = useState<Track[]>(
-    loadCachedServerTracks,
+    () => localOnly ? [] : loadCachedServerTracks(),
   );
   const [removedTrackIds, setRemovedTrackIds] = useState(
     loadRemovedLibraryTrackIds,
   );
   const [isLocalLoading, setIsLocalLoading] = useState(true);
-  const [isServerLoading, setIsServerLoading] = useState(true);
+  const [isServerLoading, setIsServerLoading] = useState(!localOnly);
   const [isLocalCacheLoading, setIsLocalCacheLoading] = useState(true);
-  const [isStreamingCacheLoading, setIsStreamingCacheLoading] = useState(true);
+  const [isStreamingCacheLoading, setIsStreamingCacheLoading] = useState(!localOnly);
   const [isServerReachable, setIsServerReachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
@@ -156,7 +156,7 @@ export function useMusicLibrary(): MusicLibrary {
 
     // Show the cached streaming library immediately; the server sync below is
     // only a refresh. Ignored if the server (or a legacy copy) already answered.
-    void loadStreamingCache()
+    if (!localOnly) void loadStreamingCache()
       .then((cached) => {
         if (cancelled || cached.length === 0) return;
         setServerTracks((current) => {
@@ -236,7 +236,7 @@ export function useMusicLibrary(): MusicLibrary {
         if (!cancelled) setIsLocalLoading(false);
       });
 
-    void loadServerLibrary(controller.signal)
+    if (!localOnly) void loadServerLibrary(controller.signal)
       .then(({ tracks: loadedTracks, unavailableTrackIds }) => {
         if (!cancelled) {
           // A successful response is authoritative. Keeping cached tracks from
@@ -264,7 +264,7 @@ export function useMusicLibrary(): MusicLibrary {
       controller.abort();
       stopListening?.();
     };
-  }, []);
+  }, [localOnly]);
 
   const addAlbum = useCallback(async (url: string) => {
     setIsAddingAlbum(true);
@@ -369,6 +369,7 @@ export function useMusicLibrary(): MusicLibrary {
   }, []);
 
   const refreshStreamingMusic = useCallback(async () => {
+    if (localOnly) return 0;
     try {
       const { tracks: loadedTracks, unavailableTrackIds } = await loadServerLibrary();
       setServerTracks((current) =>
@@ -380,7 +381,7 @@ export function useMusicLibrary(): MusicLibrary {
       setIsServerReachable(false);
       throw reason;
     }
-  }, []);
+  }, [localOnly]);
 
   return {
     tracks,
