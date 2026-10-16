@@ -16,6 +16,9 @@ type Patch = { revision: number; writeId: string; changes: Record<string, string
 type Status = { ready: boolean; pending: boolean; error: string | null; conflict: boolean };
 const endpoint = `${serverBaseUrl}/api/state`;
 const values = new Map<string, string>();
+// Before server hydration, local playback uses a temporary session. Never send
+// these values to the server or mix them into a later server snapshot.
+const localValues = new Map<string, string>();
 const pending = new Map<string, string | null>();
 const listeners = new Set<() => void>();
 let revision = 0;
@@ -89,6 +92,7 @@ export function hydrateServerState(): Promise<void> {
     }
     values.clear();
     for (const [key, value] of Object.entries(saved.values)) values.set(key, value);
+    localValues.clear();
     revision = saved.revision;
     publish({ ready: true, error: null, conflict: false });
   })().catch(error => {
@@ -100,7 +104,7 @@ export function hydrateServerState(): Promise<void> {
 }
 
 export function getServerItem(key: string) {
-  return values.get(key) ?? null;
+  return (status.ready ? values : localValues).get(key) ?? null;
 }
 
 export function reloadServerState() {
@@ -117,7 +121,11 @@ function scheduleSave(delay = 750) {
 }
 
 export function setServerItem(key: string, value: string | null) {
-  if (!status.ready) throw new Error("Listening state has not loaded from the server.");
+  if (!status.ready) {
+    if (value === null) localValues.delete(key);
+    else localValues.set(key, value);
+    return;
+  }
   if (status.conflict) throw new Error(status.error ?? "Reload server state before editing.");
   if ((values.get(key) ?? null) === value) return;
   if (value === null) values.delete(key);
@@ -151,7 +159,13 @@ export function flushServerState(keepalive = false): Promise<void> {
     publish({ error: null });
   })().catch(error => {
     const conflict = error instanceof StateRequestError && error.conflict;
-    publish({ error: conflict ? error.message : "Listening state has not saved. Keep Ambra open; reconnect to the server to retry.", conflict });
+    const disconnected = error instanceof TypeError
+      || (error instanceof DOMException && error.name === "TimeoutError");
+    publish({
+      error: disconnected ? null : conflict ? error.message
+        : "Listening state has not saved. Keep Ambra open; reconnect to the server to retry.",
+      conflict,
+    });
     if (!conflict) scheduleSave(5000);
     throw error;
   }).finally(() => {
