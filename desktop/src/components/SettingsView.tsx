@@ -5,11 +5,13 @@ import { newPreset, parseAutoEq, validatePreset, type DspPreset, type DspStatus,
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
 import type { LyricMotion } from "../utils/preferences";
+import type { StreamingProvider } from "../api/server";
+import { musicProviderName } from "../utils/musicProviderName";
 import "./SettingsView.css";
 
-type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
-export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, registerScrollElement }: Props) {
+export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DspPreset | null>(null);
@@ -162,6 +164,12 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
       <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Auto-sync lyrics</span><span className="settingsToggleDescription" id="autoSyncLyricsDescription">
         {audio.native ? "Match synced lyrics to the song's vocals when they were timed for a different version. Analyzes each song once, which downloads streamed tracks again." : "Available in the desktop app."}</span></span>
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Auto-sync lyrics" aria-describedby="autoSyncLyricsDescription" checked={autoSyncLyrics} disabled={!audio.native} onChange={e => onAutoSyncLyrics(e.currentTarget.checked)} /></label>
+      <div className="settingsSectionHeading"><div><h2>Sidebar playlists</h2><p id="sidebarPlaylistsDescription">Choose which services appear in your sidebar. Your playlists will keep syncing.</p></div></div>
+      {(["spotify", "qobuz", "tidal"] as const).map(provider => <label className="settingsToggleRow" key={provider}>
+        <span className="settingsToggleLabel">Show {musicProviderName(provider)} playlists</span>
+        <input type="checkbox" role="switch" className="settingsToggle" aria-label={`Show ${musicProviderName(provider)} playlists`} aria-describedby="sidebarPlaylistsDescription"
+          checked={servicePlaylistVisibility[provider]} onChange={e => onServicePlaylistVisibilityChange(provider, e.currentTarget.checked)} />
+      </label>)}
     </section>
   </div>;
 }

@@ -14,7 +14,7 @@ const providers: StreamingProvider[] = ["spotify", "qobuz", "tidal"];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const playlistId = (provider: StreamingProvider, id: string) => `service:${provider}:${id}`;
 
-export function useServicePlaylists(selectedId: string | null) {
+export function useServicePlaylists(selectedId: string | null, enabled: boolean) {
   const [groups, setGroups] = useState<PlaylistServiceGroup[]>([]);
   const [contents, setContents] = useState<Record<string, ServicePlaylistContents>>({});
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -32,6 +32,7 @@ export function useServicePlaylists(selectedId: string | null) {
   const alive = useRef(true);
 
   const load = useCallback((playlist: Playlist, force = false): Promise<void> => {
+    if (!enabled) return Promise.resolve();
     if (!playlist.provider || !playlist.remoteId) return Promise.resolve();
     const existing = requests.current.get(playlist.id);
     if (existing && !force) return existing.promise;
@@ -56,9 +57,10 @@ export function useServicePlaylists(selectedId: string | null) {
       });
     requests.current.set(playlist.id, { controller, promise });
     return promise;
-  }, []);
+  }, [enabled]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
+    if (!enabled) return;
     try {
       const connected = await serviceAuthStatus();
       await Promise.all(providers.filter(provider => connected[provider]).map(async provider => {
@@ -89,9 +91,10 @@ export function useServicePlaylists(selectedId: string | null) {
     } catch (reason) {
       if (alive.current && !signal?.aborted) setError(`Could not refresh service playlists. ${message(reason)}`);
     }
-  }, [load]);
+  }, [load, enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
     alive.current = true;
     let controller = new AbortController();
     const update = () => {
@@ -115,7 +118,7 @@ export function useServicePlaylists(selectedId: string | null) {
       for (const request of requests.current.values()) request.controller.abort();
       requests.current.clear();
     };
-  }, [refresh]);
+  }, [refresh, enabled]);
 
   useEffect(() => {
     const playlist = currentGroups.current.flatMap(group => group.playlists).find(playlist => playlist.id === selectedId);

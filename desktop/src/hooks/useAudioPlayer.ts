@@ -861,10 +861,14 @@ export function useAudioPlayer(
 
   useEffect(
     () => () => {
+      if (usesNativeAudio) {
+        void nativeCommandsRef.current.run("queue_native_audio", { source: null }).catch(() => {});
+        void nativeCommandsRef.current.run("pause_native_audio").catch(() => {});
+      }
       dashPlayersRef.current[0]?.reset();
       dashPlayersRef.current[1]?.reset();
     },
-    [],
+    [usesNativeAudio],
   );
 
   useEffect(() => {
