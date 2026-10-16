@@ -18,7 +18,7 @@ The <i><b>perfect</b></i> music player built with performance in mind.
 - [x] Equalizer with Rust Libraries
 - [ ] Mobile Apps
 - [ ] Server UI
-- [ ] Home Page
+- [x] Home Page
 
 <b>Future Features</b>
 
@@ -94,6 +94,13 @@ the server directly. The server saves listening state in
 `AMBRA_DATA_DIR/user-state.v1.json`; clients connected to that server restore the
 same state. UI and search preferences, audio output/DSP settings, window bounds,
 local audio files, and rebuildable client caches remain on each client.
+
+Home shows recently played songs, your playlists, and songs last played at least
+30 days ago. Last-played times and track metadata are saved in server listening
+state, independently of editable queue history. Playback is recorded when audio
+starts, including automatic track advances; restoring a paused session does not
+record a play. Existing server queue history seeds Home on the first launch.
+Update and restart the server alongside this client to accept the new history key.
 
 On the first connection to a server without listening state, the client imports
 its previous local playlists, queue/history, playback position, ordering, and

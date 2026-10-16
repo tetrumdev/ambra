@@ -1,7 +1,7 @@
 import type { SearchProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
-export type AppScreen = "bigscreen" | "lyrics" | "library" | "search" | "queue" | "settings";
+export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
 export type PlayerView = Extract<AppScreen, "bigscreen" | "lyrics">;
 export type PlaylistGroup = "ambra" | "spotify" | "qobuz" | "tidal";
@@ -36,7 +36,7 @@ const legacyScreenKey = "ambra.current-screen";
 export const defaultPreferences: AppPreferences = {
   version: 4,
   ui: {
-    screen: "library",
+    screen: "home",
     showAudioQuality: false,
     animateSwirl: true,
     lyricMotion: "system",
@@ -62,6 +62,7 @@ function isAppScreen(value: unknown): value is AppScreen {
   return (
     value === "bigscreen" ||
     value === "lyrics" ||
+    value === "home" ||
     value === "library" ||
     value === "search" ||
     value === "queue" ||
