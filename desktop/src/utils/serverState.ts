@@ -6,6 +6,7 @@ export const serverStateKeys = new Set([
   "ambra.playlists.v1",
   "ambra.queue.v1",
   "ambra.playback.v1",
+  "ambra.listening-history.v1",
   "ambra.library-order.v1",
   "ambra.removed-library-tracks.v1",
 ]);

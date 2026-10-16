@@ -19,6 +19,7 @@ const KEYS: &[&str] = &[
     "ambra.playlists.v1",
     "ambra.queue.v1",
     "ambra.playback.v1",
+    "ambra.listening-history.v1",
     "ambra.library-order.v1",
     "ambra.removed-library-tracks.v1",
 ];
@@ -165,6 +166,21 @@ fn validate(key: &str, encoded: &str) -> Result<(), String> {
     let value: Value = serde_json::from_str(encoded)
         .map_err(|error| format!("Invalid JSON for {key}: {error}"))?;
     let valid = match key {
+        "ambra.listening-history.v1" => {
+            let mut ids = std::collections::HashSet::new();
+            value["version"] == 1
+                && value["entries"].as_array().is_some_and(|entries| {
+                    entries.iter().all(|entry| {
+                        track(&entry["track"])
+                            && entry["track"]["globalId"]
+                                .as_str()
+                                .is_some_and(|id| !id.is_empty() && ids.insert(id))
+                            && entry["lastPlayedAt"]
+                                .as_u64()
+                                .is_some_and(|time| time > 0 && time <= 8_640_000_000_000_000)
+                    })
+                })
+        }
         "ambra.library-order.v1" | "ambra.removed-library-tracks.v1" => string_list(&value),
         "ambra.playback.v1" => {
             value.is_object()
