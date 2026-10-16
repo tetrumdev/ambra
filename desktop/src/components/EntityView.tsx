@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from "react";
 import {
+  highestQualityAlbumArtwork,
   loadAlbumTracks,
   type ArtistProfile,
   type CatalogAlbum,
@@ -111,6 +112,16 @@ function AlbumView({
         <AlbumArtwork
           src={album.imageUrl}
           title={album.title}
+          resolveFull={() =>
+            album.provider === "local"
+              ? Promise.resolve(saved.find((track) => track.fullCover)?.fullCover ?? null)
+              : highestQualityAlbumArtwork({
+                  provider: album.provider,
+                  albumId: album.id,
+                  upc: album.upc,
+                  coverUrl: album.imageUrl,
+                }).then((artwork) => artwork?.url ?? null)
+          }
         />
       }
       headerContent={

@@ -12,6 +12,7 @@
     z-index: 1;
     font-family: "Stack Sans Text", sans-serif;
     text-align: left;
+    /* Keep LYRICS_COVER_DIM in LyricsView.tsx in step with this overlay. */
     background: linear-gradient(
         110deg,
         rgba(0, 0, 0, 0.48),
@@ -189,7 +190,12 @@ button.lyricLine:hover {
 .lyricSegment {
     white-space: pre-wrap;
 }
+/* A word stays whole while it fits; one wider than the line wraps between its letters
+   instead of being clipped, as overflow-wrap does for plain lines. */
 .lyricWord {
+    display: inline-flex;
+    flex-wrap: wrap;
+    max-width: 100%;
     white-space: nowrap;
 }
 .lyricChar {
@@ -331,10 +337,13 @@ button.lyricLine:hover {
     z-index: 2;
     display: none;
     align-items: center;
-    padding: 3px;
-    border: 1px solid rgba(255, 255, 255, 0.12);
+    /* Matches the bigscreen view picker in AppChrome.css. */
+    box-sizing: border-box;
+    height: 42px;
+    padding: 0 6px;
+    border: 1px solid rgba(100, 100, 100, 0.4);
     border-radius: 100px;
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
     transform: translateX(-50%);
     animation: lyricsResumeAppear 250ms ease both;
 }
@@ -345,7 +354,7 @@ button.lyricLine:hover {
     inset: 0;
     z-index: -1;
     border-radius: inherit;
-    background: rgba(30, 30, 30, 0.75);
+    background: rgba(22, 22, 22, 0.4);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
 }
@@ -369,9 +378,9 @@ button.lyricLine:hover {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 17px;
+    height: 40px;
+    padding: 0 12px;
     border: 0;
-    border-radius: 100px;
     white-space: nowrap;
     color: white;
     background: transparent;
@@ -380,22 +389,24 @@ button.lyricLine:hover {
         sans-serif;
     cursor: default;
     transition:
-        background 200ms ease,
-        transform 200ms ease;
+        opacity 0.25s ease,
+        scale 0.15s;
 }
-.lyricsResume:hover,
+/* Like the view picker, the menu stays dim until the pointer reaches it; resume is the current action. */
+.lyricsSyncTrigger {
+    opacity: 0.45;
+}
 .lyricsSyncTrigger:hover,
+.lyricsSyncTrigger:focus-visible,
 .lyricsSyncTrigger[aria-expanded="true"] {
-    background: rgba(255, 255, 255, 0.14);
+    opacity: 1;
 }
 .lyricsResume:active,
 .lyricsSyncTrigger:active {
-    transform: scale(0.97);
+    scale: 0.97;
 }
 .lyricsResume + .lyricsSyncMenu {
-    margin-left: 4px;
-    padding-left: 4px;
-    border-left: 1px solid rgba(255, 255, 255, 0.14);
+    border-left: 1px solid rgba(100, 100, 100, 0.4);
 }
 .lyricsResume svg,
 .lyricsSyncTrigger svg {

@@ -244,21 +244,36 @@ export function artworkPalette(track: Track): Promise<ArtworkPalette> {
 export function highestQualityArtwork(
   track: Track,
 ): Promise<ArtworkQuality | null> {
+  return highestQualityAlbumArtwork({
+    provider: track.provider,
+    albumId: track.albumId,
+    upc: track.upc,
+    coverUrl: track.nativeCover,
+  });
+}
+
+/** Resolves an album's best available cover from its provider's own cover URL. */
+export function highestQualityAlbumArtwork(album: {
+  provider: MusicProvider;
+  albumId: string | null;
+  upc?: string | null;
+  coverUrl: string | null;
+}): Promise<ArtworkQuality | null> {
   if (
-    track.provider === "local" ||
-    track.albumId === null ||
-    track.nativeCover === null ||
-    !track.nativeCover.startsWith("https://")
+    album.provider === "local" ||
+    album.albumId === null ||
+    album.coverUrl === null ||
+    !album.coverUrl.startsWith("https://")
   ) {
     return Promise.resolve(null);
   }
 
   const cacheKey = [
     artworkPaletteVersion,
-    track.provider,
-    track.albumId,
-    track.upc ?? "",
-    track.nativeCover,
+    album.provider,
+    album.albumId,
+    album.upc ?? "",
+    album.coverUrl,
   ].join(":");
   const cached = artworkQualityRequests.get(cacheKey);
   if (cached) {
@@ -271,10 +286,10 @@ export function highestQualityArtwork(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      sourceProvider: track.provider,
-      albumId: track.albumId,
-      upc: track.upc,
-      coverUrl: track.nativeCover,
+      sourceProvider: album.provider,
+      albumId: album.albumId,
+      upc: album.upc ?? null,
+      coverUrl: album.coverUrl,
     }),
   })
     .then(async (response) => {
