@@ -121,12 +121,6 @@
     flex: none;
 }
 
-#searchProvider:focus-visible,
-.searchExpandButton:focus-visible,
-.searchProviderMenu button:focus-visible {
-    box-shadow: inset 0 0 0 2px #aaa;
-}
-
 .searchProviderMenu {
     position: absolute;
     top: calc(100% + 5px);

@@ -102,11 +102,6 @@
     background: transparent;
 }
 
-.bigscreenViewButton:focus-visible,
-.bigscreenClose:focus-visible {
-    box-shadow: inset 0 0 0 2px #aaa;
-}
-
 /* Icons stay dim until their view is selected or the pointer reaches them. */
 .bigscreenCtrls .bigscreenBtn {
     opacity: 0.45;

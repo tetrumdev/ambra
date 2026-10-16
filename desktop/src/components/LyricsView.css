@@ -35,8 +35,7 @@
 .lyricsArtwork {
     display: block;
     width: min(
-        100%,
-        680px,
+        80%,
         calc(
             100vh - var(--library-titlebar-height) - var(--lyrics-top-padding) -
                 150px
@@ -45,6 +44,10 @@
     aspect-ratio: 1;
     object-fit: cover;
     -webkit-user-drag: none;
+}
+
+.lyricsArtworkPlaceholder {
+    box-shadow: 0 0 40px 3px rgba(255, 255, 255, 0.18);
 }
 
 .lyricsStage {
@@ -82,10 +85,6 @@
 
 .lyricsViewport::-webkit-scrollbar {
     display: none;
-}
-.lyricsViewport:focus-visible {
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
-    border-radius: 12px;
 }
 
 .lyricsLines {
@@ -139,9 +138,6 @@ button.lyricLine {
 button.lyricLine:hover {
     color: white;
     text-shadow: 0 0 24px rgba(255, 255, 255, 0.15);
-}
-button.lyricLine:focus-visible {
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.65);
 }
 .lyricsViewport[data-following="false"] .lyricGroup {
     opacity: 0.75;
@@ -320,10 +316,6 @@ button.lyricLine:focus-visible {
 .lyricsResume:hover {
     background: rgba(255, 255, 255, 0.22);
 }
-.lyricsMessage button:focus-visible,
-.lyricsResume:focus-visible {
-    box-shadow: 0 0 0 2px white;
-}
 .lyricsMessage button:active,
 .lyricsResume:active {
     transform: scale(0.97);
@@ -377,36 +369,6 @@ button.lyricLine:focus-visible {
     line-height: 1.4;
     color: rgba(255, 255, 255, 0.38);
 }
-.lyricsMotion {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    margin-left: auto;
-    color: rgba(255, 255, 255, 0.6);
-}
-.lyricsMotion svg {
-    width: 17px;
-    height: 17px;
-}
-.lyricsMotion select {
-    max-width: 145px;
-    border: 0;
-    padding: 7px 0;
-    font:
-        11px/1.4 "Stack Sans Text",
-        sans-serif;
-    color: inherit;
-    background: transparent;
-    color-scheme: dark;
-    border-radius: 4px;
-    cursor: default;
-}
-.lyricsMotion:focus-within {
-    color: white;
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.5);
-    border-radius: 4px;
-}
-
 @keyframes lyricPauseBreathe {
     /* Uses the scale property so it composes with the enter/exit transform. */
     0%,
