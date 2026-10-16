@@ -16,6 +16,7 @@ import {
   lyricActive,
 } from "../utils/lyricsTiming";
 import {
+  advanceScrollSpring,
   animateLetter,
   letterHead,
   letterMotion,
@@ -29,7 +30,6 @@ type LyricsViewProps = {
   playing: boolean;
   onSeek?: (seconds: number) => void;
   motion?: LyricMotion;
-  onMotionChange?: (motion: LyricMotion) => void;
 };
 
 type Row = {
@@ -406,6 +406,7 @@ function SyncedLyrics({
   useEffect(() => {
     const container = viewport.current;
     if (!container) return;
+    const linesElement = container.querySelector<HTMLElement>(".lyricsLines")!;
     const layout = blocks.map((block) => {
       const rows =
         block.kind === "lines"
@@ -444,7 +445,8 @@ function SyncedLyrics({
         startMs:
           block.kind === "pause" ? block.startMs : lyrics.lines[block.line].startMs,
         top: 0,
-        height: 0,
+        anchor: 0,
+        lag: { value: 0, velocity: 0 },
         active: false,
         ending: false,
         progress: "",
@@ -473,8 +475,13 @@ function SyncedLyrics({
     let lastTime = Number.NaN;
     let focus = -1;
     let target = container.scrollTop;
-    let velocity = 0;
+    // Keep fractional position outside scrollTop, which some WebViews round on every write.
+    const scroll = { value: container.scrollTop, velocity: 0 };
+    let maximumScroll = 0;
+    let viewportWidth = container.clientWidth;
+    let viewportHeight = container.clientHeight;
     let lastFrame = 0;
+    let wasPlaying = playingRef.current;
     let layoutDirty = true;
     let align = true;
     // Window resizes jump straight to the new position instead of springing through every intermediate size.
@@ -485,15 +492,18 @@ function SyncedLyrics({
     const paint = (now: number) => {
       frame = 0;
       if (document.hidden) return;
-      const elapsed = lastFrame
-        ? Math.min((now - lastFrame) / 1000, 0.032)
-        : 1 / 60;
+      const frameSeconds = lastFrame ? Math.max(0, (now - lastFrame) / 1000) : 1 / 60;
+      const elapsed = Math.min(frameSeconds, 0.1);
       lastFrame = now;
-      const time = clock.getSmooth() * 1000 + lyrics.offsetMs;
+      const sampledTime = clock.getSmooth() * 1000 + lyrics.offsetMs;
+      const expectedAdvance = wasPlaying && playingRef.current ? frameSeconds * 1000 : 0;
+      wasPlaying = playingRef.current;
       const discontinuity =
         !Number.isFinite(lastTime) ||
-        time < lastTime - 50 ||
-        time - lastTime > 350;
+        sampledTime < lastTime - 50 ||
+        sampledTime - lastTime > Math.max(350, expectedAdvance + 150);
+      // Small native-clock corrections must not switch focus back across a line boundary.
+      const time = discontinuity ? sampledTime : Math.max(lastTime, sampledTime);
       for (const block of layout) {
         if (block.block.kind !== "pause") continue;
         const { startMs, endMs } = block.block;
@@ -519,13 +529,31 @@ function SyncedLyrics({
       }
       const measured = layoutDirty;
       if (layoutDirty) {
+        const previousAnchor = layout[focus]?.anchor;
         container.style.setProperty(
           "--lyrics-viewport-height",
           `${container.clientHeight}px`,
         );
         for (const block of layout) {
           block.top = block.element.offsetTop;
-          block.height = block.element.offsetHeight;
+          const line = block.rows[0]?.element;
+          if (line) {
+            // Anchor the first visual line, not the centre of a wrapped group or its annotations.
+            block.anchor = block.top +
+              line.getBoundingClientRect().top - block.element.getBoundingClientRect().top +
+              Number.parseFloat(getComputedStyle(line).lineHeight) / 2;
+          } else {
+            // The dots keep the same anchor while their surrounding slot expands or collapses.
+            block.anchor = block.top + block.element.querySelector<HTMLElement>(".lyricPause")!.offsetHeight / 2;
+          }
+        }
+        maximumScroll = Math.max(0, linesElement.offsetTop + linesElement.offsetHeight - container.clientHeight);
+        if (previousAnchor !== undefined && followingRef.current && !discontinuity && !snapScroll) {
+          // Reflow above the active line must not move it on screen or restart its scroll curve.
+          const shift = layout[focus].anchor - previousAnchor;
+          scroll.value = Math.max(0, Math.min(maximumScroll, scroll.value + shift));
+          target = Math.max(0, Math.min(maximumScroll, target + shift));
+          container.scrollTop = scroll.value;
         }
         layoutDirty = false;
       }
@@ -602,10 +630,8 @@ function SyncedLyrics({
         target = Math.max(
           0,
           Math.min(
-            container.scrollHeight - container.clientHeight,
-            block.top -
-              container.clientHeight * 0.43 +
-              Math.min(block.height, container.clientHeight * 0.4) / 2,
+            maximumScroll,
+            block.anchor - container.clientHeight * 0.43,
           ),
         );
         align = false;
@@ -632,36 +658,35 @@ function SyncedLyrics({
       let moving = false;
       if (followingRef.current) {
         if (reducedMotion || discontinuity || snapScroll) {
-          container.scrollTop = target;
-          velocity = 0;
+          scroll.value = target;
+          scroll.velocity = 0;
         } else {
           // Own the spring instead of relying on WebView-specific smooth-scroll timing.
-          const distance = target - container.scrollTop;
-          moving = Math.abs(distance) > 0.75 || Math.abs(velocity) > 2;
-          if (moving) {
-            velocity += (distance * 150 - velocity * 24) * elapsed;
-            container.scrollTop += velocity * elapsed;
-          } else {
-            container.scrollTop = target;
-            velocity = 0;
-          }
+          moving = advanceScrollSpring(scroll, target, elapsed);
         }
+        container.scrollTop = scroll.value;
       }
       for (const [index, block] of layout.entries()) {
-        const lag =
+        const lagTarget =
           followingRef.current && !reducedMotion && moving
             ? Math.max(
                 -80,
                 Math.min(
                   80,
-                  (target - container.scrollTop) *
+                  (target - scroll.value) *
                     Math.min(0.32, Math.abs(index - focus) * 0.065),
                 ),
               )
             : 0;
-        // Whole device pixels keep blurred layers from resampling at subpixel offsets.
-        const snapped = Math.round(lag * devicePixelRatio) / devicePixelRatio;
-        const transform = snapped ? `translate3d(0, ${snapped}px, 0)` : "";
+        if (!followingRef.current || reducedMotion || discontinuity || snapScroll) {
+          block.lag.value = 0;
+          block.lag.velocity = 0;
+        } else {
+          // Ease into a new stagger instead of jumping surrounding lines when focus changes.
+          settling = advanceScrollSpring(block.lag, lagTarget, elapsed) || settling;
+        }
+        // Subpixel offsets let the stagger settle without stepping between device pixels.
+        const transform = block.lag.value ? `translate3d(0, ${block.lag.value.toFixed(3)}px, 0)` : "";
         if (block.element.style.transform !== transform)
           block.element.style.transform = transform;
       }
@@ -671,7 +696,7 @@ function SyncedLyrics({
     const hold = () => {
       followingRef.current = false;
       setFollowing(false);
-      velocity = 0;
+      scroll.velocity = 0;
       schedule();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -689,17 +714,24 @@ function SyncedLyrics({
     resume.current = () => {
       followingRef.current = true;
       setFollowing(true);
+      scroll.value = container.scrollTop;
+      scroll.velocity = 0;
       align = true;
       schedule();
     };
     wake.current = schedule;
-    const resize = new ResizeObserver((entries) => {
+    const resize = new ResizeObserver(() => {
       layoutDirty = true;
-      if (entries.some((entry) => entry.target === container)) snapScroll = true;
+      if (container.clientWidth !== viewportWidth || container.clientHeight !== viewportHeight) {
+        viewportWidth = container.clientWidth;
+        viewportHeight = container.clientHeight;
+        snapScroll = true;
+      }
       schedule();
     });
     resize.observe(container);
-    resize.observe(container.querySelector(".lyricsLines")!);
+    resize.observe(linesElement);
+    for (const block of layout) resize.observe(block.element);
     const onVisibility = () => {
       cancelAnimationFrame(frame);
       frame = 0;
@@ -835,7 +867,16 @@ export function LyricsView({
       data-reduced-motion={reducedMotion}
     >
       <header className="lyricsHeading">
-        {track && <LyricsArtwork track={track} />}
+        {track ? (
+          <LyricsArtwork track={track} />
+        ) : (
+          <img
+            id="lyricsArtwork"
+            className="lyricsArtwork lyricsArtworkPlaceholder"
+            src="/ambra.png"
+            alt="Ambra"
+          />
+        )}
       </header>
       <section className="lyricsStage" aria-label="Song lyrics">
         {!track ? (

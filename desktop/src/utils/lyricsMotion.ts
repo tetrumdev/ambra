@@ -11,6 +11,22 @@ import type { LyricSegment } from "../types/lyrics";
 export type SpringConfig = { stiffness: number; damping: number };
 export type Spring = { value: number; velocity: number };
 
+/** Exact critically damped motion keeps scrolling smooth across different frame rates. */
+export function advanceScrollSpring(spring: Spring, target: number, seconds: number): boolean {
+  const response = 12;
+  const offset = spring.value - target;
+  const coefficient = spring.velocity + response * offset;
+  const decay = Math.exp(-response * seconds);
+  spring.value = target + (offset + coefficient * seconds) * decay;
+  spring.velocity = (spring.velocity - response * coefficient * seconds) * decay;
+  if (Math.abs(spring.value - target) < 0.02 && Math.abs(spring.velocity) < 0.1) {
+    spring.value = target;
+    spring.velocity = 0;
+    return false;
+  }
+  return true;
+}
+
 /** Near-critically damped: letters float up and settle without wobble. */
 const liftSpring: SpringConfig = { stiffness: 120, damping: 22 };
 /** Slightly softer than critical, so a swell blooms rather than snaps. */

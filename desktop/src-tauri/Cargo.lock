@@ -30,6 +30,7 @@ dependencies = [
  "tauri-plugin-opener",
  "walkdir",
  "wasapi",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

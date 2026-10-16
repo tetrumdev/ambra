@@ -23,7 +23,7 @@
 .settingsTextButton { color: #bbb; background: none; border: 0; padding: 6px; }
 .settingsView button:disabled { opacity: .45; }
 .settingsView input[type="checkbox"] { accent-color: white; }
-.settingsView :focus-visible, .settingsSidebar :focus-visible { outline: 1px solid #aaa; outline-offset: 3px; }
+.settingsView .settingsMotionSelect { width: auto; flex-shrink: 0; }
 .settingsOutputFields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .settingsFieldHelp { color: #aaa; font-size: 11px; line-height: 1.5; }
 .settingsOutputActions, .settingsActions, .settingsEditorFooter { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }

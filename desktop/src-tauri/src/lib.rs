@@ -967,6 +967,8 @@ pub fn run() {
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            #[cfg(target_os = "windows")]
+            keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
             Ok(())

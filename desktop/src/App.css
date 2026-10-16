@@ -66,10 +66,6 @@ body,
     padding: 8px 16px;
     font: inherit;
 }
-.stateStartup button:focus-visible, .stateSaveError button:focus-visible {
-    outline: 2px solid white !important;
-    outline-offset: 3px;
-}
 .stateSaveError {
     position: fixed;
     top: 36px;
@@ -269,10 +265,6 @@ button img {
 .settingsToggle:checked::before {
     transform: translateX(20px);
     background: black;
-}
-
-.settingsToggle:focus-visible {
-    box-shadow: 0 0 0 3px #aaa;
 }
 
 .libraryView,

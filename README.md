@@ -72,6 +72,9 @@ separately running server alone; stop the server with Ctrl+C in its terminal.
 
 From the repository root, `bun run dev` installs the desktop dependencies and
 launches the client. `bun run build` builds the standalone client.
+`bun run tauri dev` also works from the repository root and forwards to the
+desktop CLI. Tauri's frontend hooks explicitly run in `desktop` so they cannot
+re-enter the root scripts and start another client or build.
 
 The server only accepts requests from the Ambra app itself. Set
 `AMBRA_ALLOWED_ORIGINS` (comma-separated) to admit another front end.
