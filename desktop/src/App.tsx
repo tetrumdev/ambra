@@ -11,7 +11,7 @@ import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
-import { LyricsView } from "./components/LyricsView";
+import { LYRICS_COVER_DIM, LyricsView } from "./components/LyricsView";
 import { SearchBar } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -850,7 +850,7 @@ function App() {
       {(player.currentTrack || isPlayerView) && (
         <>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
-            coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} />
+            coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} coverDim={isLyricsView ? LYRICS_COVER_DIM : 1} />
           <AlbumArtwork
             track={player.currentTrack}
             active={isBigscreen}

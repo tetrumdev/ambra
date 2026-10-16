@@ -34,6 +34,12 @@ import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import "./LyricsView.css";
 import "./TrackMenus.css";
 
+/**
+ * Share of the background left visible beside the artwork by #lyricsPage's
+ * gradient in LyricsView.css (about 41% black where the cover sits).
+ */
+export const LYRICS_COVER_DIM = 0.59;
+
 type LyricsViewProps = {
   track: Track | undefined;
   clock: PlaybackClock;
@@ -156,8 +162,10 @@ function graphemes(text: string, lang?: string): string[] {
 /** Splits text into unbreakable words; scripts without spaces fall back to dictionary words. */
 function wordPieces(text: string, lang?: string): string[] {
   return text.split(/(\s+)/).flatMap((token) => {
-    if (!token || /^\s+$/.test(token) || !IntlSegmenter || !unspacedScript.test(token))
-      return token ? [token] : [];
+    if (!token || /^\s+$/.test(token)) return token ? [token] : [];
+    if (!IntlSegmenter || !unspacedScript.test(token))
+      // Hyphens and dashes stay with the part before them and may end a line, as in plain text.
+      return token.match(/[^-‐‑–—/]*[-‐‑–—/]+|[^-‐‑–—/]+/g) ?? [token];
     const pieces: string[] = [];
     for (const part of new IntlSegmenter(lang, { granularity: "word" }).segment(token)) {
       // Keep punctuation on the word before it so it never starts a line.

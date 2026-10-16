@@ -1,16 +1,6 @@
-type Rgb = [number, number, number];
+import { swirlShares } from "./swirlProportions";
 
-export function softenedPaletteWeights(weights: number[], colorCount: number) {
-  const count = Math.min(4, Math.max(1, colorCount));
-  // Square roots gently favor common colors while keeping small accents visible.
-  const softened = Array.from({ length: 4 }, (_, index) =>
-    index < count && Number.isFinite(weights[index]) ? Math.sqrt(Math.max(0, weights[index])) : 0,
-  );
-  const total = softened.reduce((sum, weight) => sum + weight, 0);
-  return total > 0
-    ? softened.map((weight) => weight / total)
-    : softened.map((_, index) => index < count ? 1 / count : 0);
-}
+type Rgb = [number, number, number];
 
 function parseColor(color: string): Rgb {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return [0, 0, 0];
@@ -121,14 +111,20 @@ export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
   return zones.map((sum, index) => counts[index] ? sum / counts[index] : 0.5);
 }
 
+/**
+ * `coverDim` is the share of the background still visible beside the cover
+ * after any overlay drawn over the field but under the cover (1 = none).
+ */
 export function coverSeparation(
   edges: number[] | null,
   colors: string[],
   weights: number[],
+  coverDim = 1,
 ): CoverSeparation {
   if (colors.length === 0) return neutralCoverSeparation;
-  const influence = softenedPaletteWeights(weights, colors.length);
-  const background = colors
+  // The background shows each color in about its swirl share.
+  const influence = swirlShares(weights.slice(0, colors.length));
+  const background = coverDim * colors
     .slice(0, 4)
     .reduce((sum, color, index) => sum + luminance(parseColor(color)) * influence[index], 0);
   // Without a readable cover, its palette is the best guess for every edge.
