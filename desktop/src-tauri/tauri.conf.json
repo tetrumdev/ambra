@@ -4,9 +4,15 @@
   "version": "0.1.2",
   "identifier": "com.quantium.ambra",
   "build": {
-    "beforeDevCommand": "bun run dev",
+    "beforeDevCommand": {
+      "script": "bun run dev",
+      "cwd": ".."
+    },
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": {
+      "script": "bun run build",
+      "cwd": ".."
+    },
     "frontendDist": "../dist"
   },
   "app": {

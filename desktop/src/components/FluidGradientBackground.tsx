@@ -14,6 +14,7 @@ type FluidGradientBackgroundProps = {
 
 const COLOR_TRANSITION_MS = 1800;
 const EDGE_COMPONENTS = COVER_EDGE_ZONES * 4;
+const NOISE_TEXTURE_SIZE = 256;
 // The field drifts far too slowly for frames beyond 60 fps to differ, so
 // high-refresh displays draw every other frame instead of doubling the work.
 const MIN_FRAME_INTERVAL_MS = 1000 / 60 - 2;
@@ -31,29 +32,26 @@ precision highp float;
 
 uniform vec2 u_resolution;
 uniform float u_time;
-uniform float u_seed;
+uniform highp sampler2D u_noise;
 uniform vec3 u_colors[4];
 uniform vec4 u_cover;
 // Per zone along the cover's sides (top, right, bottom, left per entry).
 uniform vec4 u_edgeLuma[${COVER_EDGE_ZONES}];
 uniform vec4 u_edgeDirection[${COVER_EDGE_ZONES}];
 
-// Arithmetic hash (Dave Hoskins, "Hash without Sine"): every pixel evaluates
-// this ~180 times a frame, and sin() is far slower than multiply-adds on GPUs.
-float hash(vec2 point) {
-  vec3 p3 = fract(vec3(point.xyx + u_seed) * 0.1031);
-  p3 += dot(p3, p3.yzx + 33.33);
-  return fract((p3.x + p3.y) * p3.z);
-}
-
 float noise(vec2 point) {
   vec2 cell = floor(point);
   vec2 local = fract(point);
-  vec2 smoothLocal = local * local * (3.0 - 2.0 * local);
+  vec2 smoothLocal = local * local * local * (local * (local * 6.0 - 15.0) + 10.0);
 
+  // Shared lattice values stay identical across cell boundaries and GPU backends.
+  // Fetch texel centres and interpolate in high precision: hardware filtering can
+  // quantize slow movement, which repeated domain warps amplify into contour jumps.
+  vec2 uv = (mod(cell, ${NOISE_TEXTURE_SIZE}.0) + 0.5) / ${NOISE_TEXTURE_SIZE}.0;
+  vec2 texel = vec2(1.0 / ${NOISE_TEXTURE_SIZE}.0, 0.0);
   return mix(
-    mix(hash(cell), hash(cell + vec2(1.0, 0.0)), smoothLocal.x),
-    mix(hash(cell + vec2(0.0, 1.0)), hash(cell + vec2(1.0)), smoothLocal.x),
+    mix(texture2D(u_noise, uv).r, texture2D(u_noise, uv + texel.xy).r, smoothLocal.x),
+    mix(texture2D(u_noise, uv + texel.yx).r, texture2D(u_noise, uv + texel.xx).r, smoothLocal.x),
     smoothLocal.y
   );
 }
@@ -148,7 +146,9 @@ void main() {
   float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
   color = mix(vec3(luminance), color, 1.18);
   color *= 0.84 + 0.22 * fbm(fluidPoint * 2.2 + secondWarp);
-  gl_FragColor = vec4(separateFromCover(color), 1.0);
+  // Fixed screen-space dithering breaks up 8-bit color contours without animated grain.
+  float dither = texture2D(u_noise, gl_FragCoord.xy / ${NOISE_TEXTURE_SIZE}.0).r - 0.5;
+  gl_FragColor = vec4(clamp(separateFromCover(color) + dither / 255.0, 0.0, 1.0), 1.0);
 }
 `;
 
@@ -165,6 +165,29 @@ function createShader(
   console.warn("Could not compile fluid-gradient shader:", gl.getShaderInfoLog(shader));
   gl.deleteShader(shader);
   return null;
+}
+
+function createNoiseTexture(gl: WebGLRenderingContext, seed: number) {
+  const texture = gl.createTexture();
+  if (!texture) return null;
+  const pixels = new Uint8Array(NOISE_TEXTURE_SIZE * NOISE_TEXTURE_SIZE);
+  let state = Math.floor(seed * 0x4000000) >>> 0;
+  for (let index = 0; index < pixels.length; index++) {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    pixels[index] = state >>> 24;
+  }
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  // A power-of-two texture can repeat seamlessly in WebGL 1 without mipmaps.
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  gl.texImage2D(
+    gl.TEXTURE_2D, 0, gl.LUMINANCE, NOISE_TEXTURE_SIZE, NOISE_TEXTURE_SIZE,
+    0, gl.LUMINANCE, gl.UNSIGNED_BYTE, pixels,
+  );
+  return texture;
 }
 
 function colorComponents(color: string) {
@@ -295,6 +318,8 @@ export function FluidGradientBackground({
       powerPreference: "low-power",
     });
     if (!gl) return;
+    // The shader provides fixed dithering; avoid backend-dependent framebuffer dithering.
+    gl.disable(gl.DITHER);
 
     const vertexShader = createShader(gl, gl.VERTEX_SHADER, vertexShaderSource);
     const fragmentShader = createShader(
@@ -316,19 +341,24 @@ export function FluidGradientBackground({
     }
 
     const buffer = gl.createBuffer();
+    const noiseTexture = createNoiseTexture(gl, journey.seed);
     const position = gl.getAttribLocation(program, "a_position");
     const resolution = gl.getUniformLocation(program, "u_resolution");
     const time = gl.getUniformLocation(program, "u_time");
-    const shaderSeed = gl.getUniformLocation(program, "u_seed");
+    const shaderNoise = gl.getUniformLocation(program, "u_noise");
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
     const shaderCover = gl.getUniformLocation(program, "u_cover");
     const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
     const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
     if (
-      !buffer || position < 0 || !resolution || !time || !shaderSeed || !shaderColors
+      !buffer || !noiseTexture || position < 0 || !resolution || !time || !shaderNoise || !shaderColors
       || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
     ) {
+      gl.deleteTexture(noiseTexture);
+      gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
+      gl.deleteShader(vertexShader);
+      gl.deleteShader(fragmentShader);
       return;
     }
 
@@ -342,9 +372,7 @@ export function FluidGradientBackground({
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
 
-    // The hash offsets lattice coordinates by the seed; a small range keeps
-    // full precision even where mediump floats are 16-bit.
-    gl.uniform1f(shaderSeed, journey.seed);
+    gl.uniform1i(shaderNoise, 0);
 
     const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotionRef.current = motionPreference.matches;
@@ -457,6 +485,7 @@ export function FluidGradientBackground({
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = 0;
       gl.deleteBuffer(buffer);
+      gl.deleteTexture(noiseTexture);
       gl.deleteProgram(program);
       gl.deleteShader(vertexShader);
       gl.deleteShader(fragmentShader);

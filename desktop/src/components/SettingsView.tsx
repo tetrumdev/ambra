@@ -4,11 +4,12 @@ import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { newPreset, parseAutoEq, validatePreset, type DspPreset, type DspStatus, type EqBand, type ImpulseFile } from "../utils/audioSettings";
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
+import type { LyricMotion } from "../utils/preferences";
 import "./SettingsView.css";
 
-type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
-export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, registerScrollElement }: Props) {
+export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DspPreset | null>(null);
@@ -154,6 +155,10 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Show song specs" aria-describedby="songSpecsDescription" checked={showAudioQuality} onChange={e => onShowAudioQuality(e.currentTarget.checked)} /></label>
       <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Animate swirl</span><span className="settingsToggleDescription" id="swirlMotionDescription">Keep the player background moving, independently of system UI animations.</span></span>
         <input type="checkbox" role="switch" className="settingsToggle" aria-label="Animate swirl" aria-describedby="swirlMotionDescription" checked={animateSwirl} onChange={e => onAnimateSwirl(e.currentTarget.checked)} /></label>
+      <label className="settingsToggleRow"><span><span className="settingsToggleLabel">Lyric motion</span><span className="settingsToggleDescription" id="lyricMotionDescription">Full enables lyric animation even when system animations are off.</span></span>
+        <select className="settingsMotionSelect" aria-label="Lyric motion" aria-describedby="lyricMotionDescription" value={lyricMotion} onChange={e => onLyricMotionChange(e.currentTarget.value as LyricMotion)}>
+          <option value="system">Follow system</option><option value="full">Full</option><option value="reduced">Reduced</option>
+        </select></label>
     </section>
   </div>;
 }

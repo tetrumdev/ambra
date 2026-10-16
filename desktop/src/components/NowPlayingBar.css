@@ -118,10 +118,6 @@
     background: #ffffff12;
 }
 
-.playbackError button:focus-visible {
-    box-shadow: inset 0 0 0 2px #ffe0e0;
-}
-
 .playbackError .playbackErrorCopy {
     min-width: 0;
     gap: 8px;

@@ -51,8 +51,6 @@
 }
 
 .columnResizeHandle:focus-visible {
-    outline: 1px solid white;
-    outline-offset: 2px;
     opacity: 1;
 }
 

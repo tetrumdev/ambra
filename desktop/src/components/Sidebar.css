@@ -41,10 +41,6 @@
     font-family: "Stack Sans Text";
 }
 
-.sidebarFooter button:focus-visible {
-    box-shadow: 0 0 0 2px #aaa;
-}
-
 .sidebarSettingsButton img {
     display: block;
     width: 18px;
