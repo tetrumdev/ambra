@@ -3,11 +3,16 @@ import {
   COVER_EDGE_ZONES,
   type CoverSeparation,
 } from "../utils/backgroundPalette";
+import { SWIRL_SHARPNESS, swirlBiases } from "../utils/swirlProportions";
 
 type FluidGradientBackgroundProps = {
   colors: string[];
+  /** Each color's share of the cover; the swirl gives it a matching share of the field. */
+  weights: number[];
   separation: CoverSeparation;
   coverId: string;
+  /** Visible share of the field beside the cover after page overlays; 1 = none. */
+  coverDim?: number;
   active: boolean;
   animate?: boolean;
 };
@@ -34,7 +39,10 @@ uniform vec2 u_resolution;
 uniform float u_time;
 uniform highp sampler2D u_noise;
 uniform vec3 u_colors[4];
+// Shifts each field so its color covers about its share of the cover (see swirlProportions.ts).
+uniform vec4 u_bias;
 uniform vec4 u_cover;
+uniform float u_coverDim;
 // Per zone along the cover's sides (top, right, bottom, left per entry).
 uniform vec4 u_edgeLuma[${COVER_EDGE_ZONES}];
 uniform vec4 u_edgeDirection[${COVER_EDGE_ZONES}];
@@ -107,11 +115,13 @@ vec3 separateFromCover(vec3 color) {
   // Keep existing contrast and gently separate similar colors. Bounded
   // adjustments preserve the moving field instead of forcing it to match
   // brightness targets from the stationary cover zones.
-  float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+  // Compare what is seen: an overlay may darken the field but not the cover.
+  float luma = u_coverDim * dot(color, vec3(0.2126, 0.7152, 0.0722));
   float similarity = 1.0 - smoothstep(0.03, 0.22, abs(luma - edge));
   float amount = nearby * similarity * abs(direction);
   vec3 deeper = color * (1.0 - 0.07 * amount);
-  vec3 lifted = mix(color, vec3(1.0), 0.04 * amount);
+  // Lift toward what shows as white through the overlay, so the visible change matches.
+  vec3 lifted = mix(color, vec3(1.0 / u_coverDim), 0.04 * amount);
   return direction < 0.0 ? deeper : lifted;
 }
 
@@ -136,7 +146,8 @@ void main() {
     fbm(fluidPoint * 1.18 + vec2(-4.2, 6.8 - time * 0.83)),
     fbm(fluidPoint * 1.38 + vec2(2.6 - time * 0.52, -7.4 + time * 0.35))
   );
-  fields = exp((fields - max(max(fields.x, fields.y), max(fields.z, fields.w))) * 9.0);
+  fields += u_bias;
+  fields = exp((fields - max(max(fields.x, fields.y), max(fields.z, fields.w))) * ${SWIRL_SHARPNESS}.0);
   fields /= fields.x + fields.y + fields.z + fields.w;
 
   vec3 color = u_colors[0] * fields.x
@@ -199,15 +210,17 @@ function colorComponents(color: string) {
 
 function paletteComponents(
   colors: string[],
+  weights: number[],
   separation: CoverSeparation,
 ) {
   const palette = colors.slice(0, 4);
   while (palette.length < 4) palette.push(palette[0] ?? "#000000");
-  // Transition colors and cover separation without changing the field's shape.
+  // Transition colors, proportions and cover separation without changing the field's shape.
   return [
     ...palette.flatMap(colorComponents),
     ...separation.edges,
     ...separation.directions,
+    ...swirlBiases(weights),
   ];
 }
 
@@ -224,14 +237,17 @@ function easedProgress(progress: number) {
 
 export function FluidGradientBackground({
   colors,
+  weights,
   separation,
   coverId,
+  coverDim = 1,
   active,
   animate = true,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteKey = [
     ...colors.slice(0, 4),
+    ...weights.slice(0, 4),
     ...separation.edges,
     ...separation.directions,
   ].join(":");
@@ -241,10 +257,11 @@ export function FluidGradientBackground({
   }
   const journey = journeyRef.current;
   const coverIdRef = useRef(coverId);
+  const coverDimRef = useRef(coverDim);
   const resizeRef = useRef<(() => void) | null>(null);
   const transitionRef = useRef({
-    from: paletteComponents(colors, separation),
-    to: paletteComponents(colors, separation),
+    from: paletteComponents(colors, weights, separation),
+    to: paletteComponents(colors, weights, separation),
     startedAt: 0,
   });
   const drawRef = useRef<((now: number) => void) | null>(null);
@@ -258,7 +275,7 @@ export function FluidGradientBackground({
     const now = performance.now();
     const previous = transitionRef.current;
     const progress = easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS);
-    const target = paletteComponents(colors, separation);
+    const target = paletteComponents(colors, weights, separation);
     const current = mixPalette(previous.from, previous.to, progress);
     transitionRef.current = reducedMotionRef.current || !activeRef.current
       ? { from: target, to: target, startedAt: now }
@@ -270,8 +287,9 @@ export function FluidGradientBackground({
 
   useEffect(() => {
     coverIdRef.current = coverId;
+    coverDimRef.current = Math.min(1, Math.max(0.05, coverDim));
     resizeRef.current?.();
-  }, [coverId]);
+  }, [coverId, coverDim]);
 
   useEffect(() => {
     const now = performance.now();
@@ -347,7 +365,9 @@ export function FluidGradientBackground({
     const time = gl.getUniformLocation(program, "u_time");
     const shaderNoise = gl.getUniformLocation(program, "u_noise");
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
+    const shaderBias = gl.getUniformLocation(program, "u_bias");
     const shaderCover = gl.getUniformLocation(program, "u_cover");
+    const shaderCoverDim = gl.getUniformLocation(program, "u_coverDim");
     const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
     const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
     if (
@@ -457,8 +477,10 @@ export function FluidGradientBackground({
       // The cover may mount after the canvas; keep looking until it appears.
       if (!observedCover || !observedCover.isConnected) measureCover();
       gl.uniform4fv(shaderCover, cover);
+      gl.uniform1f(shaderCoverDim, coverDimRef.current);
       gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
       gl.uniform4fv(shaderEdgeDirection, palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2));
+      gl.uniform4fv(shaderBias, palette.slice(12 + EDGE_COMPONENTS * 2, 16 + EDGE_COMPONENTS * 2));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
       // transitions without disabling this explicitly selected background.

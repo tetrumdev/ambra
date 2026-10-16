@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   artworkPalette,
   thumbnailArtwork,
@@ -28,6 +28,8 @@ type BackgroundArtworkProps = ArtworkProps & {
   active: boolean;
   animate?: boolean;
   coverId?: string;
+  /** Visible share of the background beside the cover; see coverSeparation. */
+  coverDim?: number;
 };
 
 const EDGE_SAMPLE_SIZE = 16;
@@ -95,12 +97,19 @@ export function AlbumArtwork({ track, active }: BackgroundArtworkProps) {
   );
 }
 
-export function BackgroundArtwork({ track, active, animate, coverId = "albumCover" }: BackgroundArtworkProps) {
+export function BackgroundArtwork({ track, active, animate, coverId = "albumCover", coverDim = 1 }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
     colors: ["#000000", "#000000", "#000000", "#000000"],
     weights: [1, 0, 0, 0],
   });
-  const [separation, setSeparation] = useState<CoverSeparation>(neutralCoverSeparation);
+  const [edges, setEdges] = useState<number[] | null | undefined>();
+  // Recomputed when the view's overlay changes, so both views separate the cover by what is visible.
+  const separation = useMemo<CoverSeparation>(
+    () => edges === undefined
+      ? neutralCoverSeparation
+      : coverSeparation(edges, palette.colors, palette.weights, coverDim),
+    [edges, palette, coverDim],
+  );
 
   useEffect(() => {
     if (!track) return;
@@ -113,7 +122,7 @@ export function BackgroundArtwork({ track, active, animate, coverId = "albumCove
       if (!cancelled && palette.colors.length === 4) {
         const colors = separateCollapsedPalette(palette.colors);
         setPalette({ ...palette, colors });
-        setSeparation(coverSeparation(edges, colors, palette.weights));
+        setEdges(edges);
       }
     });
 
@@ -132,8 +141,10 @@ export function BackgroundArtwork({ track, active, animate, coverId = "albumCove
     <div id="backgroundFX" aria-hidden="true" data-active={active} data-empty={!track}>
       <FluidGradientBackground
         colors={palette.colors}
+        weights={palette.weights}
         separation={separation}
         coverId={coverId}
+        coverDim={coverDim}
         active={active && !!track}
         animate={track ? animate : false}
       />
