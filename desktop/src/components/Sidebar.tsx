@@ -10,6 +10,8 @@ import { DropdownChevron } from "./DropdownChevron";
 import type { PlaylistGroup } from "../utils/preferences";
 
 type SidebarProps = {
+  onOpenHome: () => void;
+  isHomeActive: boolean;
   onOpenSettings: () => void;
   isSettingsActive: boolean;
   onOpenLibrary: () => void;
@@ -27,6 +29,8 @@ type SidebarProps = {
 };
 
 export function Sidebar({
+  onOpenHome,
+  isHomeActive,
   onOpenSettings,
   isSettingsActive,
   onOpenLibrary,
@@ -67,6 +71,14 @@ export function Sidebar({
     <>
       <div id="sidebarMain">
         <div id="libraryContainer">
+          <button
+            type="button"
+            onClick={onOpenHome}
+            className="sidebarBtn sidebarLibraryButton sidebarHomeButton"
+            aria-current={isHomeActive ? "page" : undefined}
+          >
+            Home
+          </button>
           <button
             type="button"
             onClick={onOpenLibrary}

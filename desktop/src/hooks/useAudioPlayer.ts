@@ -86,6 +86,7 @@ export function useAudioPlayer(
   tracks: Track[],
   initialPlayback: InitialPlayback,
   queueNavigation: AudioQueueNavigation,
+  onTrackPlayed: (track: Track) => void,
 ): AudioPlayer {
   const firstAudioRef = useRef<HTMLAudioElement>(null);
   const secondAudioRef = useRef<HTMLAudioElement>(null);
@@ -108,6 +109,17 @@ export function useAudioPlayer(
   const dashPlayersRef = useRef<Array<MediaPlayerClass | null>>([null, null]);
   const nativeLoadGenerationRef = useRef(0);
   const nativeReadyGenerationRef = useRef<number | null>(null);
+  const reportedPlayRef = useRef(false);
+  const onTrackPlayedRef = useRef(onTrackPlayed);
+  onTrackPlayedRef.current = onTrackPlayed;
+
+  const reportPlay = useCallback(() => {
+    if (reportedPlayRef.current) return;
+    const track = tracksRef.current.find(track => track.globalId === currentTrackIdRef.current);
+    if (!track) return;
+    reportedPlayRef.current = true;
+    onTrackPlayedRef.current(track);
+  }, []);
 
   const [currentTrackId, setCurrentTrackId] = useState<string | null>(null);
   const [clock] = useState(createPlaybackClock);
@@ -281,6 +293,7 @@ export function useAudioPlayer(
     if (committedTrack?.globalId !== advancedTrack.globalId) return false;
 
     currentTrackIdRef.current = advancedTrack.globalId;
+    reportedPlayRef.current = false;
     setCurrentTrackId(advancedTrack.globalId);
     setCurrentTime(0);
     setDuration(advancedTrack.durationSeconds);
@@ -330,6 +343,7 @@ export function useAudioPlayer(
       const targetTrack = library[targetIndex];
       if (!targetTrack) return;
       restoreStartedRef.current = true;
+      reportedPlayRef.current = false;
 
       if (usesNativeAudio) {
         clock.setRunning(false);
@@ -631,6 +645,7 @@ export function useAudioPlayer(
       clock.setRunning(true);
       pendingPlaybackDeckRef.current = null;
       setIsPlaying(true);
+      reportPlay();
     }
   }, []);
 
@@ -790,6 +805,7 @@ export function useAudioPlayer(
         }
         if (playback.error) setPlaybackError(playback.error);
         else if (playback.isPlaying) setPlaybackError(null);
+        if (playback.isPlaying && !playback.buffering && !playback.error) reportPlay();
         // Keep the pause control active through a short rebuffer. The native
         // worker still intends to play and will resume by itself.
         setIsPlaying(

@@ -6,6 +6,7 @@ import { entityKey, type BrowseEntity } from "./utils/browse";
 //Components
 import { AppChrome } from "./components/AppChrome";
 import { LibraryView, type LibrarySection } from "./components/LibraryView";
+import { HomeView } from "./components/HomeView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
@@ -20,6 +21,7 @@ import { SettingsSidebar, type SettingsTab } from "./components/SettingsSidebar"
 
 import { useAudioPlayer } from "./hooks/useAudioPlayer";
 import { useMusicLibrary } from "./hooks/useMusicLibrary";
+import { useListeningHistory } from "./hooks/useListeningHistory";
 import { useStartupWindow } from "./hooks/useStartupWindow";
 import { useAudioSettings } from "./hooks/AudioSettingsContext";
 import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
@@ -60,6 +62,7 @@ function App() {
   const [preferences, setPreferences] = useState(loadPreferences);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("outputs");
   const playlistStore = usePlaylists();
+  const listeningHistory = useListeningHistory();
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
@@ -113,13 +116,13 @@ function App() {
   const search = useTrackSearch(searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
-      [...browseTracks, ...playlistStore.tracks, ...servicePlaylistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
+      [...listeningHistory.tracks, ...browseTracks, ...playlistStore.tracks, ...servicePlaylistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
     );
     for (const track of search.knownTracks) {
       tracksById.set(track.globalId, track);
     }
     return [...tracksById.values()];
-  }, [browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
+  }, [listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks],
@@ -140,7 +143,7 @@ function App() {
     previous: () => queue.previous()?.track,
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
-  });
+  }, listeningHistory.recordPlay);
   useStaleTrackRefresh(
     playlistStore.tracks,
     library.isServerReachable,
@@ -185,6 +188,7 @@ function App() {
   const isPlayerView = isBigscreen || isLyricsView;
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
+  const isHomeView = screen === "home" && !browseEntity;
   const isSearchView = screen === "search" && !browseEntity;
   // Subscribes coarsely: App rerenders every 5 s while playing, not every tick.
   const persistedPosition = usePlaybackTime(player.clock, time => player.isPlaying ? Math.floor(time / 5) * 5 : time);
@@ -193,12 +197,12 @@ function App() {
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
   const f11FullscreenRef = useRef(false);
   const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue">>(
-    screen === "search" || screen === "settings" ? screen : "library",
+    screen === "home" || screen === "search" || screen === "settings" ? screen : "library",
   );
   const playerReturnScreenRef =
     useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>("library");
   if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
-  if (screen === "library" || screen === "search" || screen === "settings") {
+  if (screen === "home" || screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
   const latestSessionRef = useRef({ preferences, player });
@@ -242,6 +246,8 @@ function App() {
       ? entityKey(browseEntity)
     : isSearchView
       ? "search"
+    : isHomeView
+      ? "home"
       : selectedPlaylist
         ? `playlist:${selectedPlaylist.id}`
         : `library:${librarySection}`;
@@ -878,14 +884,20 @@ function App() {
           {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
           {!isQueueView && !isSettingsView && servicePlaylistError && <p className="playlistSyncError" role="alert">{servicePlaylistError}</p>}
           {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
+            isHomeActive={isHomeView && !isQueueView}
+            onOpenHome={() => {
+              setBrowseEntity(null); navigation.current = [];
+              setSelectedPlaylistId(null);
+              changeScreen("home");
+            }}
             isSettingsActive={isSettingsView}
             onOpenSettings={() => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(null);
               changeScreen("settings");
             }}
-            activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !selectedPlaylist ? librarySection : null}
-            activePlaylistId={!isQueueView && !isSettingsView && !isSearchView ? selectedPlaylist?.id ?? null : null}
+            activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
+            activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
             onOpenLibrarySection={(section) => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(null);
@@ -977,6 +989,14 @@ function App() {
               }}
               registerScrollElement={registerScrollElement}
             />
+          ) : isHomeView ? (
+            <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
+              error={listeningHistory.error} onPlay={(tracks, id) => onEntityAction("play", tracks, id)}
+              onSelectPlaylist={id => {
+                setBrowseEntity(null); navigation.current = [];
+                setSelectedPlaylistId(id);
+                changeScreen("library");
+              }} registerScrollElement={registerScrollElement} />
           ) : selectedPlaylist ? (
             <PlaylistView
               key={selectedPlaylist.id}

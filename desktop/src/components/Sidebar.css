@@ -95,6 +95,10 @@
     border-left: 1px solid white;
 }
 
+.sidebarHomeButton {
+    margin-bottom: 18px;
+}
+
 .sidebarBtn.sidebarLibraryButton:hover,
 .sidebarBtn.sidebarLibraryButton[aria-current="page"] {
     color: white;

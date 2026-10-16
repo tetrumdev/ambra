@@ -28,7 +28,8 @@ export function AppChrome({
   );
   return (
     <>
-      {(currentScreen === "library" ||
+      {(currentScreen === "home" ||
+        currentScreen === "library" ||
         currentScreen === "search" ||
         currentScreen === "settings") &&
         canDragWindow && (

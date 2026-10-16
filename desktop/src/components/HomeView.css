@@ -1,0 +1,176 @@
+.homeView {
+    grid-column: 2;
+    grid-row: 1;
+}
+
+.homeHeader {
+    padding: 34px 30px 12px;
+}
+
+.homeHeader .libraryTitle {
+    margin: 0 0 20px;
+    font-size: clamp(2.5rem, 5vw, 4rem);
+    line-height: 1.15;
+}
+
+.homeSection {
+    margin: 0 0 28px;
+    min-width: 0;
+}
+
+.homeSectionHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 30px 14px;
+}
+
+.homeSectionHeader h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 500;
+    line-height: 1.4;
+}
+
+.homeRowControls {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.homeRowControls button {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid #535353;
+    border-radius: 50%;
+    background: transparent;
+    color: #b3b3b3;
+}
+
+.homeRowControls button:enabled:hover,
+.homeRowControls button:focus-visible {
+    color: white;
+    border-color: white;
+}
+
+.homeRowControls button:disabled {
+    opacity: 0.3;
+}
+
+.homeRow {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: clamp(140px, 16vw, 180px);
+    gap: 20px;
+    margin: 0;
+    padding: 2px 30px 12px;
+    list-style: none;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    touch-action: pan-x pan-y;
+    scroll-padding-inline: 30px;
+    scroll-snap-type: x proximity;
+}
+
+.homeCard {
+    min-width: 0;
+    scroll-snap-align: start;
+}
+
+.homeCardButton {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: white;
+    font: inherit;
+    text-align: left;
+}
+
+.homeArtwork {
+    position: relative;
+    aspect-ratio: 1;
+    overflow: hidden;
+    border-radius: 8px;
+    background: #191919;
+}
+
+.homeArtwork > img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.homePlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: #0006;
+    opacity: 0;
+}
+
+.homePlay img {
+    width: 32px;
+    height: 32px;
+}
+
+.homeCardButton:hover .homePlay,
+.homeCardButton:focus-visible .homePlay {
+    opacity: 1;
+}
+
+.homeCardButton:hover .homeCardTitle,
+.homeCardButton:focus-visible .homeCardTitle {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.homeCardButton:focus-visible .homeArtwork {
+    box-shadow: 0 0 0 2px white;
+}
+
+.homeCardTitle,
+.homeCardDetail {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.homeCardTitle {
+    margin: 12px 0 4px;
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.homeCardDetail {
+    color: #a3a2a3;
+    font-size: 0.8rem;
+}
+
+.homePlaylistPlaceholder {
+    display: grid;
+    place-items: center;
+    height: 100%;
+    color: #b3b3b3;
+    font-size: 3rem;
+}
+
+.homeEmpty,
+.homeError {
+    margin: 0 30px;
+    padding: 18px 0 24px;
+    color: #a3a2a3;
+    line-height: 1.6;
+}
+
+.homeError {
+    color: #ffb4b4;
+}
