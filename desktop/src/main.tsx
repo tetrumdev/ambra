@@ -28,22 +28,21 @@ document.documentElement.dataset.platform = navigator.userAgent.includes(
   ? "windows"
   : "other";
 
-// Restore durable state before mounting so startup never renders an older session.
+// Restore shared state when possible; otherwise open an isolated local session.
 function Root() {
   const state = useSyncExternalStore(subscribeServerState, serverStateStatus);
   const [loading, setLoading] = useState(true);
-  const [startupError, setStartupError] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
   useStartupWindow(!state.ready);
 
   async function restore() {
     setLoading(true);
-    setStartupError(null);
     try {
       await hydratePersistentStorage();
       await hydrateServerState();
       mark("state-hydrated");
-    } catch (error) { setStartupError(String(error)); }
-    finally { setLoading(false); }
+    } catch { /* Local tracks remain available when saved state cannot load. */ }
+    finally { setLoading(false); setStarted(true); }
   }
 
   useEffect(() => { void restore(); }, []);
@@ -52,20 +51,24 @@ function Root() {
     mark("first-commit");
     requestAnimationFrame(() => setTimeout(() => mark("interactive"), 0));
   }, []);
-  if (!state.ready) return <main className="stateStartup" aria-busy={loading}>
+  if (!state.ready && !started) return <main className="stateStartup" aria-busy={loading}>
     <div data-tauri-drag-region className="stateTitlebar" />
-    <h1>{loading ? "Loading your listening state…" : "Could not load your listening state"}</h1>
-    {startupError && <>
-      <p role="alert">{startupError}</p>
-      <p>Start the Ambra server, then retry. Existing data stays untouched.</p>
-    </>}
-    <button disabled={loading} onClick={() => void restore()}>Retry</button>
+    <h1>Loading your listening state…</h1>
   </main>;
 
+  const statusMessage = !state.ready
+    ? "Showing local tracks. This session is temporary; reconnecting restores saved server state."
+    : `${state.error ?? ""}${state.conflict ? " Reloading discards unsaved changes in this window." : ""}`;
+
   return <>
-    <AudioSettingsProvider><App /></AudioSettingsProvider>
-    {state.error && <div className="stateSaveError" role="alert">
-      <span>{state.error}{state.conflict && " Reloading discards unsaved changes in this window."}</span>
+    <div className="appViewport">
+      <AudioSettingsProvider><App key={state.ready ? "server" : "local"} localOnly={!state.ready} /></AudioSettingsProvider>
+    </div>
+    {!state.ready ? <div className="stateSaveError" role="status">
+      <span title={statusMessage}>{statusMessage}</span>
+      <button disabled={loading} onClick={() => void restore()}>{loading ? "Connecting…" : "Reconnect"}</button>
+    </div> : state.error && <div className="stateSaveError" role="alert">
+      <span title={statusMessage}>{statusMessage}</span>
       {state.conflict
         ? <button onClick={reloadServerState}>Reload server state</button>
         : <button onClick={() => void flushServerState().catch(() => {})}>Retry save</button>}

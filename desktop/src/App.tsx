@@ -58,8 +58,11 @@ import {
 import { usePlaylists } from "./hooks/usePlaylists";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 
-function App() {
-  const [preferences, setPreferences] = useState(loadPreferences);
+function App({ localOnly }: { localOnly: boolean }) {
+  const [preferences, setPreferences] = useState(() => {
+    const saved = loadPreferences();
+    return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
+  });
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("outputs");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
@@ -77,10 +80,10 @@ function App() {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
-  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId);
+  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly);
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
-    useState<LibrarySection>("overview");
+    useState<LibrarySection>(localOnly ? "tracks" : "overview");
   const [collectionSorts, setCollectionSorts] = useState<
     Record<string, TrackSort>
   >({});
@@ -91,6 +94,7 @@ function App() {
     ? preferences.search.provider
     : "all";
   const refreshSearchProviders = useCallback(() => {
+    if (localOnly) return;
     const request = ++searchProvidersRequest.current;
     void configuredSearchProviders().then((providers) => {
       if (request !== searchProvidersRequest.current) return;
@@ -101,8 +105,9 @@ function App() {
     }).catch(() => {
       if (request === searchProvidersRequest.current) setSearchProviders([]);
     });
-  }, []);
+  }, [localOnly]);
   useEffect(() => {
+    if (localOnly) return;
     refreshSearchProviders();
     window.addEventListener("focus", refreshSearchProviders);
     window.addEventListener("online", refreshSearchProviders);
@@ -111,9 +116,9 @@ function App() {
       window.removeEventListener("focus", refreshSearchProviders);
       window.removeEventListener("online", refreshSearchProviders);
     };
-  }, [refreshSearchProviders]);
-  const library = useMusicLibrary();
-  const search = useTrackSearch(searchQuery, searchProvider);
+  }, [refreshSearchProviders, localOnly]);
+  const library = useMusicLibrary(localOnly);
+  const search = useTrackSearch(localOnly ? "" : searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
       [...listeningHistory.tracks, ...browseTracks, ...playlistStore.tracks, ...servicePlaylistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
@@ -161,13 +166,14 @@ function App() {
   }, [queue.upcomingEntries]);
 
   useEffect(() => {
+    if (localOnly) return;
     const tracks = queue.upcomingEntries.slice(0, 2).map((entry) => entry.track);
     if (player.currentTrack) tracks.unshift(player.currentTrack);
     void preloadLyrics(tracks);
-  }, [player.currentTrack, queue.upcomingEntries]);
+  }, [player.currentTrack, queue.upcomingEntries, localOnly]);
 
   useEffect(() => {
-    if (library.isServerReachable || library.isLoading) return;
+    if (localOnly || library.isServerReachable || library.isLoading) return;
 
     const retryStreamingMusic = () => {
       void library.refreshStreamingMusic().catch(() => {});
@@ -181,7 +187,7 @@ function App() {
       window.removeEventListener("online", retryStreamingMusic);
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
+  }, [localOnly, library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
   const screen = preferences.ui.screen;
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
@@ -870,7 +876,7 @@ function App() {
 
       {!isPlayerView && (
         <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
-          {!isQueueView && !isSettingsView && <SearchBar
+          {!localOnly && !isQueueView && !isSettingsView && <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}
             provider={searchProvider}
@@ -919,6 +925,7 @@ function App() {
             }}
             playlists={playlistStore.playlists}
             serviceGroups={servicePlaylistStore.groups}
+            servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
             playlistGroups={preferences.ui.playlistGroups}
             onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {
               ...current, ui: { ...current.ui, playlistGroups: { ...current.ui.playlistGroups, [group]: expanded } },
@@ -941,6 +948,10 @@ function App() {
               animateSwirl={preferences.ui.animateSwirl}
               lyricMotion={preferences.ui.lyricMotion}
               autoSyncLyrics={preferences.ui.autoSyncLyrics}
+              servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
+              onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
+                ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
+              }))}
               onAutoSyncLyrics={autoSyncLyrics => setPreferences(current => ({ ...current, ui: { ...current.ui, autoSyncLyrics } }))}
               onLyricMotionChange={lyricMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricMotion } }))}
               onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />

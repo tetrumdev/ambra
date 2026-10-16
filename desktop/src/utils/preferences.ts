@@ -1,4 +1,4 @@
-import type { SearchProvider } from "../api/server";
+import type { SearchProvider, StreamingProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
 
 export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
@@ -18,6 +18,7 @@ export type AppPreferences = {
     /** The player view to reopen: whichever of album art or lyrics was shown last. */
     playerView: PlayerView;
     playlistGroups: Record<PlaylistGroup, boolean>;
+    servicePlaylistVisibility: Record<StreamingProvider, boolean>;
   };
   search: {
     query: string;
@@ -43,6 +44,7 @@ export const defaultPreferences: AppPreferences = {
     autoSyncLyrics: false,
     playerView: "bigscreen",
     playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
+    servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
   },
   search: {
     query: "",
@@ -105,12 +107,20 @@ function migratePreferences(value: unknown): AppPreferences {
       if (typeof ui.playlistGroups[group] === "boolean") playlistGroups[group] = ui.playlistGroups[group];
     }
   }
+  const servicePlaylistVisibility = { ...defaultPreferences.ui.servicePlaylistVisibility };
+  if (isRecord(ui.servicePlaylistVisibility)) {
+    for (const provider of ["spotify", "qobuz", "tidal"] as const) {
+      if (typeof ui.servicePlaylistVisibility[provider] === "boolean") {
+        servicePlaylistVisibility[provider] = ui.servicePlaylistVisibility[provider];
+      }
+    }
+  }
 
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -129,7 +139,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -159,6 +169,7 @@ function migratePreferences(value: unknown): AppPreferences {
           autoSyncLyrics,
           playerView,
           playlistGroups,
+          servicePlaylistVisibility,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -192,6 +203,7 @@ function migratePreferences(value: unknown): AppPreferences {
           autoSyncLyrics,
           playerView,
           playlistGroups,
+          servicePlaylistVisibility,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },

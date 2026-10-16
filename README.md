@@ -57,8 +57,9 @@ Tauri, Vite, React, Bun, and NodeJS
 ### Streaming service login
 
 The desktop app uses the separate Ambra server for playlists, queue and playback
-history, playback track and position, library ordering, and hidden tracks. Start
-the server before opening the client, including when playing local music. The
+history, playback track and position, library ordering, and hidden tracks. When
+the server or saved state is unavailable, the client opens local tracks with a
+temporary session. Streaming features and shared state require the server. The
 client does not bundle or start the server:
 
 ```sh
@@ -109,7 +110,13 @@ client's legacy data. Old client state stays untouched for rollback; it is no
 longer updated. Back up the server data directory before downgrading. An older
 client reads its old local snapshot, not subsequent server changes.
 
-The client loads server state before opening the library. Failed saves remain
+The client tries to load server state before opening the library. If loading
+fails, local tracks remain available without cached streaming tracks or service
+playlists. Local session changes stay in memory and are never uploaded over
+saved server state. Choose **Reconnect** to restore server state; the temporary
+local session is replaced after a successful connection.
+
+After server state has loaded, failed saves remain
 pending in memory and retry while the client is open; normal desktop window
 closure waits for a successful save. Force-quitting can lose pending changes.
 Concurrent edits from stale clients are rejected and require explicitly
