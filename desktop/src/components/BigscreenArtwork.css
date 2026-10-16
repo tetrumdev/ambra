@@ -36,6 +36,10 @@
     opacity: 0;
 }
 
+#albumCover[data-empty="true"] {
+    box-shadow: 0 0 40px 3px rgba(255, 255, 255, 0.18);
+}
+
 #albumCover[data-empty="true"] .albumCoverPlaceholder {
     opacity: 1;
 }
