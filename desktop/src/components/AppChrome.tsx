@@ -45,6 +45,14 @@ export function AppChrome({
             <div className="bigscreenTitlebar" data-tauri-drag-region />
           )}
           <div className="bigscreenCtrls">
+            <button
+              className="bigscreenClose xContainer"
+              type="button"
+              onClick={onExit}
+              aria-label="Close player"
+            >
+              <img src="/x.svg" alt="" className="bigscreenBtn" id="closeBtn" />
+            </button>
             <div
               className="bigscreenViewPicker"
               role="group"
@@ -63,14 +71,6 @@ export function AppChrome({
                 </button>
               ))}
             </div>
-            <button
-              className="bigscreenClose xContainer"
-              type="button"
-              onClick={onExit}
-              aria-label="Close player"
-            >
-              <img src="/x.svg" alt="" className="bigscreenBtn" id="closeBtn" />
-            </button>
           </div>
         </>
       )}

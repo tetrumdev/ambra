@@ -15,6 +15,7 @@ use tauri::{App, AppHandle, Emitter, Manager, State};
 mod decoder;
 mod dsp;
 mod gain;
+pub mod lyric_offset;
 mod output;
 mod resync;
 mod settings;

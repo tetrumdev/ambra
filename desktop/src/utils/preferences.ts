@@ -13,6 +13,8 @@ export type AppPreferences = {
     showAudioQuality: boolean;
     animateSwirl: boolean;
     lyricMotion: LyricMotion;
+    /** Detect and correct a constant lyric timing offset from the recording. */
+    autoSyncLyrics: boolean;
     /** The player view to reopen: whichever of album art or lyrics was shown last. */
     playerView: PlayerView;
     playlistGroups: Record<PlaylistGroup, boolean>;
@@ -38,6 +40,7 @@ export const defaultPreferences: AppPreferences = {
     showAudioQuality: false,
     animateSwirl: true,
     lyricMotion: "system",
+    autoSyncLyrics: false,
     playerView: "bigscreen",
     playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
   },
@@ -91,6 +94,9 @@ function migratePreferences(value: unknown): AppPreferences {
   const lyricMotion = ui.lyricMotion === "full" || ui.lyricMotion === "reduced"
     ? ui.lyricMotion
     : "system";
+  const autoSyncLyrics = typeof ui.autoSyncLyrics === "boolean"
+    ? ui.autoSyncLyrics
+    : defaultPreferences.ui.autoSyncLyrics;
   const playerView: PlayerView = ui.playerView === "lyrics" ? "lyrics" : "bigscreen";
   const playlistGroups = { ...defaultPreferences.ui.playlistGroups };
   if (isRecord(ui.playlistGroups)) {
@@ -103,7 +109,7 @@ function migratePreferences(value: unknown): AppPreferences {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView, playlistGroups },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -122,7 +128,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, playerView, playlistGroups },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -149,6 +155,7 @@ function migratePreferences(value: unknown): AppPreferences {
           showAudioQuality,
           animateSwirl,
           lyricMotion,
+          autoSyncLyrics,
           playerView,
           playlistGroups,
         },
@@ -181,6 +188,7 @@ function migratePreferences(value: unknown): AppPreferences {
           showAudioQuality,
           animateSwirl,
           lyricMotion,
+          autoSyncLyrics,
           playerView,
           playlistGroups,
         },

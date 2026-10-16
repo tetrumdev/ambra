@@ -50,7 +50,7 @@
     --bigscreen-control-size: 40px;
     position: absolute;
     top: 40px;
-    right: 40px;
+    left: 40px;
     display: flex;
     align-items: center;
     gap: 12px;

@@ -34,6 +34,10 @@ Browser playback reads the media element's current time directly. Native playbac
 
 Positive `offsetMs` advances highlighting by adding the offset to playback time. LRC `[offset:]` has this meaning. Lyricsfile 1.0's `metadata.offset_ms` semantics are explicitly unresolved in its draft specification, so Ambra does not apply that field. TTML offsets for alternate audio roles, such as lrc.red's spatial audio metadata, are not applied to ordinary playback because the applicable recording/offset convention cannot be established. These remain format limitations rather than guessed corrections.
 
+Settings > General > Auto-sync lyrics (off by default, desktop app only) estimates one constant correction for lyrics timed against a different edit or master. The `detect_lyric_offset` Tauri command decodes the playing source a second time, measures centre-panned 250 Hz–4 kHz energy every 20 ms, and scores shifts within ±10 s by phrase/gap energy contrast plus energy rises at phrase starts. A shift is applied only when its peak stands well above the other shifts and a rival peak from repeated song structure; corrections under 150 ms are ignored. Results are kept in memory for the session only, and a newer request stops an older analysis. It cannot fix timings that are wrong in only some places, and dense mixes or centre-panned instruments can make the vocal signal unreliable; in those cases it leaves the timing unchanged.
+
+Hovering the lyric column shows a Sync menu in the resume pill. It can run an analysis on demand (regardless of the setting), nudge the timing by ±0.1/0.5 s, reset the timing, or show a timed song as plain text. These choices are saved per track ID in local preferences (`ambra.lyrics-sync.v1`, most recent 2,000 tracks) and take precedence over automatic detection; lyric text itself is still never stored.
+
 ## Reliability
 
 Lyrics and misses are never cached in memory, on disk, or in the browser HTTP cache. The local route returns `Cache-Control: no-store`; outgoing requests and client fetches also disable caching. The only retained provider state is request spacing and rate-limit cooldowns.

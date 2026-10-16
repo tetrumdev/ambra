@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { thumbnailArtwork } from "../api/server";
 import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
@@ -10,6 +11,13 @@ import {
 } from "../utils/artworkImages";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
+import { detectLyricOffset } from "../utils/lyricsOffset";
+import {
+  lyricSyncOverride,
+  MAX_CORRECTION_MS,
+  saveLyricSyncOverride,
+  type LyricSyncOverride,
+} from "../utils/lyricsSyncOverrides";
 import {
   detailedLine,
   focusLyric,
@@ -22,7 +30,9 @@ import {
   letterMotion,
   restLetter,
 } from "../utils/lyricsMotion";
+import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import "./LyricsView.css";
+import "./TrackMenus.css";
 
 type LyricsViewProps = {
   track: Track | undefined;
@@ -30,6 +40,7 @@ type LyricsViewProps = {
   playing: boolean;
   onSeek?: (seconds: number) => void;
   motion?: LyricMotion;
+  autoSync?: boolean;
 };
 
 type Row = {
@@ -250,10 +261,12 @@ function LyricGroups({
   lyrics,
   blocks,
   onSeek,
+  credits,
 }: {
   lyrics: TrackLyrics;
   blocks: Block[];
   onSeek?: (seconds: number) => void;
+  credits?: ReactNode;
 }) {
   const singerIds = lyrics.singers.map((singer) => singer.id);
   for (const block of blocks) {
@@ -373,6 +386,31 @@ function LyricGroups({
         </div>
         ),
       )}
+      {credits}
+    </div>
+  );
+}
+
+const sources = {
+  amll: "AMLL TTML DB",
+  "lrc.red": "lrc.red",
+  lrclib: "LRCLIB",
+};
+
+/** Shown after the last line, where the song ends. */
+function LyricsCredits({ lyrics }: { lyrics: TrackLyrics }) {
+  return (
+    <div className="lyricsCredits">
+      <span className="lyricsSyncLabel">
+        {lyrics.sync === "none"
+          ? "Unsynced lyrics"
+          : lyrics.hasWordSync
+            ? "Word-by-word lyrics"
+            : "Synced lyrics"}
+      </span>
+      {lyrics.source && (
+        <span className="lyricsCredit">Lyrics from {sources[lyrics.source]}</span>
+      )}
     </div>
   );
 }
@@ -383,12 +421,14 @@ function SyncedLyrics({
   playing,
   reducedMotion,
   onSeek,
+  menu,
 }: {
   lyrics: TrackLyrics;
   clock: PlaybackClock;
   playing: boolean;
   reducedMotion: boolean;
   onSeek?: (seconds: number) => void;
+  menu: ReactNode;
 }) {
   const viewport = useRef<HTMLDivElement>(null);
   const blocks = useMemo(() => lyricBlocks(lyrics, true), [lyrics]);
@@ -773,6 +813,7 @@ function SyncedLyrics({
         <LyricGroups
           lyrics={lyrics}
           blocks={blocks}
+          credits={<LyricsCredits lyrics={lyrics} />}
           onSeek={
             onSeek
               ? (seconds) => {
@@ -783,27 +824,158 @@ function SyncedLyrics({
           }
         />
       </div>
-      {!following && (
-        <button
-          className="lyricsResume"
-          type="button"
-          onClick={() => resume.current()}
-        >
+      <LyricsControls onResume={following ? undefined : () => resume.current()}>
+        {menu}
+      </LyricsControls>
+    </>
+  );
+}
+
+/** One pill: "Back to current line" while browsing, joined by the sync menu on hover. */
+function LyricsControls({
+  onResume,
+  children,
+}: {
+  onResume?: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className="lyricsControls" data-resume={Boolean(onResume)}>
+      {onResume && (
+        <button className="lyricsResume" type="button" onClick={onResume}>
           <svg viewBox="0 0 20 20" aria-hidden="true">
             <path d="m6 4 8 6-8 6Z" />
           </svg>
           Back to current line
         </button>
       )}
-    </>
+      {children}
+    </div>
   );
 }
 
-const sources = {
-  amll: "AMLL TTML DB",
-  "lrc.red": "lrc.red",
-  lrclib: "LRCLIB",
-};
+function formatCorrection(correctionMs: number) {
+  if (!correctionMs) return "Original";
+  // A positive correction shows each line earlier.
+  return `${(Math.abs(correctionMs) / 1000).toFixed(1)} s ${correctionMs > 0 ? "earlier" : "later"}`;
+}
+
+const nudges = [-500, -100, 100, 500];
+
+function SyncMenu({
+  unsynced,
+  correctionMs,
+  edited,
+  analyzing,
+  canAnalyze,
+  onAutoSync,
+  onNudge,
+  onReset,
+  onToggleSync,
+}: {
+  unsynced: boolean;
+  correctionMs: number;
+  edited: boolean;
+  analyzing: boolean;
+  canAnalyze: boolean;
+  onAutoSync: () => void;
+  onNudge: (deltaMs: number) => void;
+  onReset: () => void;
+  onToggleSync: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  useFadeOutOnUnmount(panel);
+  const trigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setOpen(false);
+      trigger.current?.focus();
+    };
+    document.addEventListener("pointerdown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const choose = (action: () => void) => () => {
+    setOpen(false);
+    action();
+  };
+  return (
+    <div className="lyricsSyncMenu" ref={root}>
+      <button
+        ref={trigger}
+        className="lyricsSyncTrigger"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path d="M10 3.5a6.5 6.5 0 1 0 6.5 6.5h-1.6A4.9 4.9 0 1 1 10 5.1V7l3-2.75L10 1.5Z" />
+        </svg>
+        Sync
+      </button>
+      {open && (
+        <div ref={panel} className="lyricsSyncPanel" role="menu" aria-label="Lyric sync">
+          {unsynced ? (
+            <button className="menuItem" type="button" role="menuitem" onClick={choose(onToggleSync)}>
+              Turn sync back on
+            </button>
+          ) : (
+            <>
+              <button
+                className="menuItem"
+                type="button"
+                role="menuitem"
+                disabled={!canAnalyze || analyzing}
+                onClick={choose(onAutoSync)}
+              >
+                {analyzing ? "Analyzing…" : "Auto-sync now"}
+              </button>
+              <div className="lyricsSyncTiming" role="group" aria-label="Timing">
+                <span className="lyricsSyncTimingLabel">
+                  Timing<strong>{formatCorrection(correctionMs)}</strong>
+                </span>
+                <span className="lyricsSyncNudges">
+                  {nudges.map((delta) => (
+                    <button
+                      key={delta}
+                      type="button"
+                      role="menuitem"
+                      aria-label={`Show lyrics ${Math.abs(delta) / 1000} s ${delta > 0 ? "earlier" : "later"}`}
+                      onClick={() => onNudge(delta)}
+                    >
+                      {delta > 0 ? "+" : "−"}
+                      {Math.abs(delta) / 1000}
+                    </button>
+                  ))}
+                </span>
+                <span className="lyricsSyncHint">+ shows lines sooner</span>
+              </div>
+              <button className="menuItem" type="button" role="menuitem" disabled={!edited} onClick={choose(onReset)}>
+                Reset timing
+              </button>
+              <button className="menuItem" type="button" role="menuitem" onClick={choose(onToggleSync)}>
+                Turn off sync for this song
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const NOTICE_MS = 4000;
 
 export function LyricsView({
   track,
@@ -811,11 +983,13 @@ export function LyricsView({
   playing,
   onSeek,
   motion = "system",
+  autoSync = false,
 }: LyricsViewProps) {
   const [lyrics, setLyrics] = useState<TrackLyrics | null>(
     () => track ? cachedLyrics(track) ?? null : null,
   );
   const [error, setError] = useState(false);
+  const [detected, setDetected] = useState<{ lyrics: TrackLyrics; correctionMs: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [systemReducedMotion, setSystemReducedMotion] = useState(
     () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
@@ -857,6 +1031,93 @@ export function LyricsView({
     track?.providerTrackId,
     attempt,
   ]);
+
+  const timed = lyrics?.status === "lyrics" && lyrics.sync !== "none";
+  // LyricsView remounts per track, so the saved choice is read once.
+  const [override, setOverride] = useState<LyricSyncOverride | undefined>(
+    () => track ? lyricSyncOverride(track.globalId) : undefined,
+  );
+  const updateOverride = (next: LyricSyncOverride) => {
+    if (!track) return;
+    setOverride(next);
+    saveLyricSyncOverride(track.globalId, next);
+  };
+  const [notice, setNotice] = useState<{ text: string; id: number } | null>(null);
+  const showNotice = (text: string) => setNotice((current) => ({ text, id: (current?.id ?? 0) + 1 }));
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
+  const autoSyncedNotice = (correctionMs: number) =>
+    `Lyrics auto-synced · ${formatCorrection(correctionMs)}`;
+
+  const manual = override?.correctionMs !== undefined;
+  useEffect(() => {
+    if (!autoSync || manual || !isTauri() || !track || !lyrics || !timed) return;
+    let cancelled = false;
+    void detectLyricOffset(track, lyrics)
+      .then((result) => {
+        if (cancelled) return;
+        const correctionMs = result.confident ? result.correctionMs : 0;
+        setDetected({ lyrics, correctionMs });
+        if (correctionMs) showNotice(autoSyncedNotice(correctionMs));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [autoSync, manual, track, lyrics, timed]);
+
+  const [analyzing, setAnalyzing] = useState(false);
+  const forceAutoSync = () => {
+    if (!track || !lyrics) return;
+    setAnalyzing(true);
+    void detectLyricOffset(track, lyrics)
+      .then((result) => {
+        if (!result.confident) {
+          showNotice("Couldn't find a reliable match for this song");
+          return;
+        }
+        // An explicit request is the listener's choice, so it is kept like a manual edit.
+        updateOverride({ ...override, correctionMs: result.correctionMs });
+        showNotice(result.correctionMs ? autoSyncedNotice(result.correctionMs) : "Lyrics are already in sync");
+      })
+      .catch(() => showNotice("Couldn't analyze this song"))
+      .finally(() => setAnalyzing(false));
+  };
+
+  const correctionMs = manual
+    ? override!.correctionMs!
+    : autoSync && detected?.lyrics === lyrics ? detected.correctionMs : 0;
+  const unsynced = timed && override?.unsynced === true;
+  const syncedLyrics = useMemo(
+    () => lyrics && correctionMs
+      ? { ...lyrics, offsetMs: lyrics.offsetMs + correctionMs }
+      : lyrics,
+    [lyrics, correctionMs],
+  );
+  const plainLyrics = useMemo(
+    () => lyrics && unsynced ? { ...lyrics, sync: "none" as const, hasWordSync: false } : lyrics,
+    [lyrics, unsynced],
+  );
+  const menu = timed && (
+    <SyncMenu
+      unsynced={unsynced}
+      correctionMs={correctionMs}
+      edited={manual}
+      analyzing={analyzing}
+      canAnalyze={isTauri()}
+      onAutoSync={forceAutoSync}
+      onNudge={(deltaMs) =>
+        updateOverride({
+          ...override,
+          correctionMs: Math.max(-MAX_CORRECTION_MS, Math.min(MAX_CORRECTION_MS, correctionMs + deltaMs)),
+        })}
+      onReset={() => updateOverride({ unsynced: override?.unsynced })}
+      onToggleSync={() => updateOverride({ ...override, unsynced: !unsynced })}
+    />
+  );
 
   const unavailableDuringFailure =
     lyrics?.status === "unavailable" && lyrics.failedProviders.length > 0;
@@ -905,43 +1166,40 @@ export function LyricsView({
           <p className="lyricsMessage" role="status">
             No lyrics available for this song.
           </p>
-        ) : lyrics.sync !== "none" ? (
+        ) : timed && !unsynced ? (
           <SyncedLyrics
-            lyrics={lyrics}
+            lyrics={syncedLyrics!}
             clock={clock}
             playing={playing}
             reducedMotion={reducedMotion}
             onSeek={onSeek}
+            menu={menu}
           />
         ) : (
-          <div
-            className="lyricsViewport lyricsPlain"
-            tabIndex={0}
-            aria-label="Unsynced lyrics"
-            lang={lyrics.language ?? undefined}
-          >
-            <p className="lyricsSyncNote">Timing unavailable</p>
-            <LyricGroups lyrics={lyrics} blocks={lyricBlocks(lyrics, false)} />
+          <>
+            <div
+              className="lyricsViewport lyricsPlain"
+              tabIndex={0}
+              aria-label="Unsynced lyrics"
+              lang={lyrics.language ?? undefined}
+            >
+              <p className="lyricsSyncNote">
+                {unsynced ? "Sync turned off for this song" : "Timing unavailable"}
+              </p>
+              <LyricGroups
+                lyrics={plainLyrics!}
+                blocks={lyricBlocks(plainLyrics!, false)}
+                credits={<LyricsCredits lyrics={plainLyrics!} />}
+              />
+            </div>
+            {menu && <LyricsControls>{menu}</LyricsControls>}
+          </>
+        )}
+        {notice && (
+          <div className="lyricsNotice" role="status" key={notice.id}>
+            {notice.text}
           </div>
         )}
-        <footer className="lyricsFooter">
-          {lyrics?.status === "lyrics" && (
-            <div className="lyricsAttribution">
-              <span className="lyricsSyncLabel">
-                {lyrics.sync === "none"
-                  ? "Unsynced lyrics"
-                  : lyrics.hasWordSync
-                    ? "Word by word"
-                    : "Synced lyrics"}
-              </span>
-              {lyrics.source && (
-                <span className="lyricsCredit">
-                  Lyrics from {sources[lyrics.source]}
-                </span>
-              )}
-            </div>
-          )}
-        </footer>
       </section>
     </main>
   );

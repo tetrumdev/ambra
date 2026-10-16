@@ -63,6 +63,12 @@
         150px;
     padding-inline: var(--lyrics-column-padding);
 }
+/* Keeps the lyric column's height and centring from when credits sat below it. */
+.lyricsStage::after {
+    content: "";
+    flex: none;
+    height: 63px;
+}
 
 .lyricsViewport {
     position: relative;
@@ -297,8 +303,7 @@ button.lyricLine:hover {
 .lyricsMessage p {
     margin: 0 0 20px;
 }
-.lyricsMessage button,
-.lyricsResume {
+.lyricsMessage button {
     color: white;
     background: rgba(255, 255, 255, 0.12);
     border: 1px solid rgba(255, 255, 255, 0.12);
@@ -312,62 +317,197 @@ button.lyricLine:hover {
         background 200ms ease,
         transform 200ms ease;
 }
-.lyricsMessage button:hover,
-.lyricsResume:hover {
+.lyricsMessage button:hover {
     background: rgba(255, 255, 255, 0.22);
 }
-.lyricsMessage button:active,
-.lyricsResume:active {
+.lyricsMessage button:active {
     transform: scale(0.97);
 }
-.lyricsResume {
+/* Resume shows while browsing; the sync menu joins it while the lyrics are hovered. */
+.lyricsControls {
     position: absolute;
     bottom: 84px;
     left: 50%;
-    transform: translateX(-50%);
-    display: flex;
+    z-index: 2;
+    display: none;
     align-items: center;
-    gap: 8px;
-    white-space: nowrap;
+    padding: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 100px;
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    transform: translateX(-50%);
+    animation: lyricsResumeAppear 250ms ease both;
+}
+/* Blurring on a layer rather than the pill itself lets the menu above it blur the lyrics too. */
+.lyricsControls::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
     background: rgba(30, 30, 30, 0.75);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
-    animation: lyricsResumeAppear 250ms ease both;
 }
-.lyricsResume:active {
-    transform: translateX(-50%) scale(0.97);
+.lyricsSyncMenu {
+    display: none;
+    position: relative;
 }
-.lyricsResume svg {
+.lyricsControls[data-resume="true"],
+.lyricsStage:hover .lyricsControls,
+.lyricsControls:focus-within,
+.lyricsStage:hover .lyricsSyncMenu,
+.lyricsSyncMenu:focus-within,
+.lyricsSyncMenu:has([aria-expanded="true"]) {
+    display: flex;
+}
+.lyricsControls:has([aria-expanded="true"]) {
+    display: flex;
+}
+.lyricsResume,
+.lyricsSyncTrigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 17px;
+    border: 0;
+    border-radius: 100px;
+    white-space: nowrap;
+    color: white;
+    background: transparent;
+    font:
+        500 13px/1.4 "Stack Sans Text",
+        sans-serif;
+    cursor: default;
+    transition:
+        background 200ms ease,
+        transform 200ms ease;
+}
+.lyricsResume:hover,
+.lyricsSyncTrigger:hover,
+.lyricsSyncTrigger[aria-expanded="true"] {
+    background: rgba(255, 255, 255, 0.14);
+}
+.lyricsResume:active,
+.lyricsSyncTrigger:active {
+    transform: scale(0.97);
+}
+.lyricsResume + .lyricsSyncMenu {
+    margin-left: 4px;
+    padding-left: 4px;
+    border-left: 1px solid rgba(255, 255, 255, 0.14);
+}
+.lyricsResume svg,
+.lyricsSyncTrigger svg {
     width: 14px;
     height: 14px;
     fill: currentColor;
 }
-.lyricsFooter {
-    flex: none;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 12px;
-    min-height: 58px;
-    padding: 12px 18px 20px;
+/* Matches the track menus in TrackMenus.css. */
+.lyricsSyncPanel {
+    position: absolute;
+    bottom: calc(100% + 12px);
+    left: 50%;
     box-sizing: border-box;
-}
-.lyricsAttribution {
+    width: 220px;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    overflow: hidden;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    color: white;
+    font-family: "Stack Sans Text", Inter, sans-serif;
+    background: none;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transform: translateX(-50%);
+}
+.lyricsSyncPanel .menuItem:disabled {
+    opacity: 0.5;
+}
+.lyricsSyncPanel .menuItem:disabled:hover {
+    background-color: rgba(29, 29, 29, 0.7);
+}
+.lyricsSyncTiming {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 15px;
+    font-size: 0.9rem;
+    background-color: rgba(29, 29, 29, 0.7);
+}
+.lyricsSyncTimingLabel {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+.lyricsSyncTimingLabel strong {
+    font-weight: 400;
+    color: #b3b3b3;
+    font-variant-numeric: tabular-nums;
+}
+.lyricsSyncNudges {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+}
+.lyricsSyncNudges button {
+    padding: 6px 0;
+    border: 0;
+    border-radius: 6px;
+    color: inherit;
+    font: inherit;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+    background: #353535;
+    cursor: default;
+}
+.lyricsSyncNudges button:hover,
+.lyricsSyncNudges button:focus-visible {
+    background: #424242;
+    outline: none;
+}
+.lyricsSyncHint {
+    color: #b3b3b3;
+    font-size: 12px;
+}
+.lyricsCredits {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 56px;
 }
 .lyricsSyncLabel {
-    font-size: 11px;
+    font-size: 13px;
     line-height: 1.4;
     color: rgba(255, 255, 255, 0.6);
 }
 .lyricsCredit {
-    font-size: 10px;
+    font-size: 12px;
     line-height: 1.4;
-    color: rgba(255, 255, 255, 0.38);
+    color: rgba(255, 255, 255, 0.4);
+}
+.lyricsNotice {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    z-index: 1;
+    padding: 8px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 100px;
+    white-space: nowrap;
+    color: white;
+    font:
+        500 13px/1.4 "Stack Sans Text",
+        sans-serif;
+    background: rgba(30, 30, 30, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    pointer-events: none;
+    transform: translateX(-50%);
+    /* Matches NOTICE_MS in LyricsView.tsx. */
+    animation: lyricsNotice 4000ms ease both;
 }
 @keyframes lyricPauseBreathe {
     /* Uses the scale property so it composes with the enter/exit transform. */
@@ -387,6 +527,19 @@ button.lyricLine:hover {
     to {
         opacity: 1;
         margin-bottom: 0;
+    }
+}
+
+@keyframes lyricsNotice {
+    from,
+    to {
+        opacity: 0;
+        translate: 0 -6px;
+    }
+    8%,
+    88% {
+        opacity: 1;
+        translate: 0 0;
     }
 }
 
@@ -412,9 +565,6 @@ button.lyricLine:hover {
     .lyricLine {
         font-size: clamp(28px, 5vw, 42px);
     }
-    .lyricsFooter {
-        padding-inline: 45px;
-    }
     .lyricsSyncNote {
         padding-inline: 45px;
     }
@@ -424,7 +574,6 @@ button.lyricLine:hover {
     .lyricsLines {
         padding-inline: 26px;
     }
-    .lyricsFooter,
     .lyricsSyncNote {
         padding-inline: 26px;
     }
@@ -433,7 +582,8 @@ button.lyricLine:hover {
     }
 }
 
-#lyricsPage[data-reduced-motion="true"] .lyricsResume {
+#lyricsPage[data-reduced-motion="true"] .lyricsControls,
+#lyricsPage[data-reduced-motion="true"] .lyricsNotice {
     animation: none;
 }
 #lyricsPage[data-reduced-motion="true"] .lyricGroup {
