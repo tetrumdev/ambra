@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { preloadArtwork } from "../utils/artworkImages";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { ArtworkImage } from "./ArtworkImage";
@@ -6,9 +7,31 @@ import "./AlbumArtwork.css";
 import "./AppChrome.css";
 
 // `noun` names the image for assistive labels; artist pages reuse this for portraits.
-export function AlbumArtwork({ src, title, noun = "cover" }: { src: string | null; title: string; noun?: "cover" | "portrait" }) {
+// `resolveFull` finds the full-resolution image; the enlarged view shows `src` until it has loaded.
+export function AlbumArtwork({ src, title, noun = "cover", resolveFull }: {
+  src: string | null;
+  title: string;
+  noun?: "cover" | "portrait";
+  resolveFull?: () => Promise<string | null>;
+}) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [expanded, setExpanded] = useState(false);
+  const [full, setFull] = useState<{ for: string | null; url: string } | null>(null);
+  const requested = useRef<string | null | undefined>(undefined);
+  const loadFull = () => {
+    if (!resolveFull || requested.current === src) return;
+    requested.current = src;
+    void resolveFull()
+      .then(async (url) => {
+        if (!url || url === src) return;
+        await preloadArtwork(url, true);
+        setFull({ for: src, url });
+      })
+      .catch(() => {
+        if (requested.current === src) requested.current = undefined;
+      });
+  };
+  const enlarged = full?.for === src ? full.url : src;
   const [hasDragRegion, setHasDragRegion] = useState(false);
 
   function returnOrClose() {
@@ -25,6 +48,7 @@ export function AlbumArtwork({ src, title, noun = "cover" }: { src: string | nul
         aria-haspopup="dialog"
         onClick={() => {
           setExpanded(false);
+          loadFull();
           setHasDragRegion(Boolean(document.querySelector(
             ".libraryTitlebar:not(.albumArtworkDragRegion)[data-tauri-drag-region], .bigscreenTitlebar[data-tauri-drag-region]",
           )));
@@ -59,7 +83,7 @@ export function AlbumArtwork({ src, title, noun = "cover" }: { src: string | nul
           }}
         >
           <img
-            src={src || whiteArtwork}
+            src={enlarged || whiteArtwork}
             alt={`${title} ${noun}`}
             decoding="async"
             draggable={false}
