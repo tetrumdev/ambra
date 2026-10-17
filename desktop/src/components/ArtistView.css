@@ -52,7 +52,7 @@
     text-underline-offset: 5px;
 }
 .artistTextAction:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
 }
 .artistAbout {
     margin: 48px 30px 64px;

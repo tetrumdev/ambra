@@ -357,7 +357,7 @@
 }
 
 .librarySourcesError {
-    color: #ffb4b4;
+    color: var(--error-text);
     overflow-wrap: anywhere;
 }
 
@@ -609,7 +609,7 @@
 }
 
 .searchStatus[data-error="true"] {
-    color: #e68f8f;
+    color: var(--error-text);
 }
 
 .separator {
@@ -817,7 +817,7 @@
 
 .selectionActionMenu button:disabled {
     cursor: default;
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
 }
 
 .selectionDeleteButton {
@@ -843,7 +843,7 @@
 
 .selectionDeleteButton:disabled {
     cursor: default;
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
 }
 
 .trackLeading {

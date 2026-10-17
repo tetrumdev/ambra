@@ -151,7 +151,7 @@
 }
 
 .playlistSyncError {
-    color: #ffb4b4;
+    color: var(--error-text);
 }
 
 .playlistSyncError {
@@ -280,7 +280,7 @@
 }
 
 .playlistEditContent p[role="alert"] {
-    color: #ffb4b4;
+    color: var(--error-text);
 }
 
 .playlistEditDialog::backdrop {
@@ -327,27 +327,17 @@
 }
 
 .playlistEditButtons button:disabled {
-    opacity: 0.4;
+    opacity: var(--disabled-opacity);
     cursor: default;
 }
 
 @media screen and (width <= 799px) {
-    #library .mainLogoContainer,
-    #search .mainLogoContainer,
-    #settings .mainLogoContainer {
+    .appScreen .mainLogoContainer,
+    .appScreen #libraryContainer,
+    .appScreen .sidebarFooter {
         display: none;
     }
-    #library #sidebarMain,
-    #search #sidebarMain,
-    #settings #sidebarMain {
+    .appScreen #sidebarMain {
         border: none;
-    }
-    #library #libraryContainer,
-    #search #libraryContainer,
-    #settings #libraryContainer,
-    #library .sidebarFooter,
-    #search .sidebarFooter,
-    #settings .sidebarFooter {
-        display: none;
     }
 }
