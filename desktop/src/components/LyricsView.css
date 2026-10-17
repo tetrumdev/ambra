@@ -434,7 +434,7 @@ button.lyricLine:hover {
     transform: translateX(-50%);
 }
 .lyricsSyncPanel .menuItem:disabled {
-    opacity: 0.5;
+    opacity: var(--disabled-opacity);
 }
 .lyricsSyncPanel .menuItem:disabled:hover {
     background-color: rgba(29, 29, 29, 0.7);

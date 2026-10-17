@@ -14,7 +14,7 @@ const providers: StreamingProvider[] = ["spotify", "qobuz", "tidal"];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const playlistId = (provider: StreamingProvider, id: string) => `service:${provider}:${id}`;
 
-export function useServicePlaylists(selectedId: string | null, enabled: boolean) {
+export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
   const [groups, setGroups] = useState<PlaylistServiceGroup[]>([]);
   const [contents, setContents] = useState<Record<string, ServicePlaylistContents>>({});
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -124,6 +124,22 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean)
     const playlist = currentGroups.current.flatMap(group => group.playlists).find(playlist => playlist.id === selectedId);
     if (playlist) void load(playlist);
   }, [selectedId, load]);
+
+  useEffect(() => {
+    if (!enabled || !preloadHome) return;
+    const playlists = providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? [])
+      .filter(playlist => !currentContents.current[playlist.id] && playlist.trackCount !== 0);
+    let cancelled = false;
+    let next = 0;
+    // Home needs track metadata for its cover grids before a playlist is opened.
+    const workers = Array.from({ length: Math.min(3, playlists.length) }, async () => {
+      while (!cancelled && next < playlists.length) {
+        await load(playlists[next++]);
+      }
+    });
+    void Promise.all(workers);
+    return () => { cancelled = true; };
+  }, [enabled, preloadHome, groups, load]);
 
   const playlists = useMemo(() => providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? []).map(playlist => {
     const result = contents[playlist.id];

@@ -1,28 +1,32 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Track } from "../types/music";
 import { removePlaylistTracks, reorderPlaylistTracks } from "../utils/playlists";
 import { addPlaylistTrack, emptyPlaylists, parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY, savePlaylistSnapshot, type PlaylistSnapshot } from "../utils/playlistStorage";
 import { getPersistentItem } from "../utils/persistentStorage";
+import { subscribeServerState } from "../utils/serverState";
+
+const storedPlaylists = () => getPersistentItem(PLAYLIST_STORAGE_KEY);
 
 export function usePlaylists() {
-  const [initial] = useState(() => {
+  const raw = useSyncExternalStore(subscribeServerState, storedPlaylists);
+  const loaded = useMemo(() => {
     try {
-      return { snapshot: parsePlaylistSnapshot(getPersistentItem(PLAYLIST_STORAGE_KEY)), error: null };
+      return { snapshot: parsePlaylistSnapshot(raw), error: null };
     } catch {
       return { snapshot: emptyPlaylists(), error: "Saved playlists could not be loaded. The stored data has been left untouched." };
     }
-  });
-  const [snapshot, setSnapshot] = useState(initial.snapshot);
+  }, [raw]);
+  const snapshot = loaded.snapshot;
   const current = useRef(snapshot);
-  const [error, setError] = useState<string | null>(initial.error);
+  current.current = snapshot;
+  const [error, setError] = useState<string | null>(null);
 
   function commit(next: PlaylistSnapshot): boolean {
-    if (initial.error) return false;
+    if (loaded.error) return false;
     try {
       // Save the complete membership + metadata change before confirming it in the UI.
       const saved = savePlaylistSnapshot(next);
       current.current = saved;
-      setSnapshot(saved);
       setError(null);
       return true;
     } catch {
@@ -42,7 +46,7 @@ export function usePlaylists() {
   return {
     playlists: snapshot.playlists,
     tracks: snapshot.tracks,
-    error,
+    error: loaded.error ?? error,
     create,
     rename: (id: string, name: string) => Boolean(name.trim()) && current.current.playlists.some(playlist => playlist.id === id) && commit({
       ...current.current,

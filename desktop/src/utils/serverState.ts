@@ -124,6 +124,7 @@ export function setServerItem(key: string, value: string | null) {
   if (!status.ready) {
     if (value === null) localValues.delete(key);
     else localValues.set(key, value);
+    publish({});
     return;
   }
   if (status.conflict) throw new Error(status.error ?? "Reload server state before editing.");

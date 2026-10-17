@@ -21,7 +21,7 @@
 .settingsView button { font: inherit; font-size: 12px; }
 .settingsButton { color: white; background: none; border: 1px solid #555; border-radius: 0; padding: 6px 10px; }
 .settingsTextButton { color: #bbb; background: none; border: 0; padding: 6px; }
-.settingsView button:disabled { opacity: .45; }
+.settingsView button:disabled { opacity: var(--disabled-opacity); }
 .settingsView input[type="checkbox"] { accent-color: white; }
 .settingsView .settingsMotionSelect { width: auto; flex-shrink: 0; }
 .settingsOutputFields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
@@ -46,7 +46,7 @@
 .settingsImpulse small { display: block; margin-top: 4px; color: #aaa; }
 .settingsEditorFooter { border-top: 1px solid #333; padding-top: 16px; margin-top: 24px; }
 .settingsDspStatus { display: grid; gap: 8px; font-size: 12px; border-top: 1px solid #333; padding-top: 16px; margin-top: 30px; }
-.settingsError { color: #ffb7b7 !important; overflow-wrap: anywhere; }
+.settingsError { color: var(--error-text) !important; overflow-wrap: anywhere; }
 .settingsSrOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .settingsServiceRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 0; border-bottom: 1px solid #333; }
 .settingsServiceRow > div { min-width: 0; }

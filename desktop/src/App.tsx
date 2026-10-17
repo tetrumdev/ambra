@@ -80,7 +80,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
-  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly);
+  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
     useState<LibrarySection>(localOnly ? "tracks" : "overview");
@@ -875,7 +875,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} />}
 
       {!isPlayerView && (
-        <main id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
+        <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
           {!localOnly && !isQueueView && !isSettingsView && <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}

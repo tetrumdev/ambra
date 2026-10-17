@@ -1,3 +1,5 @@
+/* The queue reuses the playlist header, column header and track rows from LibraryView.css;
+   this file only covers what is particular to the queue. */
 #queue .queueView {
     grid-column: 2;
     container: queue / inline-size;
@@ -15,27 +17,37 @@
     padding-top: var(--content-top-spacer);
 }
 
+/* Spaced like the playlist header. */
 .queueHeader .libraryTitle {
-    margin-top: 0;
+    margin: 0 0 8px;
+    line-height: 1.08;
 }
 
-.queueHeader .librarySections {
+.queueHeader .libraryPlayActions {
     flex-wrap: wrap;
-    row-gap: 8px;
+    margin-top: 6px;
+    margin-bottom: 4px;
 }
 
-.queueHeader .librarySectionButton:disabled {
-    opacity: 0.5;
-    text-decoration: none;
+.queueHeader .libraryPlayBtn,
+.queueHeader .libraryShuffleBtn {
+    font-family: inherit;
+    cursor: default;
+}
+
+.queueHeader .libraryPlayBtn img {
+    width: 12px;
+}
+
+.queueHeader button:disabled {
+    opacity: var(--disabled-opacity);
 }
 
 .queueHeader .libraryInfo {
-    align-items: center;
+    margin-top: 4px;
 }
 
 .queueView #queueList {
-    --library-leading-width: 56px;
-    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr) minmax(64px, auto);
     flex: 1;
     height: auto;
     width: 100%;
@@ -50,12 +62,20 @@
     height: 24px;
 }
 
-.queueView #queueList[data-selecting="true"] {
-    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr) minmax(64px, auto) 40px;
+/* The header sits above the list rather than scrolling with it, so less fade is needed. */
+.queueView .columnInfo {
+    padding-top: 18px;
+    padding-bottom: 12px;
 }
 
 .queueSection {
-    padding-top: 28px;
+    padding-top: 24px;
+}
+
+/* Whichever section comes first sits close under the column header. */
+.queueView .columnInfo + .queueSection,
+.queueView .columnInfo + .queueSection[hidden] + .queueTail > .queueSection:first-child {
+    padding-top: 8px;
 }
 
 .queueSection[hidden] {
@@ -66,15 +86,9 @@
     margin: 0;
     padding: 0 15px 10px;
     border-bottom: 1px solid #535353;
-    color: #8a898a;
-    font-size: 0.72rem;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-}
-
-.queueView .queueItem {
-    padding-right: 15px;
+    color: #b6b6b6;
+    font-size: 0.9rem;
+    font-weight: 600;
 }
 
 .queueView .queueItem[data-current="true"] {
@@ -85,54 +99,35 @@
     background-color: #242424;
 }
 
-.queueView .queueItem[data-current="true"] .queueTrackName > span:first-child {
+.queueView .queueItem[data-current="true"] .trackTitleText {
     color: white;
-    font-weight: 500;
+}
+
+/* The playing track cannot be started again from its own row. */
+.queueItem[data-current="true"] .trackPlayButton:disabled {
+    opacity: 0;
 }
 
 .queueItem[data-played="true"] .coverImg {
     opacity: 0.55;
 }
 
-.queueSelectionIndicator {
-    grid-column: 5;
-    display: grid;
-    place-items: center;
-}
-
-.queueSelectionIndicator .selectionIndicator {
-    width: 20px;
-    height: 20px;
-    object-fit: contain;
-}
-
-.queueItem .trackName,
-.queueItem .artistName {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.queueTrackName > span {
-    display: block;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.queueItem[data-played="true"] .trackName {
+.queueItem[data-played="true"] .trackDescriptor {
     color: #a3a2a3;
 }
 
-.queueTrackArtist {
-    color: #a3a2a3;
-    font-size: 0.75rem;
-    font-weight: 400;
+.queueItem .trackName {
+    display: flex;
+    flex-direction: column;
+    max-width: 100%;
 }
 
 .queueTrackArtist {
     display: none;
     overflow: hidden;
+    color: #a3a2a3;
+    font-size: 0.75rem;
+    font-weight: 400;
     text-overflow: ellipsis;
 }
 
@@ -147,13 +142,30 @@
     }
 
     .queueView #queueList {
-        --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px;
+        --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
+            minmax(64px, 0.55fr) 40px;
     }
 
-    .queueView #queueList[data-selecting="true"] {
-        --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px 40px;
+    .queueView .albumColumn,
+    .queueItem .albumName {
+        display: none;
     }
 
+    .queueView .durationColumn {
+        grid-column: 4;
+    }
+
+    .queueItem .trackCollectionMenuTrigger {
+        grid-column: 5;
+    }
+}
+
+@container queue (width < 560px) {
+    .queueView #queueList {
+        --library-columns: var(--library-leading-width) minmax(0, 1fr) minmax(64px, auto) 40px;
+    }
+
+    .queueView .artistColumn,
     .queueItem .artistName {
         display: none;
     }
@@ -162,11 +174,11 @@
         display: block;
     }
 
-    .queueItem .trackDuration {
+    .queueView .durationColumn {
         grid-column: 3;
     }
 
-    .queueSelectionIndicator {
+    .queueItem .trackCollectionMenuTrigger {
         grid-column: 4;
     }
 }
