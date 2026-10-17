@@ -107,7 +107,7 @@ export function Sidebar({
           </nav>
           <div id="playlistContainer">
             <details className="sidebarPlaylistGroup playlistDropdown" open={playlistGroups.ambra} onToggle={event => onTogglePlaylistGroup("ambra", event.currentTarget.open)}>
-              <summary><DropdownChevron />AMBRA</summary>
+              <summary><DropdownChevron />AMBRA ({playlists.length})</summary>
               <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label="AMBRA playlists">
             {playlists.map((playlist) => (
               <div key={playlist.id} className="sidebarPlaylistRow">
@@ -134,7 +134,7 @@ export function Sidebar({
               const group = serviceGroups.find(group => group.provider === provider);
               if (!group || !servicePlaylistVisibility[provider]) return null;
               return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
-                <summary><DropdownChevron />{musicProviderName(provider)}</summary>
+                <summary><DropdownChevron />{musicProviderName(provider)} ({group.playlists.length})</summary>
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
                 {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
                   <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
