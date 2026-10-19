@@ -944,22 +944,6 @@
     white-space: nowrap;
 }
 
-.trackProviderIcon {
-    width: 1em;
-    height: 1em;
-    flex: none;
-    object-fit: contain;
-    opacity: 0.55;
-}
-
-.trackProviderIcon[data-provider="tidal"] {
-    width: 1.45em;
-}
-
-.trackProviderIcon[data-provider="local"] {
-    width: 2.6em;
-}
-
 .trackName:hover {
     text-decoration: none;
 }

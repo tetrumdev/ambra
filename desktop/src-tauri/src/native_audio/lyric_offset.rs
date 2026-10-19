@@ -20,9 +20,6 @@ const DETREND_FRAMES: usize = 7_500 / FRAME_MS as usize;
 const ONSET_FRAMES: i64 = 300 / FRAME_MS;
 /// Shifts within one second of the best one belong to the same peak.
 const PEAK_FRAMES: i64 = 1_000 / FRAME_MS;
-const MIN_PROMINENCE: f64 = 4.0;
-const MIN_PEAK_MARGIN: f64 = 0.75;
-const MIN_CORRECTION_MS: i64 = 150;
 
 /// Each request supersedes the previous one, which stops decoding at its next packet.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -34,17 +31,23 @@ pub struct LyricWindow {
     end_ms: f64,
 }
 
+/// The evidence for the best shift. Whether it is trusted is decided by the app,
+/// which tunes its thresholds from the listener's own corrections.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricOffset {
-    /// Milliseconds to add to the lyric offset; 0 when no reliable shift was found.
-    correction_ms: i64,
-    confident: bool,
+    /// Milliseconds to add to the lyric offset at the best match; absent when nothing could be scored.
+    best_ms: Option<i64>,
+    /// How far the best match stands above typical shifts, in robust deviations.
+    prominence: f64,
+    /// How far the best match leads the strongest rival peak; absent when there is no rival.
+    margin: Option<f64>,
 }
 
 const UNCERTAIN: LyricOffset = LyricOffset {
-    correction_ms: 0,
-    confident: false,
+    best_ms: None,
+    prominence: 0.0,
+    margin: None,
 };
 
 #[tauri::command]
@@ -283,31 +286,21 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
         .map(|i| scores[i])
         .fold(f64::NEG_INFINITY, f64::max);
     let prominence = (scores[best] - median) / noise;
-    let margin = (scores[best] - rival) / noise;
-    let confident = prominence >= MIN_PROMINENCE
-        && (rival == f64::NEG_INFINITY || margin >= MIN_PEAK_MARGIN);
+    let margin = (rival != f64::NEG_INFINITY).then(|| (scores[best] - rival) / noise);
     let rival_shift = (0..scores.len())
         .filter(|&i| away(i) && scores[i] == rival)
         .map(|i| shifts[i] * FRAME_MS)
         .next();
     eprintln!(
-        "[lyric-sync] {label}: best {} ms, prominence {prominence:.2} (need {MIN_PROMINENCE}), \
-         rival {} margin {margin:.2} (need {MIN_PEAK_MARGIN}), {} phrases, {}",
+        "[lyric-sync] {label}: best {} ms, prominence {prominence:.2}, rival {} margin {}, {} phrases",
         shifts[best] * FRAME_MS,
         rival_shift.map_or("none".to_owned(), |shift| format!("{shift} ms")),
+        margin.map_or("none".to_owned(), |margin| format!("{margin:.2}")),
         phrases.len(),
-        if confident { "confident" } else { "uncertain" },
     );
-    if !confident {
-        return UNCERTAIN;
-    }
-    let correction_ms = shifts[best] * FRAME_MS;
     LyricOffset {
-        correction_ms: if correction_ms.abs() < MIN_CORRECTION_MS {
-            0
-        } else {
-            correction_ms
-        },
-        confident,
+        best_ms: Some(shifts[best] * FRAME_MS),
+        prominence,
+        margin,
     }
 }

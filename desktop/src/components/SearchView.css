@@ -235,6 +235,25 @@
     visibility: hidden;
 }
 
+.searchEntityTitle {
+    min-width: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.searchAlbum:hover .searchEntityTitle strong,
+.searchEntityTitle:focus-visible strong {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
 .searchAlbum .searchEntityImage {
     background: #fff;
 }

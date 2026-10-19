@@ -256,6 +256,18 @@ impl QobuzProvider {
                     .is_some_and(|rights| rights.streamable == Some(false))
             })
             .map(|(release_type, album)| CatalogAlbum {
+                artists: vec![album.artist.as_ref().map_or_else(
+                    || ArtistMetadata {
+                        provider_id: id.to_string(),
+                        name: artist.name.display.clone(),
+                        image_url: None,
+                    },
+                    |credit| ArtistMetadata {
+                        provider_id: credit.id.to_string(),
+                        name: credit.name.display.clone(),
+                        image_url: None,
+                    },
+                )],
                 id: format!("qobuz:{}", album.id),
                 provider: MusicProvider::Qobuz,
                 title: album.title,
@@ -329,6 +341,7 @@ impl QobuzProvider {
                 .into_iter()
                 .filter(|album| album.streamable != Some(false))
                 .map(|album| CatalogAlbum {
+                    artists: album_artists(&album),
                     id: format!("qobuz:{}", album.id),
                     provider: MusicProvider::Qobuz,
                     title: album.title,

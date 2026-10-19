@@ -152,8 +152,12 @@ export async function completeServiceAuth(
   if (!response.ok) throw new Error(await responseError(response));
 }
 
-export type CatalogArtist = { id: string; provider: MusicProvider; name: string; imageUrl: string | null };
-export type CatalogAlbum = { id: string; provider: MusicProvider; title: string; artist: string; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; releaseType?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
+export type CatalogArtist = {
+  id: string; provider: MusicProvider; name: string; imageUrl: string | null;
+  /** The same artist on every service it was found on, this entry included. */
+  sources?: CatalogArtist[];
+};
+export type CatalogAlbum = { id: string; provider: MusicProvider; title: string; artist: string; artists?: TrackArtist[]; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; releaseType?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
 export type SearchPage = {
   artists?: CatalogArtist[];
   albums?: CatalogAlbum[];

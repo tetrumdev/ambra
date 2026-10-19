@@ -31,6 +31,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
+import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
 import { usePlaybackTime } from "./utils/playbackClock";
 import {
   loadPreferences,
@@ -143,10 +144,14 @@ function App({ localOnly }: { localOnly: boolean }) {
     }
     return [...tracksById.values()];
   }, [availableTracks, queue.entries, queue.historyEntries]);
+  // Which way the queue last moved, so the player cover slides in from that side.
+  const skipDirectionRef = useRef({ direction: 1, at: 0 });
+  const skipDirection = useCallback(() =>
+    performance.now() - skipDirectionRef.current.at < 3000 ? skipDirectionRef.current.direction : 1, []);
   const player = useAudioPlayer(playbackTracks, preferences.playback, {
-    next: () => queue.next()?.track,
-    completeCurrent: () => queue.completeCurrent()?.track,
-    previous: () => queue.previous()?.track,
+    next: () => { skipDirectionRef.current = { direction: 1, at: performance.now() }; return queue.next()?.track; },
+    completeCurrent: () => { skipDirectionRef.current = { direction: 1, at: performance.now() }; return queue.completeCurrent()?.track; },
+    previous: () => { skipDirectionRef.current = { direction: -1, at: performance.now() }; return queue.previous()?.track; },
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
   }, listeningHistory.recordPlay);
@@ -194,6 +199,51 @@ function App({ localOnly }: { localOnly: boolean }) {
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
+  // Lyrics are the chosen view, but a song without any shows its cover until one with lyrics comes back.
+  const prefersLyrics = isPlayerView ? isLyricsView : preferences.ui.playerView === "lyrics";
+  const lyricsAvailability = useLyricsAvailability(player.currentTrack, prefersLyrics);
+  // While a song's lyrics are still being looked up, the layout holds where it was.
+  const showLyricsRef = useRef(false);
+  if (!prefersLyrics) showLyricsRef.current = false;
+  else if (lyricsAvailability !== "pending") showLyricsRef.current = lyricsAvailability === "lyrics";
+  const showLyrics = showLyricsRef.current;
+  // The lyrics on screen; when a song has none they stay to fade out rather than vanish.
+  const lyricsTrackRef = useRef(player.currentTrack);
+  if (showLyrics) lyricsTrackRef.current = player.currentTrack;
+  const lyricsTrack = lyricsTrackRef.current;
+  // When one song's lyrics replace another's, the old view stays a moment to drift out.
+  const lyricsHandoff = useRef<{ track: typeof lyricsTrack; leaving: NonNullable<typeof lyricsTrack>[] }>({ track: lyricsTrack, leaving: [] });
+  const [lyricsShown, setLyricsShown] = useState(false);
+  if (lyricsTrack?.globalId !== lyricsHandoff.current.track?.globalId) {
+    const previous = lyricsHandoff.current.track;
+    const leaving = lyricsHandoff.current.leaving.filter((track) => track.globalId !== lyricsTrack?.globalId);
+    lyricsHandoff.current = {
+      track: lyricsTrack,
+      leaving: previous && lyricsShown && isPlayerView ? [...leaving, previous].slice(-2) : leaving,
+    };
+  }
+  const leavingLyrics = lyricsHandoff.current.leaving;
+  const [, settleLyricsHandoff] = useState(0);
+  useEffect(() => {
+    if (!leavingLyrics.length) return;
+    const timer = setTimeout(() => {
+      lyricsHandoff.current = { ...lyricsHandoff.current, leaving: [] };
+      settleLyricsHandoff((value) => value + 1);
+      // Outlasts the arriving lyrics' rise, so ending the handoff never cuts it short.
+    }, 900);
+    return () => clearTimeout(timer);
+  }, [leavingLyrics]);
+  useEffect(() => {
+    if (!showLyrics || !isPlayerView) {
+      setLyricsShown(false);
+      return;
+    }
+    // Paint the hidden state once first, so arriving lyrics fade in from behind the cover.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setLyricsShown(true));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [showLyrics, isPlayerView]);
   const isQueueView = screen === "queue";
   const isSettingsView = screen === "settings";
   const isHomeView = screen === "home" && !browseEntity;
@@ -856,6 +906,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     <>
       <AppChrome
         currentScreen={screen}
+        playerView={showLyrics ? "lyrics" : "bigscreen"}
+        lyricsAvailable={lyricsAvailability !== "none"}
         isFullscreen={isFullscreen}
         onExit={closeCurrentScreen}
         onSelectPlayerView={changeScreen}
@@ -864,17 +916,23 @@ function App({ localOnly }: { localOnly: boolean }) {
       {(player.currentTrack || isPlayerView) && (
         <>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
-            coverId={isLyricsView ? "lyricsArtwork" : "albumCover"} coverDim={isLyricsView ? LYRICS_COVER_DIM : 1} />
+            playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
           <AlbumArtwork
             track={player.currentTrack}
-            active={isBigscreen}
+            active={isPlayerView}
+            layout={showLyrics ? "lyrics" : "center"}
+            direction={skipDirection}
           />
         </>
       )}
 
-      {isLyricsView && <LyricsView key={player.currentTrack?.globalId ?? "empty"}
-        track={player.currentTrack} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
-        motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} />}
+      {isPlayerView && [
+        ...leavingLyrics.map((track) => ({ track, leaving: true })),
+        ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
+      ].map(({ track, leaving }) => <LyricsView key={track.globalId}
+        track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
+        motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
+        shown={!leaving && lyricsShown} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
 
       {!isPlayerView && (
         <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>

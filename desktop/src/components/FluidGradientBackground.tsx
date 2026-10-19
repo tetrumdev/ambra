@@ -15,14 +15,20 @@ type FluidGradientBackgroundProps = {
   coverDim?: number;
   active: boolean;
   animate?: boolean;
+  /** The swirl drifts to a stop while playback is paused and gathers pace again when it resumes. */
+  playing?: boolean;
 };
 
 const COLOR_TRANSITION_MS = 1800;
+/** Matches the lyrics backdrop fade, so the separation eases with what is visible beside the cover. */
+const COVER_DIM_TRANSITION_MS = 700;
 const EDGE_COMPONENTS = COVER_EDGE_ZONES * 4;
 const NOISE_TEXTURE_SIZE = 256;
 // The field drifts far too slowly for frames beyond 60 fps to differ, so
 // high-refresh displays draw every other frame instead of doubling the work.
 const MIN_FRAME_INTERVAL_MS = 1000 / 60 - 2;
+/** Time constant for the swirl easing between still and full speed. */
+const SWIRL_EASE_SECONDS = 0.9;
 
 const vertexShaderSource = `
 attribute vec2 a_position;
@@ -243,6 +249,7 @@ export function FluidGradientBackground({
   coverDim = 1,
   active,
   animate = true,
+  playing = true,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const paletteKey = [
@@ -251,13 +258,15 @@ export function FluidGradientBackground({
     ...separation.edges,
     ...separation.directions,
   ].join(":");
-  const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number } | null>(null);
+  // Swirl time advances at `speed`, which eases rather than switching, so pausing never freezes a frame mid-motion.
+  const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number; speed: number } | null>(null);
   if (journeyRef.current === null) {
-    journeyRef.current = { seed: Math.random() * 64, seconds: 0, updatedAt: performance.now() };
+    journeyRef.current = { seed: Math.random() * 64, seconds: 0, updatedAt: performance.now(), speed: animate && playing ? 1 : 0 };
   }
   const journey = journeyRef.current;
   const coverIdRef = useRef(coverId);
-  const coverDimRef = useRef(coverDim);
+  const clampedDim = Math.min(1, Math.max(0.05, coverDim));
+  const coverDimRef = useRef({ from: clampedDim, to: clampedDim, startedAt: 0 });
   const resizeRef = useRef<(() => void) | null>(null);
   const transitionRef = useRef({
     from: paletteComponents(colors, weights, separation),
@@ -268,6 +277,7 @@ export function FluidGradientBackground({
   const animationFrameRef = useRef(0);
   const activeRef = useRef(active);
   const animateRef = useRef(animate);
+  const playingRef = useRef(playing);
   const reducedMotionRef = useRef(false);
   const [contextVersion, setContextVersion] = useState(0);
 
@@ -287,22 +297,27 @@ export function FluidGradientBackground({
 
   useEffect(() => {
     coverIdRef.current = coverId;
-    coverDimRef.current = Math.min(1, Math.max(0.05, coverDim));
+    const now = performance.now();
+    const previous = coverDimRef.current;
+    const current = previous.from + (previous.to - previous.from) * easedProgress((now - previous.startedAt) / COVER_DIM_TRANSITION_MS);
+    coverDimRef.current = reducedMotionRef.current || !activeRef.current
+      ? { from: clampedDim, to: clampedDim, startedAt: now }
+      : { from: current, to: clampedDim, startedAt: now };
     resizeRef.current?.();
-  }, [coverId, coverDim]);
+  }, [coverId, clampedDim]);
 
   useEffect(() => {
-    const now = performance.now();
-    if (animateRef.current) journey.seconds += (now - journey.updatedAt) / 1000;
-    journey.updatedAt = now;
+    // Hidden time does not count; the swirl resumes from where it was drawn.
+    if (!activeRef.current && active) journey.updatedAt = performance.now();
     activeRef.current = active;
     animateRef.current = animate;
+    playingRef.current = playing;
     cancelAnimationFrame(animationFrameRef.current);
     animationFrameRef.current = 0;
     if (drawRef.current) {
       animationFrameRef.current = requestAnimationFrame(drawRef.current);
     }
-  }, [active, animate]);
+  }, [active, animate, playing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -444,10 +459,12 @@ export function FluidGradientBackground({
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
+      const swirlTarget = animateRef.current && playingRef.current ? 1 : 0;
+      const moving = journey.speed > 0 || swirlTarget > 0;
       if (
         now - lastDrawnAt < MIN_FRAME_INTERVAL_MS
         && !layoutDirty
-        && animateRef.current
+        && moving
         && activeRef.current
       ) {
         animationFrameRef.current = requestAnimationFrame(draw);
@@ -474,19 +491,31 @@ export function FluidGradientBackground({
       );
       const palette = mixPalette(transition.from, transition.to, progress);
       gl.uniform3fv(shaderColors, palette.slice(0, 12));
-      // The cover may mount after the canvas; keep looking until it appears.
-      if (!observedCover || !observedCover.isConnected) measureCover();
+      // The cover may mount after the canvas; keep looking until it appears. While it moves
+      // (opening, closing, or gliding beside the lyrics) the glow follows it every frame.
+      const flying = !!observedCover?.getAnimations().length;
+      if (!observedCover || !observedCover.isConnected || flying) measureCover();
       gl.uniform4fv(shaderCover, cover);
-      gl.uniform1f(shaderCoverDim, coverDimRef.current);
+      const dim = coverDimRef.current;
+      const dimProgress = easedProgress((now - dim.startedAt) / COVER_DIM_TRANSITION_MS);
+      gl.uniform1f(shaderCoverDim, dim.from + (dim.to - dim.from) * dimProgress);
       gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
       gl.uniform4fv(shaderEdgeDirection, palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2));
       gl.uniform4fv(shaderBias, palette.slice(12 + EDGE_COMPONENTS * 2, 16 + EDGE_COMPONENTS * 2));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
       // transitions without disabling this explicitly selected background.
-      gl.uniform1f(time, journey.seconds + (animateRef.current ? (now - journey.updatedAt) / 1000 : 0));
+      const elapsed = Math.min(0.1, Math.max(0, (now - journey.updatedAt) / 1000));
+      journey.updatedAt = now;
+      if (reducedMotionRef.current) journey.speed = swirlTarget;
+      else {
+        journey.speed += (swirlTarget - journey.speed) * (1 - Math.exp(-elapsed / SWIRL_EASE_SECONDS));
+        if (Math.abs(swirlTarget - journey.speed) < 0.002) journey.speed = swirlTarget;
+      }
+      journey.seconds += elapsed * journey.speed;
+      gl.uniform1f(time, journey.seconds);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (activeRef.current && (animateRef.current || progress < 1)) {
+      if (activeRef.current && (journey.speed > 0 || swirlTarget > 0 || progress < 1 || dimProgress < 1 || flying)) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };

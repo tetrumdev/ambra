@@ -1,4 +1,5 @@
 import "./Sidebar.css";
+import { ProviderIcon } from "./ProviderIcon";
 import { useEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music.ts";
 import { PlaylistActions } from "./PlaylistActions";
@@ -134,7 +135,7 @@ export function Sidebar({
               const group = serviceGroups.find(group => group.provider === provider);
               if (!group || !servicePlaylistVisibility[provider]) return null;
               return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
-                <summary><DropdownChevron />{musicProviderName(provider)} ({group.playlists.length})</summary>
+                <summary><DropdownChevron /><ProviderIcon provider={provider} /> ({group.playlists.length})</summary>
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
                 {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
                   <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>

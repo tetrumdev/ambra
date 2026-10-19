@@ -118,6 +118,11 @@
     opacity: 1;
 }
 
+/* No lyrics for this song: the button stays usable but reads as dormant. */
+.bigscreenViewButton[data-unavailable="true"] .bigscreenBtn {
+    opacity: 0.2;
+}
+
 .xContainer[data-queue-positioning="true"] {
     position: absolute;
     top: 60px;

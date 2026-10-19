@@ -2,7 +2,7 @@ import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
-import { musicProviderName } from "../utils/musicProviderName";
+import { ProviderIcon } from "./ProviderIcon";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { useTrackReorder } from "../hooks/useTrackReorder";
@@ -364,13 +364,7 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
       >
         <span className="trackTitleText">{(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? index + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? index + 1}</>}</small>}{track.name}{saved && <small className="savedTrackBadge">Saved</small>}</span>
         {showProviderIcon && (
-          <img
-            className="trackProviderIcon"
-            data-provider={track.provider}
-            src={track.provider === "local" ? "/ambra.svg" : `/${track.provider}Icon.svg`}
-            alt={musicProviderName(track.provider)}
-            data-tooltip={musicProviderName(track.provider)}
-          />
+          <ProviderIcon provider={track.provider} />
         )}
       </span>
       <span className="artistName trackDescriptor">{onOpenEntity ? <ArtistLinks track={track} onOpenEntity={onOpenEntity} /> : trackArtistNames(track)}</span>

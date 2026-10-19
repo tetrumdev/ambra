@@ -1,9 +1,9 @@
 import "./TrackMenus.css";
+import { ProviderIcon } from "./ProviderIcon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
-import { musicProviderName } from "../utils/musicProviderName";
 import { DropdownChevron } from "./DropdownChevron";
 
 export type PlaylistMenuOptions = {
@@ -80,7 +80,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
               const playlists = playlistOptions.playlists.filter(playlist => playlist.provider === provider);
               if (!playlists.length) return null;
               return <details className="playlistMenuGroup playlistDropdown" key={provider ?? "ambra"} open>
-                <summary><DropdownChevron />{provider ? musicProviderName(provider) : "AMBRA"}</summary>
+                <summary><DropdownChevron /><ProviderIcon provider={provider ?? "local"} label={provider ? undefined : "AMBRA"} /></summary>
                 {playlists.map(playlist => {
               const added = playlist.trackIds.includes(trackId);
               return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving} onClick={() => {

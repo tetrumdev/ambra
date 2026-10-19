@@ -38,7 +38,8 @@
     filter: brightness(70%);
 }
 
-#controls button:active img {
+#controls button:active img,
+#controls button:active svg {
     scale: 0.7;
 }
 
@@ -51,8 +52,16 @@
     filter: none;
 }
 
-#controls button:disabled:active img {
+#controls button:disabled:active img,
+#controls button:disabled:active svg {
     scale: 1;
+}
+
+#playBtn svg {
+    width: 25px;
+    height: 25px;
+    pointer-events: none;
+    transition: scale 0.15s;
 }
 
 #controls img {
