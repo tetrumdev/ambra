@@ -55,6 +55,14 @@
     align-items: center;
     gap: 12px;
     z-index: 51;
+    transition: opacity 400ms ease;
+}
+
+/* Fades in with the player; closing leaves a fading copy behind (FadeOutOnClose). */
+@starting-style {
+    .bigscreenCtrls:not([aria-hidden]) {
+        opacity: 0;
+    }
 }
 
 .bigscreenViewPicker,
@@ -107,7 +115,7 @@
     opacity: 0.45;
     transition:
         opacity 0.25s ease,
-        scale 0.15s;
+        scale var(--motion-press-up);
 }
 
 .bigscreenViewButton[aria-pressed="true"] .bigscreenBtn,

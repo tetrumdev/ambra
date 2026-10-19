@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useSyncExternalStore } from "react";
 import ReactDOM from "react-dom/client";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import App from "./App";
 import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
 import "./interaction.css";
@@ -15,11 +16,9 @@ mark("js-start");
 startPerfTracing();
 if (perfEnabled()) {
   // Anchor page-relative marks to the Rust process start for real startup numbers.
-  void import("@tauri-apps/api/core").then(({ invoke, isTauri }) =>
-    isTauri()
-      ? invoke<number>("startup_elapsed_ms").then(setProcessOffset)
-      : undefined,
-  ).catch(() => {});
+  if (isTauri()) {
+    void invoke<number>("startup_elapsed_ms").then(setProcessOffset).catch(() => {});
+  }
 }
 
 document.documentElement.dataset.platform = navigator.userAgent.includes(

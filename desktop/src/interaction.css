@@ -26,7 +26,8 @@
 .sidebarPlaylistActions > span,
 .searchResultMenuButton > img {
     pointer-events: none;
-    transition: scale 0.15s;
+    /* Presses go down at once and spring back up, just past their size (utils/motion.ts). */
+    transition: scale var(--motion-press-up);
 }
 
 #volumeBtn:active > img,
@@ -36,6 +37,7 @@
 .sidebarPlaylistActions:active > span,
 .searchResultMenuButton:active > img {
     scale: 0.7;
+    transition: scale var(--motion-press-down);
 }
 
 /* Dialogs fade in and out like system sheets (see utils/dialogs.ts). */

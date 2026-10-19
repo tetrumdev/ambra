@@ -14,19 +14,35 @@
         minmax(0, 1fr);
     grid-template-rows: 75px 80px;
     column-gap: 24px;
-    border-top: 1px solid rgba(122, 122, 122, 0.5);
+}
+
+/* The bar is deliberately not a stacking context of its own: its glass sits below the
+   player cover flying in or out of the thumbnail (#albumCover[data-flight], z-index 11)
+   and its content above it, so the title and controls are never cut off as they glide past. */
+#bottomInfoBar > :not(.bottomInfoBarSurface),
+#playbackCluster > * {
+    z-index: 12;
+}
+
+/* The bar's glass. It is its own layer so it can glide between the two bar heights
+   while the layout underneath snaps; it reaches below the window so that never
+   uncovers a gap at the bottom. */
+.bottomInfoBarSurface {
+    position: absolute;
+    inset: 0 0 -80px 0;
     z-index: 10;
+    pointer-events: none;
+    border-top: 1px solid rgba(122, 122, 122, 0.5);
 }
 
 /* A backdrop blur repeats its border pixels to fill the kernel, so a row divider
    reaching the bar's top edge smears into a band. Sampling from 150px (3σ of the
    50px blur) above the bar and masking that margin away keeps the visible edge
    blurring real content instead. */
-#bottomInfoBar::before {
+.bottomInfoBarSurface::before {
     content: "";
     position: absolute;
     inset: -150px 0 0 0;
-    z-index: -1;
     pointer-events: none;
     background-color: rgba(59, 59, 59, 0.5);
     backdrop-filter: blur(50px);
@@ -46,7 +62,7 @@
     right: 0;
     bottom: 0;
     height: 12px;
-    z-index: -2;
+    z-index: 9;
     pointer-events: none;
     background-color: #000;
 }
@@ -202,6 +218,11 @@
     cursor: default;
 }
 
+#bottomInfoBar:not([data-variant="compact"]) #compactArtwork {
+    position: absolute;
+    visibility: hidden;
+}
+
 #compactArtwork img {
     display: block;
     width: 100%;
@@ -229,15 +250,10 @@
     object-fit: cover;
 }
 
+/* Pinned to the same corner in both layouts, so the volume and queue never move
+   when the player opens or closes. Centred in the compact bar's height. */
 #extraCtrlsCluster {
-    grid-column: 3;
-    grid-row: 2;
-    height: auto;
-    width: auto;
-    align-items: center;
-}
-
-#bottomInfoBar[data-variant="compact"] #extraCtrlsCluster {
-    grid-column: 4;
-    grid-row: 1;
+    position: absolute;
+    right: 20px;
+    bottom: 28px;
 }

@@ -14,8 +14,9 @@
     /* Shared with the player cover, which moves into the lyrics layout (BigscreenArtwork.css). */
     --lyrics-top-padding: clamp(75px, 10vh, 100px);
     --lyrics-column-padding: clamp(24px, 4vw, 80px);
-    --player-view-ease: cubic-bezier(0.32, 0.72, 0, 1);
-    --player-view-duration: 700ms;
+    /* The player's own layout changes move like the rest of the app's views (utils/motion.ts). */
+    --player-view-ease: var(--motion-smooth-ease);
+    --player-view-duration: var(--motion-smooth-duration);
 }
 
 #lyricsPage {
@@ -298,7 +299,7 @@ button.lyricLine:hover {
     cursor: default;
     transition:
         background 200ms ease,
-        transform 200ms ease;
+        transform var(--motion-snappy);
 }
 .lyricsMessage button:hover {
     background: rgba(255, 255, 255, 0.22);
@@ -374,7 +375,7 @@ button.lyricLine:hover {
     cursor: default;
     transition:
         opacity 0.25s ease,
-        scale 0.15s;
+        scale var(--motion-press-up);
 }
 /* Like the view picker, the menu stays dim until the pointer reaches it; resume is the current action. */
 .lyricsSyncTrigger {
@@ -388,6 +389,7 @@ button.lyricLine:hover {
 .lyricsResume:active,
 .lyricsSyncTrigger:active {
     scale: 0.97;
+    transition: scale var(--motion-press-down);
 }
 .lyricsResume + .lyricsSyncMenu {
     border-left: 1px solid rgba(100, 100, 100, 0.4);
@@ -605,14 +607,14 @@ button.lyricLine:hover {
     background: none;
     transition:
         opacity 450ms ease,
-        visibility 0s linear 600ms;
+        visibility 0s linear var(--player-view-duration);
 }
 #lyricsPage[data-leaving="true"] .lyricsStage {
     transform: translateY(-5%);
-    transition: transform 600ms var(--player-view-ease);
+    transition: transform var(--player-view-duration) var(--player-view-ease);
 }
 #lyricsPage[data-arriving="true"] .lyricsStage {
-    animation: lyricsArrive 650ms var(--player-view-ease) 120ms both;
+    animation: lyricsArrive var(--player-view-duration) var(--player-view-ease) 120ms both;
 }
 @keyframes lyricsArrive {
     from {

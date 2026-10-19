@@ -8,8 +8,9 @@
     left: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
-    /* Above the lyrics, so they slip behind it as they fade. */
-    z-index: 2;
+    /* Outside the player stage and above it, so the lyrics slip behind it as they
+       fade and the cover stays put while the rest of the player sinks away. */
+    z-index: 6;
     visibility: hidden;
     transition:
         left var(--player-view-duration) var(--player-view-ease),
@@ -43,29 +44,47 @@
     visibility: visible;
 }
 
-/* Closing: the cover flies down over the library into the now-playing bar, whose own thumbnail waits for it. */
-#albumCover[data-closing="true"] {
+/* In flight the cover passes over the now-playing bar, into or out of its thumbnail,
+   which stays hidden until the cover has landed on it. */
+#albumCover[data-flight] {
     visibility: visible;
     z-index: 11;
 }
-:root[data-cover-flight="closing"] #compactArtwork > * {
-    opacity: 0;
+:root[data-cover-flight="closing"] #compactArtwork {
+    visibility: hidden;
 }
 
-/* The player's colours bloom in as the cover grows out of the bar. */
-#backgroundFX[data-active="true"] {
-    animation: backgroundFXOpen 500ms ease both;
+/* The whole player rises out from behind the now-playing bar as it opens and
+   sinks back behind it as it closes, fading as it goes. Everything in the player
+   moves as one layer, so nothing inside it shifts against anything else. */
+.playerStage {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    isolation: isolate;
+    transition:
+        opacity var(--motion-smooth),
+        translate var(--motion-smooth),
+        visibility 0s;
 }
-@keyframes backgroundFXOpen {
-    from {
-        opacity: 0;
-    }
+
+.playerStage[data-open="false"] {
+    opacity: 0;
+    translate: 0 140px;
+    visibility: hidden;
+    pointer-events: none;
+    /* The fade finishes a little early, so the player is gone before it settles behind the bar. */
+    transition:
+        opacity calc(var(--motion-smooth-duration) * 0.75) var(--motion-smooth-ease),
+        translate var(--motion-smooth),
+        visibility 0s linear var(--motion-smooth-duration);
 }
 
 .albumCoverImg,
 .albumCoverPlaceholder {
     position: absolute;
     inset: 0;
+    /* Keep IMAGE_OVERHANG in BigscreenArtwork.tsx in step with this overhang. */
     width: calc(100% + 2px);
     height: calc(100% + 2px);
     object-fit: cover;
@@ -92,10 +111,10 @@
 
 /* A new album slides in from the side the player moved towards; the old one drifts out the other way. */
 .albumCoverImg[data-motion="slide"][data-leaving="false"] {
-    animation: albumCoverArrive 650ms var(--player-view-ease) both;
+    animation: albumCoverArrive var(--player-view-duration) var(--player-view-ease) both;
 }
 .albumCoverImg[data-motion="slide"][data-leaving="true"] {
-    animation: albumCoverDepart 650ms var(--player-view-ease) both;
+    animation: albumCoverDepart var(--player-view-duration) var(--player-view-ease) both;
 }
 /* A sharper copy of the same cover fades in over the old one, which waits underneath until it has. */
 .albumCoverImg[data-motion="fade"][data-leaving="false"] {
@@ -151,6 +170,8 @@
     .albumCoverImg {
         animation-duration: 1ms !important;
     }
+    .playerStage,
+    .playerStage[data-open="false"],
     #albumCover,
     .albumCoverImg,
     .albumCoverPlaceholder,

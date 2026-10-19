@@ -1,4 +1,5 @@
 import type { GlobalTrackId, Track } from "../types/music";
+import { invoke } from "@tauri-apps/api/core";
 import {
   getPersistentItem,
   removePersistentItem,
@@ -96,7 +97,6 @@ function inDesktop() {
 }
 
 async function desktopInvoke<T>(command: string, args?: Record<string, unknown>) {
-  const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(command, args);
 }
 

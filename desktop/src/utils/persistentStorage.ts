@@ -1,4 +1,5 @@
 import { getServerItem, serverStateKeys, setServerItem } from "./serverState";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 
 const restoreKeys = new Set([
   "ambra.preferences",
@@ -42,7 +43,6 @@ export type PersistenceBackend = {
 
 const desktopBackend: PersistenceBackend = {
   load: async (knownUpdatedAtMs) => {
-    const { invoke, isTauri } = await import("@tauri-apps/api/core");
     return isTauri()
       ? invoke<LoadedState | null>("load_persistent_state", {
           knownUpdatedAtMs: knownUpdatedAtMs || null,
@@ -50,7 +50,6 @@ const desktopBackend: PersistenceBackend = {
       : null;
   },
   save: async (patch) => {
-    const { invoke, isTauri } = await import("@tauri-apps/api/core");
     if (isTauri()) await invoke("save_persistent_state", { patch });
   },
 };

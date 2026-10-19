@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { setPersistentItem } from "../utils/persistentStorage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
@@ -176,19 +177,16 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
     // they land without rescanning the disk.
     let stopListening: (() => void) | undefined;
     if (isTauri()) {
-      void import("@tauri-apps/api/event")
-        .then(({ listen }) =>
-          listen("local-library-updated", () => {
-            void invoke<ScannedTrack[]>("load_cached_music")
-              .then((updated) => {
-                if (cancelled) return;
-                setLocalTracks((current) =>
-                  reconcileTracks(current, updated.map(localTrack)),
-                );
-              })
-              .catch(() => {});
-          }),
-        )
+      void listen("local-library-updated", () => {
+        void invoke<ScannedTrack[]>("load_cached_music")
+          .then((updated) => {
+            if (cancelled) return;
+            setLocalTracks((current) =>
+              reconcileTracks(current, updated.map(localTrack)),
+            );
+          })
+          .catch(() => {});
+      })
         .then((unlisten) => {
           if (cancelled) unlisten();
           else stopListening = unlisten;

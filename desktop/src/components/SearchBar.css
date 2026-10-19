@@ -30,7 +30,7 @@
     width: 36px;
     height: 40px;
     flex: none;
-    transition: width 0.25s ease;
+    transition: width var(--motion-snappy);
 }
 
 .searchInputControl[data-expanded="true"] {
