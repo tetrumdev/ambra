@@ -12,6 +12,12 @@ pub struct OutputSettings {
     #[serde(default)]
     pub resync_delay_ms: u32,
     pub preset_id: Option<String>,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+}
+
+fn default_volume() -> f64 {
+    100.0
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -34,6 +40,7 @@ impl Default for AudioSettings {
                 exclusive_mode: false,
                 resync_delay_ms: 0,
                 preset_id: None,
+                volume: default_volume(),
             }],
             presets: Vec::new(),
         }
@@ -62,6 +69,9 @@ impl AudioSettings {
             }
             if output.resync_delay_ms > 10_000 {
                 return Err("Resync delay must be between 0 and 10000 ms".into());
+            }
+            if !output.volume.is_finite() || !(0.0..=100.0).contains(&output.volume) {
+                return Err("Output volume must be between 0 and 100".into());
             }
             if output
                 .preset_id
@@ -117,6 +127,7 @@ impl AudioSettings {
                     exclusive_mode: false,
                     resync_delay_ms: 0,
                     preset_id: None,
+                    volume: default_volume(),
                 });
             }
         }

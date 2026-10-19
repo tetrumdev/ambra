@@ -11,21 +11,17 @@ import type { LyricSegment } from "../types/lyrics";
 export type SpringConfig = { stiffness: number; damping: number };
 export type Spring = { value: number; velocity: number };
 
-/** Exact critically damped motion keeps scrolling smooth across different frame rates. */
-export function advanceScrollSpring(spring: Spring, target: number, seconds: number): boolean {
-  const response = 12;
-  const offset = spring.value - target;
-  const coefficient = spring.velocity + response * offset;
-  const decay = Math.exp(-response * seconds);
-  spring.value = target + (offset + coefficient * seconds) * decay;
-  spring.velocity = (spring.velocity - response * coefficient * seconds) * decay;
-  if (Math.abs(spring.value - target) < 0.02 && Math.abs(spring.velocity) < 0.1) {
-    spring.value = target;
-    spring.velocity = 0;
-    return false;
-  }
-  return true;
-}
+/**
+ * Line scrolling as a ripple: every line follows the scroll on its own spring and
+ * sets off a beat after the one above it, so a line change pulls the lines up one
+ * by one instead of sliding the page as a block.
+ */
+/** Soft and a touch under critical, so each line glides in and settles with a faint overshoot. */
+export const rippleSpring: SpringConfig = { stiffness: 90, damping: 16 };
+/** Delay between neighbouring lines setting off. */
+export const RIPPLE_STAGGER_MS = 75;
+/** Lines further than this from where the wave starts share the last delay. */
+export const RIPPLE_MAX_LINES = 9;
 
 /** Near-critically damped: letters float up and settle without wobble. */
 const liftSpring: SpringConfig = { stiffness: 120, damping: 22 };
@@ -135,7 +131,7 @@ function targets(letter: LetterMotion, timeMs: number, lineActive: boolean) {
   return { lift: reached ? 1 : 0, swell: crossing ? 1 : 0, glow: 0 };
 }
 
-function step(spring: Spring, target: number, config: SpringConfig, seconds: number): boolean {
+export function advanceSpring(spring: Spring, target: number, config: SpringConfig, seconds: number): boolean {
   // Fixed substeps keep the spring stable through dropped frames.
   const steps = Math.max(1, Math.ceil(seconds * 240));
   const dt = seconds / steps;
@@ -171,9 +167,9 @@ export function animateLetter(
     letter.swell = { value: 0, velocity: 0 };
     letter.glow = { value: 0, velocity: 0 };
   } else {
-    moving = step(letter.lift, goal.lift, liftSpring, seconds) || moving;
-    moving = step(letter.swell, goal.swell, letter.emphasis ? waveSpring : swellSpring, seconds) || moving;
-    moving = step(letter.glow, goal.glow, glowSpring, seconds) || moving;
+    moving = advanceSpring(letter.lift, goal.lift, liftSpring, seconds) || moving;
+    moving = advanceSpring(letter.swell, goal.swell, letter.emphasis ? waveSpring : swellSpring, seconds) || moving;
+    moving = advanceSpring(letter.glow, goal.glow, glowSpring, seconds) || moving;
   }
   const lift = letter.lift.value * LIFT_EM + letter.swell.value * (letter.emphasis ? EMPHASIS_LIFT_EM : 0);
   const scale = 1 + letter.swell.value * (letter.emphasis ? EMPHASIS_SWELL : SWELL);

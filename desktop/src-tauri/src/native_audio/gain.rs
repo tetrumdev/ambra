@@ -2,6 +2,7 @@ const MIN_VOLUME: f64 = 0.0;
 const MAX_VOLUME: f64 = 100.0;
 const RAMP_MILLISECONDS: u32 = 15;
 
+#[derive(Clone)]
 pub struct GainStage {
     volume: f64,
     current_amplitude: f64,
@@ -79,5 +80,4 @@ impl GainStage {
             }
         }
     }
-
 }
