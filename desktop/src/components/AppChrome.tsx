@@ -5,6 +5,9 @@ import "../App.css";
 
 type AppChromeProps = {
   currentScreen: AppScreen;
+  /** The player view on screen, which falls back to the cover when a song has no lyrics. */
+  playerView: "bigscreen" | "lyrics";
+  lyricsAvailable: boolean;
   isFullscreen: boolean | null;
   onExit?: () => void;
   onSelectPlayerView: (screen: "bigscreen" | "lyrics") => void;
@@ -17,6 +20,8 @@ const playerViews = [
 
 export function AppChrome({
   currentScreen,
+  playerView,
+  lyricsAvailable,
   isFullscreen,
   onExit,
   onSelectPlayerView,
@@ -65,7 +70,10 @@ export function AppChrome({
                   className="bigscreenViewButton"
                   type="button"
                   aria-label={view.label}
-                  aria-pressed={currentScreen === view.screen}
+                  aria-pressed={playerView === view.screen}
+                  // Choosing lyrics for a song without any still takes effect from the next song that has them.
+                  data-unavailable={view.screen === "lyrics" && !lyricsAvailable}
+                  data-tooltip={view.screen === "lyrics" && !lyricsAvailable ? "No lyrics for this song" : undefined}
                   onClick={() => onSelectPlayerView(view.screen)}
                 >
                   <img src={view.icon} alt="" className="bigscreenBtn" />

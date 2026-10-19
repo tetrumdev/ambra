@@ -225,6 +225,8 @@ pub struct CatalogAlbum {
     pub provider: MusicProvider,
     pub title: String,
     pub artist: String,
+    /// Credited album artists, so each one can open its own page.
+    pub artists: Vec<ArtistMetadata>,
     pub image_url: Option<String>,
     pub upc: Option<String>,
     pub release_date: Option<String>,

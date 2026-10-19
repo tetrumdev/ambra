@@ -53,11 +53,53 @@ export function matchingTrackArtist(query: string, tracks: TrackCredit[]): strin
 export function rankArtists(values: CatalogArtist[], query: string, tracks: TrackCredit[] = []) {
   const credit = matchingTrackArtist(query, tracks) ?? leadingSong(query, tracks)?.artist;
   const score = (artist: CatalogArtist) => credit && searchText(artist.name) === searchText(credit) ? 6 : textRelevance(artist.name, query);
-  // Equal names within one service can be different artists. Only collapse across services.
+  // Equal names within one service can be different artists. Only collapse across services,
+  // keeping each service's entry so the artist page can gather releases from all of them.
   const result: CatalogArtist[] = [];
-  for (const item of values) if (!result.some(other => other.id === item.id || (other.provider !== item.provider && searchText(other.name) === searchText(item.name)))) result.push(item);
+  for (const item of values) {
+    if (result.some(other => other.sources?.some(source => source.id === item.id) ?? other.id === item.id)) continue;
+    const index = result.findIndex(other => searchText(other.name) === searchText(item.name) && other.provider !== item.provider);
+    if (index < 0) { result.push(item); continue; }
+    const sources = result[index].sources ?? [result[index]];
+    if (!sources.some(source => source.provider === item.provider)) result[index] = { ...result[index], sources: [...sources, item] };
+  }
   return result.sort((a, b) => score(b) - score(a));
 }
+// Labels that mark another pressing of the same album rather than a different record.
+// Anything else in brackets (Live, Acoustic, Blue Album…) keeps editions apart.
+const editionWords = new Set(["remaster", "remastered", "remasters", "deluxe", "super", "expanded", "anniversary", "edition", "special", "collector", "collectors", "bonus", "track", "tracks", "version", "reissue", "legacy", "definitive", "explicit", "digital", "the", "and", "s"]);
+function editionLabel(text: string) {
+  const words = searchText(text).split(" ").filter(Boolean);
+  return words.length > 0 && words.every(word => editionWords.has(word) || /^\d+(st|nd|rd|th)?$/.test(word));
+}
+/** The album an edition belongs to: its title and version without remaster or deluxe labels. */
+export function albumIdentity(album: CatalogAlbum) {
+  const title = album.title
+    .replace(/\s*[([]([^)\]]*)[)\]]/g, (whole, label: string) => editionLabel(label) ? "" : whole)
+    .replace(/\s+[-–—:]\s+([^-–—:]+)$/, (whole, label: string) => editionLabel(label) ? "" : whole);
+  const version = album.version && !editionLabel(album.version) ? album.version : "";
+  return `${searchText(album.artist)}|${searchText(title)}|${searchText(version)}`;
+}
+const losslessProviders = new Set(["qobuz", "tidal", "local"]);
+/** Higher is better: explicit, then bit depth and sample rate, with lossless services assumed CD quality. */
+function editionQuality(album: CatalogAlbum): number[] {
+  const lossless = losslessProviders.has(album.provider);
+  return [Number(album.explicit ?? false), album.maximumBitDepth ?? (lossless ? 16 : 0), album.maximumSamplingRateKHz ?? (lossless ? 44.1 : 0)];
+}
+
+const compareEditions = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
+
+/** One copy per album: every edition and service collapses into its best-sounding copy; earlier wins ties. */
+export function bestEditions(albums: CatalogAlbum[]): CatalogAlbum[] {
+  const best = new Map<string, CatalogAlbum>();
+  for (const album of albums) {
+    const identity = albumIdentity(album);
+    const current = best.get(identity);
+    if (!current || compareEditions(editionQuality(album), editionQuality(current)) > 0) best.set(identity, album);
+  }
+  return [...best.values()];
+}
+
 export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackCredit[] = []) {
   const song = leadingSong(query, tracks);
   const score = (album: CatalogAlbum) => {
@@ -70,23 +112,27 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
     }
     return direct;
   };
-  const groups: { album: CatalogAlbum; fusion: number; providers: Set<string> }[] = [];
+  // An edition the query names (deluxe, 2011 remaster…) wins over a better-sounding one.
+  const terms = searchText(query).split(" ").filter(term => editionWords.has(term) || /^\d{4}$/.test(term));
+  const asked = (album: CatalogAlbum) => terms.filter(term => searchText(`${album.title} ${album.version ?? ""}`).split(" ").includes(term)).length;
+  // Every edition and service of one album collapses into its best copy; earlier results win ties.
+  const groups: { identity: string; album: CatalogAlbum; fusion: number; providers: Set<string> }[] = [];
   const ranks = new Map<string, number>();
   const seen = new Set<string>();
   for (const item of values) {
     if (seen.has(item.id)) continue;
     seen.add(item.id);
-    let group = groups.find(group => searchText(group.album.artist) === searchText(item.artist) && searchText(group.album.title) === searchText(item.title) && searchText(group.album.version ?? "") === searchText(item.version ?? ""));
-    if (!group) { group = {album: item, fusion: 0, providers: new Set()}; groups.push(group); }
+    const identity = albumIdentity(item);
+    let group = groups.find(group => group.identity === identity);
+    if (!group) { group = {identity, album: item, fusion: 0, providers: new Set()}; groups.push(group); }
     if (!group.providers.has(item.provider)) {
       const rank = (ranks.get(item.provider) ?? 0) + 1;
       ranks.set(item.provider, rank);
       group.fusion += 1 / (60 + rank);
       group.providers.add(item.provider);
     }
-    const a = item, b = group.album;
-    const quality = Number(a.explicit ?? false) - Number(b.explicit ?? false) || (a.maximumBitDepth ?? 0) - (b.maximumBitDepth ?? 0) || (a.maximumSamplingRateKHz ?? 0) - (b.maximumSamplingRateKHz ?? 0);
-    if (quality > 0) group.album = item;
+    const a = [asked(item), ...editionQuality(item)], b = [asked(group.album), ...editionQuality(group.album)];
+    if (compareEditions(a, b) > 0) group.album = item;
   }
   return groups.sort((a, b) => score(b.album) - score(a.album) || b.fusion - a.fusion).map(group => group.album);
 }

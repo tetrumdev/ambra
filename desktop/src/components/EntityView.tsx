@@ -4,6 +4,7 @@ import {
   loadAlbumTracks,
   type ArtistProfile,
   type CatalogAlbum,
+  type CatalogArtist,
 } from "../api/server";
 import type { Track } from "../types/music";
 import {
@@ -22,9 +23,9 @@ export type EntityPage = {
   tracks?: Track[];
   entire?: boolean;
   profile?: ArtistProfile;
-  albums?: CatalogAlbum[];
-  albumsLoaded?: boolean;
-  nextOffset?: number | null;
+  /** The artist on each service, and the releases loaded from each so far. */
+  sources?: CatalogArtist[];
+  releases?: Record<string, { albums: CatalogAlbum[]; nextOffset: number | null }>;
   expandedPopular?: boolean;
   expandedBiography?: boolean;
 };

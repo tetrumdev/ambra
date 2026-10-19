@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LyricLine, TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { loadLyrics } from "./lyricsCache";
+import { type OffsetEvidence, trustedCorrection } from "./lyricsAutoTuning";
 import { lyricSyncOverride } from "./lyricsSyncOverrides";
 import { nativeAudioSource } from "./nativeAudioSource";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
@@ -45,11 +46,17 @@ export type DetectedOffset = {
   confident: boolean;
 };
 
-// Confident results are kept across sessions so each song is analyzed once.
-const storageKey = "ambra.lyrics-autosync.v1";
+function decide(evidence: OffsetEvidence): DetectedOffset {
+  const correctionMs = trustedCorrection(evidence);
+  return correctionMs === null ? { correctionMs: 0, confident: false } : { correctionMs, confident: true };
+}
+
+// Evidence is kept across sessions so each song is analyzed once; whether it is trusted
+// is decided on read, so it follows the tuning as the listener's corrections refine it.
+const storageKey = "ambra.lyrics-autosync.v2";
 const MAX_TRACKS = 2000;
 
-type StoredOffsets = Record<string, { timing: string; correctionMs: number }>;
+type StoredOffsets = Record<string, OffsetEvidence & { timing: string }>;
 
 function readStoredOffsets(): StoredOffsets {
   try {
@@ -58,9 +65,14 @@ function readStoredOffsets(): StoredOffsets {
     const offsets: StoredOffsets = {};
     for (const [trackId, entry] of Object.entries(value)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { timing, correctionMs } = entry as Record<string, unknown>;
-      if (typeof timing === "string" && typeof correctionMs === "number" && Number.isFinite(correctionMs))
-        offsets[trackId] = { timing, correctionMs };
+      const { timing, bestMs, prominence, margin } = entry as Record<string, unknown>;
+      if (typeof timing !== "string" || typeof prominence !== "number" || !Number.isFinite(prominence)) continue;
+      offsets[trackId] = {
+        timing,
+        bestMs: typeof bestMs === "number" && Number.isFinite(bestMs) ? bestMs : null,
+        prominence,
+        margin: typeof margin === "number" && Number.isFinite(margin) ? margin : null,
+      };
     }
     return offsets;
   } catch {
@@ -68,11 +80,11 @@ function readStoredOffsets(): StoredOffsets {
   }
 }
 
-function storeOffset(trackId: string, timing: string, correctionMs: number) {
+function storeOffset(trackId: string, timing: string, evidence: OffsetEvidence) {
   const offsets = readStoredOffsets();
   // Reinserting keeps the most recently analyzed tracks at the end.
   delete offsets[trackId];
-  offsets[trackId] = { timing, correctionMs };
+  offsets[trackId] = { timing, ...evidence };
   const trackIds = Object.keys(offsets);
   for (const stale of trackIds.slice(0, Math.max(0, trackIds.length - MAX_TRACKS))) delete offsets[stale];
   try {
@@ -82,10 +94,18 @@ function storeOffset(trackId: string, timing: string, correctionMs: number) {
   }
 }
 
-/** A correction found for these lyrics in an earlier analysis, if any. */
-export function storedLyricOffset(track: Track, lyrics: TrackLyrics): number | undefined {
+/** What an earlier analysis of these lyrics found, if any, with the timing it was taken against. */
+export function storedLyricEvidence(track: Track, lyrics: TrackLyrics): (OffsetEvidence & { timing: string }) | undefined {
   const stored = readStoredOffsets()[track.globalId];
-  return stored?.timing === timingKey(lyrics, lyricWindows(lyrics)) ? stored.correctionMs : undefined;
+  return stored?.timing === timingKey(lyrics, lyricWindows(lyrics)) ? stored : undefined;
+}
+
+/** A trusted correction found for these lyrics in an earlier analysis, if any. */
+export function storedLyricOffset(track: Track, lyrics: TrackLyrics): number | undefined {
+  const stored = storedLyricEvidence(track, lyrics);
+  if (!stored) return undefined;
+  const result = decide(stored);
+  return result.confident ? result.correctionMs : undefined;
 }
 
 type Analysis = {
@@ -111,11 +131,11 @@ function start(analysis: Analysis) {
   if (running?.background) running.preempted = true;
   running = analysis;
   analysis.preempted = false;
-  invoke<DetectedOffset>("detect_lyric_offset", analysis.args)
+  invoke<OffsetEvidence>("detect_lyric_offset", analysis.args)
     .then(
-      (result) => {
-        if (result.confident) storeOffset(analysis.trackId, analysis.timing, result.correctionMs);
-        analysis.resolve(result);
+      (evidence) => {
+        storeOffset(analysis.trackId, analysis.timing, evidence);
+        analysis.resolve(decide(evidence));
       },
       (error) => {
         if (analysis.preempted) {
@@ -145,7 +165,7 @@ export function detectLyricOffset(track: Track, lyrics: TrackLyrics, background 
   const windows = lyricWindows(lyrics);
   const timing = timingKey(lyrics, windows);
   const stored = readStoredOffsets()[track.globalId];
-  if (stored?.timing === timing) return Promise.resolve({ correctionMs: stored.correctionMs, confident: true });
+  if (stored?.timing === timing) return Promise.resolve(decide(stored));
   const source = nativeAudioSource(track);
   const key = JSON.stringify([source, timing]);
   const existing = analyses.get(key);
