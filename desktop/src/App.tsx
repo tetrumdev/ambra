@@ -59,6 +59,7 @@ import {
 
 import { usePlaylists } from "./hooks/usePlaylists";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
+import { motion } from "./utils/motion";
 
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
@@ -199,6 +200,36 @@ function App({ localOnly }: { localOnly: boolean }) {
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
+  // Closing mounts the whole library screen. It is laid out, hidden, a couple of frames
+  // before the player starts to move, so that work lands before the animation instead of
+  // in its first frame. Opening has nothing comparable to mount, so it starts at once.
+  const [playerOpen, setPlayerOpen] = useState(isPlayerView);
+  if (isPlayerView && !playerOpen) setPlayerOpen(true);
+  useEffect(() => {
+    if (isPlayerView || !playerOpen) return;
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setPlayerOpen(false));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isPlayerView, playerOpen]);
+  // The player stays on screen while it sinks away behind the bar after closing.
+  const [playerShown, setPlayerShown] = useState(isPlayerView);
+  if (playerOpen && !playerShown) setPlayerShown(true);
+  useEffect(() => {
+    if (playerOpen || !playerShown) return;
+    const timer = setTimeout(() => setPlayerShown(false), matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : motion.smooth.duration);
+    return () => clearTimeout(timer);
+  }, [playerOpen, playerShown]);
+  // Likewise the screen behind the player stays while the player rises over it, fading out.
+  const [libraryShown, setLibraryShown] = useState(!isPlayerView);
+  if (!isPlayerView && !libraryShown) setLibraryShown(true);
+  useEffect(() => {
+    if (!isPlayerView || !libraryShown) return;
+    const timer = setTimeout(() => setLibraryShown(false), matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : motion.smooth.duration);
+    return () => clearTimeout(timer);
+  }, [isPlayerView, libraryShown]);
+  // The library screen and its chrome fade out as the player opens and back in as it closes.
+  const librarySwap = playerOpen ? "leaving" : playerShown ? "arriving" : undefined;
   // Lyrics are the chosen view, but a song without any shows its cover until one with lyrics comes back.
   const prefersLyrics = isPlayerView ? isLyricsView : preferences.ui.playerView === "lyrics";
   const lyricsAvailability = useLyricsAvailability(player.currentTrack, prefersLyrics);
@@ -234,7 +265,7 @@ function App({ localOnly }: { localOnly: boolean }) {
     return () => clearTimeout(timer);
   }, [leavingLyrics]);
   useEffect(() => {
-    if (!showLyrics || !isPlayerView) {
+    if (!showLyrics || !playerShown) {
       setLyricsShown(false);
       return;
     }
@@ -243,11 +274,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       frame = requestAnimationFrame(() => setLyricsShown(true));
     });
     return () => cancelAnimationFrame(frame);
-  }, [showLyrics, isPlayerView]);
-  const isQueueView = screen === "queue";
-  const isSettingsView = screen === "settings";
-  const isHomeView = screen === "home" && !browseEntity;
-  const isSearchView = screen === "search" && !browseEntity;
+  }, [showLyrics, playerShown]);
   // Subscribes coarsely: App rerenders every 5 s while playing, not every tick.
   const persistedPosition = usePlaybackTime(player.clock, time => player.isPlaying ? Math.floor(time / 5) * 5 : time);
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
@@ -260,6 +287,12 @@ function App({ localOnly }: { localOnly: boolean }) {
   const playerReturnScreenRef =
     useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>("library");
   if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
+  // While the player opens, the screen fading out behind it keeps showing what it showed.
+  const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
+  const isQueueView = libraryScreen === "queue";
+  const isSettingsView = libraryScreen === "settings";
+  const isHomeView = libraryScreen === "home" && !browseEntity;
+  const isSearchView = libraryScreen === "search" && !browseEntity;
   if (screen === "home" || screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
@@ -906,6 +939,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     <>
       <AppChrome
         currentScreen={screen}
+        backdropScreen={isPlayerView && libraryShown ? libraryScreen : undefined}
+        swap={librarySwap}
         playerView={showLyrics ? "lyrics" : "bigscreen"}
         lyricsAvailable={lyricsAvailability !== "none"}
         isFullscreen={isFullscreen}
@@ -914,28 +949,31 @@ function App({ localOnly }: { localOnly: boolean }) {
       />
 
       {(player.currentTrack || isPlayerView) && (
-        <>
-          <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
+        <div className="playerStage" data-open={playerOpen}>
+          <BackgroundArtwork track={player.currentTrack} active={playerShown} animate={preferences.ui.animateSwirl}
             playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
-          <AlbumArtwork
-            track={player.currentTrack}
-            active={isPlayerView}
-            layout={showLyrics ? "lyrics" : "center"}
-            direction={skipDirection}
-          />
-        </>
+          {playerShown && [
+            ...leavingLyrics.map((track) => ({ track, leaving: true })),
+            ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
+          ].map(({ track, leaving }) => <LyricsView key={track.globalId}
+            track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
+            motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
+            shown={!leaving && lyricsShown} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
+        </div>
+      )}
+      {/* Outside the stage: the cover flies to and from the bar's thumbnail instead of fading with the rest. */}
+      {(player.currentTrack || isPlayerView) && (
+        <AlbumArtwork
+          track={player.currentTrack}
+          active={playerOpen}
+          layout={showLyrics ? "lyrics" : "center"}
+          direction={skipDirection}
+        />
       )}
 
-      {isPlayerView && [
-        ...leavingLyrics.map((track) => ({ track, leaving: true })),
-        ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
-      ].map(({ track, leaving }) => <LyricsView key={track.globalId}
-        track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
-        motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
-        shown={!leaving && lyricsShown} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
-
-      {!isPlayerView && (
-        <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}>
+      {libraryShown && (
+        <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
+          data-swap={librarySwap} inert={playerOpen}>
           {!localOnly && !isQueueView && !isSettingsView && <SearchBar
             query={searchQuery}
             onQueryChange={changeSearchQuery}
@@ -1089,7 +1127,7 @@ function App({ localOnly }: { localOnly: boolean }) {
 
       <NowPlayingBar
         onOpenEntity={openEntity}
-        variant={isPlayerView ? "expanded" : "compact"}
+        variant={playerOpen ? "expanded" : "compact"}
         track={player.currentTrack}
         audioQuality={player.audioQuality}
         showAudioQuality={preferences.ui.showAudioQuality}
@@ -1106,7 +1144,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         onOpenQueue={openQueue}
       />
 
-      {!isPlayerView && <AppScrollbar scrollElement={activeScrollElement} />}
+      {libraryShown && <AppScrollbar scrollElement={activeScrollElement} swap={librarySwap} />}
     </>
   );
 }

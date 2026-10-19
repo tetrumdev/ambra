@@ -15,7 +15,7 @@
     height: 10px;
     color: white;
     transform: rotate(-90deg);
-    transition: transform 150ms ease;
+    transition: transform var(--motion-snappy);
 }
 
 .playlistDropdown[open] > summary .dropdownChevron {

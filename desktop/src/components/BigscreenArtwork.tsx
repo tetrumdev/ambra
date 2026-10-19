@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { compactArtworkRect } from "../utils/compactArtwork";
+import { motion } from "../utils/motion";
 import {
   artworkPalette,
   thumbnailArtwork,
@@ -65,16 +66,23 @@ type CoverLayer = {
   leaving: boolean;
 };
 
-const FLIGHT_MS = 650;
-const FLIGHT_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
 /** The cover's own centring, which every flight transform builds on. */
 const CENTRED = "translate(-50%, -50%)";
+/** The bar thumbnail's corner radius (#compactArtwork), which the cover takes on as it lands. */
+const THUMBNAIL_RADIUS = 8;
+/** How far the cover's images overhang its box to the right and bottom (.albumCoverImg). */
+const IMAGE_OVERHANG = 2;
 
-/** Moves and scales the cover's box onto another box, measured from its resting place. */
-function flightTransform(from: DOMRect, to: DOMRect) {
-  const dx = to.left + to.width / 2 - (from.left + from.width / 2);
-  const dy = to.top + to.height / 2 - (from.top + from.height / 2);
-  return `${CENTRED} translate(${dx}px, ${dy}px) scale(${to.width / from.width})`;
+/** Moves and scales the cover's resting box onto another box on screen. */
+function flightFrame(home: DOMRect, to: DOMRect, thumbnail: DOMRect) {
+  const dx = to.left + to.width / 2 - (home.left + home.width / 2);
+  const dy = to.top + to.height / 2 - (home.top + home.height / 2);
+  const scale = to.width / home.width;
+  // Rounds the corners in step with the shrink, so they match the thumbnail's on screen when it lands.
+  // The clip leaves the images' overhang showing, so the resting frame matches the cover once the flight ends.
+  const landed = Math.min(1, Math.max(0, (1 - scale) / (1 - thumbnail.width / home.width)));
+  const radius = (landed * THUMBNAIL_RADIUS) / scale;
+  return { transform: `${CENTRED} translate(${dx}px, ${dy}px) scale(${scale})`, clipPath: `inset(0 -${IMAGE_OVERHANG}px -${IMAGE_OVERHANG}px 0 round ${radius}px)` };
 }
 
 const albumKey = (track: Track) => JSON.stringify([track.provider, track.albumId, track.cover, track.nativeCover, track.upc]);
@@ -105,38 +113,59 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
   }, [direction]);
   const key = track ? albumKey(track) : "";
 
-  // Opening grows the cover out of the now-playing bar's thumbnail; closing shrinks it back in.
+  // Opening grows the cover out of the now-playing bar's thumbnail while the rest of the
+  // player rises in; closing shrinks it back into the thumbnail while the rest sinks away.
+  // The flight is driven outside React so the handoff to the thumbnail lands in one frame.
   const cover = useRef<HTMLDivElement>(null);
+  // The move and the corner rounding run as separate animations, so the move stays off the
+  // main thread (a clip-path keyframe would pull it on) and busy frames can't make it skip.
+  const flight = useRef<Animation[]>([]);
   const wasActive = useRef(active);
-  const [closing, setClosing] = useState(false);
   useLayoutEffect(() => {
     const element = cover.current;
     const opened = active && !wasActive.current;
     const closed = !active && wasActive.current;
     wasActive.current = active;
-    if (!element || (!opened && !closed) || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!element || (!opened && !closed)) return;
+    const root = document.documentElement;
+    // Turning back mid-flight picks up from wherever the cover is on screen.
+    const midFlight = flight.current.length ? element.getBoundingClientRect() : null;
+    for (const animation of flight.current) animation.cancel();
+    flight.current = [];
+    const land = () => {
+      for (const animation of flight.current) animation.cancel();
+      flight.current = [];
+      delete element.dataset.flight;
+      delete root.dataset.coverFlight;
+    };
     const thumbnail = compactArtworkRect();
     const home = element.getBoundingClientRect();
-    if (!thumbnail || !home.width || !thumbnail.width) return;
-    const shrunk = flightTransform(home, thumbnail);
-    if (opened) {
-      const flight = element.animate([{ transform: shrunk, opacity: 0.6 }, { transform: CENTRED, opacity: 1 }], { duration: FLIGHT_MS, easing: FLIGHT_EASE });
-      return () => flight.cancel();
-    }
-    setClosing(true);
-    document.documentElement.dataset.coverFlight = "closing";
-    const flight = element.animate([{ transform: CENTRED }, { transform: shrunk }], { duration: FLIGHT_MS * 0.85, easing: FLIGHT_EASE, fill: "forwards" });
-    const land = () => {
-      flight.cancel();
-      setClosing(false);
-      delete document.documentElement.dataset.coverFlight;
-    };
-    flight.onfinish = land;
-    return () => {
-      flight.onfinish = null;
+    if (!thumbnail?.width || !home.width || matchMedia("(prefers-reduced-motion: reduce)").matches) {
       land();
-    };
+      return;
+    }
+    const resting = flightFrame(home, home, thumbnail);
+    const shrunk = flightFrame(home, thumbnail, thumbnail);
+    const start = midFlight ? flightFrame(home, midFlight, thumbnail) : opened ? shrunk : resting;
+    element.dataset.flight = opened ? "opening" : "closing";
+    if (closed) root.dataset.coverFlight = "closing";
+    else delete root.dataset.coverFlight;
+    const end = opened ? resting : shrunk;
+    // Opening moves with the rest of the player; closing, the cover lands last, settling into the thumbnail.
+    const timing: KeyframeAnimationOptions = { ...(opened ? motion.smooth : motion.land), fill: "forwards" };
+    const move = element.animate([{ transform: start.transform }, { transform: end.transform }], timing);
+    const corners = element.animate([{ clipPath: start.clipPath }, { clipPath: end.clipPath }], timing);
+    flight.current = [move, corners];
+    // The cover hides and the thumbnail shows in the same frame, so nothing blinks or jumps.
+    // Closing, the cover holds on the thumbnail until its image is decoded and ready to show.
+    const thumbnailImage = closed ? document.querySelector<HTMLImageElement>("#compactArtwork img") : null;
+    const ready = thumbnailImage ? thumbnailImage.decode().catch(() => undefined) : Promise.resolve();
+    move.onfinish = () => { void ready.then(() => { if (flight.current[0] === move) land(); }); };
   }, [active]);
+  useEffect(() => () => {
+    for (const animation of flight.current) animation.cancel();
+    delete document.documentElement.dataset.coverFlight;
+  }, []);
 
   useEffect(() => {
     if (!track) return;
@@ -161,7 +190,7 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
   const drop = (id: number) => setLayers((current) => current.filter((layer) => layer.id !== id || !layer.leaving));
 
   return (
-    <div id="albumCover" ref={cover} data-active={active} data-closing={closing} data-layout={layout} data-empty={!track} aria-hidden={!active}>
+    <div id="albumCover" ref={cover} data-active={active} data-layout={layout} data-empty={!track} aria-hidden={!active}>
       {layers.map((layer) => (
         <img
           key={layer.id}

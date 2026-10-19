@@ -13,6 +13,7 @@ import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollection
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
 import "./SearchView.css";
+import { motion } from "../utils/motion";
 
 type SearchViewProps = {
   onOpenEntity: (entity: BrowseEntity) => void;
@@ -81,8 +82,6 @@ function AlbumArtistLinks({ album, onOpenEntity }: { album: CatalogAlbum; onOpen
   </Fragment>)}</>;
 }
 
-const GLIDE_EASE = "cubic-bezier(0.32, 0.72, 0, 1)";
-
 /**
  * Results arrive from each service at different times and get re-ranked as they do.
  * Every result keeps its place on screen for a moment and glides to where it now
@@ -107,13 +106,13 @@ function useResultGlide(root: React.RefObject<HTMLDivElement | null>, changes: u
       const previous = positions.current.get(key);
       if (!previous) {
         element.animate([{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
-          { duration: 420, delay: Math.min(arrivals++ * 35, 240), easing: GLIDE_EASE, fill: "backwards" });
+          { ...motion.smooth, delay: Math.min(arrivals++ * 35, 240), fill: "backwards" });
         continue;
       }
       const dx = previous.x - position.x;
       const dy = previous.y - position.y;
       if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-      element.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], { duration: 480, easing: GLIDE_EASE });
+      element.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], motion.smooth);
     }
     positions.current = next;
   }, changes);
