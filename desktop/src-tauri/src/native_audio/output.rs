@@ -55,6 +55,7 @@ fn normalized_to_signed(sample: f64, bits: u32) -> i64 {
         .clamp(-scale, scale - 1.0) as i64
 }
 
+#[cfg(target_os = "windows")]
 fn writable_frames(available_frames: usize, sample_count: usize, channels: usize) -> usize {
     available_frames.min(sample_count / channels)
 }

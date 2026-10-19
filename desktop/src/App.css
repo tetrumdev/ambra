@@ -194,6 +194,29 @@ button img {
     font-display: block;
 }
 
+/* The library screen and its chrome fade out as the player rises over them and
+   back in as it sinks away. */
+:is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap] {
+    transition: opacity var(--motion-smooth);
+}
+
+:is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap="leaving"] {
+    opacity: 0;
+    pointer-events: none;
+}
+
+@starting-style {
+    :is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap="arriving"] {
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    :is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap] {
+        transition: none;
+    }
+}
+
 /* Library, search, settings and queue share one screen element (its id names the screen),
    so layout rules target the class and apply to every screen alike. */
 .appScreen {

@@ -48,6 +48,10 @@ objc = "0.2.7"
 coreaudio-rs = "0.13"
 objc2-core-audio = { version = "0.3", default-features = false, features = ["AudioHardwareDeprecated"] }
 
+[patch.crates-io]
+# Keep legacy Cocoa/media controls compatible with Rust's inhabited-static check.
+block = { path = "vendor/block" }
+
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.22"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

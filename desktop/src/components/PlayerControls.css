@@ -41,6 +41,7 @@
 #controls button:active img,
 #controls button:active svg {
     scale: 0.7;
+    transition: scale var(--motion-press-down);
 }
 
 #controls button:disabled {
@@ -61,7 +62,7 @@
     width: 25px;
     height: 25px;
     pointer-events: none;
-    transition: scale 0.15s;
+    transition: scale var(--motion-press-up);
 }
 
 #controls img {
@@ -70,5 +71,5 @@
     user-select: none;
     -webkit-user-drag: none;
     pointer-events: none;
-    transition: scale 0.15s;
+    transition: scale var(--motion-press-up);
 }
