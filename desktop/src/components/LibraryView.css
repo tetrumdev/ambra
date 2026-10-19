@@ -721,6 +721,11 @@
     font-family: inherit;
 }
 
+.playlistView > .libraryItem:last-child {
+    height: 75px;
+    border-bottom: 0;
+}
+
 .libraryItem:hover {
     background-color: #151515;
 }
