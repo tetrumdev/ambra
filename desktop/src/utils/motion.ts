@@ -2,7 +2,7 @@ import { spring, type SpringTiming } from "./spring";
 
 // Ambra's motion language. Views and large surfaces leave gently and settle quietly over a
 // long tail; things you touch respond at once and spring back; the cover, the app's centrepiece,
-// lands with a soft physical settle. Every animation uses one of these, from TS directly or
+// darts home to the bar and eases in. Every animation uses one of these, from TS directly or
 // from CSS through the custom properties installed below:
 //   --motion-<name>            "<duration> <easing>", for transition/animation shorthands
 //   --motion-<name>-duration
@@ -18,9 +18,9 @@ export const motion = {
   pressDown: { duration: 90, easing: "cubic-bezier(0.2, 0, 0, 1)" },
   /** A pressed control coming back up, with a small spring past its resting size. */
   pressUp: spring(0.32, 0.6, "cubic-bezier(0.34, 1.56, 0.64, 1)"),
-  /** The cover landing in the now-playing bar: arrives as the rest of the player finishes,
-      then settles with a barely visible give, the last thing to come to rest. */
-  land: spring(0.58, 0.85, "cubic-bezier(0.3, 0, 0.1, 1)"),
+  /** The cover flying back into the now-playing bar: most of the way there at once, then a
+      long ease into the thumbnail. */
+  dock: { duration: 500, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
 } satisfies Record<string, SpringTiming>;
 
 const root = document.documentElement.style;
