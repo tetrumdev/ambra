@@ -666,6 +666,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     worker.selected_device_id = (!settings.selected_output_id.is_empty())
                         .then(|| settings.selected_output_id.clone());
                     worker.exclusive_mode = settings.selected().exclusive_mode;
+                    // Loaded settings already validate the volume range.
+                    let _ = worker.gain.set_volume(settings.selected().volume, None);
                     worker.audio_settings = settings;
                 }
                 Err(error) => eprintln!("{error}"),
@@ -795,15 +797,16 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 let _ = reply.send(Ok(self.gain.volume()));
             }
             WorkerCommand::SetVolume { volume, reply } => {
-                let result = self
-                    .gain
-                    .set_volume(volume, self.spec.map(|spec| spec.sample_rate))
-                    .and_then(|()| {
-                        if let Some(output) = self.output.as_mut() {
-                            output.set_gain(self.gain.amplitude())?;
-                        }
-                        Ok(())
-                    });
+                let mut settings = self.audio_settings.clone();
+                let selected = settings.selected_output_id.clone();
+                if let Some(output) = settings
+                    .outputs
+                    .iter_mut()
+                    .find(|output| output.id == selected)
+                {
+                    output.volume = volume;
+                }
+                let result = self.apply_audio_settings(settings);
                 let _ = reply.send(result);
             }
             WorkerCommand::GetAudioSettings { reply } => {
@@ -843,6 +846,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let device_id =
             (!settings.selected_output_id.is_empty()).then(|| settings.selected_output_id.clone());
         let mode = settings.selected().exclusive_mode;
+        let volume = settings.selected().volume;
+        let volume_changed = volume != self.gain.volume();
         let output_changed = self.selected_device_id != device_id || self.exclusive_mode != mode;
         if output_changed {
             if !settings.selected().enabled {
@@ -871,6 +876,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         };
         // Persist first; a failed write must not change the live signal path.
         let previous_settings = self.audio_settings.clone();
+        let previous_gain = self.gain.clone();
         if self.event_app.is_some() {
             settings.save(&directory)?;
         }
@@ -878,31 +884,53 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let old_mode = self.exclusive_mode;
         let position = lock_status(&self.status).current_time;
         self.audio_settings = settings;
-        if output_changed {
-            if let Some(output) = self.output.as_mut() {
-                if let Err(error) = output.reset() {
-                    self.audio_settings = previous_settings;
-                    if self.event_app.is_some() {
-                        let _ = self.audio_settings.save(&directory);
-                    }
-                    return Err(error);
+        let applied = (|| -> Result<(), String> {
+            if output_changed {
+                if let Some(output) = self.output.as_mut() {
+                    output.reset()?;
+                }
+                self.output = None;
+                self.selected_device_id = device_id;
+                self.exclusive_mode = mode;
+            }
+            if volume_changed || output_changed {
+                self.gain.set_volume(
+                    volume,
+                    if output_changed {
+                        None
+                    } else {
+                        self.spec.map(|spec| spec.sample_rate)
+                    },
+                )?;
+                if output_changed {
+                    // A new output must start at its own saved level, without the previous output's ramp.
+                    self.gain.settle();
+                }
+                if let Some(output) = self.output.as_mut() {
+                    output.set_gain(self.gain.amplitude())?;
                 }
             }
-            self.output = None;
-            self.selected_device_id = device_id;
-            self.exclusive_mode = mode;
-            if self.current_source.is_some() {
-                if let Err(error) = self.seek(position) {
-                    self.audio_settings = previous_settings;
-                    self.selected_device_id = old_id;
-                    self.exclusive_mode = old_mode;
-                    if self.event_app.is_some() {
-                        let _ = self.audio_settings.save(&directory);
-                    }
-                    let _ = self.seek(position);
-                    return Err(error);
-                }
+            if output_changed && self.current_source.is_some() {
+                self.seek(position)?;
             }
+            Ok(())
+        })();
+        if let Err(error) = applied {
+            let output_replaced =
+                self.selected_device_id != old_id || self.exclusive_mode != old_mode;
+            self.audio_settings = previous_settings;
+            self.gain = previous_gain;
+            self.selected_device_id = old_id;
+            self.exclusive_mode = old_mode;
+            if self.event_app.is_some() {
+                let _ = self.audio_settings.save(&directory);
+            }
+            if output_replaced && self.current_source.is_some() {
+                let _ = self.seek(position);
+            } else if let Some(output) = self.output.as_mut() {
+                let _ = output.set_gain(self.gain.amplitude());
+            }
+            return Err(error);
         }
         if let Some(mut next) = prepared_dsp {
             if !output_changed {
@@ -1671,7 +1699,6 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 }
 
-
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {
     prepare_source_at_with_timeout(source, position_seconds, AUDIO_PREPARE_TIMEOUT)
 }
@@ -1685,7 +1712,6 @@ fn prepare_source_at_with_timeout(
     // complete preparation, not just each individual HTTP retry.
     QueuedSource::prepare_at(source, position_seconds, false)?.wait_for_preparation(timeout)
 }
-
 
 fn prepare_source_with_control(
     source: String,

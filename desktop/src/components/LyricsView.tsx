@@ -11,7 +11,7 @@ import {
 } from "../utils/artworkImages";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
-import { detectLyricOffset } from "../utils/lyricsOffset";
+import { detectLyricOffset, storedLyricOffset } from "../utils/lyricsOffset";
 import {
   lyricSyncOverride,
   MAX_CORRECTION_MS,
@@ -24,11 +24,14 @@ import {
   lyricActive,
 } from "../utils/lyricsTiming";
 import {
-  advanceScrollSpring,
+  advanceSpring,
   animateLetter,
   letterHead,
   letterMotion,
   restLetter,
+  RIPPLE_MAX_LINES,
+  RIPPLE_STAGGER_MS,
+  rippleSpring,
 } from "../utils/lyricsMotion";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import "./LyricsView.css";
@@ -494,10 +497,16 @@ function SyncedLyrics({
           block.kind === "pause" ? block.startMs : lyrics.lines[block.line].startMs,
         top: 0,
         anchor: 0,
-        lag: { value: 0, velocity: 0 },
+        // The scroll position this block is drawn at; it trails the real scroll during a ripple.
+        ripple: { value: container.scrollTop, velocity: 0 },
+        goal: container.scrollTop,
+        pending: container.scrollTop,
+        releaseAt: 0,
+        transform: "",
         active: false,
         ending: false,
         progress: "",
+        opacity: "",
         blur: "",
       };
     });
@@ -523,8 +532,9 @@ function SyncedLyrics({
     let lastTime = Number.NaN;
     let focus = -1;
     let target = container.scrollTop;
-    // Keep fractional position outside scrollTop, which some WebViews round on every write.
-    const scroll = { value: container.scrollTop, velocity: 0 };
+    // The scroll the WebView last applied while following, kept to avoid reading it back every frame.
+    const scroll = { value: container.scrollTop };
+    const viewportStyle = { height: "" };
     let maximumScroll = 0;
     let viewportWidth = container.clientWidth;
     let viewportHeight = container.clientHeight;
@@ -534,6 +544,30 @@ function SyncedLyrics({
     let align = true;
     // Window resizes jump straight to the new position instead of springing through every intermediate size.
     let snapScroll = false;
+    // Block the last ripple was centred on; the next wave sets off from there.
+    let rippleFocus = -1;
+    /** Sends each block towards the new scroll target a beat after its neighbour nearer the wave's start. */
+    const ripple = (next: number, now: number) => {
+      const direction = Math.sign(next - target);
+      const origin =
+        rippleFocus < 0
+          ? focus
+          : direction > 0
+            ? Math.min(rippleFocus, focus)
+            : Math.max(rippleFocus, focus);
+      rippleFocus = focus;
+      for (const [index, block] of layout.entries()) {
+        const rank = Math.min(
+          RIPPLE_MAX_LINES,
+          Math.max(0, direction > 0 ? index - origin : origin - index),
+        );
+        const releaseAt = now + rank * RIPPLE_STAGGER_MS;
+        // A block still waiting on the last wave leaves on time rather than being held back again.
+        block.releaseAt =
+          block.pending !== block.goal ? Math.min(block.releaseAt, releaseAt) : releaseAt;
+        block.pending = next;
+      }
+    };
     const schedule = () => {
       if (!frame && !document.hidden) frame = requestAnimationFrame(paint);
     };
@@ -578,7 +612,10 @@ function SyncedLyrics({
       const measured = layoutDirty;
       if (layoutDirty) {
         const previousAnchor = layout[focus]?.anchor;
-        container.style.setProperty(
+        setStyle(
+          container,
+          viewportStyle,
+          "height",
           "--lyrics-viewport-height",
           `${container.clientHeight}px`,
         );
@@ -597,11 +634,15 @@ function SyncedLyrics({
         }
         maximumScroll = Math.max(0, linesElement.offsetTop + linesElement.offsetHeight - container.clientHeight);
         if (previousAnchor !== undefined && followingRef.current && !discontinuity && !snapScroll) {
-          // Reflow above the active line must not move it on screen or restart its scroll curve.
+          // Reflow above the active line must not move it on screen or restart its wave.
+          // Shifting where every block is drawn is enough; the realignment below moves the real scroll.
           const shift = layout[focus].anchor - previousAnchor;
-          scroll.value = Math.max(0, Math.min(maximumScroll, scroll.value + shift));
           target = Math.max(0, Math.min(maximumScroll, target + shift));
-          container.scrollTop = scroll.value;
+          for (const block of layout) {
+            block.ripple.value += shift;
+            block.goal += shift;
+            block.pending += shift;
+          }
         }
         layoutDirty = false;
       }
@@ -648,7 +689,10 @@ function SyncedLyrics({
               : block.rows.some((row) => row.active);
           if (next !== focus || active !== block.active || discontinuity) {
             const distance = Math.abs(index - next);
-            block.element.style.setProperty(
+            setStyle(
+              block.element,
+              block,
+              "opacity",
               "--lyric-opacity",
               String(
                 active || index === next
@@ -675,13 +719,25 @@ function SyncedLyrics({
       }
       if (followingRef.current && focus >= 0 && align) {
         const block = layout[focus];
-        target = Math.max(
-          0,
-          Math.min(
-            maximumScroll,
-            block.anchor - container.clientHeight * 0.43,
-          ),
-        );
+        // Land on a whole device pixel so lines come to rest crisp, with no leftover transform.
+        const pixel = window.devicePixelRatio || 1;
+        let next = Math.round(
+          Math.max(
+            0,
+            Math.min(
+              maximumScroll,
+              block.anchor - container.clientHeight * 0.43,
+            ),
+          ) * pixel,
+        ) / pixel;
+        if (next !== scroll.value) {
+          // The real scroll jumps once per line; block transforms below hide the jump in the same frame,
+          // so the wave itself is compositor-only and never scrolls the page frame by frame.
+          container.scrollTop = next;
+          next = scroll.value = container.scrollTop;
+        }
+        if (next !== target) ripple(next, now);
+        target = next;
         align = false;
       }
       // Letters keep easing after their line ends or playback pauses, so this runs every frame.
@@ -697,54 +753,39 @@ function SyncedLyrics({
               rowMoving;
         }
         row.snap = false;
-        const animating = rowMoving || (row.active && !reducedMotion);
-        // Letters only get their own compositor layers while they move.
-        if (animating !== row.animating) row.element.dataset.animating = String(animating);
-        row.animating = animating;
+        // Letters stay in their line's layer: promoting and dropping a layer per letter at every
+        // line change cost more than repainting one line.
+        row.animating = rowMoving || (row.active && !reducedMotion);
         settling ||= rowMoving;
       }
-      let moving = false;
-      if (followingRef.current) {
-        if (reducedMotion || discontinuity || snapScroll) {
-          scroll.value = target;
-          scroll.velocity = 0;
+      const snapRipple = !followingRef.current || reducedMotion || discontinuity || snapScroll;
+      if (snapRipple) rippleFocus = focus;
+      for (const block of layout) {
+        const spring = block.ripple;
+        if (snapRipple) {
+          // While browsing the page scrolls natively and every block sits where it is laid out.
+          spring.value = block.goal = block.pending = scroll.value;
+          spring.velocity = 0;
         } else {
-          // Own the spring instead of relying on WebView-specific smooth-scroll timing.
-          moving = advanceScrollSpring(scroll, target, elapsed);
+          if (block.pending !== block.goal && now >= block.releaseAt) block.goal = block.pending;
+          if (spring.value !== block.goal || spring.velocity)
+            settling = advanceSpring(spring, block.goal, rippleSpring, elapsed) || settling;
+          settling ||= block.pending !== block.goal;
         }
-        container.scrollTop = scroll.value;
-      }
-      for (const [index, block] of layout.entries()) {
-        const lagTarget =
-          followingRef.current && !reducedMotion && moving
-            ? Math.max(
-                -80,
-                Math.min(
-                  80,
-                  (target - scroll.value) *
-                    Math.min(0.32, Math.abs(index - focus) * 0.065),
-                ),
-              )
-            : 0;
-        if (!followingRef.current || reducedMotion || discontinuity || snapScroll) {
-          block.lag.value = 0;
-          block.lag.velocity = 0;
-        } else {
-          // Ease into a new stagger instead of jumping surrounding lines when focus changes.
-          settling = advanceScrollSpring(block.lag, lagTarget, elapsed) || settling;
-        }
-        // Subpixel offsets let the stagger settle without stepping between device pixels.
-        const transform = block.lag.value ? `translate3d(0, ${block.lag.value.toFixed(3)}px, 0)` : "";
-        if (block.element.style.transform !== transform)
+        // Subpixel offsets let the wave settle without stepping between device pixels.
+        const offset = followingRef.current ? scroll.value - spring.value : 0;
+        const transform = Math.abs(offset) > 0.01 ? `translate3d(0, ${offset.toFixed(3)}px, 0)` : "";
+        if (block.transform !== transform) {
+          block.transform = transform;
           block.element.style.transform = transform;
+        }
       }
       snapScroll = false;
-      if (playingRef.current || moving || settling) schedule();
+      if (playingRef.current || settling) schedule();
     };
     const hold = () => {
       followingRef.current = false;
       setFollowing(false);
-      scroll.velocity = 0;
       schedule();
     };
     const onKey = (event: KeyboardEvent) => {
@@ -757,13 +798,19 @@ function SyncedLyrics({
         hold();
     };
     const onFocus = (event: FocusEvent) => {
-      if (event.target instanceof HTMLButtonElement) hold();
+      // Clicking a line seeks to it; only tabbing through lines means the reader is browsing.
+      if (event.target instanceof HTMLButtonElement && event.target.matches(":focus-visible")) hold();
     };
     resume.current = () => {
       followingRef.current = true;
       setFollowing(true);
       scroll.value = container.scrollTop;
-      scroll.velocity = 0;
+      // Ripple back from where the reader left off.
+      target = scroll.value;
+      for (const block of layout) {
+        block.ripple.value = block.goal = block.pending = scroll.value;
+        block.ripple.velocity = 0;
+      }
       align = true;
       schedule();
     };
@@ -1095,9 +1142,16 @@ export function LyricsView({
       .finally(() => setAnalyzing(false));
   };
 
+  // A song analyzed ahead of playback opens in sync instead of jumping once the result arrives.
+  const storedCorrectionMs = useMemo(
+    () => autoSync && !manual && isTauri() && track && lyrics && timed
+      ? storedLyricOffset(track, lyrics)
+      : undefined,
+    [autoSync, manual, track, lyrics, timed],
+  );
   const correctionMs = manual
     ? override!.correctionMs!
-    : autoSync && detected?.lyrics === lyrics ? detected.correctionMs : 0;
+    : autoSync && detected?.lyrics === lyrics ? detected.correctionMs : storedCorrectionMs ?? 0;
   const unsynced = timed && override?.unsynced === true;
   const syncedLyrics = useMemo(
     () => lyrics && correctionMs
