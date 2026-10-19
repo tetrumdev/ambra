@@ -1,3 +1,15 @@
+/* Set per group on every line change; not inheriting keeps that from restyling every letter inside. */
+@property --lyric-opacity {
+    syntax: "<number>";
+    inherits: false;
+    initial-value: 0.38;
+}
+@property --lyric-blur {
+    syntax: "<length>";
+    inherits: false;
+    initial-value: 0px;
+}
+
 #lyricsPage {
     --lyrics-top-padding: clamp(75px, 10vh, 100px);
     --lyrics-column-padding: clamp(24px, 4vw, 80px);
@@ -150,8 +162,9 @@ button.lyricLine:hover {
     opacity: 0.75;
     filter: none;
 }
+/* Only keyboard focus lights a line up; a clicked line keeps focus but should fade like the rest. */
 .lyricGroup:has(button:hover),
-.lyricGroup:focus-within {
+.lyricGroup:has(:focus-visible) {
     opacity: 1;
     filter: none;
 }
@@ -217,9 +230,6 @@ button.lyricLine:hover {
     -webkit-text-fill-color: transparent;
     /* Lift and swell are spring-driven from utils/lyricsMotion.ts. */
     transform-origin: 50% 80%;
-}
-.lyricLine[data-animating="true"] .lyricChar {
-    will-change: transform;
 }
 .lyricLine:dir(rtl) .lyricChar {
     background-image: linear-gradient(
@@ -357,6 +367,13 @@ button.lyricLine:hover {
     background: rgba(22, 22, 22, 0.4);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
+}
+/* Keep opacity off the shared parent so both the pill and its menu can sample
+   the lyrics behind them, including after the entrance animation finishes. */
+.lyricsControls::before,
+.lyricsResume,
+.lyricsSyncTrigger {
+    animation: lyricsControlsFade 250ms ease both;
 }
 .lyricsSyncMenu {
     display: none;
@@ -532,12 +549,16 @@ button.lyricLine:hover {
 }
 @keyframes lyricsResumeAppear {
     from {
-        opacity: 0;
         margin-bottom: -5px;
     }
     to {
-        opacity: 1;
         margin-bottom: 0;
+    }
+}
+
+@keyframes lyricsControlsFade {
+    from {
+        opacity: 0;
     }
 }
 
@@ -594,6 +615,9 @@ button.lyricLine:hover {
 }
 
 #lyricsPage[data-reduced-motion="true"] .lyricsControls,
+#lyricsPage[data-reduced-motion="true"] .lyricsControls::before,
+#lyricsPage[data-reduced-motion="true"] .lyricsResume,
+#lyricsPage[data-reduced-motion="true"] .lyricsSyncTrigger,
 #lyricsPage[data-reduced-motion="true"] .lyricsNotice {
     animation: none;
 }

@@ -57,12 +57,22 @@ pub async fn detect_lyric_offset(
         return Err("Too many lyric timings to analyze".to_owned());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // TEMPORARY tuning diagnostics: names the song without any URL query or token.
+        let label = source
+            .split(['?', '#'])
+            .next()
+            .and_then(|path| path.rsplit(['/', '\\']).find(|part| !part.is_empty()))
+            .unwrap_or("?")
+            .to_owned();
         let phrases = phrases(&windows);
         if phrases.len() < MIN_PHRASES {
+            eprintln!("[lyric-sync] {label}: uncertain, {} phrases (need {MIN_PHRASES})", phrases.len());
             return Ok(UNCERTAIN);
         }
-        let envelope = vocal_envelope(source, generation)?;
-        Ok(best_offset(&envelope, &phrases))
+        let envelope = vocal_envelope(source, generation).inspect_err(|error| {
+            eprintln!("[lyric-sync] {label}: failed, {error}");
+        })?;
+        Ok(best_offset(&envelope, &phrases, &label))
     })
     .await
     .map_err(|error| error.to_string())?
@@ -188,7 +198,7 @@ fn prefix_sums(values: &[f64]) -> Vec<f64> {
 }
 
 /// Scores every shift by phrase/gap energy contrast plus energy rises at phrase starts.
-fn best_offset(envelope: &[f64], phrases: &[(i64, i64)]) -> LyricOffset {
+fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOffset {
     let frames = envelope.len() as i64;
     let prefix = prefix_sums(envelope);
     let sum = |from: i64, to: i64| {
@@ -217,6 +227,10 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)]) -> LyricOffset {
             }
         }
         if count < PEAK_FRAMES || frames - count < PEAK_FRAMES || rises < MIN_PHRASES {
+            eprintln!(
+                "[lyric-sync] {label}: uncertain at shift {} ms, sung {count}/{frames} frames, {rises} onsets",
+                shift * FRAME_MS,
+            );
             return UNCERTAIN;
         }
         contrast.push(inside / count as f64 - (total - inside) / (frames - count) as f64);
@@ -268,8 +282,22 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)]) -> LyricOffset {
         })
         .map(|i| scores[i])
         .fold(f64::NEG_INFINITY, f64::max);
-    let confident = (scores[best] - median) / noise >= MIN_PROMINENCE
-        && (rival == f64::NEG_INFINITY || (scores[best] - rival) / noise >= MIN_PEAK_MARGIN);
+    let prominence = (scores[best] - median) / noise;
+    let margin = (scores[best] - rival) / noise;
+    let confident = prominence >= MIN_PROMINENCE
+        && (rival == f64::NEG_INFINITY || margin >= MIN_PEAK_MARGIN);
+    let rival_shift = (0..scores.len())
+        .filter(|&i| away(i) && scores[i] == rival)
+        .map(|i| shifts[i] * FRAME_MS)
+        .next();
+    eprintln!(
+        "[lyric-sync] {label}: best {} ms, prominence {prominence:.2} (need {MIN_PROMINENCE}), \
+         rival {} margin {margin:.2} (need {MIN_PEAK_MARGIN}), {} phrases, {}",
+        shifts[best] * FRAME_MS,
+        rival_shift.map_or("none".to_owned(), |shift| format!("{shift} ms")),
+        phrases.len(),
+        if confident { "confident" } else { "uncertain" },
+    );
     if !confident {
         return UNCERTAIN;
     }

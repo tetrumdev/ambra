@@ -95,6 +95,8 @@ the server directly. The server saves listening state in
 `AMBRA_DATA_DIR/user-state.v1.json`; clients connected to that server restore the
 same state. UI and search preferences, audio output/DSP settings, window bounds,
 local audio files, and rebuildable client caches remain on each client.
+App volume is saved separately for each output, including System Default, and
+restored when selecting that output or restarting the client.
 
 Home shows recently played songs, your playlists, and songs last played at least
 30 days ago. Last-played times and track metadata are saved in server listening

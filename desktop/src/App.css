@@ -154,8 +154,10 @@ button img {
     cursor: none !important;
 }
 
-/* Idle controls fade as one group; visibility flips only once the fade ends. */
-.bigscreenCtrls,
+/* Fade the glass surfaces themselves: opacity on their parent would isolate
+   their backdrop and stop the blur from sampling the player behind them. */
+.bigscreenClose,
+.bigscreenViewPicker,
 .volumeControlContainer,
 .devAudioControls,
 #extraCtrls #queueBtn {
@@ -163,12 +165,12 @@ button img {
 }
 
 /* Children inherit visibility, so their own transitions must not include it. */
-.bigscreenCtrls .xContainer,
 .volumeControlContainer #volumeBtn {
     transition-property: filter;
 }
 
-:root[data-bigscreen-idle="true"] .bigscreenCtrls,
+:root[data-bigscreen-idle="true"] .bigscreenClose,
+:root[data-bigscreen-idle="true"] .bigscreenViewPicker,
 :root[data-bigscreen-idle="true"] #queueBtn,
 :root[data-bigscreen-idle="true"] .volumeControlContainer,
 :root[data-bigscreen-idle="true"] .devAudioControls {

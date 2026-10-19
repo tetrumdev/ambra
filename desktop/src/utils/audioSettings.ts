@@ -3,13 +3,13 @@ import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 export type EqBand = { enabled: boolean; kind: "peak" | "lowShelf" | "highShelf"; frequency: number; gainDb: number; q: number };
 export type ImpulseFile = { id: string; name: string; sampleRate: number; channels: number; frames: number };
 export type DspPreset = { id: string; name: string; enabled: boolean; headroomDb: number; outputGainDb: number; bands: EqBand[]; convolution: ImpulseFile[] };
-export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; presetId: string | null };
+export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; presetId: string | null; volume: number };
 export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[] };
 export type NativeAudioDevice = { id: string; name: string; isDefault: boolean };
 export type DspStatus = { presetName: string | null; active: boolean; sampleRate: number | null; peakDbfs: number | null; clippedSamples: number; warnings: string[] };
 
 export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], outputs: [
-  { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, presetId: null },
+  { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, presetId: null, volume: 100 },
 ] });
 const storageKey = "ambra.audio-settings.v1";
 export function loadAudioSettings(): AudioSettings {
@@ -31,10 +31,12 @@ export function loadAudioSettings(): AudioSettings {
       for (const output of value.outputs) {
         // Existing device settings predate resync delay; don't discard their DSP.
         if (output && output.resyncDelayMs === undefined) output.resyncDelayMs = 0;
+        if (output && output.volume === undefined) output.volume = 100;
         if (!output || typeof output.id !== "string" || outputs.has(output.id)
           || typeof output.name !== "string" || !output.name.trim()
           || typeof output.enabled !== "boolean" || typeof output.exclusiveMode !== "boolean"
           || !Number.isInteger(output.resyncDelayMs) || output.resyncDelayMs < 0 || output.resyncDelayMs > 10000
+          || !Number.isFinite(output.volume) || output.volume < 0 || output.volume > 100
           || (output.presetId !== null && !presets.has(output.presetId))) throw new Error("Invalid output");
         outputs.add(output.id);
       }
