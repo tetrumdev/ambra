@@ -50,7 +50,7 @@ Rust and TypeScript
 
 ### Tools
 
-Tauri, Vite, React, Bun, and NodeJS
+Tauri, Vite, React, and Bun
 
 ## Additional Info
 
