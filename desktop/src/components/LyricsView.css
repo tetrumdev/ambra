@@ -10,9 +10,15 @@
     initial-value: 0px;
 }
 
-#lyricsPage {
+:root {
+    /* Shared with the player cover, which moves into the lyrics layout (BigscreenArtwork.css). */
     --lyrics-top-padding: clamp(75px, 10vh, 100px);
     --lyrics-column-padding: clamp(24px, 4vw, 80px);
+    --player-view-ease: cubic-bezier(0.32, 0.72, 0, 1);
+    --player-view-duration: 700ms;
+}
+
+#lyricsPage {
     position: absolute;
     inset: 0;
     display: grid;
@@ -30,42 +36,23 @@
         rgba(0, 0, 0, 0.48),
         rgba(0, 0, 0, 0.24)
     );
+    transition: opacity 500ms ease 150ms;
 }
-
-.lyricsHeading {
-    position: absolute;
-    top: calc((100vh - 150px) / 2);
-    left: 25%;
-    transform: translate(-50%, -50%);
-    display: grid;
-    place-items: center;
-    align-content: center;
-    min-width: 0;
-    width: calc(50% - 2 * var(--lyrics-column-padding));
-    margin: 0;
-}
-
-.lyricsArtwork {
-    display: block;
-    width: min(
-        80%,
-        calc(
-            100vh - var(--library-titlebar-height) - var(--lyrics-top-padding) -
-                150px
-        )
-    );
-    aspect-ratio: 1;
-    object-fit: cover;
-    -webkit-user-drag: none;
-}
-
-.lyricsArtworkPlaceholder {
-    box-shadow: 0 0 40px 3px rgba(255, 255, 255, 0.18);
+/* Leaving: the backdrop fades and the lyrics drift left, under the cover moving out to centre. */
+#lyricsPage[data-shown="false"] {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition:
+        opacity 500ms ease,
+        visibility 0s linear var(--player-view-duration);
 }
 
 .lyricsStage {
     position: relative;
     grid-column: 2;
+    transform-origin: left center;
+    transition: transform var(--player-view-duration) var(--player-view-ease);
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -240,23 +227,15 @@ button.lyricLine:hover {
 }
 
 .lyricGroup.lyricPauseGroup {
-    --pause-progress: 0;
     height: 0;
     margin-bottom: 0;
     overflow: visible;
     font-size: clamp(28px, 3.25vw, 50px);
-    /* Finish fading before removing the row's space. */
-    transition:
-        height 150ms ease 450ms,
-        margin-bottom 150ms ease 450ms,
-        opacity 500ms ease,
-        filter 450ms ease;
 }
-.lyricPauseGroup[data-active="true"]:not([data-ending="true"]) {
+/* The slot opens and closes in one step; the lines around it glide on their ripple springs. */
+.lyricPauseGroup[data-active="true"] {
     height: 0.62em;
     margin-bottom: 26px;
-    transition-duration: 400ms, 400ms, 500ms, 450ms;
-    transition-delay: 0s;
 }
 .lyricPause {
     display: flex;
@@ -265,28 +244,16 @@ button.lyricLine:hover {
     align-items: center;
     padding-inline: 0.06em;
     font-size: clamp(28px, 3.25vw, 50px);
-    transform-origin: left center;
-    opacity: 0;
     pointer-events: none;
-    transition: opacity 400ms ease;
 }
-.lyricPauseGroup[data-active="true"] .lyricPause {
-    opacity: 1;
-    animation: lyricPauseBreathe 2.4s ease-in-out infinite;
-}
-/* Fade out before the row collapses and the next line starts. */
-.lyricPauseGroup[data-ending="true"] .lyricPause {
-    opacity: 0;
-    transition: opacity 450ms ease;
-}
+/* Bloom, fill and breathing are spring-driven from utils/lyricsMotion.ts. */
 .lyricPauseDot {
-    --fill: clamp(0, calc(var(--pause-progress) * 3 - var(--dot)), 1);
     width: 0.3em;
     height: 0.3em;
     border-radius: 50%;
     background: white;
-    opacity: calc(0.3 + 0.7 * var(--fill));
-    transform: scale(calc(0.85 + 0.15 * var(--fill)));
+    opacity: 0;
+    transform: scale(0.55);
 }
 
 .lyricsPlain .lyricsLines {
@@ -504,6 +471,8 @@ button.lyricLine:hover {
     flex-direction: column;
     gap: 4px;
     margin-top: 56px;
+    /* Moves with the last line's ripple; see LyricsView.tsx. */
+    will-change: transform;
 }
 .lyricsSyncLabel {
     font-size: 13px;
@@ -536,16 +505,6 @@ button.lyricLine:hover {
     transform: translateX(-50%);
     /* Matches NOTICE_MS in LyricsView.tsx. */
     animation: lyricsNotice 4000ms ease both;
-}
-@keyframes lyricPauseBreathe {
-    /* Uses the scale property so it composes with the enter/exit transform. */
-    0%,
-    100% {
-        scale: 1;
-    }
-    50% {
-        scale: 1.14;
-    }
 }
 @keyframes lyricsResumeAppear {
     from {
@@ -581,9 +540,6 @@ button.lyricLine:hover {
         flex-direction: column;
         gap: 0;
         padding: 100px 0 150px;
-    }
-    .lyricsHeading {
-        display: none;
     }
     .lyricsStage {
         flex: 1;
@@ -631,7 +587,45 @@ button.lyricLine:hover {
 #lyricsPage[data-reduced-motion="true"] .lyricLine {
     transition: color 150ms ease;
 }
-#lyricsPage[data-reduced-motion="true"] .lyricPause {
-    animation: none;
-    transform: none;
+
+#lyricsPage[data-shown="false"] .lyricsStage {
+    transform: translateX(-24%) scale(0.92);
+}
+@media (prefers-reduced-motion: reduce) {
+    #lyricsPage,
+    #lyricsPage[data-shown="false"],
+    .lyricsStage {
+        transition: none;
+    }
+}
+
+/* Between songs: the old lyrics drift up and away while the new ones rise into place.
+   Only the arriving view keeps the backdrop, so the darkness never doubles. */
+#lyricsPage[data-leaving="true"] {
+    background: none;
+    transition:
+        opacity 450ms ease,
+        visibility 0s linear 600ms;
+}
+#lyricsPage[data-leaving="true"] .lyricsStage {
+    transform: translateY(-5%);
+    transition: transform 600ms var(--player-view-ease);
+}
+#lyricsPage[data-arriving="true"] .lyricsStage {
+    animation: lyricsArrive 650ms var(--player-view-ease) 120ms both;
+}
+@keyframes lyricsArrive {
+    from {
+        opacity: 0;
+        transform: translateY(6%);
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    #lyricsPage[data-leaving="true"],
+    #lyricsPage[data-leaving="true"] .lyricsStage {
+        transition: none;
+    }
+    #lyricsPage[data-arriving="true"] .lyricsStage {
+        animation: none;
+    }
 }

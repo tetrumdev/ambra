@@ -518,23 +518,35 @@ impl TidalProvider {
             .chain(singles.items)
             .filter(|album| album.allow_streaming && album.stream_ready)
             .map(|album| CatalogAlbum {
+                maximum_bit_depth: album_bit_depth(
+                    Some(&album.audio_quality),
+                    Some(&album.media_metadata.tags),
+                ),
+                maximum_sampling_rate_khz: None,
                 id: format!("tidal:{}", album.id),
                 provider: MusicProvider::Tidal,
                 title: album.title,
                 artist: album
                     .artists
-                    .into_iter()
-                    .map(|artist| artist.name)
+                    .iter()
+                    .map(|artist| artist.name.clone())
                     .collect::<Vec<_>>()
                     .join(", "),
+                artists: album
+                    .artists
+                    .into_iter()
+                    .map(|artist| ArtistMetadata {
+                        provider_id: artist.id.to_string(),
+                        name: artist.name,
+                        image_url: None,
+                    })
+                    .collect(),
                 image_url: Some(uuid_to_url_with_size(&album.cover, 640)),
                 upc: Some(album.upc),
                 release_date: Some(album.release_date),
                 release_type: Some(album.album_type),
                 version: album.version,
                 explicit: Some(album.explicit),
-                maximum_bit_depth: None,
-                maximum_sampling_rate_khz: None,
             })
             .collect();
         Ok(CatalogAlbumsPage {
@@ -638,15 +650,32 @@ impl TidalProvider {
                     album.allow_streaming.unwrap_or(true) && album.stream_ready.unwrap_or(true)
                 })
                 .map(|album| CatalogAlbum {
+                    // Search summaries report quality as tags, without exact bit depth or rate.
+                    maximum_bit_depth: album_bit_depth(
+                        album.audio_quality.as_deref(),
+                        album.media_metadata.as_ref().map(|metadata| metadata.tags.as_slice()),
+                    ),
+                    maximum_sampling_rate_khz: None,
                     id: format!("tidal:{}", album.id),
                     provider: MusicProvider::Tidal,
                     title: album.title,
                     artist: album
                         .artists
-                        .into_iter()
-                        .filter_map(|artist| artist.name)
+                        .iter()
+                        .filter_map(|artist| artist.name.clone())
                         .collect::<Vec<_>>()
                         .join(", "),
+                    artists: album
+                        .artists
+                        .into_iter()
+                        .filter_map(|artist| {
+                            Some(ArtistMetadata {
+                                provider_id: artist.id?.to_string(),
+                                name: artist.name?,
+                                image_url: None,
+                            })
+                        })
+                        .collect(),
                     image_url: album
                         .cover
                         .filter(|cover| !cover.is_empty())
@@ -656,8 +685,6 @@ impl TidalProvider {
                     release_type: album.album_type,
                     version: album.version,
                     explicit: album.explicit,
-                    maximum_bit_depth: None,
-                    maximum_sampling_rate_khz: None,
                 })
                 .collect(),
         })
@@ -1841,5 +1868,18 @@ mod tests {
         ];
 
         assert_eq!(base_media_decode_time(&fragment), Some(176_128));
+    }
+}
+
+/// Album summaries only name a quality tier: hi-res means 24-bit, lossless means CD quality.
+fn album_bit_depth(audio_quality: Option<&str>, tags: Option<&[String]>) -> Option<u32> {
+    let tags = tags.unwrap_or_default();
+    let has = |tag: &str| tags.iter().any(|value| value == tag);
+    if has("HIRES_LOSSLESS") || matches!(audio_quality, Some("HI_RES_LOSSLESS" | "HI_RES")) {
+        Some(24)
+    } else if has("LOSSLESS") || audio_quality == Some("LOSSLESS") {
+        Some(16)
+    } else {
+        None
     }
 }

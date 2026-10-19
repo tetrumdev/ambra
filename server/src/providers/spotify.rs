@@ -321,6 +321,15 @@ impl SpotifyProvider {
                     .map(|artist| artist.name.clone())
                     .collect::<Vec<_>>()
                     .join(", "),
+                artists: album
+                    .artists
+                    .iter()
+                    .map(|artist| ArtistMetadata {
+                        provider_id: artist.id.to_id().unwrap_or_default(),
+                        name: artist.name.clone(),
+                        image_url: None,
+                    })
+                    .collect(),
                 image_url: best_image_url(&album.covers),
                 upc: external_id(&album.external_ids, &["upc", "ean"]),
                 release_date: Some(format_spotify_date(&album.date)),
