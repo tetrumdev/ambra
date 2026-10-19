@@ -16,10 +16,11 @@ import { motion } from "../utils/motion";
 
 type PlayerBarVariant = "expanded" | "compact";
 
-/** What glides between the two layouts; the title also eases between its two sizes, the bar between its two widths. */
+/** What glides between the two layouts; the title also eases between its two sizes, the bar between its two widths.
+    The text lines' clipped edges travel with them, so a line never shows more or less of itself in one jump. */
 const GLIDING = [
   ["#songName", "font"],
-  ["#artistName", "none"],
+  ["#artistName", "line"],
   ["#controls", "none"],
   ["#currentTime", "none"],
   ["#progressBar", "width"],
@@ -170,6 +171,12 @@ export function NowPlayingBar({
         ],
         timing,
       ));
+      if (resize === "font" || resize === "line") {
+        glides.current.push(target.animate(
+          [{ width: `${old.rect.width / scaleX}px` }, { width: `${now.rect.width}px` }],
+          timing,
+        ));
+      }
     }
     // The album line only exists in the larger layout, so it fades in once the title has made room.
     const album = variant === "expanded" ? element.querySelector<HTMLElement>("#albumName") : null;

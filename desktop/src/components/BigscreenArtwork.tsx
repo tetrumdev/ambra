@@ -151,8 +151,8 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
     if (closed) root.dataset.coverFlight = "closing";
     else delete root.dataset.coverFlight;
     const end = opened ? resting : shrunk;
-    // Opening moves with the rest of the player; closing, the cover lands last, settling into the thumbnail.
-    const timing: KeyframeAnimationOptions = { ...(opened ? motion.smooth : motion.land), fill: "forwards" };
+    // Opening moves with the rest of the player; closing, the cover darts most of the way to the thumbnail, then eases in.
+    const timing: KeyframeAnimationOptions = { ...(opened ? motion.smooth : motion.dock), fill: "forwards" };
     const move = element.animate([{ transform: start.transform }, { transform: end.transform }], timing);
     const corners = element.animate([{ clipPath: start.clipPath }, { clipPath: end.clipPath }], timing);
     flight.current = [move, corners];
