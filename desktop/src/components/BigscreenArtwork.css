@@ -8,15 +8,61 @@
     left: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
-    z-index: 1;
+    /* Above the lyrics, so they slip behind it as they fade. */
+    z-index: 2;
     visibility: hidden;
+    transition:
+        left var(--player-view-duration) var(--player-view-ease),
+        width var(--player-view-duration) var(--player-view-ease),
+        height var(--player-view-duration) var(--player-view-ease),
+        opacity 400ms ease;
+}
+
+/* Beside the lyrics: centred in the left column, as large as fits under the controls. */
+#albumCover[data-layout="lyrics"] {
+    left: 25%;
+    width: min(
+        calc((50vw - 2 * var(--lyrics-column-padding)) * 0.8),
+        calc(100vh - var(--library-titlebar-height) - var(--lyrics-top-padding) - 150px)
+    );
+    height: min(
+        calc((50vw - 2 * var(--lyrics-column-padding)) * 0.8),
+        calc(100vh - var(--library-titlebar-height) - var(--lyrics-top-padding) - 150px)
+    );
+}
+
+/* Narrow windows give the lyrics the full width, so the cover steps away. */
+@media (max-width: 799px) {
+    #albumCover[data-layout="lyrics"] {
+        left: 50%;
+        opacity: 0;
+    }
 }
 
 #albumCover[data-active="true"] {
     visibility: visible;
 }
 
-#albumCoverImg,
+/* Closing: the cover flies down over the library into the now-playing bar, whose own thumbnail waits for it. */
+#albumCover[data-closing="true"] {
+    visibility: visible;
+    z-index: 11;
+}
+:root[data-cover-flight="closing"] #compactArtwork > * {
+    opacity: 0;
+}
+
+/* The player's colours bloom in as the cover grows out of the bar. */
+#backgroundFX[data-active="true"] {
+    animation: backgroundFXOpen 500ms ease both;
+}
+@keyframes backgroundFXOpen {
+    from {
+        opacity: 0;
+    }
+}
+
+.albumCoverImg,
 .albumCoverPlaceholder {
     position: absolute;
     inset: 0;
@@ -32,7 +78,7 @@
     object-fit: contain;
 }
 
-#albumCover[data-empty="true"] #albumCoverImg {
+#albumCover[data-empty="true"] .albumCoverImg {
     opacity: 0;
 }
 
@@ -42,6 +88,44 @@
 
 #albumCover[data-empty="true"] .albumCoverPlaceholder {
     opacity: 1;
+}
+
+/* A new album slides in from the side the player moved towards; the old one drifts out the other way. */
+.albumCoverImg[data-motion="slide"][data-leaving="false"] {
+    animation: albumCoverArrive 650ms var(--player-view-ease) both;
+}
+.albumCoverImg[data-motion="slide"][data-leaving="true"] {
+    animation: albumCoverDepart 650ms var(--player-view-ease) both;
+}
+/* A sharper copy of the same cover fades in over the old one, which waits underneath until it has. */
+.albumCoverImg[data-motion="fade"][data-leaving="false"] {
+    animation: albumCoverFade 400ms ease both;
+}
+.albumCoverImg[data-motion="fade"][data-leaving="true"],
+.albumCoverImg[data-motion="none"][data-leaving="true"] {
+    animation: albumCoverHold 400ms linear both;
+}
+@keyframes albumCoverArrive {
+    from {
+        opacity: 0;
+        transform: translateX(calc(var(--direction) * 9%)) scale(0.94);
+    }
+}
+@keyframes albumCoverDepart {
+    to {
+        opacity: 0;
+        transform: translateX(calc(var(--direction) * -9%)) scale(0.94);
+    }
+}
+@keyframes albumCoverFade {
+    from {
+        opacity: 0;
+    }
+}
+@keyframes albumCoverHold {
+    to {
+        opacity: 1;
+    }
 }
 
 #backgroundFX {
@@ -64,7 +148,11 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-    #albumCoverImg,
+    .albumCoverImg {
+        animation-duration: 1ms !important;
+    }
+    #albumCover,
+    .albumCoverImg,
     .albumCoverPlaceholder,
     #backgroundFX {
         transition: none;

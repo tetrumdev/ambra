@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ProviderIcon } from "./ProviderIcon";
 import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
-import { musicProviderName } from "../utils/musicProviderName";
 import { TrackArtwork } from "./TrackArtwork";
 import "./HomeView.css";
 
@@ -95,7 +95,7 @@ export function HomeView({ entries, tracks, playlists, error, onPlay, onSelectPl
               </div> : <span className="homePlaylistPlaceholder">♫</span>}
             </div>
             <span className="homeCardTitle" data-tooltip={playlist.name} data-tooltip-overflow="">{playlist.name}</span>
-            <span className="homeCardDetail">{playlist.provider ? musicProviderName(playlist.provider) : "AMBRA"} · {count} {count === 1 ? "song" : "songs"}</span>
+            <span className="homeCardDetail"><ProviderIcon provider={playlist.provider ?? "local"} label={playlist.provider ? undefined : "AMBRA"} /> · {count} {count === 1 ? "song" : "songs"}</span>
           </button>
         </li>;
       })}

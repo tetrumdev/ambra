@@ -10,6 +10,7 @@ import { PlaybackProgress } from "./PlaybackProgress";
 import { PlayerControls } from "./PlayerControls";
 import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
+import { observeCompactArtwork } from "../utils/compactArtwork";
 import { TrackArtwork } from "./TrackArtwork";
 
 type PlayerBarVariant = "expanded" | "compact";
@@ -108,6 +109,7 @@ export function NowPlayingBar({
       {variant === "compact" && (
         <button
           id="compactArtwork"
+          ref={observeCompactArtwork}
           type="button"
           onClick={onOpenBigscreen}
           aria-label="Open bigscreen player"

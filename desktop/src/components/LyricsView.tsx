@@ -1,17 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { thumbnailArtwork } from "../api/server";
 import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
-import {
-  cachedBigscreenArtwork,
-  preloadBigscreenArtwork,
-} from "../utils/artworkImages";
-import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
-import { detectLyricOffset, storedLyricOffset } from "../utils/lyricsOffset";
+import { recordSyncSample } from "../utils/lyricsAutoTuning";
+import { detectLyricOffset, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
 import {
   lyricSyncOverride,
   MAX_CORRECTION_MS,
@@ -25,9 +20,13 @@ import {
 } from "../utils/lyricsTiming";
 import {
   advanceSpring,
+  animateDot,
   animateLetter,
+  DOT_EXIT_MS,
+  dotMotion,
   letterHead,
   letterMotion,
+  releasing,
   restLetter,
   RIPPLE_MAX_LINES,
   RIPPLE_STAGGER_MS,
@@ -50,6 +49,12 @@ type LyricsViewProps = {
   onSeek?: (seconds: number) => void;
   motion?: LyricMotion;
   autoSync?: boolean;
+  /** False while the view fades out behind the cover; the lyrics hold still meanwhile. */
+  shown?: boolean;
+  /** The previous song's lyrics, drifting away as the next song's arrive. */
+  leaving?: boolean;
+  /** This song's lyrics are replacing another's on screen. */
+  arriving?: boolean;
 };
 
 type Row = {
@@ -233,40 +238,6 @@ function SweptText({ line, lang }: { line: LyricLine; lang?: string }) {
   );
 }
 
-function LyricsArtwork({ track }: { track: Track }) {
-  const fallback = thumbnailArtwork(track);
-  const [cover, setCover] = useState(
-    () => cachedBigscreenArtwork(track) ?? fallback,
-  );
-  useEffect(() => {
-    let cancelled = false;
-    setCover(cachedBigscreenArtwork(track) ?? fallback);
-    void preloadBigscreenArtwork(track).then((source) => {
-      if (!cancelled && source) setCover(source);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    track.globalId,
-    track.albumId,
-    track.cover,
-    track.fullCover,
-    track.nativeCover,
-    track.provider,
-    track.upc,
-    fallback,
-  ]);
-  return (
-    <img
-      id="lyricsArtwork"
-      className="lyricsArtwork"
-      src={cover}
-      alt=""
-      onError={() => setCover(cover === fallback ? whiteArtwork : fallback)}
-    />
-  );
-}
 
 function LyricGroups({
   lyrics,
@@ -300,11 +271,7 @@ function LyricGroups({
           <div className="lyricGroup lyricPauseGroup" data-block={block.id} key={block.id}>
             <div className="lyricPause" aria-hidden="true">
               {[0, 1, 2].map((dot) => (
-                <span
-                  key={dot}
-                  className="lyricPauseDot"
-                  style={{ "--dot": dot } as CSSProperties}
-                />
+                <span key={dot} className="lyricPauseDot" />
               ))}
             </div>
           </div>
@@ -433,10 +400,12 @@ function SyncedLyrics({
   reducedMotion,
   onSeek,
   menu,
+  frozen = false,
 }: {
   lyrics: TrackLyrics;
   clock: PlaybackClock;
   playing: boolean;
+  frozen?: boolean;
   reducedMotion: boolean;
   onSeek?: (seconds: number) => void;
   menu: ReactNode;
@@ -445,6 +414,9 @@ function SyncedLyrics({
   const blocks = useMemo(() => lyricBlocks(lyrics, true), [lyrics]);
   const playingRef = useRef(playing);
   playingRef.current = playing;
+  // While fading out, the next song's clock must not scroll or restart these lyrics.
+  const frozenRef = useRef(frozen);
+  frozenRef.current = frozen;
   const followingRef = useRef(true);
   const [following, setFollowing] = useState(true);
   const wake = useRef<() => void>(() => {});
@@ -458,6 +430,10 @@ function SyncedLyrics({
     const container = viewport.current;
     if (!container) return;
     const linesElement = container.querySelector<HTMLElement>(".lyricsLines")!;
+    const credits = {
+      element: linesElement.querySelector<HTMLElement>(".lyricsCredits"),
+      transform: "",
+    };
     const layout = blocks.map((block) => {
       const rows =
         block.kind === "lines"
@@ -487,15 +463,23 @@ function SyncedLyrics({
               };
             })
           : [];
+      const dots = Array.from(
+        container.querySelectorAll<HTMLElement>(`[data-block="${block.id}"] .lyricPauseDot`),
+        (element) => ({ element, motion: dotMotion() }),
+      );
       return {
         block,
         element: container.querySelector<HTMLElement>(
           `[data-block="${block.id}"]`,
         )!,
         rows,
+        dots,
+        dotsAnimating: false,
+        dotsSnap: true,
         startMs:
           block.kind === "pause" ? block.startMs : lyrics.lines[block.line].startMs,
         top: 0,
+        moved: 0,
         anchor: 0,
         // The scroll position this block is drawn at; it trails the real scroll during a ripple.
         ripple: { value: container.scrollTop, velocity: 0 },
@@ -505,7 +489,6 @@ function SyncedLyrics({
         transform: "",
         active: false,
         ending: false,
-        progress: "",
         opacity: "",
         blur: "",
       };
@@ -577,7 +560,9 @@ function SyncedLyrics({
       const frameSeconds = lastFrame ? Math.max(0, (now - lastFrame) / 1000) : 1 / 60;
       const elapsed = Math.min(frameSeconds, 0.1);
       lastFrame = now;
-      const sampledTime = clock.getSmooth() * 1000 + lyrics.offsetMs;
+      const sampledTime = frozenRef.current && Number.isFinite(lastTime)
+        ? lastTime
+        : clock.getSmooth() * 1000 + lyrics.offsetMs;
       const expectedAdvance = wasPlaying && playingRef.current ? frameSeconds * 1000 : 0;
       wasPlaying = playingRef.current;
       const discontinuity =
@@ -590,7 +575,8 @@ function SyncedLyrics({
         if (block.block.kind !== "pause") continue;
         const { startMs, endMs } = block.block;
         const active = time >= startMs && time < endMs;
-        const ending = active && endMs - time < 600;
+        // The slot opens with the break and closes only once the dots have faded out.
+        const ending = active && endMs - time < DOT_EXIT_MS;
         if (active !== block.active || discontinuity) {
           block.element.dataset.active = String(active);
           layoutDirty = true;
@@ -600,14 +586,8 @@ function SyncedLyrics({
           layoutDirty = true;
         }
         block.ending = ending;
-        if (active)
-          setStyle(
-            block.element,
-            block,
-            "progress",
-            "--pause-progress",
-            Math.min(1, (time - startMs) / Math.max(1, endMs - startMs - 600)).toFixed(3),
-          );
+        if (active || discontinuity) block.dotsAnimating = true;
+        if (discontinuity) block.dotsSnap = true;
       }
       const measured = layoutDirty;
       if (layoutDirty) {
@@ -620,7 +600,9 @@ function SyncedLyrics({
           `${container.clientHeight}px`,
         );
         for (const block of layout) {
+          const previousTop = block.top;
           block.top = block.element.offsetTop;
+          block.moved = block.top - previousTop;
           const line = block.rows[0]?.element;
           if (line) {
             // Anchor the first visual line, not the centre of a wrapped group or its annotations.
@@ -639,7 +621,9 @@ function SyncedLyrics({
           const shift = layout[focus].anchor - previousAnchor;
           target = Math.max(0, Math.min(maximumScroll, target + shift));
           for (const block of layout) {
-            block.ripple.value += shift;
+            // Every block is drawn where it was before the reflow and glides to its new place,
+            // so a break opening or closing eases the lines apart instead of jumping them.
+            block.ripple.value += block.moved;
             block.goal += shift;
             block.pending += shift;
           }
@@ -755,8 +739,33 @@ function SyncedLyrics({
         row.snap = false;
         // Letters stay in their line's layer: promoting and dropping a layer per letter at every
         // line change cost more than repainting one line.
-        row.animating = rowMoving || (row.active && !reducedMotion);
+        row.animating =
+          rowMoving ||
+          (!reducedMotion &&
+            (row.active || row.letters.some((letter) => releasing(letter.motion, time))));
         settling ||= rowMoving;
+      }
+      for (const block of layout) {
+        if (block.block.kind !== "pause" || !block.dotsAnimating) continue;
+        const { startMs, endMs } = block.block;
+        let dotsMoving = false;
+        for (const [index, dot] of block.dots.entries())
+          dotsMoving =
+            animateDot(
+              dot.motion,
+              dot.element,
+              index,
+              block.dots.length,
+              time,
+              startMs,
+              endMs,
+              elapsed,
+              block.dotsSnap || reducedMotion,
+              !reducedMotion,
+            ) || dotsMoving;
+        block.dotsSnap = false;
+        block.dotsAnimating = dotsMoving || block.active;
+        settling ||= dotsMoving;
       }
       const snapRipple = !followingRef.current || reducedMotion || discontinuity || snapScroll;
       if (snapRipple) rippleFocus = focus;
@@ -779,6 +788,12 @@ function SyncedLyrics({
           block.transform = transform;
           block.element.style.transform = transform;
         }
+      }
+      // The credits sit right under the last line and ride its wave, rather than jumping with the real scroll.
+      const lastTransform = layout[layout.length - 1]?.transform ?? "";
+      if (credits.element && credits.transform !== lastTransform) {
+        credits.transform = lastTransform;
+        credits.element.style.transform = lastTransform;
       }
       snapScroll = false;
       if (playingRef.current || settling) schedule();
@@ -916,6 +931,8 @@ function formatCorrection(correctionMs: number) {
 }
 
 const nudges = [-500, -100, 100, 500];
+/** Playing this long with synced lyrics on screen, without retiming them, counts as the timing looking right. */
+const WATCHED_MS = 30_000;
 
 function SyncMenu({
   unsynced,
@@ -1039,6 +1056,9 @@ export function LyricsView({
   onSeek,
   motion = "system",
   autoSync = false,
+  shown = true,
+  leaving = false,
+  arriving = false,
 }: LyricsViewProps) {
   const [lyrics, setLyrics] = useState<TrackLyrics | null>(
     () => track ? cachedLyrics(track) ?? null : null,
@@ -1159,6 +1179,30 @@ export function LyricsView({
       : lyrics,
     [lyrics, correctionMs],
   );
+  // Where the listener leaves each song's timing tunes how readily auto-sync trusts itself.
+  const recordSample = (finalMs: number, edited: boolean) => {
+    if (!track || !lyrics || !timed) return;
+    const evidence = storedLyricEvidence(track, lyrics);
+    if (evidence) recordSyncSample(track.globalId, { ...evidence, finalMs, edited });
+  };
+  const watching = playing && timed && !unsynced && autoSync;
+  const watch = useRef({ ms: 0, since: 0 });
+  const latest = useRef({ recordSample, correctionMs });
+  latest.current = { recordSample, correctionMs };
+  useEffect(() => {
+    if (!watching) return;
+    watch.current.since = performance.now();
+    return () => {
+      watch.current.ms += performance.now() - watch.current.since;
+    };
+  }, [watching]);
+  // Declared after the watch effect, so its time is counted before this runs on unmount.
+  useEffect(
+    () => () => {
+      if (watch.current.ms >= WATCHED_MS) latest.current.recordSample(latest.current.correctionMs, false);
+    },
+    [],
+  );
   const plainLyrics = useMemo(
     () => lyrics && unsynced ? { ...lyrics, sync: "none" as const, hasWordSync: false } : lyrics,
     [lyrics, unsynced],
@@ -1171,12 +1215,15 @@ export function LyricsView({
       analyzing={analyzing}
       canAnalyze={isTauri()}
       onAutoSync={forceAutoSync}
-      onNudge={(deltaMs) =>
-        updateOverride({
-          ...override,
-          correctionMs: Math.max(-MAX_CORRECTION_MS, Math.min(MAX_CORRECTION_MS, correctionMs + deltaMs)),
-        })}
-      onReset={() => updateOverride({ unsynced: override?.unsynced })}
+      onNudge={(deltaMs) => {
+        const next = Math.max(-MAX_CORRECTION_MS, Math.min(MAX_CORRECTION_MS, correctionMs + deltaMs));
+        updateOverride({ ...override, correctionMs: next });
+        recordSample(next, true);
+      }}
+      onReset={() => {
+        updateOverride({ unsynced: override?.unsynced });
+        if (track) recordSyncSample(track.globalId, null);
+      }}
       onToggleSync={() => updateOverride({ ...override, unsynced: !unsynced })}
     />
   );
@@ -1187,20 +1234,12 @@ export function LyricsView({
     <main
       id="lyricsPage"
       aria-label="Lyrics"
+      aria-hidden={!shown}
+      data-shown={shown}
+      data-leaving={leaving}
+      data-arriving={arriving}
       data-reduced-motion={reducedMotion}
     >
-      <header className="lyricsHeading">
-        {track ? (
-          <LyricsArtwork track={track} />
-        ) : (
-          <img
-            id="lyricsArtwork"
-            className="lyricsArtwork lyricsArtworkPlaceholder"
-            src="/ambra.png"
-            alt="Ambra"
-          />
-        )}
-      </header>
       <section className="lyricsStage" aria-label="Song lyrics">
         {!track ? (
           <p className="lyricsMessage" role="status">
@@ -1232,7 +1271,8 @@ export function LyricsView({
           <SyncedLyrics
             lyrics={syncedLyrics!}
             clock={clock}
-            playing={playing}
+            playing={playing && shown}
+            frozen={!shown}
             reducedMotion={reducedMotion}
             onSeek={onSeek}
             menu={menu}

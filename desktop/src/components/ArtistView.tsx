@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cachedArtistAlbums, cachedArtistProfile, loadArtistAlbums, loadArtistProfile, type ArtistProfile, type CatalogAlbum, type CatalogArtist } from "../api/server";
 import { rememberArtistImage } from "../utils/artistImages";
 import { libraryAlbums } from "../utils/librarySections";
-import { artistBiography, artistReleaseSections } from "../utils/artistPage";
+import { artistBiography, artistReleaseSections, artistSources, mergedArtistReleases } from "../utils/artistPage";
 import { entityKey, entityProvider, tracksForEntity } from "../utils/browse";
-import { musicProviderName } from "../utils/musicProviderName";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { CatalogAlbumGrid } from "./LibraryView";
 import { TrackCollectionView } from "./TrackCollectionView";
@@ -16,17 +15,21 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
   const initialProfile = cached?.profile ?? cachedArtistProfile(artist);
-  const initialReleases = cachedArtistAlbums(artist);
+  const initialSources = cached?.sources ?? artist.sources ?? [artist];
   const [profile, setProfile] = useState<ArtistProfile | undefined>(initialProfile);
-  const [albums, setAlbums] = useState<CatalogAlbum[]>(cached?.albumsLoaded ? cached.albums ?? [] : initialReleases?.albums ?? []);
-  const [albumsLoaded, setAlbumsLoaded] = useState(cached?.albumsLoaded || !!initialReleases);
-  const [nextOffset, setNextOffset] = useState<number | null>(cached?.albumsLoaded ? cached.nextOffset ?? null : initialReleases?.nextOffset ?? null);
+  // The artist is one discography across services; this entry supplies the profile and popular tracks.
+  const [sources, setSources] = useState<CatalogArtist[]>(initialSources);
+  type Releases = Record<string, { albums: CatalogAlbum[]; nextOffset: number | null }>;
+  const [releases, setReleases] = useState<Releases>(() => cached?.releases ?? Object.fromEntries(
+    initialSources.flatMap(source => { const page = cachedArtistAlbums(source); return page ? [[source.id, page]] : []; }),
+  ));
+  const albumsLoaded = !!releases[artist.id];
   const [profileError, setProfileError] = useState<string | null>(null);
   const [releaseError, setReleaseError] = useState<string | null>(null);
   const [profileLoading, setProfileLoading] = useState(artist.provider !== "local" && !initialProfile);
-  const [releasesLoading, setReleasesLoading] = useState(artist.provider !== "local" && !albumsLoaded);
+  const [loadingReleases, setLoadingReleases] = useState(0);
+  const releasesLoading = loadingReleases > 0;
   const [profileAttempt, setProfileAttempt] = useState(0);
-  const [releaseRequest, setReleaseRequest] = useState({ offset: 0, attempt: 0 });
   const [expandedPopular, setExpandedPopular] = useState(cached?.expandedPopular ?? false);
   const [expandedBiography, setExpandedBiography] = useState(cached?.expandedBiography ?? false);
   useEffect(() => {
@@ -38,19 +41,47 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
     return () => controller.abort();
   }, [artist.id, artist.provider, profileAttempt]);
   useEffect(() => {
-    if (artist.provider === "local" || (albumsLoaded && releaseRequest.offset === 0 && releaseRequest.attempt === 0)) return;
-    const controller = new AbortController(); setReleasesLoading(true); setReleaseError(null);
-    void loadArtistAlbums(artist, releaseRequest.offset, controller.signal, releaseRequest.attempt > 0).then(page => {
-      if (controller.signal.aborted) return;
-      setAlbums(current => [...new Map([...current, ...page.albums].map(album => [album.id, album])).values()]);
-      setNextOffset(page.nextOffset); setAlbumsLoaded(true);
-    }).catch(reason => { if (!controller.signal.aborted) setReleaseError(String(reason)); })
-      .finally(() => { if (!controller.signal.aborted) setReleasesLoading(false); });
-    return () => controller.abort();
-  }, [artist.id, artist.provider, releaseRequest]);
+    if (artist.provider === "local") return;
+    let live = true;
+    void artistSources({ ...artist, sources: initialSources }).then(found => { if (live) setSources(found); });
+    return () => { live = false; };
+  }, [artist.id, artist.provider]);
+  const releaseController = useRef<AbortController | null>(null);
+  const requestedReleases = useRef(new Set<string>());
   useEffect(() => {
-    props.cache.set(key, { profile, albums, albumsLoaded, nextOffset, expandedPopular, expandedBiography });
-  }, [key, profile, albums, albumsLoaded, nextOffset, expandedPopular, expandedBiography, props.cache]);
+    const controller = new AbortController();
+    releaseController.current = controller;
+    return () => { controller.abort(); requestedReleases.current.clear(); };
+  }, [artist.id]);
+  const loadReleases = useCallback((targets: { source: CatalogArtist; offset: number }[], refresh = false) => {
+    const signal = releaseController.current?.signal;
+    if (!signal) return;
+    for (const { source, offset } of targets) {
+      setLoadingReleases(count => count + 1);
+      if (source.id === artist.id) setReleaseError(null);
+      void loadArtistAlbums(source, offset, signal, refresh).then(page => {
+        if (signal.aborted) return;
+        setReleases(current => ({ ...current, [source.id]: {
+          albums: [...new Map([...(offset ? current[source.id]?.albums ?? [] : []), ...page.albums].map(album => [album.id, album])).values()],
+          nextOffset: page.nextOffset,
+        } }));
+      }).catch(reason => {
+        // Other services only fill in; the page reports trouble with its own service.
+        if (!signal.aborted && source.id === artist.id) setReleaseError(String(reason));
+      }).finally(() => { if (!signal.aborted) setLoadingReleases(count => count - 1); });
+    }
+  }, [artist.id]);
+  useEffect(() => {
+    if (artist.provider === "local") return;
+    const targets = sources.filter(source => !releases[source.id] && !requestedReleases.current.has(source.id));
+    for (const source of targets) requestedReleases.current.add(source.id);
+    loadReleases(targets.map(source => ({ source, offset: 0 })));
+  }, [artist.provider, sources, loadReleases]);
+  const albums = useMemo(() => mergedArtistReleases(artist, sources, releases), [artist, sources, releases]);
+  const moreReleases = sources.filter(source => releases[source.id]?.nextOffset != null);
+  useEffect(() => {
+    props.cache.set(key, { profile, sources, releases, expandedPopular, expandedBiography });
+  }, [key, profile, sources, releases, expandedPopular, expandedBiography, props.cache]);
   useEffect(() => {
     if (!profile) return;
     props.rememberTracks(profile.popularTracks);
@@ -74,7 +105,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
     shuffleCollection={() => props.onAction("shuffle", playable)}
     headerNavigation={<button type="button" className="browseBack" onClick={props.onBack}>Back</button>}
     headerArtwork={<ArtistPortrait artist={profile?.artist ?? artist} eager expandable />}
-    headerContent={<p className="entityByline">Artist · {musicProviderName(artist.provider)}</p>}
+    headerContent={<p className="entityByline">Artist</p>}
     playbackActions={<button type="button" className="libraryShuffleBtn" disabled={!playable.length} onClick={() => props.onAction("queue", playable)}><img src="/addToQueue.svg" alt="" /><span>ADD TO QUEUE</span></button>}
     content={<>
       {profileLoading && <p className="artistStatus" role="status">Loading artist…</p>}
@@ -87,8 +118,8 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
       {releaseSections.map(section => <section key={section.title}><h2 className="entitySectionTitle">{section.title}</h2><CatalogAlbumGrid albums={section.albums} onOpenEntity={props.onOpenEntity} /></section>)}
       {artist.provider !== "local" && !albumsLoaded && <section aria-busy={releasesLoading}><h2 className="entitySectionTitle">Albums</h2><div className="artistReleaseSkeleton" aria-label="Loading releases" role="status">{Array.from({ length: 4 }, (_, index) => <div key={index} />)}</div></section>}
       {releasesLoading && <p className="artistStatus" role="status">Loading releases…</p>}
-      {releaseError && <p className="artistStatus" role="alert">{releaseError} <button type="button" className="entityLink" onClick={() => setReleaseRequest(current => ({ ...current, attempt: current.attempt + 1 }))}>Retry</button></p>}
-      {nextOffset !== null && <button type="button" className="artistTextAction" disabled={releasesLoading} onClick={() => setReleaseRequest(current => ({ offset: nextOffset, attempt: current.attempt + 1 }))}>More releases</button>}
+      {releaseError && <p className="artistStatus" role="alert">{releaseError} <button type="button" className="entityLink" onClick={() => loadReleases([{ source: artist, offset: releases[artist.id]?.nextOffset ?? 0 }], true)}>Retry</button></p>}
+      {moreReleases.length > 0 && <button type="button" className="artistTextAction" disabled={releasesLoading} onClick={() => loadReleases(moreReleases.map(source => ({ source, offset: releases[source.id]!.nextOffset! })))}>More releases</button>}
       {!!saved.length && <section><h2 className="entitySectionTitle">Saved songs</h2>{trackList(saved)}</section>}
       {!!biography.length && <section className="artistAbout"><h2 className="entitySectionTitle">About</h2><div className="artistBiography" data-expanded={expandedBiography}>{biography.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
         <button type="button" className="artistTextAction" onClick={() => setExpandedBiography(value => !value)}>{expandedBiography ? "Show less" : "Read more"}</button>

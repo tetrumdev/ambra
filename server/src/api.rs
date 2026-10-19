@@ -863,6 +863,7 @@ async fn search_catalog(
                             .map(|artist| artist.name.clone())
                             .collect::<Vec<_>>()
                             .join(", "),
+                        artists: album.artists.clone(),
                         image_url: album.cover_url.clone(),
                         upc: album.upc.clone(),
                         release_date: album.release_date.clone(),

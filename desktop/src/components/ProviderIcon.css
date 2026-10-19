@@ -1,0 +1,17 @@
+.providerIcon {
+    width: 1em;
+    height: 1em;
+    flex: none;
+    object-fit: contain;
+    opacity: 0.55;
+    vertical-align: -0.15em;
+    -webkit-user-drag: none;
+}
+
+.providerIcon[data-provider="tidal"] {
+    width: 1.45em;
+}
+
+.providerIcon[data-provider="local"] {
+    width: 2.6em;
+}

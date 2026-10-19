@@ -116,9 +116,20 @@ export function letterHead({ segment, index, count }: LetterMotion, timeMs: numb
   return ((timeMs - segment.startMs) / (segment.endMs - segment.startMs)) * count - index;
 }
 
+/** Whether a held note is still breathing out after its line has ended. */
+export function releasing({ segment, emphasis }: LetterMotion, timeMs: number): boolean {
+  return emphasis && segment.endMs !== null && timeMs < segment.endMs + WAVE_RELEASE_MS;
+}
+
 function targets(letter: LetterMotion, timeMs: number, lineActive: boolean) {
   const { segment, index, count } = letter;
-  if (!lineActive || segment.startMs === null) return { lift: 0, swell: 0, glow: 0 };
+  if (segment.startMs === null) return { lift: 0, swell: 0, glow: 0 };
+  if (!lineActive) {
+    // A held note that ends its line lets its wave run out instead of dropping with the line.
+    if (!releasing(letter, timeMs) || timeMs < segment.startMs) return { lift: 0, swell: 0, glow: 0 };
+    const wave = heldWave(letter, timeMs);
+    return { lift: 0, swell: wave.swell, glow: wave.swell };
+  }
   const duration = segment.endMs === null ? 0 : Math.max(0, segment.endMs - segment.startMs);
   const start = segment.startMs + (duration * index) / count;
   const end = segment.startMs + (duration * (index + 1)) / count;
@@ -197,4 +208,92 @@ export function restLetter(letter: LetterMotion, element: HTMLElement) {
   if (letter.filter) element.style.filter = "";
   letter.transform = "";
   letter.filter = "";
+}
+
+/**
+ * Breathing dots for instrumental breaks. Like letters, timing only sets where each
+ * dot wants to be and springs carry it there, so the dots bloom in one after another,
+ * fill smoothly through the break and settle out instead of snapping between states.
+ */
+export type DotMotion = { appear: Spring; fill: Spring; style: string; shadow: string };
+
+/** Soft enough that a dot blooms in with a faint overshoot. */
+const dotAppearSpring: SpringConfig = { stiffness: 140, damping: 17 };
+const dotFillSpring: SpringConfig = { stiffness: 60, damping: 15 };
+/** Delay between neighbouring dots blooming in. */
+const DOT_STAGGER_MS = 110;
+/** Length of one breath; the swell is tied to song time, so it holds still while paused. */
+const DOT_BREATH_MS = 2400;
+const DOT_BREATH_SCALE = 0.16;
+/** Centre-to-centre distance between dots, in em; matches .lyricPauseDot width plus the row gap. */
+const DOT_PITCH_EM = 0.62;
+/** A softer wave rolls through the dots between breaths, so they never sit still. */
+const DOT_WAVE_MS = 1500;
+/** Phase lag between neighbouring dots, so the wave travels left to right. */
+const DOT_WAVE_LAG = 0.85;
+const DOT_WAVE_LIFT_EM = 0.05;
+const DOT_WAVE_SCALE = 0.08;
+/** The dots finish fading this long before the next line starts. */
+export const DOT_EXIT_MS = 600;
+
+export function dotMotion(): DotMotion {
+  return { appear: { value: 0, velocity: 0 }, fill: { value: 0, velocity: 0 }, style: "", shadow: "" };
+}
+
+/**
+ * Advances one dot of a break and writes its style. Returns whether it is still moving.
+ * `snap` jumps straight to the resting pose, for seeks, first paint and reduced motion.
+ */
+export function animateDot(
+  dot: DotMotion,
+  element: HTMLElement,
+  index: number,
+  count: number,
+  timeMs: number,
+  startMs: number,
+  endMs: number,
+  seconds: number,
+  snap: boolean,
+  breathe: boolean,
+): boolean {
+  const active = timeMs >= startMs && timeMs < endMs;
+  const shown = active && timeMs < endMs - DOT_EXIT_MS && timeMs >= startMs + index * DOT_STAGGER_MS;
+  const progress = clamp01((timeMs - startMs) / Math.max(1, endMs - startMs - DOT_EXIT_MS));
+  const fillTarget = active ? smoothstep(progress * count - index) : 0;
+  let moving = false;
+  if (snap) {
+    dot.appear = { value: active && timeMs < endMs - DOT_EXIT_MS ? 1 : 0, velocity: 0 };
+    dot.fill = { value: fillTarget, velocity: 0 };
+  } else {
+    moving = advanceSpring(dot.appear, shown ? 1 : 0, dotAppearSpring, seconds) || moving;
+    moving = advanceSpring(dot.fill, fillTarget, dotFillSpring, seconds) || moving;
+  }
+  const appear = Math.max(0, dot.appear.value);
+  const elapsed = timeMs - startMs;
+  // Breathe in from rest as the break starts, so the swell never starts mid-breath.
+  const breath = breathe && active ? (1 - Math.cos((elapsed / DOT_BREATH_MS) * Math.PI * 2)) / 2 : 0;
+  // The row breathes as one from its left edge, so dots spread apart as they swell.
+  const group = 1 + DOT_BREATH_SCALE * breath;
+  const wave = breathe && active ? Math.sin((elapsed / DOT_WAVE_MS) * Math.PI * 2 - index * DOT_WAVE_LAG) : 0;
+  const fill = clamp01(dot.fill.value);
+  const scale =
+    (0.55 + 0.45 * appear) * (0.85 + 0.15 * fill) * group * (1 + DOT_WAVE_SCALE * appear * (0.5 + 0.5 * wave));
+  const x = index * DOT_PITCH_EM * (group - 1);
+  const y = -DOT_WAVE_LIFT_EM * appear * wave;
+  const opacity = Math.min(1, appear) * (0.3 + 0.7 * fill);
+  const style = `translate3d(${x.toFixed(4)}em, ${y.toFixed(4)}em, 0) scale(${scale.toFixed(4)})`;
+  if (style !== dot.style) {
+    dot.style = style;
+    element.style.transform = style;
+  }
+  // The dot filling right now glows, so the eye can follow the break counting down.
+  const glow = Math.min(1, appear) * 4 * fill * (1 - fill);
+  const shadow = glow > 0.02 ? `0 0 0.35em rgba(255, 255, 255, ${(glow * 0.55).toFixed(3)})` : "";
+  const opacityText = opacity.toFixed(3);
+  if (element.style.opacity !== opacityText) element.style.opacity = opacityText;
+  if (shadow !== dot.shadow) {
+    dot.shadow = shadow;
+    element.style.boxShadow = shadow;
+  }
+  return moving;
 }
