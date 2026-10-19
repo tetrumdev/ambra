@@ -788,6 +788,7 @@
     border-radius: 12px;
     background: rgba(29, 29, 29, 0.7);
     backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
 }
 
 .selectionActionMenu button {

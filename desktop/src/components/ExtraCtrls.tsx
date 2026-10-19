@@ -1,6 +1,5 @@
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
 import {
-  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -28,28 +27,14 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     ? visibleOutputs(audio.settings, audio.devices)
     : [];
   const showAudioModeToggle = hasNativeAudio;
-  const [volume, setVolume] = useState(100);
-  const pendingVolume = useRef<number | null>(null);
+  const [volumePreview, setVolumePreview] = useState<{ outputId: string; volume: number } | null>(null);
+  const volume = volumePreview?.outputId === selectedDeviceId
+    ? volumePreview.volume
+    : selectedOutput?.volume ?? 100;
+  const pendingVolumes = useRef(new Map<string, { outputId: string; volume: number }>());
   const isSendingVolume = useRef(false);
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   const volumeButton = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!hasNativeAudio) return;
-
-    let disposed = false;
-    void invoke<number>("native_audio_volume")
-      .then((currentVolume) => {
-        if (!disposed) setVolume(currentVolume);
-      })
-      .catch((error) =>
-        console.warn("Could not read the native audio volume:", error),
-      );
-
-    return () => {
-      disposed = true;
-    };
-  }, [hasNativeAudio]);
 
   const selectAudioDevice = async (deviceId: string) => {
     if (!audio || audio.saving) return;
@@ -60,24 +45,31 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   };
 
   const sendPendingVolume = async () => {
-    if (isSendingVolume.current) return;
+    if (!audio || isSendingVolume.current) return;
 
     isSendingVolume.current = true;
-    while (pendingVolume.current !== null) {
-      const nextVolume = pendingVolume.current;
-      pendingVolume.current = null;
-      try {
-        await invoke("set_native_audio_volume", { volume: nextVolume });
-      } catch (error) {
-        console.warn("Could not change the native audio volume:", error);
+    try {
+      while (pendingVolumes.current.size > 0) {
+        const next = pendingVolumes.current.values().next().value!;
+        pendingVolumes.current.delete(next.outputId);
+        await audio.update((current) => ({
+          ...current,
+          outputs: current.outputs.map((output) =>
+            output.id === next.outputId ? { ...output, volume: next.volume } : output,
+          ),
+        }));
+        setVolumePreview((current) => current === next ? null : current);
       }
+    } finally {
+      isSendingVolume.current = false;
     }
-    isSendingVolume.current = false;
   };
 
   const changeVolume = (nextVolume: number) => {
-    setVolume(nextVolume);
-    pendingVolume.current = nextVolume;
+    if (!audio || audio.loading) return;
+    const next = { outputId: selectedDeviceId, volume: nextVolume };
+    setVolumePreview(next);
+    pendingVolumes.current.set(next.outputId, next);
     void sendPendingVolume();
   };
 
@@ -184,6 +176,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
               min="0"
               max="100"
               step="1"
+              disabled={isLoadingDevices}
               value={volume}
               aria-label="Volume"
               aria-valuetext={`${Math.round(volume)}%`}

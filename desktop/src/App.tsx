@@ -48,6 +48,7 @@ import { isUnmodifiedKey } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
+import { prepareLyricSync } from "./utils/lyricsOffset";
 
 import { playlistTracks } from "./utils/playlists";
 import {
@@ -170,7 +171,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     const tracks = queue.upcomingEntries.slice(0, 2).map((entry) => entry.track);
     if (player.currentTrack) tracks.unshift(player.currentTrack);
     void preloadLyrics(tracks);
-  }, [player.currentTrack, queue.upcomingEntries, localOnly]);
+    if (preferences.ui.autoSyncLyrics && isTauri()) void prepareLyricSync(tracks);
+  }, [player.currentTrack, queue.upcomingEntries, localOnly, preferences.ui.autoSyncLyrics]);
 
   useEffect(() => {
     if (localOnly || library.isServerReachable || library.isLoading) return;
