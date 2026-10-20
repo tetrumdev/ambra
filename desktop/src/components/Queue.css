@@ -182,3 +182,25 @@
         grid-column: 4;
     }
 }
+
+/* Left of the search bar, level with it, following its edge as it widens
+   (the bar's collapsed and expanded widths in SearchBar.css, plus its border). */
+.queueClose {
+    position: absolute;
+    top: 10px;
+    right: 20px;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    height: 42px;
+    padding: 0 8px;
+    border: 0;
+    background: transparent;
+    transition: right var(--motion-snappy);
+}
+.queueClose[data-beside-search] {
+    right: calc(20px + 82px + 12px);
+}
+.appScreen:has(.searchInputControl[data-expanded="true"]) .queueClose[data-beside-search] {
+    right: calc(20px + 266px + 12px);
+}

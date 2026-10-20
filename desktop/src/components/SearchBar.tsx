@@ -1,7 +1,7 @@
 import "./SearchBar.css";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import type { SearchProvider, StreamingProvider } from "../api/server";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { FadeOutOnClose } from "../hooks/useFadeOutOnUnmount";
 
 const providerNames: Record<SearchProvider, string> = {
@@ -20,6 +20,9 @@ const providerIcons: Record<SearchProvider, string> = {
 
 const searchIcon = "/searchIcon.svg";
 
+/** Asks the bar to expand and take focus: "select" picks the whole query, "end" types on after it. */
+export type SearchFocusRequest = { id: number; caret: "select" | "end" };
+
 type SearchBarProps = {
   query: string;
   onQueryChange: (query: string) => void;
@@ -27,6 +30,16 @@ type SearchBarProps = {
   providers: StreamingProvider[];
   onProviderChange: (provider: SearchProvider) => void;
   onConfirm: () => void;
+  focusRequest: SearchFocusRequest | null;
+  /**
+   * Away on pages without search: hidden at once when the page changes ("page"),
+   * fading when the listener dismisses a bar summoned there ("dismissed").
+   */
+  away?: "page" | "dismissed";
+  /** Summoned onto a page without search; it fades in. */
+  summoned?: boolean;
+  /** Focus left the bar for somewhere else on the page. */
+  onLeave?: () => void;
 };
 
 export function SearchBar({
@@ -36,40 +49,48 @@ export function SearchBar({
   providers,
   onProviderChange,
   onConfirm,
+  focusRequest,
+  away,
+  summoned = false,
+  onLeave,
 }: SearchBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(Boolean(query));
   const input = useRef<HTMLInputElement>(null);
+  const inputControl = useRef<HTMLDivElement>(null);
   const control = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<SearchFocusRequest["caret"] | null>(null);
 
   useEffect(() => {
     if (query) setSearchExpanded(true);
     else if (document.activeElement !== input.current) setSearchExpanded(false);
   }, [query]);
 
-  useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if (
-        event.code !== "KeyF" ||
-        (!event.metaKey && !event.ctrlKey) ||
-        event.altKey ||
-        event.shiftKey
-      ) {
-        return;
-      }
-
-      event.preventDefault();
-      event.stopPropagation();
-      setMenuOpen(false);
-      setSearchExpanded(true);
-      requestAnimationFrame(() => input.current?.focus());
-    };
-
-    window.addEventListener("keydown", focusSearch, true);
-    return () => window.removeEventListener("keydown", focusSearch, true);
-  }, []);
+  // Focuses once the input exists, which on a collapsed bar is after it expands.
+  const focusPending = () => {
+    const field = input.current;
+    const caret = pendingFocus.current;
+    if (!field || !caret) return;
+    pendingFocus.current = null;
+    field.focus();
+    if (caret === "select") field.select();
+    else field.setSelectionRange(field.value.length, field.value.length);
+  };
+  useLayoutEffect(focusPending, [searchExpanded]);
+  useLayoutEffect(() => {
+    if (!focusRequest) return;
+    pendingFocus.current = focusRequest.caret;
+    setMenuOpen(false);
+    if (input.current) {
+      focusPending();
+      return;
+    }
+    // The collapsed width is laid out first, so the bar widens the same way a click does.
+    void inputControl.current?.offsetWidth;
+    setSearchExpanded(true);
+  }, [focusRequest]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -89,18 +110,19 @@ export function SearchBar({
     <div
       id="searchBar"
       role="search"
+      data-away={away}
+      data-summoned={summoned || undefined}
+      inert={away !== undefined}
       onBlur={(event) => {
         const nextTarget = event.relatedTarget;
-        if (
-          !query &&
-          !(nextTarget instanceof Node && event.currentTarget.contains(nextTarget))
-        ) {
-          setSearchExpanded(false);
-        }
+        if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+        if (!query) setSearchExpanded(false);
+        onLeave?.();
       }}
     >
       <div
         className="searchInputControl"
+        ref={inputControl}
         data-expanded={searchExpanded ? "true" : undefined}
       >
         {searchExpanded ? (
@@ -141,8 +163,8 @@ export function SearchBar({
             aria-label="Search songs"
             data-tooltip="Search"
             onClick={() => {
+              pendingFocus.current = "end";
               setSearchExpanded(true);
-              requestAnimationFrame(() => input.current?.focus());
             }}
           >
             <img src={searchIcon} alt="" aria-hidden="true" />

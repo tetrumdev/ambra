@@ -8,15 +8,11 @@
     left: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
-    /* Outside the player stage and above it, so the lyrics slip behind it as they
-       fade and the cover stays put while the rest of the player sinks away. */
+    /* Outside the player stage and above it, so the lyrics slip behind it as they fade. */
     z-index: 6;
     visibility: hidden;
-    transition:
-        left var(--player-view-duration) var(--player-view-ease),
-        width var(--player-view-duration) var(--player-view-ease),
-        height var(--player-view-duration) var(--player-view-ease),
-        opacity 400ms ease;
+    /* Its size and place glide only when the layout switches (AlbumArtwork), never with a window resize. */
+    transition: opacity 400ms ease;
 }
 
 /* Beside the lyrics: centred in the left column, as large as fits under the controls. */
@@ -44,47 +40,23 @@
     visibility: visible;
 }
 
-/* In flight the cover passes over the now-playing bar, into or out of its thumbnail,
-   which stays hidden until the cover has landed on it. */
-#albumCover[data-flight] {
-    visibility: visible;
-    z-index: 11;
-}
-:root[data-cover-flight="closing"] #compactArtwork {
-    visibility: hidden;
-}
-
-/* The whole player rises out from behind the now-playing bar as it opens and
-   sinks back behind it as it closes, fading as it goes. Everything in the player
-   moves as one layer, so nothing inside it shifts against anything else. */
+/* Opening and closing the player is instant. */
 .playerStage {
     position: fixed;
     inset: 0;
     z-index: 5;
     isolation: isolate;
-    transition:
-        opacity var(--motion-smooth),
-        translate var(--motion-smooth),
-        visibility 0s;
 }
 
 .playerStage[data-open="false"] {
-    opacity: 0;
-    translate: 0 140px;
     visibility: hidden;
     pointer-events: none;
-    /* The fade finishes a little early, so the player is gone before it settles behind the bar. */
-    transition:
-        opacity calc(var(--motion-smooth-duration) * 0.75) var(--motion-smooth-ease),
-        translate var(--motion-smooth),
-        visibility 0s linear var(--motion-smooth-duration);
 }
 
 .albumCoverImg,
 .albumCoverPlaceholder {
     position: absolute;
     inset: 0;
-    /* Keep IMAGE_OVERHANG in BigscreenArtwork.tsx in step with this overhang. */
     width: calc(100% + 2px);
     height: calc(100% + 2px);
     object-fit: cover;
@@ -170,8 +142,6 @@
     .albumCoverImg {
         animation-duration: 1ms !important;
     }
-    .playerStage,
-    .playerStage[data-open="false"],
     #albumCover,
     .albumCoverImg,
     .albumCoverPlaceholder,

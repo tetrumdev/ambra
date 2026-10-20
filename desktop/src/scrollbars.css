@@ -1,9 +1,16 @@
 .smoothScroll {
     overscroll-behavior: contain;
+}
+
+.smoothScroll,
+#libraryContainer,
+.settingsSidebar {
     scrollbar-width: none;
     -ms-overflow-style: none;
 }
 
-.smoothScroll::-webkit-scrollbar {
+.smoothScroll::-webkit-scrollbar,
+#libraryContainer::-webkit-scrollbar,
+.settingsSidebar::-webkit-scrollbar {
     display: none;
 }

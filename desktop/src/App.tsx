@@ -13,7 +13,7 @@ import { AppScrollbar } from "./components/AppScrollbar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { LYRICS_COVER_DIM, LyricsView } from "./components/LyricsView";
-import { SearchBar } from "./components/SearchBar";
+import { SearchBar, type SearchFocusRequest } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
 import { SettingsView } from "./components/SettingsView";
@@ -32,9 +32,9 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
-import { usePlaybackTime } from "./utils/playbackClock";
 import {
   loadPreferences,
+  savePlayback,
   savePreferences,
   type AppScreen,
 } from "./utils/preferences";
@@ -45,7 +45,7 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
-import { isUnmodifiedKey } from "./utils/keyboard";
+import { isSearchShortcut, isUnmodifiedKey } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
@@ -59,7 +59,6 @@ import {
 
 import { usePlaylists } from "./hooks/usePlaylists";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
-import { motion } from "./utils/motion";
 
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
@@ -200,36 +199,6 @@ function App({ localOnly }: { localOnly: boolean }) {
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
-  // Closing mounts the whole library screen. It is laid out, hidden, a couple of frames
-  // before the player starts to move, so that work lands before the animation instead of
-  // in its first frame. Opening has nothing comparable to mount, so it starts at once.
-  const [playerOpen, setPlayerOpen] = useState(isPlayerView);
-  if (isPlayerView && !playerOpen) setPlayerOpen(true);
-  useEffect(() => {
-    if (isPlayerView || !playerOpen) return;
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => setPlayerOpen(false));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [isPlayerView, playerOpen]);
-  // The player stays on screen while it sinks away behind the bar after closing.
-  const [playerShown, setPlayerShown] = useState(isPlayerView);
-  if (playerOpen && !playerShown) setPlayerShown(true);
-  useEffect(() => {
-    if (playerOpen || !playerShown) return;
-    const timer = setTimeout(() => setPlayerShown(false), matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : motion.smooth.duration);
-    return () => clearTimeout(timer);
-  }, [playerOpen, playerShown]);
-  // Likewise the screen behind the player stays while the player rises over it, fading out.
-  const [libraryShown, setLibraryShown] = useState(!isPlayerView);
-  if (!isPlayerView && !libraryShown) setLibraryShown(true);
-  useEffect(() => {
-    if (!isPlayerView || !libraryShown) return;
-    const timer = setTimeout(() => setLibraryShown(false), matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : motion.smooth.duration);
-    return () => clearTimeout(timer);
-  }, [isPlayerView, libraryShown]);
-  // The library screen and its chrome fade out as the player opens and back in as it closes.
-  const librarySwap = playerOpen ? "leaving" : playerShown ? "arriving" : undefined;
   // Lyrics are the chosen view, but a song without any shows its cover until one with lyrics comes back.
   const prefersLyrics = isPlayerView ? isLyricsView : preferences.ui.playerView === "lyrics";
   const lyricsAvailability = useLyricsAvailability(player.currentTrack, prefersLyrics);
@@ -244,7 +213,20 @@ function App({ localOnly }: { localOnly: boolean }) {
   const lyricsTrack = lyricsTrackRef.current;
   // When one song's lyrics replace another's, the old view stays a moment to drift out.
   const lyricsHandoff = useRef<{ track: typeof lyricsTrack; leaving: NonNullable<typeof lyricsTrack>[] }>({ track: lyricsTrack, leaving: [] });
-  const [lyricsShown, setLyricsShown] = useState(false);
+  // Opening the player shows its lyrics at once; switching between them and the cover fades (LyricsView.css).
+  const [lyricsShown, setLyricsShown] = useState(showLyrics && isPlayerView);
+  const playerWasOpen = useRef(isPlayerView);
+  if (lyricsShown && !(showLyrics && isPlayerView)) setLyricsShown(false);
+  else if (!lyricsShown && showLyrics && isPlayerView && !playerWasOpen.current) setLyricsShown(true);
+  useEffect(() => {
+    playerWasOpen.current = isPlayerView;
+    if (lyricsShown || !showLyrics || !isPlayerView) return;
+    // Paint the hidden state once first, so lyrics switched to fade in from behind the cover.
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => setLyricsShown(true));
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isPlayerView, showLyrics, lyricsShown]);
   if (lyricsTrack?.globalId !== lyricsHandoff.current.track?.globalId) {
     const previous = lyricsHandoff.current.track;
     const leaving = lyricsHandoff.current.leaving.filter((track) => track.globalId !== lyricsTrack?.globalId);
@@ -264,19 +246,6 @@ function App({ localOnly }: { localOnly: boolean }) {
     }, 900);
     return () => clearTimeout(timer);
   }, [leavingLyrics]);
-  useEffect(() => {
-    if (!showLyrics || !playerShown) {
-      setLyricsShown(false);
-      return;
-    }
-    // Paint the hidden state once first, so arriving lyrics fade in from behind the cover.
-    let frame = requestAnimationFrame(() => {
-      frame = requestAnimationFrame(() => setLyricsShown(true));
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [showLyrics, playerShown]);
-  // Subscribes coarsely: App rerenders every 5 s while playing, not every tick.
-  const persistedPosition = usePlaybackTime(player.clock, time => player.isPlaying ? Math.floor(time / 5) * 5 : time);
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
@@ -287,7 +256,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   const playerReturnScreenRef =
     useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>("library");
   if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
-  // While the player opens, the screen fading out behind it keeps showing what it showed.
+  // While the player is open, the screen hidden behind it keeps what it showed.
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
   const isQueueView = libraryScreen === "queue";
   const isSettingsView = libraryScreen === "settings";
@@ -666,42 +635,37 @@ function App({ localOnly }: { localOnly: boolean }) {
     savePreferences(preferences);
   }, [preferences]);
 
+  // Saved straight from the clock, so playing never rerenders the app: every 5 s while playing, exactly while paused.
   useEffect(() => {
     if (!player.isSessionRestored) return;
-
-    setPreferences((current) => {
-      const playback = player.currentTrack
-        ? {
-            trackId: player.currentTrack.globalId,
-            positionSeconds: persistedPosition,
-          }
+    const track = player.currentTrack;
+    let saved: string | undefined;
+    const save = () => {
+      const time = player.clock.get();
+      const playback = track
+        ? { trackId: track.globalId, positionSeconds: player.isPlaying ? Math.floor(time / 5) * 5 : time }
         : { trackId: null, positionSeconds: 0 };
-
-      if (
-        current.playback.trackId === playback.trackId &&
-        current.playback.positionSeconds === playback.positionSeconds
-      ) {
-        return current;
-      }
-
-      return { ...current, playback };
-    });
-  }, [persistedPosition, player.currentTrack, player.isSessionRestored]);
+      const key = `${playback.trackId}:${playback.positionSeconds}`;
+      if (key === saved) return;
+      saved = key;
+      savePlayback(playback);
+    };
+    save();
+    return player.clock.subscribe(save);
+  }, [player.clock, player.currentTrack, player.isPlaying, player.isSessionRestored]);
 
   useEffect(() => {
     const saveLatestSession = () => {
       const latest = latestSessionRef.current;
       if (!latest.player.isSessionRestored) return;
 
-      savePreferences({
-        ...latest.preferences,
-        playback: latest.player.currentTrack
-          ? {
-              trackId: latest.player.currentTrack.globalId,
-              positionSeconds: latest.player.clock.get(),
-            }
-          : { trackId: null, positionSeconds: 0 },
-      });
+      savePreferences(latest.preferences);
+      savePlayback(latest.player.currentTrack
+        ? {
+            trackId: latest.player.currentTrack.globalId,
+            positionSeconds: latest.player.clock.get(),
+          }
+        : { trackId: null, positionSeconds: 0 });
     };
 
     window.addEventListener("beforeunload", saveLatestSession);
@@ -762,6 +726,16 @@ function App({ localOnly }: { localOnly: boolean }) {
 
   const onEntityAction = useStableCallback((action: EntityAction, tracks: Track[], id?: string) => { void entityAction(action, tracks, id); });
   const addEntityTrack = useStableCallback((track: Track) => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); });
+  // The now-playing title's library menu.
+  const currentTrackId = player.currentTrack?.globalId;
+  const currentInLibrary = useMemo(
+    () => currentTrackId !== undefined && library.tracks.some(track => track.globalId === currentTrackId),
+    [library.tracks, currentTrackId],
+  );
+  const currentSongMenu = useMemo(
+    () => ({ playlistOptions, inLibrary: currentInLibrary, showAlbumLink: !isPlayerView, onAddToLibrary: addEntityTrack }),
+    [playlistOptions, currentInLibrary, isPlayerView, addEntityTrack],
+  );
 
   const changeScreen = (nextScreen: AppScreen) => {
     if ((nextScreen === "bigscreen" || nextScreen === "lyrics") && !isPlayerView && !player.currentTrack) return;
@@ -774,7 +748,20 @@ function App({ localOnly }: { localOnly: boolean }) {
     }));
   };
 
+  // Settings and the player have no search of their own; Cmd/Ctrl+F summons the bar over them.
+  const hasSearchPage = !isPlayerView && !isSettingsView;
+  const [searchSummon, setSearchSummon] = useState<"off" | "on" | "dismissed">("off");
+  useEffect(() => setSearchSummon("off"), [screen]);
+  const [searchFocus, setSearchFocus] = useState<SearchFocusRequest | null>(null);
+  const requestSearchFocus = (caret: SearchFocusRequest["caret"]) =>
+    setSearchFocus((current) => ({ id: (current?.id ?? 0) + 1, caret }));
+
   const changeSearchQuery = (nextQuery: string) => {
+    // A blank query on a page without search leaves the listener where they are.
+    if (!nextQuery.trim() && !hasSearchPage) {
+      setPreferences((current) => ({ ...current, search: { ...current.search, query: nextQuery } }));
+      return;
+    }
     setBrowseEntity(null); navigation.current = [];
     setPreferences((current) => ({
       ...current,
@@ -788,6 +775,23 @@ function App({ localOnly }: { localOnly: boolean }) {
       },
     }));
   };
+
+  // Cmd/Ctrl+F opens Ambra's search everywhere, in place of the WebView's find bar.
+  const openSearch = useStableCallback(() => {
+    if (localOnly) return;
+    if (!hasSearchPage) setSearchSummon("on");
+    requestSearchFocus("select");
+  });
+  // Search opens only through its shortcut; typing elsewhere in the app never starts one.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isSearchShortcut(event)) return;
+      event.preventDefault();
+      openSearch();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [openSearch]);
 
   const playFromCollection = (trackId: GlobalTrackId) => {
     queue.playFromContext(activeCollectionContext, trackId);
@@ -939,8 +943,6 @@ function App({ localOnly }: { localOnly: boolean }) {
     <>
       <AppChrome
         currentScreen={screen}
-        backdropScreen={isPlayerView && libraryShown ? libraryScreen : undefined}
-        swap={librarySwap}
         playerView={showLyrics ? "lyrics" : "bigscreen"}
         lyricsAvailable={lyricsAvailability !== "none"}
         isFullscreen={isFullscreen}
@@ -949,10 +951,10 @@ function App({ localOnly }: { localOnly: boolean }) {
       />
 
       {(player.currentTrack || isPlayerView) && (
-        <div className="playerStage" data-open={playerOpen}>
-          <BackgroundArtwork track={player.currentTrack} active={playerShown} animate={preferences.ui.animateSwirl}
+        <div className="playerStage" data-open={isPlayerView}>
+          <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
             playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
-          {playerShown && [
+          {isPlayerView && [
             ...leavingLyrics.map((track) => ({ track, leaving: true })),
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
           ].map(({ track, leaving }) => <LyricsView key={track.globalId}
@@ -961,173 +963,186 @@ function App({ localOnly }: { localOnly: boolean }) {
             shown={!leaving && lyricsShown} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
         </div>
       )}
-      {/* Outside the stage: the cover flies to and from the bar's thumbnail instead of fading with the rest. */}
       {(player.currentTrack || isPlayerView) && (
         <AlbumArtwork
           track={player.currentTrack}
-          active={playerOpen}
+          active={isPlayerView}
           layout={showLyrics ? "lyrics" : "center"}
           direction={skipDirection}
         />
       )}
 
-      {libraryShown && (
-        <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
-          data-swap={librarySwap} inert={playerOpen}>
-          {!localOnly && !isQueueView && !isSettingsView && <SearchBar
-            query={searchQuery}
-            onQueryChange={changeSearchQuery}
-            provider={searchProvider}
-            providers={searchProviders}
-            onProviderChange={(provider) => setPreferences((current) => ({
-              ...current,
-              search: { ...current.search, provider },
-            }))}
-            onConfirm={() => { setBrowseEntity(null); changeScreen(searchQuery.trim() ? "search" : "library"); }}
-          />}
-          {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
-          {!isQueueView && !isSettingsView && servicePlaylistError && <p className="playlistSyncError" role="alert">{servicePlaylistError}</p>}
-          {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
-            isHomeActive={isHomeView && !isQueueView}
-            onOpenHome={() => {
-              setBrowseEntity(null); navigation.current = [];
-              setSelectedPlaylistId(null);
-              changeScreen("home");
+      {/* Stays mounted, hidden, behind the player, so closing it is instant and every scroll position holds. */}
+      <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
+        data-hidden={isPlayerView || undefined} inert={isPlayerView && searchSummon !== "on"}>
+        {/* On every screen; where a screen has no search of its own it waits hidden until summoned. */}
+        {!localOnly && <SearchBar
+          query={searchQuery}
+          onQueryChange={changeSearchQuery}
+          provider={searchProvider}
+          providers={searchProviders}
+          onProviderChange={(provider) => setPreferences((current) => ({
+            ...current,
+            search: { ...current.search, provider },
+          }))}
+          onConfirm={() => {
+            if (searchQuery.trim()) { setBrowseEntity(null); changeScreen("search"); }
+            else if (hasSearchPage) changeScreen("library");
+          }}
+          focusRequest={searchFocus}
+          away={hasSearchPage || searchSummon === "on" ? undefined : searchSummon === "dismissed" ? "dismissed" : "page"}
+          summoned={!hasSearchPage && searchSummon === "on"}
+          onLeave={() => setSearchSummon((summon) => summon === "on" ? "dismissed" : summon)}
+        />}
+        {isQueueView && (
+          <button className="xContainer queueClose" type="button" onClick={closeCurrentScreen}
+            data-beside-search={localOnly ? undefined : true}>
+            <img src="/x.svg" alt="Close" className="closeBtn" />
+          </button>
+        )}
+        {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+        {!isQueueView && !isSettingsView && servicePlaylistError && <p className="playlistSyncError" role="alert">{servicePlaylistError}</p>}
+        {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
+          isHomeActive={isHomeView && !isQueueView}
+          onOpenHome={() => {
+            setBrowseEntity(null); navigation.current = [];
+            setSelectedPlaylistId(null);
+            changeScreen("home");
+          }}
+          isSettingsActive={isSettingsView}
+          onOpenSettings={() => {
+            setBrowseEntity(null); navigation.current = [];
+            setSelectedPlaylistId(null);
+            changeScreen("settings");
+          }}
+          activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
+          activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
+          onOpenLibrarySection={(section) => {
+            setBrowseEntity(null); navigation.current = [];
+            setSelectedPlaylistId(null);
+            setLibrarySection(section);
+            changeScreen("library");
+          }}
+          onOpenLibrary={() => {
+            setBrowseEntity(null); navigation.current = [];
+            setSelectedPlaylistId(null);
+            setLibrarySection("overview");
+            changeScreen("library");
+          }}
+          onCreatePlaylist={createPlaylist}
+          onRenamePlaylist={playlistStore.rename}
+          onDeletePlaylist={(id) => {
+            if (!playlistStore.deletePlaylist(id)) return false;
+            if (selectedPlaylistId === id) setSelectedPlaylistId(null);
+            return true;
+          }}
+          playlists={playlistStore.playlists}
+          serviceGroups={servicePlaylistStore.groups}
+          servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
+          playlistGroups={preferences.ui.playlistGroups}
+          onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {
+            ...current, ui: { ...current.ui, playlistGroups: { ...current.ui.playlistGroups, [group]: expanded } },
+          })}
+          onSelectPlaylist={(id) => {
+            setBrowseEntity(null); navigation.current = [];
+            setSelectedPlaylistId(id);
+            changeScreen("library");
+          }}
+        />}
+        {isSettingsView ? (
+          <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
+            onServiceConnected={() => {
+              refreshSearchProviders();
+              void servicePlaylistStore.refresh();
+              search.retry();
+              void library.refreshStreamingMusic();
             }}
-            isSettingsActive={isSettingsView}
-            onOpenSettings={() => {
-              setBrowseEntity(null); navigation.current = [];
-              setSelectedPlaylistId(null);
-              changeScreen("settings");
-            }}
-            activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
-            activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
-            onOpenLibrarySection={(section) => {
-              setBrowseEntity(null); navigation.current = [];
-              setSelectedPlaylistId(null);
-              setLibrarySection(section);
-              changeScreen("library");
-            }}
-            onOpenLibrary={() => {
-              setBrowseEntity(null); navigation.current = [];
-              setSelectedPlaylistId(null);
-              setLibrarySection("overview");
-              changeScreen("library");
-            }}
-            onCreatePlaylist={createPlaylist}
-            onRenamePlaylist={playlistStore.rename}
-            onDeletePlaylist={(id) => {
-              if (!playlistStore.deletePlaylist(id)) return false;
-              if (selectedPlaylistId === id) setSelectedPlaylistId(null);
-              return true;
-            }}
-            playlists={playlistStore.playlists}
-            serviceGroups={servicePlaylistStore.groups}
+            onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
+            animateSwirl={preferences.ui.animateSwirl}
+            lyricMotion={preferences.ui.lyricMotion}
+            autoSyncLyrics={preferences.ui.autoSyncLyrics}
             servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
-            playlistGroups={preferences.ui.playlistGroups}
-            onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {
-              ...current, ui: { ...current.ui, playlistGroups: { ...current.ui.playlistGroups, [group]: expanded } },
-            })}
-            onSelectPlaylist={(id) => {
+            onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
+              ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
+            }))}
+            onAutoSyncLyrics={autoSyncLyrics => setPreferences(current => ({ ...current, ui: { ...current.ui, autoSyncLyrics } }))}
+            onLyricMotionChange={lyricMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricMotion } }))}
+            onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
+        ) : isQueueView ? (
+          <Queue
+            currentEntry={queue.currentEntry}
+            upcomingEntries={queue.upcomingEntries}
+            historyEntries={queue.historyEntries}
+            jumpTo={jumpToQueueEntry}
+            replayHistory={replayQueueHistoryEntry}
+            reorderEntries={queue.reorderEntries}
+            deleteEntries={deleteQueueEntries}
+            deleteHistoryEntries={queue.removeHistoryEntries}
+            registerScrollElement={registerScrollElement}
+          />
+        ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
+          onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
+          onAddTrack={addEntityTrack}
+          rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
+          <SearchView
+            onOpenEntity={openEntity}
+            playlistOptions={playlistOptions}
+            query={searchQuery}
+            provider={searchProvider}
+            tracks={search.results}
+            candidates={search.candidates}
+            isSearching={search.isSearching}
+            artists={search.artists}
+            albums={search.albums}
+            canRetry={search.canRetry}
+            retry={search.retry}
+            error={search.error}
+            playStandalone={playStandaloneFromSearch}
+            addToQueue={addToQueueFromSearch}
+            playNext={playNextFromSearch}
+            addToLibrary={(trackId) => {
+              const track = selectedSearchTrack(trackId);
+              if (
+                track &&
+                (track.provider === "tidal" ||
+                  track.provider === "qobuz" ||
+                  track.provider === "spotify")
+              ) {
+                void library.addTrack(track.provider, track.providerTrackId);
+              }
+            }}
+            registerScrollElement={registerScrollElement}
+          />
+        ) : isHomeView ? (
+          <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
+            error={listeningHistory.error} onPlay={(tracks, id) => onEntityAction("play", tracks, id)}
+            onSelectPlaylist={id => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(id);
               changeScreen("library");
-            }}
-          />}
-          {isSettingsView ? (
-            <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
-              onServiceConnected={() => {
-                refreshSearchProviders();
-                void servicePlaylistStore.refresh();
-                search.retry();
-                void library.refreshStreamingMusic();
-              }}
-              onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
-              animateSwirl={preferences.ui.animateSwirl}
-              lyricMotion={preferences.ui.lyricMotion}
-              autoSyncLyrics={preferences.ui.autoSyncLyrics}
-              servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
-              onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
-                ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
-              }))}
-              onAutoSyncLyrics={autoSyncLyrics => setPreferences(current => ({ ...current, ui: { ...current.ui, autoSyncLyrics } }))}
-              onLyricMotionChange={lyricMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricMotion } }))}
-              onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
-          ) : isQueueView ? (
-            <Queue
-              currentEntry={queue.currentEntry}
-              upcomingEntries={queue.upcomingEntries}
-              historyEntries={queue.historyEntries}
-              jumpTo={jumpToQueueEntry}
-              replayHistory={replayQueueHistoryEntry}
-              reorderEntries={queue.reorderEntries}
-              deleteEntries={deleteQueueEntries}
-              deleteHistoryEntries={queue.removeHistoryEntries}
-              registerScrollElement={registerScrollElement}
-            />
-          ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
-            onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
-            onAddTrack={addEntityTrack}
-            rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
-            <SearchView
-              onOpenEntity={openEntity}
-              playlistOptions={playlistOptions}
-              query={searchQuery}
-              provider={searchProvider}
-              tracks={search.results}
-              candidates={search.candidates}
-              isSearching={search.isSearching}
-              artists={search.artists}
-              albums={search.albums}
-              canRetry={search.canRetry}
-              retry={search.retry}
-              error={search.error}
-              playStandalone={playStandaloneFromSearch}
-              addToQueue={addToQueueFromSearch}
-              playNext={playNextFromSearch}
-              addToLibrary={(trackId) => {
-                const track = selectedSearchTrack(trackId);
-                if (
-                  track &&
-                  (track.provider === "tidal" ||
-                    track.provider === "qobuz" ||
-                    track.provider === "spotify")
-                ) {
-                  void library.addTrack(track.provider, track.providerTrackId);
-                }
-              }}
-              registerScrollElement={registerScrollElement}
-            />
-          ) : isHomeView ? (
-            <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
-              error={listeningHistory.error} onPlay={(tracks, id) => onEntityAction("play", tracks, id)}
-              onSelectPlaylist={id => {
-                setBrowseEntity(null); navigation.current = [];
-                setSelectedPlaylistId(id);
-                changeScreen("library");
-              }} registerScrollElement={registerScrollElement} />
-          ) : selectedPlaylist ? (
-            <PlaylistView
-              key={selectedPlaylist.id}
-              playlist={selectedPlaylist}
-              artworkTracks={baseCollectionTracks}
-              {...collectionViewProps}
-            />
-          ) : (
-            <LibraryView
-              key={`library:${librarySection}`}
-              {...collectionViewProps}
-              section={librarySection}
-              onSectionChange={setLibrarySection}
-              onRescanLocalMusic={library.rescanLocalMusic}
-            />
-          )}
-        </main>
-      )}
+            }} registerScrollElement={registerScrollElement} />
+        ) : selectedPlaylist ? (
+          <PlaylistView
+            key={selectedPlaylist.id}
+            playlist={selectedPlaylist}
+            artworkTracks={baseCollectionTracks}
+            {...collectionViewProps}
+          />
+        ) : (
+          <LibraryView
+            key={`library:${librarySection}`}
+            {...collectionViewProps}
+            section={librarySection}
+            onSectionChange={setLibrarySection}
+            onRescanLocalMusic={library.rescanLocalMusic}
+          />
+        )}
+      </main>
 
       <NowPlayingBar
         onOpenEntity={openEntity}
-        variant={playerOpen ? "expanded" : "compact"}
+        songMenu={currentSongMenu}
+        variant={isPlayerView ? "expanded" : "compact"}
         track={player.currentTrack}
         audioQuality={player.audioQuality}
         showAudioQuality={preferences.ui.showAudioQuality}
@@ -1144,7 +1159,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         onOpenQueue={openQueue}
       />
 
-      {libraryShown && <AppScrollbar scrollElement={activeScrollElement} swap={librarySwap} />}
+      <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
     </>
   );
 }

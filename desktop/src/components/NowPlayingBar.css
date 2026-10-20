@@ -16,17 +16,13 @@
     column-gap: 24px;
 }
 
-/* The bar is deliberately not a stacking context of its own: its glass sits below the
-   player cover flying in or out of the thumbnail (#albumCover[data-flight], z-index 11)
-   and its content above it, so the title and controls are never cut off as they glide past. */
+/* The bar is deliberately not a stacking context of its own, so its content sits above the player. */
 #bottomInfoBar > :not(.bottomInfoBarSurface),
 #playbackCluster > * {
     z-index: 12;
 }
 
-/* The bar's glass. It is its own layer so it can glide between the two bar heights
-   while the layout underneath snaps; it reaches below the window so that never
-   uncovers a gap at the bottom. */
+/* The bar's glass. It reaches below the window so no gap ever shows at the bottom. */
 .bottomInfoBarSurface {
     position: absolute;
     inset: 0 0 -80px 0;

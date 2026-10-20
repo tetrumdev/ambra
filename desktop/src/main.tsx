@@ -7,7 +7,7 @@ import "./interaction.css";
 import "./scrollbars.css";
 import { hydratePersistentStorage } from "./utils/persistentStorage";
 import { installTooltips } from "./utils/tooltips";
-import { isBrowserShortcut } from "./utils/keyboard";
+import { isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 import { useStartupWindow } from "./hooks/useStartupWindow";
 import { flushServerState, hydrateServerState, installServerStateLifecycle, reloadServerState, serverStateStatus, subscribeServerState } from "./utils/serverState";
@@ -29,7 +29,12 @@ document.documentElement.dataset.platform = navigator.userAgent.includes(
 
 // Restore shared state when possible; otherwise open an isolated local session.
 function Root() {
-  const state = useSyncExternalStore(subscribeServerState, serverStateStatus);
+  // Only the fields shown here, so routine saves don't rerender the whole app.
+  const state = {
+    ready: useSyncExternalStore(subscribeServerState, () => serverStateStatus().ready),
+    error: useSyncExternalStore(subscribeServerState, () => serverStateStatus().error),
+    conflict: useSyncExternalStore(subscribeServerState, () => serverStateStatus().conflict),
+  };
   const [loading, setLoading] = useState(true);
   const [started, setStarted] = useState(false);
   useStartupWindow(!state.ready);
@@ -76,6 +81,9 @@ function Root() {
 }
 
 installTooltips();
+window.addEventListener("keydown", (event) => {
+  if (isBrowserFindShortcut(event)) event.preventDefault();
+}, true);
 // Development keeps reload and friends.
 if (!import.meta.env.DEV) {
   window.addEventListener("keydown", (event) => {

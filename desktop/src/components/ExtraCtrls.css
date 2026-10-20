@@ -14,7 +14,8 @@
 .clickMenuBackdrop {
     position: fixed;
     inset: 0;
-    z-index: 11;
+    /* Above the now-playing bar's content (z-index 12), so menus open over it. */
+    z-index: 13;
     background: transparent;
 }
 

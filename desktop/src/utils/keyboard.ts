@@ -23,11 +23,20 @@ export function isUnmodifiedKey(event: KeyPress, code: string) {
     && !modifierIsActive("Shift");
 }
 
+/** Cmd/Ctrl+F, which opens Ambra's search instead of the WebView's find bar. */
+export function isSearchShortcut(event: KeyPress) {
+  return event.code === "KeyF" && (event.ctrlKey || event.metaKey) && !event.altKey;
+}
+
+/** The WebView's find-in-page, which Ambra's search replaces everywhere, development included. */
+export function isBrowserFindShortcut(event: KeyPress) {
+  return event.code === "F3" || ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === "KeyF" || event.code === "KeyG"));
+}
+
 // Shortcuts the WebView would answer with browser behavior (reload, print,
-// view source, find-next, caret browsing...). A native app has none of these.
-// Cmd/Ctrl+F is left alone: the app uses it to focus search.
-const BROWSER_MODIFIED_KEYS = new Set(["KeyR", "KeyP", "KeyU", "KeyS", "KeyO", "KeyG", "KeyJ"]);
-const BROWSER_FUNCTION_KEYS = new Set(["F3", "F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh"]);
+// view source, caret browsing...). A native app has none of these.
+const BROWSER_MODIFIED_KEYS = new Set(["KeyR", "KeyP", "KeyU", "KeyS", "KeyO", "KeyJ"]);
+const BROWSER_FUNCTION_KEYS = new Set(["F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh"]);
 
 export function isBrowserShortcut(event: KeyPress) {
   if (BROWSER_FUNCTION_KEYS.has(event.code)) return true;

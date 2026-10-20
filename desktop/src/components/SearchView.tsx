@@ -9,7 +9,7 @@ import { prefetchArtistPage } from "../utils/artistPage";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
-import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { MENU_WIDTH, TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
 import "./SearchView.css";
@@ -243,7 +243,7 @@ export function SearchView({
     event.stopPropagation();
 
     const triggerRect = event.currentTarget.getBoundingClientRect();
-    const menuWidth = 180;
+    const menuWidth = MENU_WIDTH;
     const gap = 4;
 
     setOpenMenu({

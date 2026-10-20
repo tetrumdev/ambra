@@ -21,10 +21,11 @@ import {
   jumpQueue,
   refreshQueueTracks,
   replayQueueHistory,
-  reorderQueueUpcoming,
+  reorderQueue,
   removeQueueEntries,
   removeQueueHistory,
   rewindQueue,
+  type QueueEntryRef,
   type QueueState,
 } from "../utils/queueNavigation";
 
@@ -48,7 +49,7 @@ export type QueueController = {
   previous: () => QueueItem | undefined;
   jumpTo: (queueId: number) => QueueItem | undefined;
   replayHistory: (historyId: string) => QueueItem | undefined;
-  reorderEntries: (queueIds: QueueId[]) => void;
+  reorderEntries: (history: QueueEntryRef[], upcoming: QueueEntryRef[]) => void;
   removeHistoryEntries: (historyIds: string[]) => void;
   removeEntries: (queueIds: QueueId[]) => {
     currentRemoved: boolean;
@@ -244,8 +245,8 @@ export function useQueue(
     return transition.item;
   }, [commitState]);
 
-  const reorderEntries = useCallback((queueIds: QueueId[]) => {
-    const nextState = reorderQueueUpcoming(stateRef.current, queueIds);
+  const reorderEntries = useCallback((history: QueueEntryRef[], upcoming: QueueEntryRef[]) => {
+    const nextState = reorderQueue(stateRef.current, history, upcoming, historyEntry);
     if (nextState !== stateRef.current) commitState(nextState);
   }, [commitState]);
 
