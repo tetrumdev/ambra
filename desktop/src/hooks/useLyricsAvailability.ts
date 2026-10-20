@@ -3,10 +3,11 @@ import type { TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 
-export type LyricsAvailability = "lyrics" | "none" | "pending";
+export type LyricsAvailability = "lyrics" | "unsynced" | "none" | "pending";
 
 function availability(lyrics: TrackLyrics): LyricsAvailability {
-  if (lyrics.status === "lyrics") return "lyrics";
+  // Lyrics without timings can't follow the song, so the player shows the cover instead.
+  if (lyrics.status === "lyrics") return lyrics.sync === "none" ? "unsynced" : "lyrics";
   // A failed lookup stays on the lyrics view, where it can be retried.
   return lyrics.status === "unavailable" && lyrics.failedProviders.length > 0 ? "lyrics" : "none";
 }

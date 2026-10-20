@@ -78,7 +78,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
+      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ ...position, transformOrigin: placement === "above" ? "left bottom" : "left top", width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem menuBack" onClick={() => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
           <div className="playlistMenuList">

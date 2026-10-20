@@ -9,6 +9,7 @@ import {
 import { TrackList, type TrackListProps } from "./TrackList";
 import { secureRandomInt } from "../utils/queueModel";
 import { formatTotalDuration } from "../utils/totalDuration";
+import { staggerRows } from "../utils/viewMotion";
 
 // Gap between the stuck playlist header's contents and the top of the view.
 const COLLAPSED_HEADER_INSET = 16;
@@ -158,6 +159,15 @@ export function TrackCollectionView({
       updateCollapsibleHeader(element);
     });
   }, [updateCollapsibleHeader]);
+
+  // The first tracks to show, whether there at once or once they load, settle in row by row.
+  const rowsArrived = useRef(false);
+  useLayoutEffect(() => {
+    const element = scrollElementRef.current;
+    if (rowsArrived.current || isEmpty || !element) return;
+    rowsArrived.current = true;
+    staggerRows(element, ".libraryItem");
+  }, [isEmpty]);
 
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
     scrollElementRef.current = element;

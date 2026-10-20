@@ -165,10 +165,15 @@ export function autoSyncTuning(): AutoSyncTuning {
   return cachedTuning;
 }
 
+/** The correction at the best match, trusted or not, or null when nothing could be scored. */
+export function bestCorrection(evidence: OffsetEvidence): number | null {
+  return evidence.bestMs === null ? null : evidence.bestMs + autoSyncTuning().biasMs;
+}
+
 /** The correction to apply for this evidence under the current tuning, or null when it is not trusted. */
 export function trustedCorrection(evidence: OffsetEvidence): number | null {
   const tuning = autoSyncTuning();
   if (!accepts(evidence, tuning.minProminence, tuning.minMargin)) return null;
-  const correctionMs = evidence.bestMs! + tuning.biasMs;
+  const correctionMs = bestCorrection(evidence)!;
   return Math.abs(correctionMs) < MIN_CORRECTION_MS ? 0 : correctionMs;
 }

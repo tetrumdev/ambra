@@ -143,7 +143,9 @@
     line-height: 1.08;
     /* Width follows the scaled text inside the fixed header footprint. */
     width: calc((100% + var(--playlist-title-shift)) / var(--playlist-title-scale));
-    overflow: hidden;
+    /* Clipped sideways only: the tight line height would otherwise cut off descenders and accents. */
+    overflow-x: clip;
+    overflow-y: visible;
     text-overflow: ellipsis;
     white-space: nowrap;
     transform: scale(var(--playlist-title-scale));

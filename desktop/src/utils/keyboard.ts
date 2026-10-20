@@ -28,6 +28,17 @@ export function isSearchShortcut(event: KeyPress) {
   return event.code === "KeyF" && (event.ctrlKey || event.metaKey) && !event.altKey;
 }
 
+/** Cmd/Ctrl+comma, the usual shortcut for an app's settings. */
+export function isSettingsShortcut(event: KeyPress) {
+  return event.code === "Comma" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+}
+
+/** Whether keys pressed here are being typed, so single-letter shortcuts must leave them alone. */
+export function isTypingTarget(target: EventTarget | null) {
+  return target instanceof HTMLElement
+    && (target.isContentEditable || target.matches("input:not([type='range']):not([type='checkbox']):not([type='radio']), textarea, select"));
+}
+
 /** The WebView's find-in-page, which Ambra's search replaces everywhere, development included. */
 export function isBrowserFindShortcut(event: KeyPress) {
   return event.code === "F3" || ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === "KeyF" || event.code === "KeyG"));
