@@ -40,6 +40,85 @@
     transition: scale var(--motion-press-down);
 }
 
+/* Things that light up under the pointer ease in quickly and fade back out at half the
+   speed (utils/motion.ts). :where() keeps this from overriding a control's own transition. */
+:where(
+    .libraryItem,
+    .libraryOverviewCard,
+    .menuItem,
+    .audioDeviceOption,
+    .searchProviderMenu button,
+    .selectionActionMenu button,
+    .selectionDeleteButton,
+    .playlistEditButtons button,
+    .lyricsSyncNudges button,
+    .lyricsMessage button,
+    .librarySourcesTrigger,
+    .librarySourceRow button,
+    .playbackError button,
+    .sidebarBtn,
+    .sidebarPlaylistGroup > summary,
+    #createPlaylistBtn,
+    .homeRowControls button,
+    .columnSortButton,
+    .librarySectionButton,
+    .artistTextAction,
+    .browseBack,
+    .playlistEditCancel,
+    .trackPlayButton,
+    .homePlay,
+    .sidebarSettingsButton img
+) {
+    transition-property: background-color, border-color, color, opacity;
+    transition-duration: calc(var(--motion-hover-duration) * 2);
+    transition-timing-function: ease-out;
+}
+
+:where(
+    .libraryItem,
+    .libraryOverviewCard,
+    .menuItem,
+    .audioDeviceOption,
+    .searchProviderMenu button,
+    .selectionActionMenu button,
+    .selectionDeleteButton,
+    .playlistEditButtons button,
+    .lyricsSyncNudges button,
+    .lyricsMessage button,
+    .librarySourcesTrigger,
+    .librarySourceRow button,
+    .playbackError button,
+    .sidebarBtn,
+    .sidebarPlaylistGroup > summary,
+    #createPlaylistBtn,
+    .homeRowControls button,
+    .columnSortButton,
+    .librarySectionButton,
+    .artistTextAction,
+    .browseBack,
+    .playlistEditCancel,
+    .trackPlayButton
+):hover,
+:where(.homeCardButton:hover .homePlay, .sidebarSettingsButton:hover img) {
+    transition-duration: var(--motion-hover-duration);
+    transition-timing-function: var(--motion-hover-ease);
+}
+
+/* Menus grow out of the point they were opened from (each sets its transform-origin)
+   and fade out as they close (hooks/useFadeOutOnUnmount.ts). */
+#trackPlaybackMenu,
+#trackCollectionMenu,
+.devAudioControls {
+    animation: menuEnter var(--motion-snappy) both;
+}
+
+@keyframes menuEnter {
+    from {
+        opacity: 0;
+        scale: 0.94;
+    }
+}
+
 /* Dialogs fade in and out like system sheets (see utils/dialogs.ts). */
 dialog[open],
 dialog[open]::backdrop {
@@ -60,6 +139,12 @@ dialog[data-closing]::backdrop {
 }
 
 @media (prefers-reduced-motion: reduce) {
+    #trackPlaybackMenu,
+    #trackCollectionMenu,
+    .devAudioControls {
+        animation: none;
+    }
+
     dialog[open],
     dialog[open]::backdrop {
         transition: none;

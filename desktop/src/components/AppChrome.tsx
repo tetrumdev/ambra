@@ -1,3 +1,4 @@
+import type { LyricsAvailability } from "../hooks/useLyricsAvailability";
 import type { AppScreen } from "../utils/preferences";
 import { canUseWindowDragRegion } from "../utils/windowChrome";
 import "./AppChrome.css";
@@ -5,9 +6,9 @@ import "../App.css";
 
 type AppChromeProps = {
   currentScreen: AppScreen;
-  /** The player view on screen, which falls back to the cover when a song has no lyrics. */
+  /** The player view on screen, which falls back to the cover when a song has no synced lyrics. */
   playerView: "bigscreen" | "lyrics";
-  lyricsAvailable: boolean;
+  lyricsAvailability: LyricsAvailability;
   isFullscreen: boolean | null;
   onExit?: () => void;
   onSelectPlayerView: (screen: "bigscreen" | "lyrics") => void;
@@ -21,7 +22,7 @@ const playerViews = [
 export function AppChrome({
   currentScreen,
   playerView,
-  lyricsAvailable,
+  lyricsAvailability,
   isFullscreen,
   onExit,
   onSelectPlayerView,
@@ -32,6 +33,8 @@ export function AppChrome({
     isFullscreen,
   );
   const isPlayerScreen = currentScreen === "bigscreen" || currentScreen === "lyrics";
+  const lyricsUnavailable = lyricsAvailability === "none" ? "No lyrics for this song"
+    : lyricsAvailability === "unsynced" ? "No synced lyrics for this song" : undefined;
   return (
     <>
       {(currentScreen === "home" ||
@@ -72,9 +75,9 @@ export function AppChrome({
                   type="button"
                   aria-label={view.label}
                   aria-pressed={playerView === view.screen}
-                  // Choosing lyrics for a song without any still takes effect from the next song that has them.
-                  data-unavailable={view.screen === "lyrics" && !lyricsAvailable}
-                  data-tooltip={view.screen === "lyrics" && !lyricsAvailable ? "No lyrics for this song" : undefined}
+                  // Choosing lyrics for a song without synced ones still takes effect from the next song that has them.
+                  data-unavailable={view.screen === "lyrics" && !!lyricsUnavailable}
+                  data-tooltip={view.screen === "lyrics" ? lyricsUnavailable : undefined}
                   onClick={() => onSelectPlayerView(view.screen)}
                 >
                   <img src={view.icon} alt="" className="bigscreenBtn" />

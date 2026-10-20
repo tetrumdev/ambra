@@ -6,7 +6,7 @@ import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import { recordSyncSample } from "../utils/lyricsAutoTuning";
-import { detectLyricOffset, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
+import { detectLyricOffset, firstAutoSyncNotice, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
 import {
   lyricSyncOverride,
   MAX_CORRECTION_MS,
@@ -481,6 +481,8 @@ function SyncedLyrics({
         top: 0,
         moved: 0,
         anchor: 0,
+        /** Where each later visual line of a wrapped lead line starts being sung, and how far below the first it sits. */
+        wraps: [] as { startMs: number; offset: number }[],
         // The scroll position this block is drawn at; it trails the real scroll during a ripple.
         ripple: { value: container.scrollTop, velocity: 0 },
         goal: container.scrollTop,
@@ -514,6 +516,8 @@ function SyncedLyrics({
     let frame = 0;
     let lastTime = Number.NaN;
     let focus = -1;
+    /** How far the focused block's sung visual line sits below its first. */
+    let wrapOffset = 0;
     let target = container.scrollTop;
     // The scroll the WebView last applied while following, kept to avoid reading it back every frame.
     const scroll = { value: container.scrollTop };
@@ -603,12 +607,27 @@ function SyncedLyrics({
           const previousTop = block.top;
           block.top = block.element.offsetTop;
           block.moved = block.top - previousTop;
-          const line = block.rows[0]?.element;
+          const lead = block.rows[0];
+          const line = lead?.element;
           if (line) {
             // Anchor the first visual line, not the centre of a wrapped group or its annotations.
+            const lineHeight = Number.parseFloat(getComputedStyle(line).lineHeight);
             block.anchor = block.top +
               line.getBoundingClientRect().top - block.element.getBoundingClientRect().top +
-              Number.parseFloat(getComputedStyle(line).lineHeight) / 2;
+              lineHeight / 2;
+            // A word-timed line that wraps is followed one visual line at a time as it is sung.
+            block.wraps = [];
+            if (lead.detailed && line.offsetHeight > lineHeight * 1.5) {
+              const firstTop = lead.letters[0]?.element.offsetTop ?? 0;
+              let lastTop = firstTop;
+              for (const letter of lead.letters) {
+                const top = letter.element.offsetTop;
+                const startMs = letter.motion.segment.startMs;
+                if (top <= lastTop + lineHeight / 2 || startMs === null) continue;
+                lastTop = top;
+                block.wraps.push({ startMs, offset: top - firstTop });
+              }
+            }
           } else {
             // The dots keep the same anchor while their surrounding slot expands or collapses.
             block.anchor = block.top + block.element.querySelector<HTMLElement>(".lyricPause")!.offsetHeight / 2;
@@ -697,8 +716,12 @@ function SyncedLyrics({
           }
           block.active = active;
         }
-        if (next !== focus || measured) align = true;
+        const wrap = next >= 0
+          ? layout[next].wraps.reduce((offset, step) => (time >= step.startMs ? step.offset : offset), 0)
+          : 0;
+        if (next !== focus || measured || wrap !== wrapOffset) align = true;
         focus = next;
+        wrapOffset = wrap;
         lastTime = time;
       }
       if (followingRef.current && focus >= 0 && align) {
@@ -710,7 +733,7 @@ function SyncedLyrics({
             0,
             Math.min(
               maximumScroll,
-              block.anchor - container.clientHeight * 0.43,
+              block.anchor + wrapOffset - container.clientHeight * 0.43,
             ),
           ) * pixel,
         ) / pixel;
@@ -1136,7 +1159,7 @@ export function LyricsView({
         if (cancelled) return;
         const correctionMs = result.confident ? result.correctionMs : 0;
         setDetected({ lyrics, correctionMs });
-        if (correctionMs) showNotice(autoSyncedNotice(correctionMs));
+        if (correctionMs && firstAutoSyncNotice(track.globalId, correctionMs)) showNotice(autoSyncedNotice(correctionMs));
       })
       .catch(() => {});
     return () => {
@@ -1150,13 +1173,17 @@ export function LyricsView({
     setAnalyzing(true);
     void detectLyricOffset(track, lyrics)
       .then((result) => {
-        if (!result.confident) {
-          showNotice("Couldn't find a reliable match for this song");
+        // Asked for explicitly, the best match is applied even when it is too weak to apply on its
+        // own; the listener can see whether it fits and nudge it, which also tunes auto-sync.
+        const correctionMs = result.confident ? result.correctionMs : result.bestMs;
+        if (correctionMs === null) {
+          showNotice("Too few timed lines to auto-sync this song");
           return;
         }
         // An explicit request is the listener's choice, so it is kept like a manual edit.
-        updateOverride({ ...override, correctionMs: result.correctionMs });
-        showNotice(result.correctionMs ? autoSyncedNotice(result.correctionMs) : "Lyrics are already in sync");
+        updateOverride({ ...override, correctionMs });
+        if (!result.confident) showNotice(`Best guess · ${formatCorrection(correctionMs)}`);
+        else showNotice(correctionMs ? autoSyncedNotice(correctionMs) : "Lyrics are already in sync");
       })
       .catch(() => showNotice("Couldn't analyze this song"))
       .finally(() => setAnalyzing(false));

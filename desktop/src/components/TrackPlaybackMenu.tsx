@@ -39,6 +39,8 @@ export function TrackPlaybackMenu({
             ${xPos >= window.innerWidth - MENU_WIDTH ? "-100%" : "1%"},
             ${yPos >= window.innerHeight - 250 ? "-100%" : "1%"}
           )`,
+          // The scale applies after the flip, so the box's own corner is always the clicked point.
+          transformOrigin: "0 0",
         }}
       >
         <div

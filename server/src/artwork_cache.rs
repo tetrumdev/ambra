@@ -65,7 +65,7 @@ fn entry_paths(directory: &Path, url: &str) -> (PathBuf, PathBuf) {
     let key = format!("{:016x}-{:x}", hasher.finish(), url.len());
     (
         directory.join(format!("{key}.jpg")),
-        directory.join(format!("{key}.colors-v2.json")),
+        directory.join(format!("{key}.colors-v3.json")),
     )
 }
 
@@ -432,7 +432,7 @@ mod tests {
         let legacy_path = PathBuf::from(
             colors_path
                 .to_string_lossy()
-                .replace(".colors-v2.json", ".colors.json"),
+                .replace(".colors-v3.json", ".colors.json"),
         );
         fs::write(
             legacy_path,

@@ -92,6 +92,8 @@ export function AudioControlsMenu({
         style={{
           left: position.left,
           top: position.top,
+          // It opens above its button, aligned to its right edge.
+          transformOrigin: "right bottom",
           visibility: position.ready ? "visible" : "hidden",
         }}
         onClick={(event) => event.stopPropagation()}

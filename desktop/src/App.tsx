@@ -29,7 +29,7 @@ import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
 import {
@@ -45,8 +45,9 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
-import { isSearchShortcut, isUnmodifiedKey } from "./utils/keyboard";
+import { isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
+import { enterView } from "./utils/viewMotion";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
 import { prepareLyricSync } from "./utils/lyricsOffset";
@@ -199,7 +200,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
   const isPlayerView = isBigscreen || isLyricsView;
-  // Lyrics are the chosen view, but a song without any shows its cover until one with lyrics comes back.
+  // Lyrics are the chosen view, but a song without synced ones shows its cover until one with them comes back.
   const prefersLyrics = isPlayerView ? isLyricsView : preferences.ui.playerView === "lyrics";
   const lyricsAvailability = useLyricsAvailability(player.currentTrack, prefersLyrics);
   // While a song's lyrics are still being looked up, the layout holds where it was.
@@ -919,6 +920,28 @@ function App({ localOnly }: { localOnly: boolean }) {
   };
 
   const openQueue = () => changeScreen("queue");
+  const openSettings = () => {
+    setBrowseEntity(null); navigation.current = [];
+    setSelectedPlaylistId(null);
+    changeScreen("settings");
+  };
+
+  // Q opens the queue and closes it again; Cmd/Ctrl+comma opens settings.
+  const handleScreenShortcut = useStableCallback((event: KeyboardEvent) => {
+    if (event.defaultPrevented || event.repeat) return;
+    if (isSettingsShortcut(event)) {
+      event.preventDefault();
+      if (!isSettingsView) openSettings();
+    } else if (isUnmodifiedKey(event, "KeyQ") && !isTypingTarget(event.target)) {
+      event.preventDefault();
+      if (isQueueView) closeCurrentScreen();
+      else openQueue();
+    }
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handleScreenShortcut);
+    return () => window.removeEventListener("keydown", handleScreenShortcut);
+  }, [handleScreenShortcut]);
 
   const collectionViewProps = {
     onOpenEntity: openEntity,
@@ -939,12 +962,24 @@ function App({ localOnly }: { localOnly: boolean }) {
     registerScrollElement,
   };
 
+  // Each screen or page rises in as it opens, in the frame it first paints.
+  const mainRef = useRef<HTMLElement>(null);
+  const viewKey = isSettingsView ? "settings" : isQueueView ? "queue" : browseEntity ? `entity:${entityKey(browseEntity)}`
+    : isSearchView ? "search" : isHomeView ? "home" : selectedPlaylist ? `playlist:${selectedPlaylist.id}` : `library:${librarySection}`;
+  const shownView = useRef(viewKey);
+  useLayoutEffect(() => {
+    if (shownView.current === viewKey) return;
+    shownView.current = viewKey;
+    // The page is the last thing in the screen, after the search bar and sidebar.
+    if (!isPlayerView) enterView(mainRef.current?.lastElementChild);
+  }, [viewKey, isPlayerView]);
+
   return (
     <>
       <AppChrome
         currentScreen={screen}
         playerView={showLyrics ? "lyrics" : "bigscreen"}
-        lyricsAvailable={lyricsAvailability !== "none"}
+        lyricsAvailability={lyricsAvailability}
         isFullscreen={isFullscreen}
         onExit={closeCurrentScreen}
         onSelectPlayerView={changeScreen}
@@ -973,7 +1008,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       )}
 
       {/* Stays mounted, hidden, behind the player, so closing it is instant and every scroll position holds. */}
-      <main className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
+      <main ref={mainRef} className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
         data-hidden={isPlayerView || undefined} inert={isPlayerView && searchSummon !== "on"}>
         {/* On every screen; where a screen has no search of its own it waits hidden until summoned. */}
         {!localOnly && <SearchBar
@@ -1010,11 +1045,7 @@ function App({ localOnly }: { localOnly: boolean }) {
             changeScreen("home");
           }}
           isSettingsActive={isSettingsView}
-          onOpenSettings={() => {
-            setBrowseEntity(null); navigation.current = [];
-            setSelectedPlaylistId(null);
-            changeScreen("settings");
-          }}
+          onOpenSettings={openSettings}
           activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
           activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
           onOpenLibrarySection={(section) => {
@@ -1157,6 +1188,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         onSeek={player.seek}
         onOpenBigscreen={() => changeScreen(preferences.ui.playerView)}
         onOpenQueue={openQueue}
+        direction={skipDirection}
       />
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
