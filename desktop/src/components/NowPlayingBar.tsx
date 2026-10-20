@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from "react";
+import { useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { AudioQuality, Track } from "../types/music";
@@ -11,6 +11,7 @@ import { PlayerControls } from "./PlayerControls";
 import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
 import { TrackArtwork } from "./TrackArtwork";
+import { motion } from "../utils/motion";
 
 type PlayerBarVariant = "expanded" | "compact";
 
@@ -77,6 +78,8 @@ type NowPlayingBarProps = {
   onSeek: (time: number) => void;
   onOpenBigscreen?: () => void;
   onOpenQueue?: () => void;
+  /** 1 when the player moved forward, -1 when it went back; the next song slides in from that side. */
+  direction?: () => number;
 };
 
 export function NowPlayingBar({
@@ -97,12 +100,28 @@ export function NowPlayingBar({
   onNext,
   onSeek,
   onOpenQueue,
+  direction,
 }: NowPlayingBarProps) {
   const isEmpty = track === undefined;
   const quality = track && showAudioQuality ? formatAudioQuality(track, audioQuality) : null;
 
+  // A new song's title and thumbnail ease in from the side the player moved towards,
+  // the way the big cover does. Nothing waits on it, so it takes the slower, gentler timing.
+  const bar = useRef<HTMLDivElement>(null);
+  const shownSong = useRef(track?.globalId);
+  useLayoutEffect(() => {
+    if (shownSong.current === track?.globalId) return;
+    shownSong.current = track?.globalId;
+    if (!bar.current || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const step = direction?.() ?? 1;
+    // The whole thumbnail moves, not just its image, so its white backing never shows around a shrunken cover.
+    const arrive = [{ opacity: 0, transform: `translateX(${step * 14}px)` }, { opacity: 1, transform: "none" }];
+    bar.current.querySelector("#songInfo")?.animate(arrive, motion.smooth);
+    bar.current.querySelector("#compactArtwork")?.animate(arrive, motion.smooth);
+  }, [track?.globalId, direction]);
+
   return (
-    <div id="bottomInfoBar" data-variant={variant}>
+    <div id="bottomInfoBar" ref={bar} data-variant={variant}>
       <div className="bottomInfoBarSurface" aria-hidden="true" />
       <AudioDecks controller={audioDecks} />
       {track && playbackError && (

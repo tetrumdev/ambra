@@ -99,6 +99,9 @@ fn dominant_colors(bytes: &[u8]) -> Option<Vec<String>> {
     dominant_palette(bytes).map(|palette| palette.colors)
 }
 
+/// How far (in `color_distance`, square-rooted) a shade may be from a palette color and still count toward its coverage.
+const REPRESENTED_DISTANCE: f32 = 150.0;
+
 pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
     const CANDIDATE_COLORS: usize = 8;
 
@@ -199,18 +202,21 @@ pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
         selected.push(candidates.remove(accent));
     }
 
-    // Include all sampled shades in the nearest selected color's coverage.
+    // Each sampled shade counts toward the nearest selected color it resembles. Shades
+    // none of them resemble (often greys and whites beside a few strong accents) are
+    // left out rather than inflating whichever accent happens to be least far away.
     let mut counts = vec![0_usize; selected.len()];
     for pixel in &pixels {
-        let nearest = selected
+        let (nearest, distance) = selected
             .iter()
+            .map(|cluster| color_distance(*pixel, cluster.color))
             .enumerate()
-            .min_by(|(_, left), (_, right)| {
-                color_distance(*pixel, left.color).total_cmp(&color_distance(*pixel, right.color))
-            })?
-            .0;
-        counts[nearest] += 1;
+            .min_by(|(_, left), (_, right)| left.total_cmp(right))?;
+        if distance.sqrt() <= REPRESENTED_DISTANCE {
+            counts[nearest] += 1;
+        }
     }
+    let represented = counts.iter().sum::<usize>().max(1);
     while selected.len() < 4 {
         selected.push(*selected.last()?);
         counts.push(0);
@@ -231,7 +237,7 @@ pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
             .collect(),
         weights: counts
             .into_iter()
-            .map(|count| count as f32 / pixels.len() as f32)
+            .map(|count| count as f32 / represented as f32)
             .collect(),
     })
 }

@@ -22,6 +22,11 @@
     transform: rotate(0);
 }
 
+/* A group sliding shut turns its chevron as it starts, not once it has closed (utils/detailsMotion.ts). */
+.playlistDropdown[open][data-closing] > summary .dropdownChevron {
+    transform: rotate(-90deg);
+}
+
 @media (prefers-reduced-motion: reduce) {
     .dropdownChevron {
         transition: none;

@@ -1,5 +1,6 @@
-/* The queue reuses the playlist header, column header and track rows from LibraryView.css;
-   this file only covers what is particular to the queue. */
+/* The queue is laid out like a playlist (LibraryView.css) so it reads as a track list,
+   but it is a place, not a collection: a smaller title, text actions instead of the
+   play buttons, labelled sections and history folded away above now playing. */
 #queue .queueView {
     grid-column: 2;
     container: queue / inline-size;
@@ -12,39 +13,39 @@
     font: 300 0.9rem "Stack Sans Text", Inter, sans-serif;
 }
 
+/* Opaque and above the list, so rows scrolled up to the list's edge never show along its top seam. */
 .queueHeader {
     flex: none;
-    padding-top: var(--content-top-spacer);
+    position: relative;
+    z-index: 9;
+    padding-top: calc(var(--content-top-spacer) + 8px);
+    background: #000;
 }
 
-/* Spaced like the playlist header. */
 .queueHeader .libraryTitle {
-    margin: 0 0 8px;
-    line-height: 1.08;
-}
-
-.queueHeader .libraryPlayActions {
-    flex-wrap: wrap;
-    margin-top: 6px;
-    margin-bottom: 4px;
-}
-
-.queueHeader .libraryPlayBtn,
-.queueHeader .libraryShuffleBtn {
-    font-family: inherit;
-    cursor: default;
-}
-
-.queueHeader .libraryPlayBtn img {
-    width: 12px;
-}
-
-.queueHeader button:disabled {
-    opacity: var(--disabled-opacity);
+    margin: 0;
+    font-size: 2.75rem;
+    line-height: 1.1;
 }
 
 .queueHeader .libraryInfo {
-    margin-top: 4px;
+    align-items: center;
+    margin-top: 6px;
+}
+
+.queueTextButton {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #a3a2a3;
+    font: inherit;
+    font-weight: 600;
+    cursor: default;
+}
+
+.queueTextButton:hover,
+.queueTextButton:focus-visible {
+    color: white;
 }
 
 .queueView #queueList {
@@ -66,29 +67,101 @@
 .queueView .columnInfo {
     padding-top: 18px;
     padding-bottom: 12px;
+    /* Its own layer, as in playlists (where the collapse transform gives it one); otherwise the
+       web view can draw a scrolled row's composited cover over it. */
+    will-change: transform;
+}
+
+/* As in playlists: covers fractional clipping and compositing seams at the header's top edge. */
+.queueView .columnInfo::before {
+    position: absolute;
+    top: -2px;
+    left: 0;
+    right: 0;
+    height: 3px;
+    content: "";
+    background: #000;
+    pointer-events: none;
 }
 
 .queueSection {
     padding-top: 24px;
 }
 
-/* Whichever section comes first sits close under the column header. */
-.queueView .columnInfo + .queueSection,
-.queueView .columnInfo + .queueSection[hidden] + .queueTail > .queueSection:first-child {
-    padding-top: 8px;
-}
-
 .queueSection[hidden] {
     display: none;
 }
 
+/* Small caps labels, like the sidebar's playlist groups, over a divider that starts each list. */
 .queueSectionTitle {
     margin: 0;
     padding: 0 15px 10px;
     border-bottom: 1px solid #535353;
-    color: #b6b6b6;
-    font-size: 0.9rem;
+    color: #b3b3b3;
+    font-size: 12px;
     font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.queueHistoryBar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 15px 0 0;
+}
+
+.queueHistoryBar .queueTextButton {
+    font-size: 0.8rem;
+}
+
+/* Folded, history is one quiet row with no divider of its own. */
+.queueHistoryToggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 7px;
+    border: 0;
+    background: transparent;
+    font-family: inherit;
+    cursor: default;
+}
+
+.queueHistoryToggle[aria-expanded="true"] {
+    flex: 1;
+    border-bottom: 1px solid #535353;
+}
+
+.queueHistoryBar:has(.queueHistoryToggle[aria-expanded="true"]) {
+    align-items: stretch;
+}
+
+.queueHistoryBar:has(.queueHistoryToggle[aria-expanded="true"]) .queueTextButton {
+    padding-bottom: 10px;
+    border-bottom: 1px solid #535353;
+}
+
+.queueHistoryToggle:hover,
+.queueHistoryToggle:focus-visible {
+    color: white;
+}
+
+.queueHistoryToggle[aria-expanded="true"] .dropdownChevron {
+    transform: rotate(0);
+}
+
+.queueHistoryBar + .queueSection {
+    padding-top: 0;
+}
+
+.queueHistoryBar + .queueSection[hidden] + .queueTail > .queueSection:first-child {
+    padding-top: 16px;
+}
+
+/* Whichever section comes first sits close under the column header. */
+.queueView .columnInfo + .queueSection,
+.queueView .columnInfo + .queueSection[hidden] + .queueTail > .queueSection:first-child {
+    padding-top: 8px;
 }
 
 .queueView .queueItem[data-current="true"] {
@@ -137,10 +210,6 @@
 }
 
 @container queue (width < 780px) {
-    .queueHeader .libraryTitle {
-        font-size: 2.5rem;
-    }
-
     .queueView #queueList {
         --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
             minmax(64px, 0.55fr) 40px;

@@ -8,6 +8,7 @@ import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
 import { MENU_WIDTH, TrackCollectionMenu } from "./TrackCollectionMenu";
+import { DropdownChevron } from "./DropdownChevron";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
@@ -62,6 +63,9 @@ export function Queue(props: QueueProps) {
   const currentRef = useRef<HTMLElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
   const followCurrent = useRef(true);
+  // History starts folded into a single row above now playing, so the queue opens on what is playing.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const historyShown = historyOpen && history.length > 0;
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
     scrollRef.current = element;
     props.registerScrollElement(element);
@@ -69,10 +73,11 @@ export function Queue(props: QueueProps) {
   const currentScrollTop = useCallback(() => {
     const scroller = scrollRef.current;
     const anchor = currentRef.current;
-    if (!scroller || !anchor) return 0;
+    // Folded, history is one row; it stays in view instead of being scrolled past.
+    if (!scroller || !anchor || !historyShown) return 0;
     return Math.max(0, anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
       + scroller.scrollTop);
-  }, []);
+  }, [historyShown]);
   const jumpToCurrent = useCallback(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = currentScrollTop();
     followCurrent.current = true;
@@ -102,8 +107,11 @@ export function Queue(props: QueueProps) {
     followCurrent.current = Math.abs((scrollRef.current?.scrollTop ?? 0) - currentScrollTop()) <= 24;
   }
 
-  function showHistory() {
-    followCurrent.current = false;
+  // Unfolding shows the plays right under their row, oldest first, leading into now playing.
+  function toggleHistory() {
+    const open = !historyOpen;
+    setHistoryOpen(open);
+    followCurrent.current = !open;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }
   // History and upcoming reorder as one list; whatever lands behind now playing is history, the rest is up next.
@@ -189,32 +197,27 @@ export function Queue(props: QueueProps) {
       <div className="queueView">
         <header className="libraryHeader queueHeader">
           <h1 className="libraryTitle">Queue</h1>
-          <div className="libraryPlayActions">
-            {current && <button type="button" className="libraryPlayBtn" onClick={jumpToCurrent}>
-              <img src="/Play.svg" alt="" aria-hidden="true" />
-              <span>NOW PLAYING</span>
-            </button>}
-            <button type="button" className="libraryShuffleBtn" disabled={!history.length} onClick={showHistory}>
-              <span>HISTORY</span>
-            </button>
-            <button type="button" className="libraryShuffleBtn" disabled={!entries.length}
-              onClick={() => removeEntries(upcoming.length ? upcoming : entries)}>
-              <span>{upcoming.length || !entries.length ? "CLEAR UPCOMING" : "CLEAR ALL"}</span>
-            </button>
-          </div>
           <div className="libraryInfo">
-            <span className="numOfTracks">{upcoming.length} {upcoming.length === 1 ? "song" : "songs"} up next</span>
-            {upcoming.length > 0 && <><span className="separator">•</span><span className="playlistLength">{formatTotalDuration(duration)}</span></>}
-            {history.length > 0 && <><span className="separator">•</span><span>{history.length} played</span></>}
+            <span>{upcoming.length ? `${upcoming.length} ${upcoming.length === 1 ? "song" : "songs"} up next` : "Nothing up next"}</span>
+            {upcoming.length > 0 && <><span className="separator">•</span><span>{formatTotalDuration(duration)}</span>
+              <span className="separator">•</span>
+              <button type="button" className="queueTextButton" onClick={() => removeEntries(upcoming)}>Clear</button></>}
           </div>
         </header>
         <div id="queueList" className="libraryView smoothScroll" ref={setScrollElement} onScroll={trackScrollPosition}
           data-selecting={selection.isSelecting ? "true" : undefined}>
           {entries.length > 0 && <TrackColumnHeader headerRef={columnHeaderRef} />}
-          <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!history.length}>
-            <h2 className="queueSectionTitle">History</h2>
-            <QueueRows entries={history} label="Queue history" {...rowProps} onPointerDown={onPointerDown}
-              draggedId={draggedTrackId} dropTarget={dropTarget} />
+          {history.length > 0 && <div className="queueHistoryBar">
+            <button type="button" className="queueSectionTitle queueHistoryToggle" aria-expanded={historyShown}
+              aria-controls="queueHistory" onClick={toggleHistory}>
+              <DropdownChevron />Played ({history.length})
+            </button>
+            {historyShown && <button type="button" className="queueTextButton"
+              onClick={() => removeEntries(history)}>Clear</button>}
+          </div>}
+          <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!historyShown}>
+            {historyShown && <QueueRows entries={history} label="Queue history" {...rowProps} onPointerDown={onPointerDown}
+              draggedId={draggedTrackId} dropTarget={dropTarget} />}
           </section>
           <div className="queueTail" ref={tailRef}>
             <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!current}>
