@@ -7,7 +7,7 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { useTrackReorder } from "../hooks/useTrackReorder";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
-import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { MENU_WIDTH, TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { ArtistLinks, trackArtistNames } from "./ArtistLinks";
@@ -182,7 +182,7 @@ export function TrackList({
     }
 
     const triggerRect = event.currentTarget.getBoundingClientRect();
-    const menuWidth = 180;
+    const menuWidth = MENU_WIDTH;
     const gap = 4;
 
     setOpenMenu({

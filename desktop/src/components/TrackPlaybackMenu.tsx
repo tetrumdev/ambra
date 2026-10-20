@@ -2,6 +2,7 @@ import "./TrackMenus.css";
 import { useRef } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
+import { MENU_WIDTH } from "./TrackCollectionMenu";
 
 type TrackPlaybackMenuProps = {
   onClose: () => void;
@@ -35,7 +36,7 @@ export function TrackPlaybackMenu({
           left: xPos,
           top: yPos,
           transform: `translate(
-            ${xPos >= window.innerWidth - 180 ? "-100%" : "1%"},
+            ${xPos >= window.innerWidth - MENU_WIDTH ? "-100%" : "1%"},
             ${yPos >= window.innerHeight - 250 ? "-100%" : "1%"}
           )`,
         }}

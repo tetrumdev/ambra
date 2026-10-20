@@ -9,9 +9,11 @@ export function useTrackReorder(
   reorderTracks: ((ids: string[]) => void) | undefined,
   onStart: () => void,
   scrollRef?: RefObject<HTMLElement | null>,
+  /** Rows anywhere inside this element accept drops; by default only the dragged row's own list does. */
+  dropScopeRef?: RefObject<HTMLElement | null>,
 ) {
-  const latest = useRef({ trackIds, reorderTracks, onStart, scrollRef });
-  latest.current = { trackIds, reorderTracks, onStart, scrollRef };
+  const latest = useRef({ trackIds, reorderTracks, onStart, scrollRef, dropScopeRef });
+  latest.current = { trackIds, reorderTracks, onStart, scrollRef, dropScopeRef };
   const cleanup = useRef<(() => void) | null>(null);
   const suppressClick = useRef(false);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export function useTrackReorder(
     if (!container || !sourceId) return;
     cleanup.current?.();
     const scroller = latest.current.scrollRef?.current ?? container;
+    const scope = latest.current.dropScopeRef?.current ?? container;
 
     const pointerId = event.pointerId;
     const startX = event.clientX;
@@ -54,7 +57,7 @@ export function useTrackReorder(
     }
 
     function viewport() {
-      const bounds = container!.getBoundingClientRect();
+      const bounds = scope.getBoundingClientRect();
       const scrollBounds = scrollViewport();
       return {
         left: Math.max(bounds.left, scrollBounds.left),
@@ -68,7 +71,7 @@ export function useTrackReorder(
       const bounds = viewport();
       const over = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-track-id]");
       destination = null;
-      if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom && over?.parentElement === container && over.dataset.trackId !== sourceId) {
+      if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom && over && (scope === container ? over.parentElement === container : scope.contains(over)) && over.dataset.trackId !== sourceId) {
         const rect = over.getBoundingClientRect();
         destination = {
           trackId: over.dataset.trackId!,

@@ -9,7 +9,8 @@
 }
 
 :root {
-    font-family: "Source Serif 4", Inter, Avenir, Helvetica, Arial, sans-serif;
+    /* Sans everywhere; the serif is kept for page titles, which set it themselves (.libraryTitle). */
+    font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
     font-size: 16px;
     line-height: 24px;
     font-weight: 400;
@@ -194,29 +195,6 @@ button img {
     font-display: block;
 }
 
-/* The library screen and its chrome fade out as the player rises over them and
-   back in as it sinks away. */
-:is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap] {
-    transition: opacity var(--motion-smooth);
-}
-
-:is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap="leaving"] {
-    opacity: 0;
-    pointer-events: none;
-}
-
-@starting-style {
-    :is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap="arriving"] {
-        opacity: 0;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    :is(.appScreen, .appScrollbar, .libraryTitlebar, .xContainer)[data-swap] {
-        transition: none;
-    }
-}
-
 /* Library, search, settings and queue share one screen element (its id names the screen),
    so layout rules target the class and apply to every screen alike. */
 .appScreen {
@@ -247,6 +225,11 @@ button img {
     inset: var(--library-titlebar-height) var(--scrollbar-column-width) 0 0;
     width: auto;
     height: auto;
+}
+
+/* Behind the open player. Hidden rather than unmounted, so scroll positions hold. */
+:is(.appScreen, .appScrollbar)[data-hidden] {
+    visibility: hidden;
 }
 
 .settingsView {

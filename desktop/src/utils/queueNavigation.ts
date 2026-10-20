@@ -134,7 +134,6 @@ export function replayQueueHistory(state: QueueState, historyId: string): QueueT
   const index = state.history.findIndex(entry => entry.historyId === historyId);
   const entry = state.history[index];
   if (!entry) return { state, item: undefined };
-  const asItem = ({ track, source, shufflePackageId }: QueueItem): QueueItem => ({ track, source, shufflePackageId });
   const item = asItem(entry);
   return {
     state: {
@@ -150,12 +149,36 @@ export function replayQueueHistory(state: QueueState, historyId: string): QueueT
   };
 }
 
-export function reorderQueueUpcoming(state: QueueState, queueIds: readonly QueueId[]): QueueState {
-  if (queueIds.length !== state.upcoming.length || new Set(queueIds).size !== queueIds.length) return state;
-  const upcoming = queueIds.map(id => state.upcoming[id - 2]);
-  if (upcoming.some(entry => !entry)) return state;
-  if (upcoming.every((entry, index) => entry === state.upcoming[index])) return state;
-  return { ...state, upcoming };
+const asItem = ({ track, source, shufflePackageId }: QueueItem): QueueItem => ({ track, source, shufflePackageId });
+
+/** A played entry by its history ID, or an upcoming one by its queue position. */
+export type QueueEntryRef = { historyId: string } | { queueId: QueueId };
+
+/**
+ * Lays out history and upcoming anew around the current track. Entries may cross over:
+ * an upcoming one moved behind the current track joins the history, and a played one
+ * moved ahead of it is queued again.
+ */
+export function reorderQueue(
+  state: QueueState,
+  historyRefs: readonly QueueEntryRef[],
+  upcomingRefs: readonly QueueEntryRef[],
+  archive: (item: QueueItem) => QueueHistoryEntry,
+): QueueState {
+  const refs = [...historyRefs, ...upcomingRefs];
+  const keys = refs.map(ref => "historyId" in ref ? `h:${ref.historyId}` : `q:${ref.queueId}`);
+  if (refs.length !== state.history.length + state.upcoming.length || new Set(keys).size !== keys.length) return state;
+  const played = new Map(state.history.map(entry => [entry.historyId, entry]));
+  const resolve = (ref: QueueEntryRef) => "historyId" in ref ? played.get(ref.historyId) : state.upcoming[ref.queueId - 2];
+  if (refs.some(ref => !resolve(ref))) return state;
+  const history = historyRefs.map(ref => "historyId" in ref ? played.get(ref.historyId)! : archive(resolve(ref)!));
+  const upcoming = upcomingRefs.map(ref => "queueId" in ref ? resolve(ref)! : asItem(resolve(ref)!));
+  if (
+    history.length === state.history.length
+    && history.every((entry, index) => entry === state.history[index])
+    && upcoming.every((entry, index) => entry === state.upcoming[index])
+  ) return state;
+  return { ...state, history, upcoming };
 }
 
 export function removeQueueHistory(state: QueueState, historyIds: ReadonlySet<string>): QueueState {

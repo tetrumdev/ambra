@@ -6,6 +6,9 @@ import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
 
+/** Every track menu's width, wide enough that no action wraps. Keep TrackMenus.css in step. */
+export const MENU_WIDTH = 220;
+
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
   onAdd: (playlistId: string, trackId: string) => boolean | Promise<boolean>;
@@ -14,6 +17,8 @@ export type PlaylistMenuOptions = {
 
 export type TrackCollectionAction = {
   label: string;
+  /** Only where the playback menu has the same item, so the two show the same icon. */
+  icon?: string;
   onSelect: () => void;
 };
 
@@ -24,9 +29,11 @@ type TrackCollectionMenuProps = {
   actions: TrackCollectionAction[];
   trackId: string;
   playlistOptions?: PlaylistMenuOptions;
+  /** "above" opens upward from yPos, for menus anchored near the bottom of the window. */
+  placement?: "below" | "above";
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below" }: TrackCollectionMenuProps) {
   const [choosingPlaylist, setChoosingPlaylist] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -53,7 +60,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     const reposition = () => {
       const { width, height } = element.getBoundingClientRect();
       const left = Math.max(4, Math.min(xPos, window.innerWidth - width - 4));
-      const top = Math.max(4, Math.min(yPos, window.innerHeight - height - 4));
+      const top = Math.max(4, Math.min(placement === "above" ? yPos - height : yPos, window.innerHeight - height - 4));
       setPosition(current => current.left === left && current.top === top ? current : { left, top });
     };
     reposition();
@@ -64,16 +71,16 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       observer.disconnect();
       window.removeEventListener("resize", reposition);
     };
-  }, [xPos, yPos]);
+  }, [xPos, yPos, placement]);
   useEffect(() => { panel.current?.focus(); }, [choosingPlaylist]);
-  const width = choosingPlaylist ? 260 : 180;
+  const width = choosingPlaylist ? 260 : MENU_WIDTH;
   return (
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
       <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ ...position, width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
-          <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(false)}>← Back</button>
+          <button type="button" className="menuItem menuBack" onClick={() => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
           <div className="playlistMenuList">
             {playlistOptions.playlists.length === 0 && <p>No playlists yet. Create one below.</p>}
             {([undefined, "spotify", "qobuz", "tidal"] as const).map(provider => {
@@ -94,13 +101,14 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
             event.preventDefault();
             void save(() => playlistOptions.onCreate(name, trackId));
           }}>
-            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New AMBRA playlist name" value={name} onChange={event => setName(event.target.value)} />
-            <button type="submit" disabled={!name.trim() || saving}>{saving ? "Saving…" : "Create & add"}</button>
+            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New playlist" value={name} onChange={event => setName(event.target.value)} />
+            <button type="submit" disabled={!name.trim() || saving}>{saving ? "Saving…" : "Create"}</button>
             {error && <span role="alert">{error}</span>}
           </form>
         </> : <>
         {actions.map(action => (
           <button type="button" key={action.label} className="menuItem" onClick={() => { action.onSelect(); onClose(); }}>
+            {action.icon && <img className="menuIcon" src={action.icon} alt="" aria-hidden="true" />}
             {action.label}
           </button>
         ))}

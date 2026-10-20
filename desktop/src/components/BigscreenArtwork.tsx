@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { compactArtworkRect } from "../utils/compactArtwork";
 import { motion } from "../utils/motion";
 import {
   artworkPalette,
@@ -66,23 +65,10 @@ type CoverLayer = {
   leaving: boolean;
 };
 
-/** The cover's own centring, which every flight transform builds on. */
-const CENTRED = "translate(-50%, -50%)";
-/** The bar thumbnail's corner radius (#compactArtwork), which the cover takes on as it lands. */
-const THUMBNAIL_RADIUS = 8;
-/** How far the cover's images overhang its box to the right and bottom (.albumCoverImg). */
-const IMAGE_OVERHANG = 2;
-
-/** Moves and scales the cover's resting box onto another box on screen. */
-function flightFrame(home: DOMRect, to: DOMRect, thumbnail: DOMRect) {
-  const dx = to.left + to.width / 2 - (home.left + home.width / 2);
-  const dy = to.top + to.height / 2 - (home.top + home.height / 2);
-  const scale = to.width / home.width;
-  // Rounds the corners in step with the shrink, so they match the thumbnail's on screen when it lands.
-  // The clip leaves the images' overhang showing, so the resting frame matches the cover once the flight ends.
-  const landed = Math.min(1, Math.max(0, (1 - scale) / (1 - thumbnail.width / home.width)));
-  const radius = (landed * THUMBNAIL_RADIUS) / scale;
-  return { transform: `${CENTRED} translate(${dx}px, ${dy}px) scale(${scale})`, clipPath: `inset(0 -${IMAGE_OVERHANG}px -${IMAGE_OVERHANG}px 0 round ${radius}px)` };
+/** The cover's laid-out place and size, resolved to pixels so a glide can run between two layouts. */
+function coverBox(element: HTMLElement): Keyframe {
+  const { left, width, height } = getComputedStyle(element);
+  return { left, width, height };
 }
 
 const albumKey = (track: Track) => JSON.stringify([track.provider, track.albumId, track.cover, track.nativeCover, track.upc]);
@@ -113,59 +99,28 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
   }, [direction]);
   const key = track ? albumKey(track) : "";
 
-  // Opening grows the cover out of the now-playing bar's thumbnail while the rest of the
-  // player rises in; closing shrinks it back into the thumbnail while the rest sinks away.
-  // The flight is driven outside React so the handoff to the thumbnail lands in one frame.
+  // The cover glides between layouts, but follows a window resize at once. Rather than a CSS
+  // transition (which a resize would set off too), the switch itself animates from the box
+  // the cover had, read while the old layout is still on screen.
   const cover = useRef<HTMLDivElement>(null);
-  // The move and the corner rounding run as separate animations, so the move stays off the
-  // main thread (a clip-path keyframe would pull it on) and busy frames can't make it skip.
-  const flight = useRef<Animation[]>([]);
-  const wasActive = useRef(active);
+  const laidOutAs = useRef(layout);
+  const before = useRef<Keyframe | null>(null);
+  const glide = useRef<Animation | null>(null);
+  if (laidOutAs.current !== layout) {
+    laidOutAs.current = layout;
+    // Mid-glide, this is wherever the cover is on screen, so turning back is seamless.
+    before.current = cover.current ? coverBox(cover.current) : null;
+  }
   useLayoutEffect(() => {
     const element = cover.current;
-    const opened = active && !wasActive.current;
-    const closed = !active && wasActive.current;
-    wasActive.current = active;
-    if (!element || (!opened && !closed)) return;
-    const root = document.documentElement;
-    // Turning back mid-flight picks up from wherever the cover is on screen.
-    const midFlight = flight.current.length ? element.getBoundingClientRect() : null;
-    for (const animation of flight.current) animation.cancel();
-    flight.current = [];
-    const land = () => {
-      for (const animation of flight.current) animation.cancel();
-      flight.current = [];
-      delete element.dataset.flight;
-      delete root.dataset.coverFlight;
-    };
-    const thumbnail = compactArtworkRect();
-    const home = element.getBoundingClientRect();
-    if (!thumbnail?.width || !home.width || matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      land();
-      return;
-    }
-    const resting = flightFrame(home, home, thumbnail);
-    const shrunk = flightFrame(home, thumbnail, thumbnail);
-    const start = midFlight ? flightFrame(home, midFlight, thumbnail) : opened ? shrunk : resting;
-    element.dataset.flight = opened ? "opening" : "closing";
-    if (closed) root.dataset.coverFlight = "closing";
-    else delete root.dataset.coverFlight;
-    const end = opened ? resting : shrunk;
-    // Opening moves with the rest of the player; closing, the cover darts most of the way to the thumbnail, then eases in.
-    const timing: KeyframeAnimationOptions = { ...(opened ? motion.smooth : motion.dock), fill: "forwards" };
-    const move = element.animate([{ transform: start.transform }, { transform: end.transform }], timing);
-    const corners = element.animate([{ clipPath: start.clipPath }, { clipPath: end.clipPath }], timing);
-    flight.current = [move, corners];
-    // The cover hides and the thumbnail shows in the same frame, so nothing blinks or jumps.
-    // Closing, the cover holds on the thumbnail until its image is decoded and ready to show.
-    const thumbnailImage = closed ? document.querySelector<HTMLImageElement>("#compactArtwork img") : null;
-    const ready = thumbnailImage ? thumbnailImage.decode().catch(() => undefined) : Promise.resolve();
-    move.onfinish = () => { void ready.then(() => { if (flight.current[0] === move) land(); }); };
-  }, [active]);
-  useEffect(() => () => {
-    for (const animation of flight.current) animation.cancel();
-    delete document.documentElement.dataset.coverFlight;
-  }, []);
+    const from = before.current;
+    before.current = null;
+    if (!element || !from) return;
+    glide.current?.cancel();
+    glide.current = null;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    glide.current = element.animate([from, coverBox(element)], motion.smooth);
+  }, [layout]);
 
   useEffect(() => {
     if (!track) return;

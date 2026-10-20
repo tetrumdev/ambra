@@ -131,12 +131,6 @@
     opacity: 0.2;
 }
 
-.xContainer[data-queue-positioning="true"] {
-    position: absolute;
-    top: 60px;
-    right: 45px;
-}
-
 .bigscreenBtn {
     display: block;
     width: 1.2rem;

@@ -244,12 +244,20 @@ export function loadPreferences(): AppPreferences {
   return { ...preferences, playback: playback ?? { ...defaultPreferences.playback } };
 }
 
+/** Saves everything but playback, which follows the clock through savePlayback instead. */
 export function savePreferences(preferences: AppPreferences) {
   try {
     const { playback, ...localPreferences } = preferences;
     setPersistentItem(preferencesKey, JSON.stringify(localPreferences));
-    setPersistentItem(playbackKey, JSON.stringify(playback));
   } catch (error) {
     console.warn("Could not save preferences:", error);
+  }
+}
+
+export function savePlayback(playback: AppPreferences["playback"]) {
+  try {
+    setPersistentItem(playbackKey, JSON.stringify(playback));
+  } catch (error) {
+    console.warn("Could not save playback:", error);
   }
 }

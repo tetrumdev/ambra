@@ -3,10 +3,11 @@ import type { QueueEntry, QueueHistoryEntry, QueueId, Track } from "../types/mus
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { useTrackReorder } from "../hooks/useTrackReorder";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
+import type { QueueEntryRef } from "../utils/queueNavigation";
 import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
-import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { MENU_WIDTH, TrackCollectionMenu } from "./TrackCollectionMenu";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
@@ -20,7 +21,7 @@ export type QueueProps = {
   historyEntries: QueueHistoryEntry[];
   jumpTo: (queueId: QueueId) => void;
   replayHistory: (historyId: string) => void;
-  reorderEntries: (queueIds: QueueId[]) => void;
+  reorderEntries: (history: QueueEntryRef[], upcoming: QueueEntryRef[]) => void;
   deleteEntries: (queueIds: QueueId[]) => void;
   deleteHistoryEntries: (historyIds: string[]) => void;
   registerScrollElement: (element: HTMLDivElement | null) => void;
@@ -55,7 +56,6 @@ export function Queue(props: QueueProps) {
   })), [props.historyEntries]);
   const entries = useMemo(() => [...history, ...(current ? [current] : []), ...upcoming], [current, upcoming, history]);
   const ids = useMemo(() => entries.map(entry => entry.id), [entries]);
-  const upcomingIds = useMemo(() => upcoming.map(entry => entry.id), [upcoming]);
   const selection = useRangeSelection(ids);
   const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -106,14 +106,25 @@ export function Queue(props: QueueProps) {
     followCurrent.current = false;
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }
+  // History and upcoming reorder as one list; whatever lands behind now playing is history, the rest is up next.
   const reorder = useCallback((orderedIds: string[]) => {
-    const entriesById = new Map(upcoming.map(entry => [entry.id, entry.queueId!]));
-    if (orderedIds.some(id => !entriesById.has(id))) return;
-    props.reorderEntries(orderedIds.map(id => entriesById.get(id)!));
-  }, [upcoming, props.reorderEntries]);
+    const refs = new Map<string, QueueEntryRef>();
+    for (const entry of entries as DisplayEntry[]) {
+      if (entry.historyId !== undefined) refs.set(entry.id, { historyId: entry.historyId });
+      else if (entry.queueId !== undefined && !entry.current) refs.set(entry.id, { queueId: entry.queueId });
+    }
+    const split = current ? orderedIds.indexOf(current.id) : orderedIds.length;
+    const others = orderedIds.filter(id => id !== current?.id);
+    if (split < 0 || others.some(id => !refs.has(id))) return;
+    props.reorderEntries(others.slice(0, split).map(id => refs.get(id)!), others.slice(split).map(id => refs.get(id)!));
+  }, [entries, current, props.reorderEntries]);
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
-    upcomingIds, reorder, () => setMenu(null), scrollRef,
+    ids, reorder, () => setMenu(null), scrollRef, scrollRef,
   );
+  // Up next rows count from 0, but sit after history and now playing in the shared list.
+  const upcomingOffset = history.length + (current ? 1 : 0);
+  const onUpcomingPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, index: number) =>
+    onPointerDown(event, upcomingOffset + index), [onPointerDown, upcomingOffset]);
   const signature = ids.join("|");
   useEffect(() => {
     selection.clear();
@@ -136,7 +147,7 @@ export function Queue(props: QueueProps) {
 
   const actions = useRef<EntryAction>(() => {});
   actions.current = (action, event, entry) => {
-    if (suppressClick.current && !entry.historyId && !entry.current && action !== "select") return;
+    if (suppressClick.current && !entry.current && action !== "select") return;
     if (action === "select" || selection.isSelecting) {
       event.preventDefault();
       event.stopPropagation();
@@ -150,7 +161,7 @@ export function Queue(props: QueueProps) {
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
       const trigger = event.currentTarget.hasAttribute("data-collection-menu-trigger");
-      setMenu({ entry, x: trigger ? rect.right - 180 : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY });
+      setMenu({ entry, x: trigger ? rect.right - MENU_WIDTH : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY });
     } else {
       setMenu(null);
       playEntry(entry);
@@ -165,7 +176,7 @@ export function Queue(props: QueueProps) {
     <PerfProfiler id="queue">
       {menu && <TrackCollectionMenu trackId={menu.entry.track.globalId} onClose={() => setMenu(null)}
         xPos={menu.x} yPos={menu.y} actions={[
-          ...(!menu.entry.current ? [{ label: "Play from here", onSelect: () => playEntry(menu.entry) }] : []),
+          ...(!menu.entry.current ? [{ label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) }] : []),
           { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", onSelect: () => removeEntries([menu.entry]) },
         ]} />}
       {selection.isSelecting && (
@@ -202,17 +213,19 @@ export function Queue(props: QueueProps) {
           {entries.length > 0 && <TrackColumnHeader headerRef={columnHeaderRef} />}
           <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!history.length}>
             <h2 className="queueSectionTitle">History</h2>
-            <QueueRows entries={history} label="Queue history" {...rowProps} />
+            <QueueRows entries={history} label="Queue history" {...rowProps} onPointerDown={onPointerDown}
+              draggedId={draggedTrackId} dropTarget={dropTarget} />
           </section>
           <div className="queueTail" ref={tailRef}>
             <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!current}>
               <h2 className="queueSectionTitle">Now Playing</h2>
               {current && <QueueRow entry={current} index={0} {...rowProps} selected={selection.selectedIds.has(current.id)}
-                menuOpen={menu?.entry.id === current.id} />}
+                menuOpen={menu?.entry.id === current.id}
+                dropPosition={dropTarget?.trackId === current.id ? dropTarget.position : undefined} />}
             </section>
             <section id="upcomingQueueTracks" className="queueSection" aria-label="Upcoming tracks" hidden={!upcoming.length}>
               <h2 className="queueSectionTitle">Up Next</h2>
-              <QueueRows entries={upcoming} label="Upcoming queue" {...rowProps} onPointerDown={onPointerDown}
+              <QueueRows entries={upcoming} label="Upcoming queue" {...rowProps} onPointerDown={onUpcomingPointerDown}
                 draggedId={draggedTrackId} dropTarget={dropTarget} />
             </section>
             {!entries.length && <p className="queueEmpty">Queue is empty</p>}
