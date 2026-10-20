@@ -8,6 +8,7 @@ import { closeDialog, openDialog } from "../utils/dialogs";
 import type { PlaylistServiceGroup } from "../hooks/useServicePlaylists";
 import { musicProviderName } from "../utils/musicProviderName";
 import { DropdownChevron } from "./DropdownChevron";
+import { slideDetails } from "../utils/detailsMotion";
 import type { PlaylistGroup } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
 
@@ -108,13 +109,15 @@ export function Sidebar({
           </nav>
           <div id="playlistContainer">
             <details className="sidebarPlaylistGroup playlistDropdown" open={playlistGroups.ambra} onToggle={event => onTogglePlaylistGroup("ambra", event.currentTarget.open)}>
-              <summary><DropdownChevron />AMBRA ({playlists.length})</summary>
+              <summary onClick={slideDetails}><DropdownChevron />AMBRA ({playlists.length})</summary>
               <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label="AMBRA playlists">
             {playlists.map((playlist) => (
               <div key={playlist.id} className="sidebarPlaylistRow">
                 <button
                   type="button"
                   className="sidebarBtn sidebarLibraryButton sidebarPlaylistName"
+                  data-tooltip={playlist.name}
+                  data-tooltip-overflow=""
                   onClick={() => onSelectPlaylist(playlist.id)}
                   aria-current={
                     activePlaylistId === playlist.id ? "page" : undefined
@@ -135,10 +138,10 @@ export function Sidebar({
               const group = serviceGroups.find(group => group.provider === provider);
               if (!group || !servicePlaylistVisibility[provider]) return null;
               return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
-                <summary><DropdownChevron /><ProviderIcon provider={provider} /> ({group.playlists.length})</summary>
+                <summary onClick={slideDetails}><DropdownChevron /><ProviderIcon provider={provider} /> ({group.playlists.length})</summary>
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
                 {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
-                  <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
+                  <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" data-tooltip={playlist.name} data-tooltip-overflow="" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
                 </div>)}
                 {group.error && <p className="sidebarSyncMessage" role="alert">{group.error}</p>}
                 </nav>

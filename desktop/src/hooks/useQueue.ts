@@ -64,6 +64,13 @@ const emptyQueue: QueueState = {
   upcoming: [],
 };
 
+/** The queue keeps only recent plays to step back through; every play stays in the listening history on Home. */
+const MAX_HISTORY = 100;
+
+function keepRecentHistory(state: QueueState): QueueState {
+  return state.history.length > MAX_HISTORY ? { ...state, history: state.history.slice(-MAX_HISTORY) } : state;
+}
+
 let historySequence = 0;
 
 function historyEntry(item: QueueItem): QueueHistoryEntry {
@@ -98,7 +105,8 @@ export function useQueue(
   const restoreAttemptedRef = useRef(false);
   const restoredTrackIdRef = useRef(restoredTrackId);
 
-  const commitState = useCallback((nextState: QueueState) => {
+  const commitState = useCallback((committed: QueueState) => {
+    const nextState = keepRecentHistory(committed);
     saveQueueSnapshot(queueSnapshot(nextState.history, nextState.current, nextState.upcoming));
     stateRef.current = nextState;
     setState(nextState);
@@ -133,8 +141,9 @@ export function useQueue(
 
     // Restoring on a machine without some local files must not erase their IDs
     // from the server. Persist only subsequent queue actions.
-    stateRef.current = restored;
-    setState(restored);
+    const trimmed = keepRecentHistory(restored);
+    stateRef.current = trimmed;
+    setState(trimmed);
     setIsRestored(true);
   }, [availableTracks, ready]);
 

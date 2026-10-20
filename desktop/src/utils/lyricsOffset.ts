@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { LyricLine, TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { loadLyrics } from "./lyricsCache";
-import { type OffsetEvidence, trustedCorrection } from "./lyricsAutoTuning";
+import { bestCorrection, type OffsetEvidence, trustedCorrection } from "./lyricsAutoTuning";
 import { lyricSyncOverride } from "./lyricsSyncOverrides";
 import { nativeAudioSource } from "./nativeAudioSource";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
@@ -44,11 +44,14 @@ export type DetectedOffset = {
   /** Milliseconds to add to `lyrics.offsetMs`; 0 when no reliable shift exists. */
   correctionMs: number;
   confident: boolean;
+  /** The correction at the best match even when it is not trusted; null when nothing could be scored. */
+  bestMs: number | null;
 };
 
 function decide(evidence: OffsetEvidence): DetectedOffset {
   const correctionMs = trustedCorrection(evidence);
-  return correctionMs === null ? { correctionMs: 0, confident: false } : { correctionMs, confident: true };
+  const bestMs = bestCorrection(evidence);
+  return correctionMs === null ? { correctionMs: 0, confident: false, bestMs } : { correctionMs, confident: true, bestMs };
 }
 
 // Evidence is kept across sessions so each song is analyzed once; whether it is trusted
@@ -106,6 +109,32 @@ export function storedLyricOffset(track: Track, lyrics: TrackLyrics): number | u
   if (!stored) return undefined;
   const result = decide(stored);
   return result.confident ? result.correctionMs : undefined;
+}
+
+// The corrections each song has already announced, so a song only says it was auto-synced once.
+const noticedKey = "ambra.lyrics-autosync-noticed.v1";
+
+/** Whether this correction is new for the song, in which case it is remembered as announced. */
+export function firstAutoSyncNotice(trackId: string, correctionMs: number): boolean {
+  let noticed: Record<string, number> = {};
+  try {
+    const value: unknown = JSON.parse(getPersistentItem(noticedKey) ?? "{}");
+    if (typeof value === "object" && value !== null) noticed = value as Record<string, number>;
+  } catch {
+    // A damaged record only means a notice is shown again.
+  }
+  if (noticed[trackId] === correctionMs) return false;
+  // Reinserting keeps the most recently announced tracks at the end.
+  delete noticed[trackId];
+  noticed[trackId] = correctionMs;
+  const trackIds = Object.keys(noticed);
+  for (const stale of trackIds.slice(0, Math.max(0, trackIds.length - MAX_TRACKS))) delete noticed[stale];
+  try {
+    setPersistentItem(noticedKey, JSON.stringify(noticed));
+  } catch (error) {
+    console.warn("Could not save lyric auto-sync notice:", error);
+  }
+  return true;
 }
 
 type Analysis = {

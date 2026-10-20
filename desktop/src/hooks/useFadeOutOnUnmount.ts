@@ -58,6 +58,8 @@ function fadingCopy(element: HTMLElement): HTMLElement | null {
     fontSize: computed.fontSize,
     lineHeight: computed.lineHeight,
     opacity: "1",
+    // The copy only fades; it must not replay the menu's opening.
+    animation: "none",
     transition: `opacity ${FADE_MS}ms ease`,
   });
   return ghost;
