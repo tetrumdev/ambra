@@ -15,7 +15,53 @@
     filter: drop-shadow(0 0 8px rgba(0 0 0 0.4));
 }
 
-#songInfo > #songName,
+/* The title and its library menu button. As wide as the title (never wider than its
+   column), so the button sits just after the text and hovering the title reveals it. */
+.songNameRow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: fit-content;
+    max-width: 100%;
+    min-width: 0;
+    margin-bottom: 25px;
+}
+
+.songMenuButton {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.5);
+    opacity: 0;
+    transition: opacity 150ms ease, color 150ms ease;
+}
+
+.songMenuButton svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+    pointer-events: none;
+}
+
+.songNameRow:hover .songMenuButton,
+.songMenuButton:focus-visible,
+.songMenuButton[aria-expanded="true"] {
+    opacity: 1;
+}
+
+/* Pointing at the dots only brightens them. */
+.songMenuButton:hover,
+.songMenuButton:focus-visible,
+.songMenuButton[aria-expanded="true"] {
+    color: white;
+}
+
+#songInfo #songName,
 #songInfo > #albumName,
 #songInfo > #artistName {
     display: block;
@@ -38,15 +84,28 @@
     );
 }
 
-#bottomInfoBar:not([data-variant="compact"]) #songName {
+#songInfo #songName {
+    /* Shrinks to the title, and gives way to the menu button when the title is long.
+       The edge fade gets room of its own, so a title that fits keeps its last letters. */
+    flex: 0 1 auto;
+    width: auto;
+    box-sizing: border-box;
+    padding-right: 20px;
+}
+
+/* Into the fade's room, so the button sits just after the text. */
+.songNameRow .songMenuButton {
+    margin-left: -16px;
+}
+
+#bottomInfoBar:not([data-variant="compact"]) .songNameRow {
     /* Stop 24px before the 152px-wide control group centered in the window. */
-    width: max(0px, calc(50vw - 130px));
+    max-width: max(0px, calc(50vw - 130px));
 }
 
 #songName {
     font-weight: 600;
     font-size: 1.3rem;
-    margin-bottom: 25px;
 }
 
 .label {
@@ -74,9 +133,11 @@
     min-width: 0;
 }
 
-#bottomInfoBar[data-variant="compact"] #songName {
-    width: 100%;
+#bottomInfoBar[data-variant="compact"] .songNameRow {
     margin-bottom: 4px;
+}
+
+#bottomInfoBar[data-variant="compact"] #songName {
     overflow: hidden;
     white-space: nowrap;
     text-overflow: clip;
