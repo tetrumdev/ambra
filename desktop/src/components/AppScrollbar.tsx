@@ -3,8 +3,8 @@ import "./AppScrollbar.css";
 
 type AppScrollbarProps = {
   scrollElement: HTMLElement | null;
-  /** Fading out behind the player as it opens, or back in as it closes. */
-  swap?: "arriving" | "leaving";
+  /** Kept in place behind the player rather than unmounted. */
+  hidden?: boolean;
 };
 
 type ScrollMetrics = {
@@ -15,7 +15,7 @@ type ScrollMetrics = {
 
 const MINIMUM_THUMB_HEIGHT = 36;
 
-export function AppScrollbar({ scrollElement, swap }: AppScrollbarProps) {
+export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProps) {
   const railRef = useRef<HTMLDivElement>(null);
   const thumbRef = useRef<HTMLDivElement>(null);
   const metricsRef = useRef<ScrollMetrics>({
@@ -146,7 +146,7 @@ export function AppScrollbar({ scrollElement, swap }: AppScrollbarProps) {
   };
 
   return (
-    <div className="appScrollbar" ref={railRef} aria-hidden="true" data-swap={swap}>
+    <div className="appScrollbar" ref={railRef} aria-hidden="true" data-hidden={hidden || undefined}>
       <div
         className="appScrollbarThumb"
         ref={thumbRef}

@@ -5,13 +5,15 @@
     left: 0;
     top: 0;
     background-color: transparent;
-    z-index: 11;
+    /* Above the now-playing bar's content (z-index 12), so menus open over it. */
+    z-index: 13;
 }
 
 #trackPlaybackMenu,
 #trackCollectionMenu {
     box-sizing: border-box;
-    width: 180px;
+    /* MENU_WIDTH in TrackCollectionMenu.tsx. */
+    width: 220px;
     border: 1px solid #2f2f2f;
     border-radius: 12px;
     z-index: 20;
@@ -19,6 +21,7 @@
     color: white;
     /* Menus are fixed-position and may render outside a view that sets the app's UI font. */
     font-family: "Stack Sans Text", Inter, sans-serif;
+    text-align: left;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -41,10 +44,14 @@
     font-size: 0.9rem;
     font-weight: 400;
     line-height: 1.2;
+    /* Set here rather than inherited: a menu opened from the now-playing bar renders
+       outside the screens, where the page centres text. */
     text-align: left;
+    white-space: nowrap;
     background-color: rgba(29, 29, 29, 0.7);
     display: grid;
     grid-template-columns: 1fr;
+    justify-items: start;
     align-items: center;
     gap: 10px;
 }
@@ -81,38 +88,97 @@
     opacity: var(--disabled-opacity);
     cursor: default;
 }
+/* Choosing a playlist: one glass panel like the menu it replaces, with quiet section
+   labels and the app's pill-shaped field and button for a new playlist. */
+#trackCollectionMenu:has(.playlistMenuList) {
+    background-color: rgba(29, 29, 29, 0.7);
+}
+#trackCollectionMenu:has(.playlistMenuList) .menuItem {
+    background-color: transparent;
+}
+#trackCollectionMenu:has(.playlistMenuList) .menuItem:hover,
+#trackCollectionMenu:has(.playlistMenuList) .menuItem:focus-visible {
+    background-color: rgba(255, 255, 255, 0.07);
+}
+
+.menuBack {
+    grid-template-columns: 10px 1fr;
+    font-weight: 600;
+    border-bottom: 1px solid #2f2f2f;
+}
+.menuBack .dropdownChevron {
+    transform: rotate(90deg);
+}
+
 .playlistMenuList {
     overflow-y: auto;
     min-height: 45px;
     max-height: min(240px, 40vh);
 }
+/* Playlist names can be long; inside the chooser's fixed width they wrap. */
+.playlistMenuList .menuItem {
+    white-space: normal;
+    justify-items: stretch;
+    height: auto;
+    padding-block: 12px;
+}
 .playlistMenuList p {
-    padding: 0 15px;
+    margin: 0;
+    padding: 14px 15px;
+    color: #b3b3b3;
     font-size: 0.85rem;
 }
 
 .playlistMenuGroup > summary {
-    padding: 8px 15px;
+    padding: 12px 15px 4px;
     color: #b3b3b3;
     font-size: 12px;
     font-weight: 600;
     cursor: default;
 }
+
 .playlistMenuCreate {
-    display: grid;
+    display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 10px;
-    background: #1d1d1d;
+    border-top: 1px solid #2f2f2f;
 }
 .playlistMenuCreate input {
+    flex: 1;
     min-width: 0;
-    padding: 6px;
-    color: white;
-    background: #292929;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 12px;
     border: 1px solid #535353;
+    border-radius: 100px;
+    outline: none;
+    color: white;
+    background: rgba(0, 0, 0, 0.3);
+    font: inherit;
+    font-size: 0.85rem;
+    user-select: text;
+    -webkit-user-select: text;
+}
+.playlistMenuCreate input:focus {
+    border-color: #8a8a8a;
 }
 .playlistMenuCreate button {
-    padding: 6px;
-    background: #353535;
+    flex: none;
+    height: 32px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 100px;
+    color: black;
+    background: white;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
     cursor: default;
+}
+.playlistMenuCreate [role="alert"] {
+    flex-basis: 100%;
+    color: #ff8a80;
+    font-size: 0.8rem;
+    line-height: 1.3;
 }

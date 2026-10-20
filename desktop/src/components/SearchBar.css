@@ -9,10 +9,28 @@
     border: none;
     outline: none;
     color: white;
-    background: black;
+    /* The same glass as the player's controls (AppChrome.css). */
+    background: rgba(22, 22, 22, 0.4);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
     border: 1px solid #535353;
     font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
-    transition: 0.25s ease;
+    transition: filter 0.25s ease, border-color 0.25s ease;
+}
+
+/* Pages without search leave it out at once; one summoned there fades in, and out again when dismissed. */
+#searchBar[data-away] {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+/* Over the player, the hidden screen around it stays hidden. */
+#searchBar[data-summoned] {
+    visibility: visible;
+    transition: filter 0.25s ease, border-color 0.25s ease, opacity 0.2s ease;
+}
+#searchBar[data-away="dismissed"] {
+    transition: opacity 0.2s ease, visibility 0s linear 0.2s;
 }
 
 #searchBar:focus-within {

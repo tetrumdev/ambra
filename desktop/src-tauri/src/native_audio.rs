@@ -42,6 +42,18 @@ const SOURCE_CHANGED_EVENT: &str = "native-audio-source-changed";
 const END_PRELOAD_TIMEOUT: Duration = Duration::from_secs(3);
 const OUTPUT_DRAIN_GRACE: Duration = Duration::from_millis(500);
 const MAX_OUTPUT_DRAIN_WAIT: Duration = Duration::from_secs(5);
+// Another application can hold an exclusive device a little longer, or still be
+// releasing it. Opening it is tried this many times, this far apart, before the
+// failure is reported.
+const EXCLUSIVE_OPEN_ATTEMPTS: u32 = 4;
+const EXCLUSIVE_OPEN_RETRY_DELAY: Duration = Duration::from_millis(750);
+
+/// An exclusive output that could not be opened yet, retried while playback is wanted.
+struct OutputRetry {
+    spec: StreamSpec,
+    attempts: u32,
+    next_attempt: Instant,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StreamSpec {
@@ -454,6 +466,7 @@ struct PlaybackEngine<O: AudioOutput> {
     status: Arc<Mutex<PlaybackStatus>>,
     decoder: Option<DecoderStream>,
     output: Option<O>,
+    output_retry: Option<OutputRetry>,
     resync: ResyncDelay,
     end_preload_started_at: Option<Instant>,
     output_drain_deadline: Option<Instant>,
@@ -626,6 +639,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             status,
             decoder: None,
             output: None,
+            output_retry: None,
             resync: ResyncDelay::default(),
             end_preload_started_at: None,
             output_drain_deadline: None,
@@ -890,6 +904,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     output.reset()?;
                 }
                 self.output = None;
+                self.output_retry = None;
                 self.selected_device_id = device_id;
                 self.exclusive_mode = mode;
             }
@@ -962,14 +977,63 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     // A new device stream needs time to lock. Reusing an already-open output
     // (including gapless, same-format track advance) never calls this helper.
     fn open_output(&mut self, spec: StreamSpec) -> Result<(), String> {
-        self.output = Some(O::open_device_with_mode(
-            spec,
-            self.selected_device_id.as_deref(),
-            self.exclusive_mode,
-        )?);
+        self.output_retry = None;
+        match O::open_device_with_mode(spec, self.selected_device_id.as_deref(), self.exclusive_mode)
+        {
+            Ok(output) => {
+                self.install_output(output, spec);
+                Ok(())
+            }
+            // Exclusive mode waits its turn for the device instead of failing at once;
+            // pump keeps trying while playback is wanted and pausing stops it.
+            Err(_) if self.exclusive_mode => {
+                self.rendering = false;
+                self.output_retry = Some(OutputRetry {
+                    spec,
+                    attempts: 1,
+                    next_attempt: Instant::now() + EXCLUSIVE_OPEN_RETRY_DELAY,
+                });
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn install_output(&mut self, output: O, spec: StreamSpec) {
+        self.output = Some(output);
         self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
         self.rendering = false;
-        Ok(())
+    }
+
+    /// Tries a pending exclusive open when it is due. True while the device is still being waited for.
+    fn retry_output(&mut self) -> Result<bool, String> {
+        let Some(retry) = self.output_retry.as_mut() else {
+            return Ok(false);
+        };
+        if Instant::now() >= retry.next_attempt {
+            let spec = retry.spec;
+            match O::open_device_with_mode(spec, self.selected_device_id.as_deref(), true) {
+                Ok(output) => {
+                    self.output_retry = None;
+                    self.install_output(output, spec);
+                    return Ok(false);
+                }
+                Err(error) if retry.attempts + 1 >= EXCLUSIVE_OPEN_ATTEMPTS => {
+                    self.output_retry = None;
+                    return Err(error);
+                }
+                Err(_) => {
+                    retry.attempts += 1;
+                    retry.next_attempt = Instant::now() + EXCLUSIVE_OPEN_RETRY_DELAY;
+                }
+            }
+        }
+        update_status(&self.status, |status| {
+            status.is_playing = false;
+            status.buffering = true;
+        });
+        thread::sleep(Duration::from_millis(5));
+        Ok(true)
     }
 
     fn load(
@@ -982,6 +1046,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let preparation_deadline = Instant::now() + AUDIO_PREPARE_TIMEOUT;
         let previous_spec = self.spec;
         let was_resyncing = self.resync.is_active();
+        self.output_retry = None;
         let mut previous_output = self.output.take();
         if let Some(output) = previous_output.as_mut() {
             output.reset()?;
@@ -1141,6 +1206,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     fn pause(&mut self) -> Result<(), String> {
         self.desired_playing = false;
+        // Pausing gives up waiting for a busy exclusive device; playing again starts afresh.
+        self.output_retry = None;
         if let Some(output) = self.output.as_mut() {
             output.pause()?;
         }
@@ -1176,7 +1243,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.reset_gain_buffer();
         let prepared = prepare_source_at(source, position_seconds)?;
         let audio_quality = self.install_prepared(prepared)?;
-        if self.desired_playing && self.output.is_none() {
+        // A device still being waited for keeps its retries; seeking does not restart them.
+        if self.desired_playing && self.output.is_none() && self.output_retry.is_none() {
             self.open_output(spec)?;
         }
         update_status(&self.status, |status| {
@@ -1196,6 +1264,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             .ok_or_else(|| "The native audio format is unavailable".to_owned())?;
         let prebuffer = prebuffer_samples(spec, self.current_source.as_deref(), false);
         self.drain_decoder()?;
+        // The song keeps buffering while an exclusive device is waited for.
+        if self.retry_output()? {
+            return Ok(());
+        }
 
         if !self.rendering && self.pcm.len() < prebuffer && !self.decoder_ended {
             update_status(&self.status, |status| {
@@ -1606,6 +1678,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     fn fail(&mut self, error: String) {
         self.desired_playing = false;
+        self.output_retry = None;
         if let Some(output) = self.output.as_mut() {
             let _ = output.pause();
         }

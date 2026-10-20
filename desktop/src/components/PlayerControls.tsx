@@ -7,9 +7,10 @@ import { MorphSVGPlugin } from "gsap/MorphSVGPlugin";
 gsap.registerPlugin(useGSAP, MorphSVGPlugin);
 
 // Play is split down the middle into two halves that fold into the pause bars,
-// so every corner has a partner and the icon morphs instead of swapping.
+// so every corner has a partner and the icon morphs instead of swapping. The left
+// half runs past the split along the triangle's edges so the anti-aliased seam is covered.
 const shapes = {
-  play: ["M5 3L12.8 7.5L12.8 16.5L5 21Z", "M12.8 7.5L20.6 12L20.6 12L12.8 16.5Z"],
+  play: ["M5 3L13.2 7.73L13.2 16.27L5 21Z", "M12.8 7.5L20.6 12L20.6 12L12.8 16.5Z"],
   pause: ["M5.5 3L9.75 3L9.75 21L5.5 21Z", "M14.25 3L18.5 3L18.5 21L14.25 21Z"],
 };
 
