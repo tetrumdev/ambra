@@ -134,10 +134,17 @@ impl Selection {
     }
 
     fn finish(self) -> LyricsResponse {
-        let mut lyrics = self
-            .lrclib
-            .or(self.red)
-            .or(self.amll)
+        // Better timing wins; between equals, LRCLIB, then lrc.red, then AMLL.
+        let mut lyrics = [self.lrclib, self.red, self.amll]
+            .into_iter()
+            .flatten()
+            .reduce(|best, next| {
+                if providers::quality(&next) > providers::quality(&best) {
+                    next
+                } else {
+                    best
+                }
+            })
             .unwrap_or_else(|| LyricsResponse::empty(None));
         lyrics.failed_providers = self.failed;
         lyrics

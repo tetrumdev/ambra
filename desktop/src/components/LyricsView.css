@@ -31,13 +31,14 @@
     z-index: 1;
     font-family: "Stack Sans Text", sans-serif;
     text-align: left;
-    /* Keep LYRICS_COVER_DIM in LyricsView.tsx in step with this overlay. */
+    /* Keep LYRICS_COVER_DIM in utils/lyricsMotion.ts in step with this overlay. */
     background: linear-gradient(
         110deg,
         rgba(0, 0, 0, 0.48),
         rgba(0, 0, 0, 0.24)
     );
-    transition: opacity 500ms ease 150ms;
+    /* On the cover's curve, so the lyrics and the cover move as one (BigscreenArtwork.tsx). */
+    transition: opacity var(--player-view-duration) var(--player-view-ease) 150ms;
 }
 /* Leaving: the backdrop fades and the lyrics drift left, under the cover moving out to centre. */
 #lyricsPage[data-shown="false"] {
@@ -45,7 +46,7 @@
     visibility: hidden;
     pointer-events: none;
     transition:
-        opacity 500ms ease,
+        opacity var(--player-view-duration) var(--player-view-ease),
         visibility 0s linear var(--player-view-duration);
 }
 
@@ -165,7 +166,6 @@ button.lyricLine:hover {
     font-variation-settings: "wght" 500;
     letter-spacing: -0.02em;
 }
-.lyricRow-translation .lyricLine,
 .lyricRow-romanization .lyricLine {
     font-size: clamp(15px, 1.4vw, 19px);
     line-height: 1.5;
@@ -621,6 +621,15 @@ button.lyricLine:hover {
         opacity: 0;
         transform: translateY(6%);
     }
+}
+/* Whatever replaces the loading text (lyrics or a message) rises in the same way when it mounts. */
+#lyricsPage[data-loaded-late="true"] .lyricsViewport,
+#lyricsPage[data-loaded-late="true"] .lyricsMessage {
+    animation: lyricsArrive var(--player-view-duration) var(--player-view-ease) both;
+}
+#lyricsPage[data-reduced-motion="true"] .lyricsViewport,
+#lyricsPage[data-reduced-motion="true"] .lyricsMessage {
+    animation: none;
 }
 @media (prefers-reduced-motion: reduce) {
     #lyricsPage[data-leaving="true"],

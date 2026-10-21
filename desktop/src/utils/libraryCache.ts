@@ -39,42 +39,46 @@ export function parseCachedServerTracks(value: string | null): Track[] {
   if (value === null) return [];
 
   try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed)
-      ? parsed.filter(isCachedTrack).map((track) => {
-          const { id: legacyId, ...cachedTrack } = track;
-
-          return {
-            ...cachedTrack,
-            globalId: track.globalId ?? legacyId!,
-            nativeCover:
-              typeof track.nativeCover === "string"
-                ? track.nativeCover
-                : track.cover,
-            version: track.version ?? null,
-            albumVersion: track.albumVersion ?? null,
-            albumArtists: Array.isArray(track.albumArtists)
-              ? track.albumArtists.map((artist) => ({
-                  ...artist,
-                  imageUrl: artist.imageUrl ?? null,
-                }))
-              : [],
-            artists: track.artists.map((artist) => ({
-              ...artist,
-              imageUrl: artist.imageUrl ?? null,
-            })),
-            copyright: track.copyright ?? null,
-            label: track.label ?? null,
-            genres: Array.isArray(track.genres) ? track.genres : [],
-            upc: track.upc ?? null,
-            maximumSamplingRateKHz: track.maximumSamplingRateKHz ?? null,
-            maximumBitDepth: track.maximumBitDepth ?? null,
-          };
-        })
-      : [];
+    return normalizeCachedTracks(JSON.parse(value));
   } catch {
     return [];
   }
+}
+
+/** Keeps the valid cached streaming tracks, filling in fields older caches lack. */
+export function normalizeCachedTracks(parsed: unknown): Track[] {
+  return Array.isArray(parsed)
+    ? parsed.filter(isCachedTrack).map((track) => {
+        const { id: legacyId, ...cachedTrack } = track;
+
+        return {
+          ...cachedTrack,
+          globalId: track.globalId ?? legacyId!,
+          nativeCover:
+            typeof track.nativeCover === "string"
+              ? track.nativeCover
+              : track.cover,
+          version: track.version ?? null,
+          albumVersion: track.albumVersion ?? null,
+          albumArtists: Array.isArray(track.albumArtists)
+            ? track.albumArtists.map((artist) => ({
+                ...artist,
+                imageUrl: artist.imageUrl ?? null,
+              }))
+            : [],
+          artists: track.artists.map((artist) => ({
+            ...artist,
+            imageUrl: artist.imageUrl ?? null,
+          })),
+          copyright: track.copyright ?? null,
+          label: track.label ?? null,
+          genres: Array.isArray(track.genres) ? track.genres : [],
+          upc: track.upc ?? null,
+          maximumSamplingRateKHz: track.maximumSamplingRateKHz ?? null,
+          maximumBitDepth: track.maximumBitDepth ?? null,
+        };
+      })
+    : [];
 }
 
 export function loadCachedServerTracks(): Track[] {

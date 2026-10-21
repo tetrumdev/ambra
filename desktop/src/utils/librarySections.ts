@@ -1,5 +1,12 @@
 import type { Track } from "../types/music";
 import { thumbnailArtwork } from "../api/server";
+import type { LibrarySection } from "../components/LibraryView";
+
+export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; label: string }> = [
+  { id: "artists", label: "Artists" },
+  { id: "albums", label: "Albums" },
+  { id: "tracks", label: "Tracks" },
+];
 
 export type LibraryArtist = {
   id: string;

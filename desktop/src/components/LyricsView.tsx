@@ -36,12 +36,6 @@ import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import "./LyricsView.css";
 import "./TrackMenus.css";
 
-/**
- * Share of the background left visible beside the artwork by #lyricsPage's
- * gradient in LyricsView.css (about 41% black where the cover sits).
- */
-export const LYRICS_COVER_DIM = 0.59;
-
 type LyricsViewProps = {
   track: Track | undefined;
   clock: PlaybackClock;
@@ -60,7 +54,7 @@ type LyricsViewProps = {
 type Row = {
   id: string;
   line: LyricLine;
-  kind: "lead" | "background" | "translation" | "romanization";
+  kind: "lead" | "background" | "romanization";
   language?: string | null;
 };
 
@@ -87,18 +81,14 @@ function lyricRows(lyrics: TrackLyrics): Row[][] {
   return lyrics.lines.map((line, index) => {
     const rows: Row[] = [{ id: String(index), line, kind: "lead" }];
     const addAnnotations = (line: LyricLine, prefix: string) => {
-      for (const kind of ["romanization", "translation"] as const) {
-        const annotations =
-          kind === "translation" ? line.translations : line.romanization;
-        annotations.forEach((annotation, index) =>
-          rows.push({
-            id: `${prefix}-${kind}-${index}`,
-            line: annotationLine(annotation, line),
-            kind,
-            language: annotation.language,
-          }),
-        );
-      }
+      line.romanization.forEach((annotation, index) =>
+        rows.push({
+          id: `${prefix}-romanization-${index}`,
+          line: annotationLine(annotation, line),
+          kind: "romanization",
+          language: annotation.language,
+        }),
+      );
     };
     addAnnotations(line, String(index));
     line.backgroundVocals.forEach((background, backgroundIndex) => {
@@ -1257,6 +1247,9 @@ export function LyricsView({
 
   const unavailableDuringFailure =
     lyrics?.status === "unavailable" && lyrics.failedProviders.length > 0;
+  // Lyrics that had to load rise in over the loading text, as cached ones arrive with the page.
+  const loadedLate = useRef(false);
+  if (track && !error && !lyrics) loadedLate.current = true;
   return (
     <main
       id="lyricsPage"
@@ -1265,6 +1258,7 @@ export function LyricsView({
       data-shown={shown}
       data-leaving={leaving}
       data-arriving={arriving}
+      data-loaded-late={loadedLate.current}
       data-reduced-motion={reducedMotion}
     >
       <section className="lyricsStage" aria-label="Song lyrics">
