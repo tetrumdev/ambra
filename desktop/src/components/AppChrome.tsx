@@ -32,9 +32,14 @@ export function AppChrome({
     isWindows ? "windows" : "other",
     isFullscreen,
   );
-  const isPlayerScreen = currentScreen === "bigscreen" || currentScreen === "lyrics";
-  const lyricsUnavailable = lyricsAvailability === "none" ? "No lyrics for this song"
-    : lyricsAvailability === "unsynced" ? "No synced lyrics for this song" : undefined;
+  const isPlayerScreen =
+    currentScreen === "bigscreen" || currentScreen === "lyrics";
+  const lyricsUnavailable =
+    lyricsAvailability === "none"
+      ? "No lyrics for this song"
+      : lyricsAvailability === "unsynced"
+        ? "No synced lyrics for this song"
+        : undefined;
   return (
     <>
       {(currentScreen === "home" ||
@@ -76,8 +81,12 @@ export function AppChrome({
                   aria-label={view.label}
                   aria-pressed={playerView === view.screen}
                   // Choosing lyrics for a song without synced ones still takes effect from the next song that has them.
-                  data-unavailable={view.screen === "lyrics" && !!lyricsUnavailable}
-                  data-tooltip={view.screen === "lyrics" ? lyricsUnavailable : undefined}
+                  data-unavailable={
+                    view.screen === "lyrics" && !!lyricsUnavailable
+                  }
+                  data-tooltip={
+                    view.screen === "lyrics" ? lyricsUnavailable : undefined
+                  }
                   onClick={() => onSelectPlayerView(view.screen)}
                 >
                   <img src={view.icon} alt="" className="bigscreenBtn" />
