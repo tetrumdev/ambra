@@ -17,6 +17,7 @@ import {
   detailedLine,
   focusLyric,
   lyricActive,
+  sweepSegments,
 } from "../utils/lyricsTiming";
 import {
   advanceSpring,
@@ -431,6 +432,7 @@ function SyncedLyrics({
               const element = container.querySelector<HTMLElement>(
                 `[data-row="${row.id}"]`,
               )!;
+              const segments = sweepSegments(row.line);
               return {
                 ...row,
                 element,
@@ -440,7 +442,7 @@ function SyncedLyrics({
                   (letter) => ({
                     element: letter,
                     motion: letterMotion(
-                      row.line.segments[Number(letter.dataset.segment)],
+                      segments[Number(letter.dataset.segment)],
                       Number(letter.dataset.index),
                       Number(letter.dataset.count),
                     ),
