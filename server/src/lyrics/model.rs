@@ -3,6 +3,9 @@ use serde::Serialize;
 pub const MAX_TIME_MS: u64 = 86_400_000;
 pub const MAX_LINES: usize = 5000;
 pub const MAX_SEGMENTS: usize = 30_000;
+/// Bounds on how long a final line without an end of its own stays highlighted.
+const FINAL_LINE_MIN_MS: u64 = 4_000;
+const FINAL_LINE_MAX_MS: u64 = 15_000;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -108,15 +111,30 @@ impl LyricsResponse {
         self.lines
             .retain(|line| valid_range(line.start_ms, line.end_ms));
         self.lines.sort_by_key(|line| line.start_ms);
+        // A final line without an end would otherwise run to the end of the track, holding it
+        // over a long instrumental ending; it is held about twice the song's typical line instead.
+        let mut starts: Vec<u64> = self.lines.iter().filter_map(|line| line.start_ms).collect();
+        starts.dedup();
+        let mut gaps: Vec<u64> = starts.windows(2).map(|pair| pair[1] - pair[0]).collect();
+        gaps.sort_unstable();
+        let final_hold = gaps.get(gaps.len() / 2).map_or(FINAL_LINE_MAX_MS, |median| {
+            (median * 2).clamp(FINAL_LINE_MIN_MS, FINAL_LINE_MAX_MS)
+        });
         let mut next = duration_ms;
-        for group in self
+        for (index, group) in self
             .lines
             .chunk_by_mut(|a, b| a.start_ms == b.start_ms)
             .rev()
+            .enumerate()
         {
             let start = group[0].start_ms;
+            let end = if index == 0 {
+                next.map(|end| start.map_or(end, |start| end.min(start + final_hold)))
+            } else {
+                next
+            };
             for line in group {
-                normalize_line(line, next);
+                normalize_line(line, end);
             }
             next = start.or(next);
         }

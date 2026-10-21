@@ -146,7 +146,7 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
       </div>
       {status && <div className="settingsDspStatus" role="status"><strong>Current playback</strong><span>{status.presetName ?? "No preset"} · {status.active ? "DSP active" : "DSP bypassed"}{status.sampleRate ? ` · ${status.sampleRate / 1000} kHz` : ""}
         {status.peakDbfs !== null ? ` · Peak ${status.peakDbfs.toFixed(1)} dBFS` : ""} · {status.clippedSamples.toLocaleString()} samples over full scale</span>{status.warnings.map(w => <p key={w}>{w}</p>)}</div>}
-      <p className="settingsNotice">Bit-perfect playback requires DSP bypass, 100% volume, and a compatible direct output path.</p>
+      <p className="settingsNotice">Exclusive mode is bit-perfect with DSP bypassed and volume at 100%. Otherwise the signal is processed in 64-bit and dithered to the device, at 24-bit when the stream opens with DSP or reduced volume.</p>
     </section>
     <section id="settings-panel-services" role="region" aria-labelledby="settings-tab-services" hidden={tab !== "services"}>
       <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected} />

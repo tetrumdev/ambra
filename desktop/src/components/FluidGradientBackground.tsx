@@ -456,6 +456,7 @@ export function FluidGradientBackground({
       scheduleDraw();
     };
     let lastDrawnAt = -Infinity;
+    let coverWasFlying = false;
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
@@ -492,9 +493,11 @@ export function FluidGradientBackground({
       const palette = mixPalette(transition.from, transition.to, progress);
       gl.uniform3fv(shaderColors, palette.slice(0, 12));
       // The cover may mount after the canvas; keep looking until it appears. While it moves
-      // (opening, closing, or gliding beside the lyrics) the glow follows it every frame.
+      // (opening, closing, or gliding beside the lyrics) the glow follows it every frame, and
+      // once more after it lands, since the last moving frame is a little short of its place.
       const flying = !!observedCover?.getAnimations().length;
-      if (!observedCover || !observedCover.isConnected || flying) measureCover();
+      if (!observedCover || !observedCover.isConnected || flying || coverWasFlying) measureCover();
+      coverWasFlying = flying;
       gl.uniform4fv(shaderCover, cover);
       const dim = coverDimRef.current;
       const dimProgress = easedProgress((now - dim.startedAt) / COVER_DIM_TRANSITION_MS);

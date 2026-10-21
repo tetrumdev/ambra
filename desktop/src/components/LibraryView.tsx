@@ -6,6 +6,7 @@ import { prefetchArtistPage } from "../utils/artistPage";
 import {
   libraryAlbums,
   libraryArtists,
+  librarySections,
   type LibraryAlbum,
   type LibraryArtist,
 } from "../utils/librarySections";
@@ -30,12 +31,6 @@ type LibraryViewProps = Omit<
   onSectionChange: (section: LibrarySection) => void;
   onRescanLocalMusic: () => Promise<number>;
 };
-
-export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; label: string }> = [
-  { id: "artists", label: "Artists" },
-  { id: "albums", label: "Albums" },
-  { id: "tracks", label: "Tracks" },
-];
 
 const VIRTUALIZE_AFTER_ENTITIES = 80;
 

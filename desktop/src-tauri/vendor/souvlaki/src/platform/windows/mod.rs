@@ -47,6 +47,39 @@ impl From<WindowsError> for Error {
     }
 }
 
+/// The Windows path of a `file:` URL: `file:///C:/My%20Music/a.jpg` becomes
+/// `C:\My Music\a.jpg`, and `file://server/share/a.jpg` becomes `\\server\share\a.jpg`.
+/// Removing the scheme alone leaves `/C:/...` with escapes, which Windows rejects.
+fn file_url_path(url: &str) -> Option<String> {
+    let rest = url.strip_prefix("file://")?;
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let (host, path) = match rest.find('/') {
+        Some(index) => rest.split_at(index),
+        None => (rest, ""),
+    };
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut input = path.bytes();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let escape = [input.next(), input.next()];
+            let decoded = match escape {
+                [Some(high), Some(low)] => std::str::from_utf8(&[high, low])
+                    .ok()
+                    .and_then(|hex| u8::from_str_radix(hex, 16).ok()),
+                _ => None,
+            };
+            bytes.push(decoded?);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    let path = String::from_utf8(bytes).ok()?.replace('/', "\\");
+    Some(match host {
+        "" | "localhost" => path.strip_prefix('\\').unwrap_or(&path).to_owned(),
+        host => format!("\\\\{host}{path}"),
+    })
+}
+
 impl MediaControls {
     /// Create media controls with the specified config.
     pub fn new(config: PlatformConfig) -> Result<Self, Error> {
@@ -189,9 +222,8 @@ impl MediaControls {
             properties.SetAlbumTitle(&HSTRING::from(album))?;
         }
         if let Some(url) = metadata.cover_url {
-            let stream = if url.starts_with("file://") {
+            let stream = if let Some(path) = file_url_path(url) {
                 // url is a file, load it manually
-                let path = url.trim_start_matches("file://");
                 let loader =
                     windows::Storage::StorageFile::GetFileFromPathAsync(&HSTRING::from(path))?;
                 let results = loader.get()?;

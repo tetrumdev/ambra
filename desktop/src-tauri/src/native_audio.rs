@@ -13,6 +13,7 @@ use serde::Serialize;
 use tauri::{App, AppHandle, Emitter, Manager, State};
 
 mod decoder;
+mod dither;
 mod dsp;
 mod gain;
 pub mod lyric_offset;
@@ -21,7 +22,8 @@ mod resync;
 mod settings;
 
 use decoder::DecodedSource;
-use dsp::{DspEngine, DspStatus, ImpulseFile};
+use dither::Dither;
+use dsp::{DspEngine, DspPreset, DspStatus, ImpulseFile};
 use gain::GainStage;
 use output::{AudioOutput, PlatformOutput};
 use resync::ResyncDelay;
@@ -59,7 +61,10 @@ struct OutputRetry {
 pub(super) struct StreamSpec {
     sample_rate: u32,
     channels: usize,
+    /// Bits the device needs to carry the source untouched, at most 24.
     bits_per_sample: u16,
+    /// The source is not on a 24-bit-or-coarser integer grid, so it is always dithered.
+    requantize: bool,
 }
 
 pub struct NativeAudioPlayer {
@@ -490,6 +495,7 @@ struct PlaybackEngine<O: AudioOutput> {
     draining_dsp_tail: bool,
     gain_buffer: Vec<f64>,
     gain_buffer_offset: usize,
+    dither: Dither,
     event_app: Option<AppHandle>,
 }
 
@@ -663,6 +669,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             draining_dsp_tail: false,
             gain_buffer: Vec::new(),
             gain_buffer_offset: 0,
+            dither: Dither::default(),
             event_app,
         };
         if let Some(app) = worker.event_app.as_ref() {
@@ -862,7 +869,12 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let mode = settings.selected().exclusive_mode;
         let volume = settings.selected().volume;
         let volume_changed = volume != self.gain.volume();
-        let output_changed = self.selected_device_id != device_id || self.exclusive_mode != mode;
+        // An exclusive stream's format depends on whether DSP runs, so switching it reopens the device.
+        let processing_changed =
+            preset_alters_signal(&settings) != preset_alters_signal(&self.audio_settings);
+        let output_changed = self.selected_device_id != device_id
+            || self.exclusive_mode != mode
+            || (mode && processing_changed);
         if output_changed {
             if !settings.selected().enabled {
                 return Err("Enable this output in Settings before selecting it".into());
@@ -978,8 +990,12 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     // (including gapless, same-format track advance) never calls this helper.
     fn open_output(&mut self, spec: StreamSpec) -> Result<(), String> {
         self.output_retry = None;
-        match O::open_device_with_mode(spec, self.selected_device_id.as_deref(), self.exclusive_mode)
-        {
+        match O::open_device_with_mode(
+            spec,
+            self.selected_device_id.as_deref(),
+            self.exclusive_mode,
+            self.output_processed(),
+        ) {
             Ok(output) => {
                 self.install_output(output, spec);
                 Ok(())
@@ -999,6 +1015,13 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         }
     }
 
+    /// Whether the samples will be changed on their way out, so a new stream should open at
+    /// 24 bits for the finest dither. A volume change on an open stream keeps its format,
+    /// so dragging the slider never interrupts playback.
+    fn output_processed(&self) -> bool {
+        preset_alters_signal(&self.audio_settings) || self.gain.amplitude() != 1.0
+    }
+
     fn install_output(&mut self, output: O, spec: StreamSpec) {
         self.output = Some(output);
         self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
@@ -1007,12 +1030,18 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     /// Tries a pending exclusive open when it is due. True while the device is still being waited for.
     fn retry_output(&mut self) -> Result<bool, String> {
+        let processed = self.output_processed();
         let Some(retry) = self.output_retry.as_mut() else {
             return Ok(false);
         };
         if Instant::now() >= retry.next_attempt {
             let spec = retry.spec;
-            match O::open_device_with_mode(spec, self.selected_device_id.as_deref(), true) {
+            match O::open_device_with_mode(
+                spec,
+                self.selected_device_id.as_deref(),
+                true,
+                processed,
+            ) {
                 Ok(output) => {
                     self.output_retry = None;
                     self.install_output(output, spec);
@@ -1436,6 +1465,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         if !self.pcm.is_empty() {
             let using_gain_buffer = self.dsp.as_ref().is_some_and(DspEngine::active)
                 || (!cfg!(target_os = "macos") && !self.gain.is_unity())
+                || (spec.requantize && output.quantization_bits().is_some())
                 || self.gain_buffer_offset < self.gain_buffer.len();
             let frames = if !using_gain_buffer {
                 let (first, second) = self.pcm.as_slices();
@@ -1459,6 +1489,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     if !cfg!(target_os = "macos") {
                         self.gain
                             .process_in_place(&mut self.gain_buffer, spec.channels);
+                    }
+                    if let Some(bits) = output.quantization_bits() {
+                        self.dither.quantize(&mut self.gain_buffer, bits);
                     }
                 }
                 output.write(&self.gain_buffer[self.gain_buffer_offset..], &[])?
@@ -1770,6 +1803,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             dsp.reset();
         }
     }
+}
+
+fn preset_alters_signal(settings: &AudioSettings) -> bool {
+    settings.preset().is_some_and(DspPreset::alters_signal)
 }
 
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {

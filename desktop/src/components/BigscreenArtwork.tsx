@@ -65,11 +65,6 @@ type CoverLayer = {
   leaving: boolean;
 };
 
-/** The cover's laid-out place and size, resolved to pixels so a glide can run between two layouts. */
-function coverBox(element: HTMLElement): Keyframe {
-  const { left, width, height } = getComputedStyle(element);
-  return { left, width, height };
-}
 
 const albumKey = (track: Track) => JSON.stringify([track.provider, track.albumId, track.cover, track.nativeCover, track.upc]);
 /** How long a song's cover may load before a smaller copy stands in for it. */
@@ -100,16 +95,16 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
   const key = track ? albumKey(track) : "";
 
   // The cover glides between layouts, but follows a window resize at once. Rather than a CSS
-  // transition (which a resize would set off too), the switch itself animates from the box
-  // the cover had, read while the old layout is still on screen.
+  // transition (which a resize would set off too), the switch itself animates from where the
+  // cover was on screen, read while the old layout is still showing.
   const cover = useRef<HTMLDivElement>(null);
   const laidOutAs = useRef(layout);
-  const before = useRef<Keyframe | null>(null);
+  const before = useRef<DOMRect | null>(null);
   const glide = useRef<Animation | null>(null);
   if (laidOutAs.current !== layout) {
     laidOutAs.current = layout;
     // Mid-glide, this is wherever the cover is on screen, so turning back is seamless.
-    before.current = cover.current ? coverBox(cover.current) : null;
+    before.current = cover.current?.getBoundingClientRect() ?? null;
   }
   useLayoutEffect(() => {
     const element = cover.current;
@@ -119,7 +114,16 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
     glide.current?.cancel();
     glide.current = null;
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    glide.current = element.animate([from, coverBox(element)], motion.smooth);
+    const to = element.getBoundingClientRect();
+    if (!to.width || !from.width) return;
+    // Only the transform moves, so the glide runs on the compositor instead of laying the
+    // cover out and resampling its image on every frame. Its resting transform centres it.
+    const dx = from.left + from.width / 2 - (to.left + to.width / 2);
+    const dy = from.top + from.height / 2 - (to.top + to.height / 2);
+    glide.current = element.animate([
+      { transform: `translate(${dx}px, ${dy}px) translate(-50%, -50%) scale(${from.width / to.width})` },
+      { transform: "translate(0px, 0px) translate(-50%, -50%) scale(1)" },
+    ], motion.smooth);
   }, [layout]);
 
   useEffect(() => {

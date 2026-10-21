@@ -48,6 +48,14 @@ pub struct DspPreset {
 }
 
 impl DspPreset {
+    /// Whether playing through this preset changes any sample; a bypassed or flat preset does not.
+    pub fn alters_signal(&self) -> bool {
+        self.enabled
+            && (self.output_gain_db != self.headroom_db
+                || self.bands.iter().any(|band| band.enabled && band.gain_db != 0.0)
+                || !self.convolution.is_empty())
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if self.id.is_empty()
             || self.id.len() > 128

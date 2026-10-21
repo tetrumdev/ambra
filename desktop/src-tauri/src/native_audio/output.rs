@@ -21,10 +21,13 @@ pub trait AudioOutput {
         }
     }
 
+    /// `processed` means DSP will change the samples, so an exclusive stream asks for the
+    /// device's widest integer format instead of the source's own bit depth.
     fn open_device_with_mode(
         spec: StreamSpec,
         device_id: Option<&str>,
         exclusive_mode: bool,
+        _processed: bool,
     ) -> Result<Self, String>
     where
         Self: Sized,
@@ -42,6 +45,11 @@ pub trait AudioOutput {
     fn reset(&mut self) -> Result<(), String>;
     fn set_gain(&mut self, _gain: f64) -> Result<(), String> {
         Ok(())
+    }
+    /// Integer resolution the device itself receives, which processed audio is dithered to.
+    /// None when the path ends in floating point and needs no requantization.
+    fn quantization_bits(&self) -> Option<u32> {
+        None
     }
     fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String>;
     fn queued_frames(&mut self) -> Result<usize, String>;

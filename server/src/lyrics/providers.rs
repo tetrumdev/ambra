@@ -207,8 +207,8 @@ impl<'a> ProviderClient<'a> {
             {
                 let record = envelope.data;
                 seen.push(record.id);
-                if record.score(request).is_some() {
-                    match self.amll_record(record, request, best) {
+                if let Some(found) = record.assess(request) {
+                    match self.amll_record(record, request, found.confirmed, best) {
                         Ok(true) => return Ok(()),
                         Ok(false) => {}
                         Err(error) => parse_error = Some(error),
@@ -216,9 +216,10 @@ impl<'a> ProviderClient<'a> {
                 }
             }
         }
+        // Searched without release notes, so another release of the song is found too.
         let query = [
-            ("musicName", request.track_name.trim().to_owned()),
-            ("artistName", request.artist_name.trim().to_owned()),
+            ("musicName", strip_release_notes(&request.title())),
+            ("artistName", lead_artist(&request.artist_name).to_owned()),
             ("pageSize", "20".to_owned()),
         ];
         let Some(envelope) = self
@@ -231,7 +232,7 @@ impl<'a> ProviderClient<'a> {
             .data
             .items
             .into_iter()
-            .filter_map(|record| record.score(request).map(|score| (score, record)))
+            .filter_map(|record| record.assess(request).map(|found| (found.score, record)))
             .collect();
         candidates.sort_by(|a, b| b.0.cmp(&a.0));
         for (_, candidate) in candidates
@@ -248,8 +249,11 @@ impl<'a> ProviderClient<'a> {
                 .await?
             {
                 let record = envelope.data;
-                if record.id == candidate.id && record.score(request).is_some() {
-                    match self.amll_record(record, request, best) {
+                let found = (record.id == candidate.id)
+                    .then(|| record.assess(request))
+                    .flatten();
+                if let Some(found) = found {
+                    match self.amll_record(record, request, found.confirmed, best) {
                         Ok(true) => return Ok(()),
                         Ok(false) => {}
                         Err(error) => parse_error = Some(error),
@@ -267,25 +271,30 @@ impl<'a> ProviderClient<'a> {
         &self,
         record: AmllRecord,
         request: &LyricsRequest,
+        confirmed: bool,
         best: &mut Option<LyricsResponse>,
     ) -> Result<bool, io::Error> {
         let Some(raw) = record.lyrics else {
             return Ok(false);
         };
         let mut lyrics = ttml::parse(&raw, request.duration_ms())?;
-        if request.duration_ms().is_some_and(|duration| {
-            lyrics
-                .lines
-                .iter()
-                .flat_map(|line| std::iter::once(line).chain(line.background_vocals.iter()))
-                .any(|line| {
-                    line.start_ms.is_some_and(|start| start > duration + 5000)
-                        || line.end_ms.is_some_and(|end| end > duration + 5000)
-                })
-        }) {
-            return Err(io::Error::other(
-                "AMLL timing exceeds the recording duration",
-            ));
+        let last_ms = lyrics
+            .lines
+            .iter()
+            .flat_map(|line| std::iter::once(line).chain(line.background_vocals.iter()))
+            .filter_map(|line| line.end_ms.or(line.start_ms))
+            .max();
+        if let Some(duration) = request.duration_ms() {
+            if last_ms.is_some_and(|last| last > duration + 5000) {
+                return Err(io::Error::other(
+                    "AMLL timing exceeds the recording duration",
+                ));
+            }
+            // Matched on title and artist alone: the words must span most of this recording,
+            // which rules out a much longer live or extended version of the song.
+            if !confirmed && last_ms.is_none_or(|last| last < duration / 2) {
+                return Ok(false);
+            }
         }
         lyrics.source = Some(Provider::Amll.name());
         Ok(keep(best, lyrics))
@@ -296,18 +305,20 @@ impl<'a> ProviderClient<'a> {
         request: &LyricsRequest,
         best: &mut Option<LyricsResponse>,
     ) -> Result<(), io::Error> {
-        if let Some(isrc) = &request.isrc {
-            // ISRC is the catalog's recording identity; no search or metadata request is needed.
-            self.red_record(&isrc.to_ascii_uppercase(), request, best)
-                .await?;
-            return Ok(());
+        let isrc = request.isrc.as_ref().map(|isrc| isrc.to_ascii_uppercase());
+        if let Some(isrc) = &isrc {
+            self.red_record(isrc, request, best).await?;
+            // Another release of the same song may carry word timing this one lacks.
+            if best.as_ref().is_some_and(|lyrics| lyrics.has_word_sync) {
+                return Ok(());
+            }
         }
         let query = [(
             "q",
             format!(
                 "{} {}",
-                request.track_name.trim(),
-                request.artist_name.trim()
+                strip_release_notes(&request.title()),
+                lead_artist(&request.artist_name)
             ),
         )];
         let Some(search) = self
@@ -319,7 +330,7 @@ impl<'a> ProviderClient<'a> {
         let mut candidates: Vec<_> = search
             .hits
             .into_iter()
-            .filter(|record| valid_isrc(&record.isrc))
+            .filter(|record| valid_isrc(&record.isrc) && isrc.as_ref() != Some(&record.isrc))
             .filter_map(|record| record.score(request).map(|score| (score, record)))
             .collect();
         candidates.sort_by(|a, b| b.0.cmp(&a.0));
@@ -414,7 +425,11 @@ impl<'a> ProviderClient<'a> {
             }
         }
         // /get may choose a line-only revision even when search contains a word-timed one.
-        query.retain(|(name, _)| matches!(*name, "track_name" | "artist_name"));
+        // Searched without release notes, so another release of the song is found too.
+        let query = [
+            ("track_name", strip_release_notes(&request.title())),
+            ("artist_name", lead_artist(&request.artist_name).to_owned()),
+        ];
         let Some(records) = self
             .json::<Vec<LrclibRecord>>(Provider::Lrclib, "/api/search", &query)
             .await?
@@ -451,16 +466,20 @@ pub(super) fn retry_after(value: Option<&str>, now: SystemTime) -> Duration {
         .unwrap_or(Duration::from_secs(5))
 }
 
-fn keep(best: &mut Option<LyricsResponse>, lyrics: LyricsResponse) -> bool {
-    let detail = lyrics.has_word_sync;
-    let rank = |lyrics: &LyricsResponse| match lyrics.status {
+/// Word-by-word timing beats line timing, which beats plain text.
+pub(super) fn quality(lyrics: &LyricsResponse) -> u8 {
+    match lyrics.status {
         "instrumental" => 1,
         "lyrics" if lyrics.has_word_sync => 4,
         "lyrics" if lyrics.sync == "line" => 3,
         "lyrics" => 2,
         _ => 0,
-    };
-    if rank(&lyrics) > best.as_ref().map(rank).unwrap_or(0) {
+    }
+}
+
+fn keep(best: &mut Option<LyricsResponse>, lyrics: LyricsResponse) -> bool {
+    let detail = lyrics.has_word_sync;
+    if quality(&lyrics) > best.as_ref().map(quality).unwrap_or(0) {
         *best = Some(lyrics);
     }
     detail
@@ -472,6 +491,147 @@ pub(super) fn normalized(value: &str) -> String {
         .flat_map(char::to_lowercase)
         .filter(|character| character.is_alphanumeric())
         .collect()
+}
+
+/// Words describing a release of the same performance rather than a different one, so its
+/// lyrics and their timing carry over: remasters, reissues, editions and mono or stereo mixes.
+/// Anything else, such as live, acoustic, remix, edit or demo, still tells versions apart.
+const RELEASE_WORDS: &[&str] = &[
+    "remaster", "remastered", "remastering", "digitally", "digital", "mono", "stereo", "version",
+    "single", "album", "lp", "original", "explicit", "clean", "edition", "deluxe", "expanded",
+    "anniversary", "bonus", "track", "mix", "special", "super", "legacy", "reissue", "the",
+];
+
+fn is_release_note(note: &str) -> bool {
+    let words: Vec<String> = note
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    // Featured artists and soundtrack credits name people and films, not a different take.
+    if words.first().is_none_or(|word| {
+        ["feat", "ft", "featuring", "with", "from"].contains(&word.as_str())
+    }) {
+        return true;
+    }
+    words.iter().all(|word| {
+        // Years, decades and ordinals: "2011", "1990s", "25th".
+        let digits = word.trim_end_matches(['s', 't', 'n', 'd', 'r', 'h']);
+        RELEASE_WORDS.contains(&word.as_str())
+            || (!digits.is_empty() && digits.chars().all(|character| character.is_ascii_digit()))
+    })
+}
+
+/// The title without release notes, as "Song - 2011 Remaster" or "Song (feat. Someone)"
+/// becomes "Song", while "Song (Live)" keeps its note.
+pub(super) fn strip_release_notes(title: &str) -> String {
+    let mut title = title.trim();
+    for dash in [" - ", " – ", " — "] {
+        if let Some(index) = title.find(dash)
+            && is_release_note(&title[index + dash.len()..])
+        {
+            title = title[..index].trim_end();
+        }
+    }
+    let mut kept = String::new();
+    let mut group = String::new();
+    let mut depth = 0_usize;
+    for character in title.chars() {
+        match character {
+            '(' | '[' => {
+                if depth > 0 {
+                    group.push(character);
+                }
+                depth += 1;
+            }
+            ')' | ']' if depth > 0 => {
+                depth -= 1;
+                if depth > 0 {
+                    group.push(character);
+                } else {
+                    if !is_release_note(&group) {
+                        kept.push('(');
+                        kept.push_str(&group);
+                        kept.push(')');
+                    }
+                    group.clear();
+                }
+            }
+            _ if depth > 0 => group.push(character),
+            _ => kept.push(character),
+        }
+    }
+    if depth > 0 {
+        kept.push('(');
+        kept.push_str(&group);
+    }
+    kept.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn canonical_title(title: &str) -> String {
+    normalized(&strip_release_notes(title))
+}
+
+const ARTIST_SEPARATORS: &[&str] = &[
+    " featuring ", " feat. ", " feat ", " ft. ", " ft ", " with ", " & ", ",", ";", "/", "、",
+];
+
+/// The first credited artist, as services join several into one string differently.
+pub(super) fn lead_artist(value: &str) -> &str {
+    // ASCII lowercasing keeps byte offsets, so they index the original text.
+    let lower = value.to_ascii_lowercase();
+    let end = ARTIST_SEPARATORS
+        .iter()
+        .filter_map(|separator| lower.find(separator))
+        .min()
+        .unwrap_or(value.len());
+    value[..end].trim()
+}
+
+fn artist_names(value: &str) -> Vec<String> {
+    let mut text = value.to_lowercase();
+    for separator in ARTIST_SEPARATORS {
+        text = text.replace(separator, "\u{1}");
+    }
+    text.split('\u{1}')
+        .map(normalized)
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn artists_match(requested: &str, candidates: &[String]) -> bool {
+    let full = normalized(requested);
+    let wanted = artist_names(requested);
+    candidates.iter().any(|candidate| {
+        if normalized(candidate) == full {
+            return true;
+        }
+        let names = artist_names(candidate);
+        // The lead artist on either side is credited on the other.
+        wanted.first().is_some_and(|lead| names.contains(lead))
+            || names.first().is_some_and(|lead| wanted.contains(lead))
+    })
+}
+
+/// Share of characters that need no edit to turn one string into the other.
+fn similarity(left: &str, right: &str) -> f64 {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let longest = left.len().max(right.len());
+    if longest == 0 {
+        return 1.0;
+    }
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    for (row, left_character) in left.iter().enumerate() {
+        let mut current = vec![row + 1; right.len() + 1];
+        for (column, right_character) in right.iter().enumerate() {
+            current[column + 1] = (previous[column] + usize::from(left_character != right_character))
+                .min(previous[column + 1] + 1)
+                .min(current[column] + 1);
+        }
+        previous = current;
+    }
+    1.0 - previous[right.len()] as f64 / longest as f64
 }
 
 pub(super) fn valid_isrc(value: &str) -> bool {
@@ -492,22 +652,31 @@ struct Recording<'a> {
     apple_music_ids: &'a [String],
 }
 
+pub(super) struct Match {
+    pub score: u32,
+    /// Backed by an ID, the album or the duration, not by title and artist alone.
+    pub confirmed: bool,
+}
+
 impl Recording<'_> {
     fn score(&self, request: &LyricsRequest) -> Option<u32> {
+        self.assess(request).map(|found| found.score)
+    }
+
+    fn assess(&self, request: &LyricsRequest) -> Option<Match> {
         if self
             .duration
             .is_some_and(|duration| !duration.is_finite() || !(0.0..=86_400.0).contains(&duration))
         {
             return None;
         }
+        // A different ISRC is often the same performance reissued on another album, so it no
+        // longer rules a record out; every version of a song should get the same lyrics.
         let isrc_match = request.isrc.as_ref().is_some_and(|isrc| {
             self.isrcs
                 .iter()
                 .any(|value| value.eq_ignore_ascii_case(isrc))
         });
-        if request.isrc.is_some() && !self.isrcs.is_empty() && !isrc_match {
-            return None;
-        }
         let id_match = isrc_match
             || request
                 .spotify_id
@@ -517,11 +686,9 @@ impl Recording<'_> {
                 .apple_music_id
                 .as_ref()
                 .is_some_and(|id| self.apple_music_ids.contains(id));
-        let album_match = !request.album_name.trim().is_empty()
-            && self
-                .albums
-                .iter()
-                .any(|album| normalized(album) == normalized(&request.album_name));
+        let album = canonical_title(&request.album_name);
+        let album_match =
+            !album.is_empty() && self.albums.iter().any(|value| canonical_title(value) == album);
         let duration_match = match (
             request.duration_seconds.filter(|value| *value > 0.0),
             self.duration,
@@ -538,19 +705,45 @@ impl Recording<'_> {
             _ => false,
         };
         if id_match {
-            return Some(100 + u32::from(album_match));
+            return Some(Match {
+                score: 100 + u32::from(album_match),
+                confirmed: true,
+            });
         }
-        let title = normalized(&request.title());
-        let artist = normalized(&request.artist_name);
-        if title.is_empty()
-            || artist.is_empty()
-            || !self.titles.iter().any(|value| normalized(value) == title)
-            || !self.artists.iter().any(|value| normalized(value) == artist)
-            || (!album_match && !duration_match)
-        {
+        let title = canonical_title(&request.title());
+        if title.is_empty() || !artists_match(&request.artist_name, self.artists) {
             return None;
         }
-        Some(10 + u32::from(album_match) * 5 + u32::from(duration_match) * 3)
+        let exact_title = self
+            .titles
+            .iter()
+            .any(|value| canonical_title(value) == title);
+        // A near-identical spelling (a typo, a missing apostrophe) counts only when the duration
+        // confirms the recording. Lengths must stay close, so an added note such as "live"
+        // never passes as a misspelling on a long title.
+        let close_title = !exact_title
+            && duration_match
+            && title.chars().count() >= 8
+            && self.titles.iter().any(|value| {
+                let value = canonical_title(value);
+                value.chars().count().abs_diff(title.chars().count()) <= 2
+                    && similarity(&value, &title) >= 0.9
+            });
+        if !exact_title && !close_title {
+            return None;
+        }
+        // A source that reports no duration (AMLL) may match on title and artist alone;
+        // its timings are checked against the recording once downloaded.
+        if !album_match && !duration_match && self.duration.is_some() {
+            return None;
+        }
+        Some(Match {
+            score: 10
+                + u32::from(album_match) * 5
+                + u32::from(duration_match) * 3
+                + u32::from(exact_title) * 2,
+            confirmed: album_match || duration_match,
+        })
     }
 }
 
@@ -578,7 +771,12 @@ pub(super) struct AmllRecord {
     lyrics: Option<String>,
 }
 impl AmllRecord {
+    #[cfg(test)]
     pub fn score(&self, request: &LyricsRequest) -> Option<u32> {
+        self.assess(request).map(|found| found.score)
+    }
+
+    fn assess(&self, request: &LyricsRequest) -> Option<Match> {
         Recording {
             titles: &self.music_names,
             artists: &self.artist_names,
@@ -588,7 +786,7 @@ impl AmllRecord {
             spotify_ids: &self.spotify_ids,
             apple_music_ids: &self.apple_music_ids,
         }
-        .score(request)
+        .assess(request)
     }
 }
 
