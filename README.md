@@ -59,17 +59,15 @@ Tauri, Vite, React, and Bun
 The desktop app uses the separate Ambra server for playlists, queue and playback
 history, playback track and position, library ordering, and hidden tracks. When
 the server or saved state is unavailable, the client opens local tracks with a
-temporary session. Streaming features and shared state require the server. The
-client does not bundle or start the server:
+temporary session. Streaming features and shared state require the server.
 
-```sh
-cd server
-cargo run
-```
-
-Run the client separately from `desktop` with `tauri dev`. Building or running
-the client does not require a server binary. Closing the client leaves a
-separately running server alone; stop the server with Ctrl+C in its terminal.
+The app bundles the server and starts it on launch, restarting it if it stops
+and stopping it on exit. Its output goes to `ambra-server.log` in the app's log
+directory. Every dev and release build compiles the server for its target first
+(`scripts/build-server-sidecar.ts`), so `tauri dev` and `tauri build` need no
+extra steps. If a server already answers on its port, such as one started with
+`cargo run` in `server`, the app uses that one instead; closing the app leaves
+it running.
 
 From the repository root, `bun run dev` installs the desktop dependencies and
 launches the client. `bun run build` builds the standalone client.
