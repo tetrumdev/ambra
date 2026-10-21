@@ -40,6 +40,11 @@
     /* On the cover's curve, so the lyrics and the cover move as one (BigscreenArtwork.tsx). */
     transition: opacity var(--player-view-duration) var(--player-view-ease) 150ms;
 }
+/* Resting through an outro nobody asked for: the same moves, drifting (utils/motion.ts). */
+#lyricsPage[data-resting="true"] {
+    --player-view-ease: var(--motion-drift-ease);
+    --player-view-duration: var(--motion-drift-duration);
+}
 /* Leaving: the backdrop fades and the lyrics drift left, under the cover moving out to centre. */
 #lyricsPage[data-shown="false"] {
     opacity: 0;

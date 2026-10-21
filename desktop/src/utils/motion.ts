@@ -11,6 +11,9 @@ export const motion = {
   /** Views and large surfaces moving or fading: the player opening and closing, the bar
       reshaping, lyrics and covers changing places. A gentle start, then a long quiet settle. */
   smooth: { duration: 500, easing: "cubic-bezier(0.4, 0, 0, 1)" },
+  /** The same moves when nobody asked for them, like the lyrics resting through a long outro:
+      slow and even at both ends, so the change is noticed only once it is underway. */
+  drift: { duration: 1600, easing: "cubic-bezier(0.45, 0, 0.25, 1)" },
   /** A screen or page arriving: nearly there at once, then a short settle, so navigating never waits. */
   enter: { duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
   /** Things lighting up under the pointer. Leaving takes twice as long, so they fade rather than blink off. */

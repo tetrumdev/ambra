@@ -14,6 +14,7 @@ import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { LyricsView } from "./components/LyricsView";
 import { LYRICS_COVER_DIM } from "./utils/lyricsMotion";
+import { motion } from "./utils/motion";
 import { SearchBar, type SearchFocusRequest } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -996,14 +997,15 @@ function App({ localOnly }: { localOnly: boolean }) {
       {(player.currentTrack || isPlayerView) && (
         <div className="playerStage" data-open={isPlayerView}>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
-            playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
+            playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1}
+            coverDimMs={lyricsResting ? motion.drift.duration : undefined} />
           {isPlayerView && [
             ...leavingLyrics.map((track) => ({ track, leaving: true })),
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
           ].map(({ track, leaving }) => <LyricsView key={track.globalId}
             track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
             motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
-            shown={!leaving && lyricsShown} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
+            shown={!leaving && lyricsShown} resting={!leaving && lyricsResting} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
         </div>
       )}
       {(player.currentTrack || isPlayerView) && (
@@ -1011,6 +1013,7 @@ function App({ localOnly }: { localOnly: boolean }) {
           track={player.currentTrack}
           active={isPlayerView}
           layout={lyricsOnStage ? "lyrics" : "center"}
+          resting={lyricsResting}
           direction={skipDirection}
         />
       )}
