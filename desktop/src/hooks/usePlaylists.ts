@@ -43,11 +43,36 @@ export function usePlaylists() {
     return commit(next) ? playlist.id : null;
   }
 
+  /** A new AMBRA playlist with the same name and songs, from any playlist including a service's. */
+  function duplicate(name: string, tracks: Track[]) {
+    if (!name.trim()) return null;
+    const playlist = { id: crypto.randomUUID(), name: name.trim(), trackIds: [...new Set(tracks.map(track => track.globalId))] };
+    const saved = new Map(current.current.tracks.map(track => [track.globalId, track]));
+    for (const track of tracks) saved.set(track.globalId, track);
+    return commit({ ...current.current, playlists: [...current.current.playlists, playlist], tracks: [...saved.values()] }) ? playlist.id : null;
+  }
+
+  /** Swaps songs for other copies in place, keeping their order; a copy already present is not repeated. */
+  function replaceTracks(id: string, replacements: Map<string, Track>) {
+    if (!current.current.playlists.some(playlist => playlist.id === id)) return false;
+    const saved = new Map(current.current.tracks.map(track => [track.globalId, track]));
+    for (const track of replacements.values()) saved.set(track.globalId, track);
+    return commit({
+      ...current.current,
+      tracks: [...saved.values()],
+      playlists: current.current.playlists.map(playlist => playlist.id === id
+        ? { ...playlist, trackIds: [...new Set(playlist.trackIds.map(trackId => replacements.get(trackId)?.globalId ?? trackId))] }
+        : playlist),
+    });
+  }
+
   return {
     playlists: snapshot.playlists,
     tracks: snapshot.tracks,
     error: loaded.error ?? error,
     create,
+    duplicate,
+    replaceTracks,
     rename: (id: string, name: string) => Boolean(name.trim()) && current.current.playlists.some(playlist => playlist.id === id) && commit({
       ...current.current,
       playlists: current.current.playlists.map(playlist => playlist.id === id ? { ...playlist, name: name.trim() } : playlist),

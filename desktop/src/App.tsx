@@ -60,6 +60,7 @@ import {
 } from "./utils/trackCollectionOrder";
 
 import { usePlaylists } from "./hooks/usePlaylists";
+import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
 
@@ -85,6 +86,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
     null,
   );
+  const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
@@ -1163,6 +1165,15 @@ function App({ localOnly }: { localOnly: boolean }) {
             key={selectedPlaylist.id}
             playlist={selectedPlaylist}
             artworkTracks={baseCollectionTracks}
+            onRename={selectedPlaylist.provider ? undefined : playlistStore.rename}
+            onDuplicate={() => {
+              const id = playlistStore.duplicate(selectedPlaylist.name, baseCollectionTracks);
+              if (id) setSelectedPlaylistId(id);
+            }}
+            onImprove={selectedPlaylist.provider ? undefined : () => playlistImprovement.improve(selectedPlaylist.id)}
+            improvementProgress={playlistImprovement.progress}
+            improvementReport={playlistImprovement.reports[selectedPlaylist.id]}
+            onExit={playlistImprovement.clear}
             {...collectionViewProps}
           />
         ) : (
