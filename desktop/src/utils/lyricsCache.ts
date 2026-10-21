@@ -6,7 +6,8 @@ import { SearchCache } from "./searchCache";
 const lyricsCache = new SearchCache<TrackLyrics>(30 * 60_000, 12);
 const requests = new Map<string, Promise<TrackLyrics>>();
 
-function lyricsKey(track: Track): string {
+/** Everything a lyrics lookup depends on; a change to any of it is a different lookup. */
+export function lyricsKey(track: Track): string {
   return JSON.stringify([
     track.globalId,
     track.name,
