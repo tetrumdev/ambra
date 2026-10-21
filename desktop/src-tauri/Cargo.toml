@@ -1,6 +1,6 @@
 [package]
 name = "AMBRA"
-version = "0.1.2"
+version = "0.2.0"
 description = "Ambra music player"
 authors = ["Quantium Labs"]
 edition = "2024"
