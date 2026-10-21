@@ -5,9 +5,7 @@ import type { Playlist } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
-
-/** Every track menu's width, wide enough that no action wraps. Keep TrackMenus.css in step. */
-export const MENU_WIDTH = 220;
+import { MENU_WIDTH } from "../utils/trackMenu";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];

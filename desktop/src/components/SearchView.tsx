@@ -9,7 +9,8 @@ import { prefetchArtistPage } from "../utils/artistPage";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
-import { MENU_WIDTH, TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { MENU_WIDTH } from "../utils/trackMenu";
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
 import "./SearchView.css";
@@ -88,31 +89,58 @@ function AlbumArtistLinks({ album, onOpenEntity }: { album: CatalogAlbum; onOpen
  * belongs, and results that are new rise in, instead of the grid jumping.
  */
 function useResultGlide(root: React.RefObject<HTMLDivElement | null>, changes: unknown[]) {
+  // Layout positions, without any glide in progress.
   const positions = useRef(new Map<string, { x: number; y: number }>());
+  // Only these are retargeted; CSS transitions such as hover fades are left alone.
+  const glides = useRef(new WeakMap<HTMLElement, Animation[]>());
   useLayoutEffect(() => {
     const container = root.current;
     if (!container) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     const base = container.getBoundingClientRect();
+    // Read everything before animating anything, so the pass costs one layout.
+    const measured = Array.from(container.querySelectorAll<HTMLElement>("[data-glide]"), (element) => {
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      // Where a running glide currently draws the element, relative to its layout box.
+      const offset = style.transform === "none" ? new DOMMatrixReadOnly() : new DOMMatrixReadOnly(style.transform);
+      return {
+        element,
+        key: element.dataset.glide!,
+        offset: { x: offset.m41, y: offset.m42 },
+        opacity: Number(style.opacity),
+        // Measured within the scrolled content, so scrolling between updates is not mistaken for movement.
+        position: {
+          x: rect.left - base.left + container.scrollLeft - offset.m41,
+          y: rect.top - base.top + container.scrollTop - offset.m42,
+        },
+      };
+    });
     const next = new Map<string, { x: number; y: number }>();
     let arrivals = 0;
-    for (const element of container.querySelectorAll<HTMLElement>("[data-glide]")) {
-      const rect = element.getBoundingClientRect();
-      // Measured within the scrolled content, so scrolling between updates is not mistaken for movement.
-      const position = { x: rect.left - base.left + container.scrollLeft, y: rect.top - base.top + container.scrollTop };
-      const key = element.dataset.glide!;
+    for (const { element, key, offset, opacity, position } of measured) {
       next.set(key, position);
       if (reduced) continue;
+      const inFlight = (glides.current.get(element) ?? []).filter((animation) => animation.playState !== "finished");
       const previous = positions.current.get(key);
       if (!previous) {
-        element.animate([{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
-          { ...motion.smooth, delay: Math.min(arrivals++ * 35, 240), fill: "backwards" });
+        if (inFlight.length) continue;
+        glides.current.set(element, [element.animate([{ opacity: 0, transform: "translateY(12px)" }, { opacity: 1, transform: "none" }],
+          { ...motion.smooth, delay: Math.min(arrivals++ * 35, 240), fill: "backwards" })]);
         continue;
       }
-      const dx = previous.x - position.x;
-      const dy = previous.y - position.y;
-      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;
-      element.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], motion.smooth);
+      // Unmoved results keep whatever glide they are in, rather than restarting it.
+      if (Math.abs(previous.x - position.x) < 0.5 && Math.abs(previous.y - position.y) < 0.5) continue;
+      // Start from where the result is drawn right now, so a glide that is interrupted bends
+      // toward its new place instead of jumping back to where the last one began.
+      const dx = previous.x + offset.x - position.x;
+      const dy = previous.y + offset.y - position.y;
+      for (const animation of inFlight) animation.cancel();
+      // A result already moving carries on without the gentle start, so it never stalls mid-flight.
+      const timing = inFlight.length ? { ...motion.smooth, easing: motion.enter.easing } : motion.smooth;
+      const started = [element.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: "none" }], timing)];
+      if (opacity < 1) started.push(element.animate([{ opacity }, { opacity: 1 }], timing));
+      glides.current.set(element, started);
     }
     positions.current = next;
   }, changes);
@@ -305,7 +333,9 @@ export function SearchView({
       {featuredTrack && (
         <div id="searchResults">
           <div id="firstResult">
+            {/* Keyed so a new top track gets its own element and glides up from the grid. */}
             <SearchResult
+              key={featuredTrack.globalId}
               onOpenEntity={onOpenEntity}
               track={featuredTrack}
               variant="featured"

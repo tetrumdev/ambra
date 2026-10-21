@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { serviceAuthStatus, type StreamingProvider } from "../api/server";
-import { changeServicePlaylist, servicePlaylistContents, servicePlaylists, type ServicePlaylistContents } from "../api/playlists";
+import { changeServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
 import type { Playlist, Track } from "../types/music";
 import { musicProviderName } from "../utils/musicProviderName";
+import { loadServicePlaylistCache, saveServicePlaylistCache, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
 
 export type PlaylistServiceGroup = {
   provider: StreamingProvider;
@@ -13,10 +14,24 @@ export type PlaylistServiceGroup = {
 const providers: StreamingProvider[] = ["spotify", "qobuz", "tidal"];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const playlistId = (provider: StreamingProvider, id: string) => `service:${provider}:${id}`;
+/** An open playlist cached longer than this is quietly checked for changes. */
+const OPEN_REVALIDATE_MS = 5 * 60_000;
+
+/**
+ * How a playlist's cached contents are reused: "preload" refetches only when the service
+ * lists a different name or track count, "open" also when the copy is old, "force" always.
+ */
+type LoadMode = "preload" | "open" | "force";
+
+function needsFetch(cached: CachedPlaylistContents | undefined, playlist: Playlist, mode: LoadMode) {
+  if (!cached || mode === "force") return true;
+  if (cached.playlist.name !== playlist.name || cached.playlist.trackCount !== playlist.trackCount) return true;
+  return mode === "open" && Date.now() - cached.fetchedAt > OPEN_REVALIDATE_MS;
+}
 
 export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
   const [groups, setGroups] = useState<PlaylistServiceGroup[]>([]);
-  const [contents, setContents] = useState<Record<string, ServicePlaylistContents>>({});
+  const [contents, setContents] = useState<Record<string, CachedPlaylistContents>>({});
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
@@ -30,24 +45,30 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
   const requests = useRef(new Map<string, { controller: AbortController; promise: Promise<void> }>());
   const mutations = useRef(new Set<string>());
   const alive = useRef(true);
+  const [hydrated, setHydrated] = useState(false);
 
-  const load = useCallback((playlist: Playlist, force = false): Promise<void> => {
+  const load = useCallback((playlist: Playlist, mode: LoadMode = "open"): Promise<void> => {
     if (!enabled) return Promise.resolve();
     if (!playlist.provider || !playlist.remoteId) return Promise.resolve();
     const existing = requests.current.get(playlist.id);
-    if (existing && !force) return existing.promise;
+    if (existing && mode !== "force") return existing.promise;
+    const cached = currentContents.current[playlist.id];
+    if (!needsFetch(cached, playlist, mode)) return Promise.resolve();
     existing?.controller.abort();
     const controller = new AbortController();
-    setLoading(current => new Set(current).add(playlist.id));
+    // A cached copy stays on screen while it is revalidated, without a loading state.
+    if (!cached) setLoading(current => new Set(current).add(playlist.id));
     const promise = servicePlaylistContents(playlist.provider, playlist.remoteId, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]))
       .then(result => {
         if (!alive.current || controller.signal.aborted) return;
-        currentContents.current = { ...currentContents.current, [playlist.id]: result };
+        currentContents.current = { ...currentContents.current, [playlist.id]: { ...result, fetchedAt: Date.now() } };
         setContents(currentContents.current);
         setErrors(current => { const next = { ...current }; delete next[playlist.id]; return next; });
       })
       .catch(reason => {
         if (!alive.current || controller.signal.aborted) return;
+        // A failed background check keeps showing the cached copy.
+        if (currentContents.current[playlist.id] && mode !== "force") return;
         setErrors(current => ({ ...current, [playlist.id]: message(reason) }));
       })
       .finally(() => {
@@ -93,6 +114,31 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     }
   }, [load, enabled]);
 
+  // Cached playlists show at once; anything a refresh already fetched takes precedence.
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    void loadServicePlaylistCache().then(cache => {
+      if (cancelled) return;
+      if (cache) {
+        const groups = [...currentGroups.current, ...cache.groups
+          .filter(group => !currentGroups.current.some(current => current.provider === group.provider))
+          .map(group => ({ ...group, error: null }))];
+        currentGroups.current = groups;
+        setGroups(groups);
+        currentContents.current = { ...cache.contents, ...currentContents.current };
+        setContents(currentContents.current);
+      }
+      setHydrated(true);
+    });
+    return () => { cancelled = true; };
+  }, [enabled]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    saveServicePlaylistCache({ version: 1, groups: groups.map(({ provider, playlists }) => ({ provider, playlists })), contents });
+  }, [hydrated, groups, contents]);
+
   useEffect(() => {
     if (!enabled) return;
     alive.current = true;
@@ -123,18 +169,18 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
   useEffect(() => {
     const playlist = currentGroups.current.flatMap(group => group.playlists).find(playlist => playlist.id === selectedId);
     if (playlist) void load(playlist);
-  }, [selectedId, load]);
+  }, [selectedId, load, hydrated]);
 
   useEffect(() => {
     if (!enabled || !preloadHome) return;
     const playlists = providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? [])
-      .filter(playlist => !currentContents.current[playlist.id] && playlist.trackCount !== 0);
+      .filter(playlist => playlist.trackCount !== 0 && needsFetch(currentContents.current[playlist.id], playlist, "preload"));
     let cancelled = false;
     let next = 0;
     // Home needs track metadata for its cover grids before a playlist is opened.
     const workers = Array.from({ length: Math.min(3, playlists.length) }, async () => {
       while (!cancelled && next < playlists.length) {
-        await load(playlists[next++]);
+        await load(playlists[next++], "preload");
       }
     });
     void Promise.all(workers);
@@ -161,11 +207,11 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
         const ids = result.tracks.filter(track => trackIds?.includes(track.globalId)).map(track => track.providerTrackId);
         await changeServicePlaylist(playlist.provider, playlist.remoteId, { action: "remove", trackIds: ids, revision: result.revision });
       }
-      await load(playlist, true);
+      await load(playlist, "force");
       return true;
     } catch (reason) {
       setError(`${musicProviderName(playlist.provider)}: ${message(reason)}`);
-      void load(playlist, true);
+      void load(playlist, "force");
       throw reason;
     } finally {
       mutations.current.delete(id);

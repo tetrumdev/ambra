@@ -12,7 +12,8 @@ import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
-import { LYRICS_COVER_DIM, LyricsView } from "./components/LyricsView";
+import { LyricsView } from "./components/LyricsView";
+import { LYRICS_COVER_DIM } from "./utils/lyricsMotion";
 import { SearchBar, type SearchFocusRequest } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -60,6 +61,7 @@ import {
 
 import { usePlaylists } from "./hooks/usePlaylists";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
+import { useLyricsRest } from "./hooks/useLyricsRest";
 
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
@@ -214,20 +216,23 @@ function App({ localOnly }: { localOnly: boolean }) {
   const lyricsTrack = lyricsTrackRef.current;
   // When one song's lyrics replace another's, the old view stays a moment to drift out.
   const lyricsHandoff = useRef<{ track: typeof lyricsTrack; leaving: NonNullable<typeof lyricsTrack>[] }>({ track: lyricsTrack, leaving: [] });
+  // During a long instrumental ending the lyrics step aside for the cover until the pointer moves.
+  const lyricsResting = useLyricsRest(player.currentTrack, player.clock, isLyricsView && showLyrics);
+  const lyricsOnStage = showLyrics && !lyricsResting;
   // Opening the player shows its lyrics at once; switching between them and the cover fades (LyricsView.css).
-  const [lyricsShown, setLyricsShown] = useState(showLyrics && isPlayerView);
+  const [lyricsShown, setLyricsShown] = useState(lyricsOnStage && isPlayerView);
   const playerWasOpen = useRef(isPlayerView);
-  if (lyricsShown && !(showLyrics && isPlayerView)) setLyricsShown(false);
-  else if (!lyricsShown && showLyrics && isPlayerView && !playerWasOpen.current) setLyricsShown(true);
+  if (lyricsShown && !(lyricsOnStage && isPlayerView)) setLyricsShown(false);
+  else if (!lyricsShown && lyricsOnStage && isPlayerView && !playerWasOpen.current) setLyricsShown(true);
   useEffect(() => {
     playerWasOpen.current = isPlayerView;
-    if (lyricsShown || !showLyrics || !isPlayerView) return;
+    if (lyricsShown || !lyricsOnStage || !isPlayerView) return;
     // Paint the hidden state once first, so lyrics switched to fade in from behind the cover.
     let frame = requestAnimationFrame(() => {
       frame = requestAnimationFrame(() => setLyricsShown(true));
     });
     return () => cancelAnimationFrame(frame);
-  }, [isPlayerView, showLyrics, lyricsShown]);
+  }, [isPlayerView, lyricsOnStage, lyricsShown]);
   if (lyricsTrack?.globalId !== lyricsHandoff.current.track?.globalId) {
     const previous = lyricsHandoff.current.track;
     const leaving = lyricsHandoff.current.leaving.filter((track) => track.globalId !== lyricsTrack?.globalId);
@@ -698,7 +703,8 @@ function App({ localOnly }: { localOnly: boolean }) {
   });
   const openEntity = useStableCallback((entity: BrowseEntity) => {
     if (browseEntity && entityKey(entity) === entityKey(browseEntity)) return;
-    navigation.current.push({ entity: browseEntity, screen, playlistId: selectedPlaylistId, section: librarySection });
+    // Going back never reopens the player: it returns to the screen beneath it.
+    navigation.current.push({ entity: browseEntity, screen: isPlayerView ? playerReturnScreenRef.current : screen, playlistId: selectedPlaylistId, section: librarySection });
     setBrowseEntity(entity); setSelectedPlaylistId(null);
     setPreferences(current => ({ ...current, ui: { ...current.ui, screen: "library" } }));
   });
@@ -1002,7 +1008,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         <AlbumArtwork
           track={player.currentTrack}
           active={isPlayerView}
-          layout={showLyrics ? "lyrics" : "center"}
+          layout={lyricsOnStage ? "lyrics" : "center"}
           direction={skipDirection}
         />
       )}

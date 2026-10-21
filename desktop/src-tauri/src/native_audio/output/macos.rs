@@ -21,9 +21,11 @@ use coreaudio::audio_unit::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
 use objc2_core_audio::AudioDeviceID;
 
+use super::super::dither::Dither;
 use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed};
 
 const RENDER_BLOCKS: usize = 8;
+const I32_SCALE: f64 = 2_147_483_648.0;
 const MAX_RENDER_BLOCK_FRAMES: usize = 8_192;
 const GAIN_RAMP_MILLISECONDS: usize = 5;
 
@@ -37,6 +39,8 @@ pub struct PlatformOutput {
     queued_samples: Arc<AtomicU64>,
     gain_bits: Arc<AtomicU64>,
     channels: usize,
+    /// Integer depth of the hogged device's physical format; None when CoreAudio mixes in float.
+    physical_bits: Option<u32>,
     started: bool,
     owns_hog_mode: bool,
 }
@@ -73,13 +77,14 @@ impl AudioOutput for PlatformOutput {
     }
 
     fn open_device(spec: StreamSpec, device_id: Option<&str>) -> Result<Self, String> {
-        Self::open_device_with_mode(spec, device_id, true)
+        Self::open_device_with_mode(spec, device_id, true, false)
     }
 
     fn open_device_with_mode(
         spec: StreamSpec,
         selected_device_id: Option<&str>,
         exclusive_mode: bool,
+        processed: bool,
     ) -> Result<Self, String> {
         let device_id = match selected_device_id {
             Some(device_id) => device_id
@@ -100,6 +105,7 @@ impl AudioOutput for PlatformOutput {
             device_id,
             owns_hog_mode,
             exclusive_mode,
+            processed,
             follows_system_output,
         );
 
@@ -139,6 +145,10 @@ impl AudioOutput for PlatformOutput {
         }
         self.gain_bits.store(gain.to_bits(), Ordering::Release);
         Ok(())
+    }
+
+    fn quantization_bits(&self) -> Option<u32> {
+        self.physical_bits
     }
 
     fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String> {
@@ -202,20 +212,30 @@ impl PlatformOutput {
         device_id: AudioDeviceID,
         owns_hog_mode: bool,
         exclusive_mode: bool,
+        processed: bool,
         follows_system_output: bool,
     ) -> Result<Self, String> {
+        let mut physical_bits = None;
         if exclusive_mode {
+            // Untouched 16-bit audio goes out at its own depth. Everything else, processed
+            // audio included, goes out at 24 bits, the most music ever carries; a 32-bit
+            // format only pads it. Nothing drops below the source's depth.
             let physical_candidates: &[SampleFormat] = match spec.bits_per_sample {
-                0..=16 => &[
+                0..=16 if !processed => &[
                     SampleFormat::I16,
                     SampleFormat::I24,
                     SampleFormat::I32,
                     SampleFormat::F32,
                 ],
-                17..=24 => &[SampleFormat::I24, SampleFormat::I32, SampleFormat::F32],
-                _ => &[SampleFormat::I32, SampleFormat::F32],
+                0..=16 => &[
+                    SampleFormat::I24,
+                    SampleFormat::I32,
+                    SampleFormat::F32,
+                    SampleFormat::I16,
+                ],
+                _ => &[SampleFormat::I24, SampleFormat::I32, SampleFormat::F32],
             };
-            let physical_description = physical_candidates
+            let (physical_format, physical_description) = physical_candidates
                 .iter()
                 .find_map(|sample_format| {
                     find_matching_physical_format(
@@ -227,6 +247,7 @@ impl PlatformOutput {
                             channels: spec.channels as u32,
                         },
                     )
+                    .map(|description| (*sample_format, description))
                 })
                 .ok_or_else(|| {
                     format!(
@@ -236,6 +257,12 @@ impl PlatformOutput {
                 })?;
             set_device_physical_stream_format(device_id, physical_description)
                 .map_err(coreaudio_error)?;
+            physical_bits = match physical_format {
+                SampleFormat::I16 => Some(16),
+                // A 32-bit format still carries 24-bit music, which CoreAudio converts exactly.
+                SampleFormat::I24 | SampleFormat::I32 => Some(24),
+                _ => None,
+            };
         }
 
         let mut audio_unit = if follows_system_output {
@@ -277,6 +304,7 @@ impl PlatformOutput {
         let mut gain_step = 0.0_f64;
         let mut gain_frames_remaining = 0_usize;
         let gain_ramp_frames = (spec.sample_rate as usize * GAIN_RAMP_MILLISECONDS / 1_000).max(1);
+        let mut dither = Dither::default();
         type Args = render_callback::Args<data::Interleaved<i32>>;
         audio_unit
             .set_render_callback(move |args: Args| {
@@ -333,11 +361,23 @@ impl PlatformOutput {
                                 gain_step = 0.0;
                             }
                         }
-                        let sample = active_block[active_offset + sample_offset] as f64;
-                        output[output_offset + sample_offset] = (sample * current_gain)
-                            .round()
-                            .clamp(i32::MIN as f64, i32::MAX as f64)
-                            as i32;
+                        let sample = active_block[active_offset + sample_offset];
+                        // Full volume passes samples through untouched; any other level is
+                        // dithered to the hogged device's depth so CoreAudio never rounds it.
+                        output[output_offset + sample_offset] = match physical_bits {
+                            _ if current_gain == 1.0 => sample,
+                            Some(bits) => normalized_to_signed(
+                                dither.quantize_sample(
+                                    f64::from(sample) / I32_SCALE * current_gain,
+                                    bits,
+                                ),
+                                32,
+                            ) as i32,
+                            None => (f64::from(sample) * current_gain)
+                                .round()
+                                .clamp(i32::MIN as f64, i32::MAX as f64)
+                                as i32,
+                        };
                     }
                     subtract_queued_samples(&callback_queued_samples, count);
                     active_offset += count;
@@ -358,6 +398,7 @@ impl PlatformOutput {
             queued_samples,
             gain_bits,
             channels: spec.channels,
+            physical_bits,
             started: false,
             owns_hog_mode,
         })

@@ -2,7 +2,7 @@ import "./TrackMenus.css";
 import { useRef } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
-import { MENU_WIDTH } from "./TrackCollectionMenu";
+import { MENU_WIDTH } from "../utils/trackMenu";
 
 type TrackPlaybackMenuProps = {
   onClose: () => void;

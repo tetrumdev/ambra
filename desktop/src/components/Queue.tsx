@@ -7,12 +7,13 @@ import type { QueueEntryRef } from "../utils/queueNavigation";
 import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
-import { MENU_WIDTH, TrackCollectionMenu } from "./TrackCollectionMenu";
+import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { MENU_WIDTH } from "../utils/trackMenu";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
-import { trackArtistNames } from "./ArtistLinks";
+import { trackArtistNames } from "../utils/trackArtists";
 import "./LibraryView.css";
 import "./Queue.css";
 
@@ -62,6 +63,8 @@ export function Queue(props: QueueProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
+  const columnHeaderRef = useRef<HTMLDivElement>(null);
+  const historyBarRef = useRef<HTMLDivElement>(null);
   const followCurrent = useRef(true);
   // History starts folded into a single row above now playing, so the queue opens on what is playing.
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -75,8 +78,10 @@ export function Queue(props: QueueProps) {
     const anchor = currentRef.current;
     // Folded, history is one row; it stays in view instead of being scrolled past.
     if (!scroller || !anchor || !historyShown) return 0;
-    return Math.max(0, anchor.getBoundingClientRect().top - scroller.getBoundingClientRect().top
-      + scroller.scrollTop);
+    const scrollerTop = scroller.getBoundingClientRect().top;
+    // Now playing settles just below the sticky history bar rather than underneath it.
+    const stickyBottom = historyBarRef.current ? historyBarRef.current.getBoundingClientRect().bottom - scrollerTop : 0;
+    return Math.max(0, anchor.getBoundingClientRect().top - scrollerTop + scroller.scrollTop - stickyBottom);
   }, [historyShown]);
   const jumpToCurrent = useCallback(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = currentScrollTop();
@@ -107,13 +112,39 @@ export function Queue(props: QueueProps) {
     followCurrent.current = Math.abs((scrollRef.current?.scrollTop ?? 0) - currentScrollTop()) <= 24;
   }
 
-  // Unfolding shows the plays right under their row, oldest first, leading into now playing.
+  // Where now playing sat on screen just before history unfolded above it.
+  const tailTopBeforeOpen = useRef<number | null>(null);
   function toggleHistory() {
     const open = !historyOpen;
+    tailTopBeforeOpen.current = open && scrollRef.current && tailRef.current
+      ? tailRef.current.getBoundingClientRect().top - scrollRef.current.getBoundingClientRect().top
+      : null;
     setHistoryOpen(open);
     followCurrent.current = !open;
-    if (scrollRef.current) scrollRef.current.scrollTop = 0;
   }
+  // Unfolding reveals the latest plays, right above now playing, which moves down at most to the
+  // middle of the list; older plays are further up.
+  useLayoutEffect(() => {
+    const before = tailTopBeforeOpen.current;
+    tailTopBeforeOpen.current = null;
+    const scroller = scrollRef.current;
+    const tail = tailRef.current;
+    if (before === null || !scroller || !tail) return;
+    const grown = tail.getBoundingClientRect().top - scroller.getBoundingClientRect().top - before;
+    const shift = Math.min(grown, Math.max(0, scroller.clientHeight / 2 - before));
+    scroller.scrollTop += grown - shift;
+  }, [historyOpen]);
+  // The history bar sticks under the column header, so folding and clearing stay in reach.
+  const [columnHeaderHeight, setColumnHeaderHeight] = useState(0);
+  useLayoutEffect(() => {
+    const header = columnHeaderRef.current;
+    if (!header) return;
+    const measure = () => setColumnHeaderHeight(header.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(header);
+    return () => observer.disconnect();
+  }, [entries.length > 0]);
   // History and upcoming reorder as one list; whatever lands behind now playing is history, the rest is up next.
   const reorder = useCallback((orderedIds: string[]) => {
     const refs = new Map<string, QueueEntryRef>();
@@ -177,7 +208,6 @@ export function Queue(props: QueueProps) {
   };
   const onAction = useCallback<EntryAction>((action, event, entry) => actions.current(action, event, entry), []);
   const rowProps = { selecting: selection.isSelecting, selectedIds: selection.selectedIds, menuEntryId: menu?.entry.id, onAction };
-  const columnHeaderRef = useRef<HTMLDivElement>(null);
   const duration = props.upcomingEntries.reduce((total, entry) => total + entry.track.durationSeconds, 0);
 
   return (
@@ -207,7 +237,8 @@ export function Queue(props: QueueProps) {
         <div id="queueList" className="libraryView smoothScroll" ref={setScrollElement} onScroll={trackScrollPosition}
           data-selecting={selection.isSelecting ? "true" : undefined}>
           {entries.length > 0 && <TrackColumnHeader headerRef={columnHeaderRef} />}
-          {history.length > 0 && <div className="queueHistoryBar">
+          {history.length > 0 && <div className="queueHistoryBar" ref={historyBarRef}
+            style={{ "--queue-column-header-height": `${columnHeaderHeight}px` } as React.CSSProperties}>
             <button type="button" className="queueSectionTitle queueHistoryToggle" aria-expanded={historyShown}
               aria-controls="queueHistory" onClick={toggleHistory}>
               <DropdownChevron />Played ({history.length})

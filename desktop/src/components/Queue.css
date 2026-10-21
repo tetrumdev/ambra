@@ -109,6 +109,12 @@
     align-items: center;
     justify-content: space-between;
     padding: 8px 15px 0 0;
+    /* Stays under the column header while the plays scroll, so it can always fold them away. */
+    position: sticky;
+    top: var(--queue-column-header-height, 0px);
+    /* Under the column header (z-index 8), above the rows. */
+    z-index: 7;
+    background: #000;
 }
 
 .queueHistoryBar .queueTextButton {

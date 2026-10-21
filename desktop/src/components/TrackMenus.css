@@ -12,7 +12,7 @@
 #trackPlaybackMenu,
 #trackCollectionMenu {
     box-sizing: border-box;
-    /* MENU_WIDTH in TrackCollectionMenu.tsx. */
+    /* MENU_WIDTH in utils/trackMenu.ts. */
     width: 220px;
     border: 1px solid #2f2f2f;
     border-radius: 12px;

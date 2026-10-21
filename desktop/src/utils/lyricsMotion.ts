@@ -19,6 +19,12 @@ export type Spring = { value: number; velocity: number };
 /** Soft and a touch under critical, so each line glides in and settles with a faint overshoot. */
 export const rippleSpring: SpringConfig = { stiffness: 90, damping: 16 };
 /** Delay between neighbouring lines setting off. */
+/**
+ * Share of the background left visible beside the artwork by #lyricsPage's
+ * gradient in LyricsView.css (about 41% black where the cover sits).
+ */
+export const LYRICS_COVER_DIM = 0.59;
+
 export const RIPPLE_STAGGER_MS = 75;
 /** Lines further than this from where the wave starts share the last delay. */
 export const RIPPLE_MAX_LINES = 9;

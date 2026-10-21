@@ -94,16 +94,17 @@ impl AudioOutput for PlatformOutput {
     }
 
     fn open(spec: StreamSpec) -> Result<Self, String> {
-        Self::open_device_with_mode(spec, None, true)
+        Self::open_device_with_mode(spec, None, true, false)
     }
 
     fn open_device_with_mode(
         spec: StreamSpec,
         device_id: Option<&str>,
         exclusive_mode: bool,
+        processed: bool,
     ) -> Result<Self, String> {
         initialize_mta().ok().map_err(wasapi_error)?;
-        let result = Self::open_initialized(spec, device_id, exclusive_mode);
+        let result = Self::open_initialized(spec, device_id, exclusive_mode, processed);
         if result.is_err() {
             deinitialize();
         }
@@ -166,6 +167,17 @@ impl AudioOutput for PlatformOutput {
         Ok(frames)
     }
 
+    fn quantization_bits(&self) -> Option<u32> {
+        match self.sample_format {
+            DeviceSampleFormat::Signed16 => Some(16),
+            // A 32-bit container still carries 24-bit music.
+            DeviceSampleFormat::Signed24Packed
+            | DeviceSampleFormat::Signed24In32
+            | DeviceSampleFormat::Signed32 => Some(24),
+            DeviceSampleFormat::Float32 => None,
+        }
+    }
+
     fn queued_frames(&mut self) -> Result<usize, String> {
         self.audio_client
             .get_current_padding()
@@ -192,6 +204,7 @@ impl PlatformOutput {
         spec: StreamSpec,
         device_id: Option<&str>,
         exclusive_mode: bool,
+        processed: bool,
     ) -> Result<Self, String> {
         let enumerator = DeviceEnumerator::new().map_err(wasapi_error)?;
         let device = match device_id {
@@ -206,7 +219,7 @@ impl PlatformOutput {
         let (default_period, minimum_period) =
             audio_client.get_device_period().map_err(wasapi_error)?;
         let (sample_format, wave_format) = if exclusive_mode {
-            supported_format(&audio_client, spec)?
+            supported_format(&audio_client, spec, processed)?
         } else {
             // Shared WASAPI can convert this stream to the endpoint's mix format. Using
             // float PCM also keeps the conversion from the decoder lossless until it
@@ -322,21 +335,32 @@ impl Drop for PlatformOutput {
 fn supported_format(
     audio_client: &AudioClient,
     spec: StreamSpec,
+    processed: bool,
 ) -> Result<(DeviceSampleFormat, WaveFormat), String> {
+    // Untouched 16-bit audio goes out at its own depth. Everything else, processed
+    // audio included, goes out at 24 bits, the most music ever carries; a 32-bit
+    // container only pads it. Nothing drops below the source's depth.
     let candidates: &[DeviceSampleFormat] = match spec.bits_per_sample {
-        0..=16 => &[
+        0..=16 if !processed => &[
             DeviceSampleFormat::Signed16,
-            DeviceSampleFormat::Signed24In32,
-            DeviceSampleFormat::Signed32,
-            DeviceSampleFormat::Float32,
-        ],
-        17..=24 => &[
             DeviceSampleFormat::Signed24In32,
             DeviceSampleFormat::Signed24Packed,
             DeviceSampleFormat::Signed32,
             DeviceSampleFormat::Float32,
         ],
-        _ => &[DeviceSampleFormat::Signed32],
+        0..=16 => &[
+            DeviceSampleFormat::Signed24In32,
+            DeviceSampleFormat::Signed24Packed,
+            DeviceSampleFormat::Signed32,
+            DeviceSampleFormat::Float32,
+            DeviceSampleFormat::Signed16,
+        ],
+        _ => &[
+            DeviceSampleFormat::Signed24In32,
+            DeviceSampleFormat::Signed24Packed,
+            DeviceSampleFormat::Signed32,
+            DeviceSampleFormat::Float32,
+        ],
     };
     for candidate in candidates {
         let requested = candidate.wave_format(spec);
