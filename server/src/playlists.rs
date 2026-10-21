@@ -46,6 +46,9 @@ pub enum PlaylistChange {
         track_ids: Vec<String>,
         revision: String,
     },
+    Rename {
+        name: String,
+    },
 }
 
 #[derive(Deserialize)]

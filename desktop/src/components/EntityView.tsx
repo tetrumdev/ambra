@@ -17,6 +17,7 @@ import { AlbumArtwork } from "./AlbumArtwork";
 import { TrackCollectionView } from "./TrackCollectionView";
 import type { PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { ArtistView } from "./ArtistView";
+import { AlbumAbout } from "./AlbumAbout";
 import "./EntityView.css";
 
 export type EntityPage = {
@@ -182,7 +183,7 @@ function AlbumView({
           disabled={!tracks.length}
           onClick={() => props.onAction("queue", tracks)}
         >
-          <img src="/addToQueue.svg" alt="" />
+          <img src="/add-to-queue.svg" alt="" />
           <span>ADD TO QUEUE</span>
         </button>
       }
@@ -201,6 +202,7 @@ function AlbumView({
         if (track) props.onAddTrack(track);
       }}
       onOpenEntity={props.onOpenEntity}
+      footer={<AlbumAbout album={album} track={(catalogTracks ?? saved)[0]} />}
       showTrackNumbers
       showArtwork={false}
       savedTrackIds={savedTrackIds}

@@ -16,6 +16,8 @@ export type OffsetEvidence = {
   prominence: number;
   /** Lead over the strongest rival peak; null when there is no rival. */
   margin: number | null;
+  /** Playback milliseconds where the singing stops; null when the recording can't tell. */
+  vocalEndMs?: number | null;
 };
 
 export type AutoSyncTuning = {

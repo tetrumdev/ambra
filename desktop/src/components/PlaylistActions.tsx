@@ -3,11 +3,12 @@ import { createPortal } from "react-dom";
 import type { Playlist } from "../types/music";
 import { TrackCollectionMenu, type TrackCollectionAction } from "./TrackCollectionMenu";
 import { closeDialog, openDialog } from "../utils/dialogs";
+import { MenuDotsIcon } from "./MenuDotsIcon";
 
 type Props = {
   playlist: Playlist;
-  onRename?: (id: string, name: string) => boolean;
-  onDelete?: (id: string) => boolean;
+  onRename?: (id: string, name: string) => boolean | Promise<boolean>;
+  onDelete?: (id: string) => boolean | Promise<boolean>;
   /** Listed between Rename and Delete. */
   actions?: TrackCollectionAction[];
   className?: string;
@@ -15,10 +16,11 @@ type Props = {
 };
 
 export function PlaylistActions({ playlist, onRename, onDelete, actions = [], className = "sidebarPlaylistActions", children }: Props) {
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; flipY: number } | null>(null);
   const [action, setAction] = useState<"rename" | "delete" | null>(null);
   const [name, setName] = useState(playlist.name);
   const [error, setError] = useState(false);
+  const [saving, setSaving] = useState(false);
   const dialog = useRef<HTMLDialogElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -49,10 +51,10 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], cl
         aria-expanded={Boolean(menu)}
         onClick={(event) => {
           const bounds = event.currentTarget.getBoundingClientRect();
-          setMenu({ x: bounds.right, y: bounds.bottom });
+          setMenu({ x: bounds.right, y: bounds.bottom, flipY: bounds.top });
         }}
       >
-        {children ?? <span aria-hidden="true">⋯</span>}
+        {children ?? <MenuDotsIcon />}
       </button>
       {/* Portaled: the playlist header's transformed, clipped action row would trap a fixed menu. */}
       {menu && createPortal(
@@ -60,14 +62,15 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], cl
           trackId=""
           xPos={menu.x}
           yPos={menu.y}
+          flipY={menu.flipY}
           onClose={() => {
             setMenu(null);
             trigger.current?.focus();
           }}
           actions={[
-            ...(onRename ? [{ label: "Rename Playlist", onSelect: () => edit("rename") }] : []),
+            ...(onRename ? [{ label: "Rename Playlist", icon: "/edit.svg", onSelect: () => edit("rename") }] : []),
             ...actions,
-            ...(onDelete ? [{ label: "Delete Playlist", onSelect: () => edit("delete") }] : []),
+            ...(onDelete ? [{ label: "Delete Playlist", icon: "/delete.svg", onSelect: () => edit("delete") }] : []),
           ]}
         />,
         document.body,
@@ -91,12 +94,13 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], cl
           Cancel
         </button>
         <form
-          onSubmit={(event) => {
+          onSubmit={async (event) => {
             event.preventDefault();
-            const saved =
-              action === "rename"
-                ? onRename?.(playlist.id, name)
-                : onDelete?.(playlist.id);
+            setSaving(true);
+            const saved = await (action === "rename"
+              ? onRename?.(playlist.id, name)
+              : onDelete?.(playlist.id));
+            setSaving(false);
             if (saved) close();
             else setError(true);
           }}
@@ -124,7 +128,7 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], cl
           <div className="playlistEditButtons">
             <button
               type="submit"
-              disabled={action === "rename" && !name.trim()}
+              disabled={saving || (action === "rename" && !name.trim())}
             >
               {action === "rename" ? "Save" : "Delete"}
             </button>

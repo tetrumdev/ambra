@@ -1,3 +1,4 @@
+mod credits;
 mod playlists;
 
 use std::{
