@@ -2,7 +2,8 @@
   "scripts": {
     "tauri": "bun run --cwd desktop tauri",
     "dev": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri dev",
-    "build": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri build"
+    "build": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri build",
+    "release": "./scripts/release.sh"
   },
   "dependencies": {
     "dashjs": "^5.2.1"
