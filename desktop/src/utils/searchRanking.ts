@@ -80,6 +80,22 @@ function compareEdition(left: Track, right: Track, query: string) {
     || Number(remaster(left)) - Number(remaster(right));
 }
 
+function soundQuality(track: Track) {
+  const isLossless = lossless(track);
+  return [Number(isLossless), track.maximumBitDepth ?? (isLossless ? 16 : 0), track.maximumSamplingRateKHz ?? (isLossless ? 44.1 : 0)];
+}
+
+/** The best-sounding copy of the same recording with the same explicitness; the original wins ties. */
+export function bestQualityRecording(original: Track, candidates: Track[]) {
+  let best = original;
+  for (const candidate of candidates) {
+    if (candidate.provider === "local" || candidate.explicit !== original.explicit || !sameRecording(original, candidate)) continue;
+    const [a, b] = [soundQuality(candidate), soundQuality(best)];
+    if ((a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0) > 0) best = candidate;
+  }
+  return best;
+}
+
 function relevance(track: Track, query: string) {
   const search = normalized(query);
   if (!search) return 0;

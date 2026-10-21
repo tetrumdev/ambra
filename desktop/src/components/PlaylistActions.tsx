@@ -1,15 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { Playlist } from "../types/music";
-import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { TrackCollectionMenu, type TrackCollectionAction } from "./TrackCollectionMenu";
 import { closeDialog, openDialog } from "../utils/dialogs";
 
 type Props = {
   playlist: Playlist;
-  onRename: (id: string, name: string) => boolean;
-  onDelete: (id: string) => boolean;
+  onRename?: (id: string, name: string) => boolean;
+  onDelete?: (id: string) => boolean;
+  /** Listed between Rename and Delete. */
+  actions?: TrackCollectionAction[];
+  className?: string;
+  children?: ReactNode;
 };
 
-export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
+export function PlaylistActions({ playlist, onRename, onDelete, actions = [], className = "sidebarPlaylistActions", children }: Props) {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [action, setAction] = useState<"rename" | "delete" | null>(null);
   const [name, setName] = useState(playlist.name);
@@ -38,7 +43,7 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
       <button
         ref={trigger}
         type="button"
-        className="sidebarPlaylistActions"
+        className={className}
         aria-label={`Options for ${playlist.name}`}
         aria-haspopup="dialog"
         aria-expanded={Boolean(menu)}
@@ -47,9 +52,10 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
           setMenu({ x: bounds.right, y: bounds.bottom });
         }}
       >
-        <span aria-hidden="true">⋯</span>
+        {children ?? <span aria-hidden="true">⋯</span>}
       </button>
-      {menu && (
+      {/* Portaled: the playlist header's transformed, clipped action row would trap a fixed menu. */}
+      {menu && createPortal(
         <TrackCollectionMenu
           trackId=""
           xPos={menu.x}
@@ -59,10 +65,12 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
             trigger.current?.focus();
           }}
           actions={[
-            { label: "Rename Playlist", onSelect: () => edit("rename") },
-            { label: "Delete Playlist", onSelect: () => edit("delete") },
+            ...(onRename ? [{ label: "Rename Playlist", onSelect: () => edit("rename") }] : []),
+            ...actions,
+            ...(onDelete ? [{ label: "Delete Playlist", onSelect: () => edit("delete") }] : []),
           ]}
-        />
+        />,
+        document.body,
       )}
       <dialog
         ref={dialog}
@@ -87,8 +95,8 @@ export function PlaylistActions({ playlist, onRename, onDelete }: Props) {
             event.preventDefault();
             const saved =
               action === "rename"
-                ? onRename(playlist.id, name)
-                : onDelete(playlist.id);
+                ? onRename?.(playlist.id, name)
+                : onDelete?.(playlist.id);
             if (saved) close();
             else setError(true);
           }}

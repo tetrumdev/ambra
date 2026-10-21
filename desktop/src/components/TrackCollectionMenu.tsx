@@ -17,6 +17,7 @@ export type TrackCollectionAction = {
   label: string;
   /** Only where the playback menu has the same item, so the two show the same icon. */
   icon?: string;
+  disabled?: boolean;
   onSelect: () => void;
 };
 
@@ -105,7 +106,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
           </form>
         </> : <>
         {actions.map(action => (
-          <button type="button" key={action.label} className="menuItem" onClick={() => { action.onSelect(); onClose(); }}>
+          <button type="button" key={action.label} className="menuItem" disabled={action.disabled} onClick={() => { action.onSelect(); onClose(); }}>
             {action.icon && <img className="menuIcon" src={action.icon} alt="" aria-hidden="true" />}
             {action.label}
           </button>
