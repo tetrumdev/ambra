@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { serviceAuthStatus, type StreamingProvider } from "../api/server";
-import { changeServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
+import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
 import type { Playlist, Track } from "../types/music";
 import { musicProviderName } from "../utils/musicProviderName";
 import { loadServicePlaylistCache, saveServicePlaylistCache, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
@@ -219,5 +219,40 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     }
   }
 
-  return { groups, playlists, tracks, contents, loading, busy, errors, error, refresh, load, addTrack: (id: string, track: Track) => change(id, track), removeTracks: (id: string, ids: string[]) => change(id, undefined, ids) };
+  async function edit(id: string, name?: string): Promise<boolean> {
+    const playlist = playlists.find(item => item.id === id);
+    if (!playlist?.provider || !playlist.remoteId || !playlist.editable || mutations.current.has(id)) return false;
+    mutations.current.add(id);
+    setBusy(new Set(mutations.current));
+    setError(null);
+    try {
+      if (name === undefined) await deleteServicePlaylist(playlist.provider, playlist.remoteId);
+      else await changeServicePlaylist(playlist.provider, playlist.remoteId, { action: "rename", name });
+      if (!alive.current) return true;
+      setGroups(current => {
+        const next = current.map(group => group.provider !== playlist.provider ? group : {
+          ...group,
+          playlists: name === undefined
+            ? group.playlists.filter(item => item.id !== id)
+            : group.playlists.map(item => item.id === id ? { ...item, name: name.trim() } : item),
+        });
+        currentGroups.current = next;
+        return next;
+      });
+      if (name === undefined) {
+        const { [id]: _, ...rest } = currentContents.current;
+        currentContents.current = rest;
+        setContents(rest);
+      } else void load({ ...playlist, name: name.trim() }, "force");
+      return true;
+    } catch (reason) {
+      setError(`${musicProviderName(playlist.provider)}: ${message(reason)}`);
+      return false;
+    } finally {
+      mutations.current.delete(id);
+      if (alive.current) setBusy(new Set(mutations.current));
+    }
+  }
+
+  return { groups, playlists, tracks, contents, loading, busy, errors, error, refresh, load, rename: (id: string, name: string) => edit(id, name), deletePlaylist: (id: string) => edit(id), addTrack: (id: string, track: Track) => change(id, track), removeTracks: (id: string, ids: string[]) => change(id, undefined, ids) };
 }

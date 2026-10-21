@@ -23,7 +23,7 @@
 #queueBtn > img,
 .xContainer > img,
 .librarySourcesClose > img,
-.sidebarPlaylistActions > span,
+.sidebarPlaylistActions > svg,
 .searchResultMenuButton > img {
     pointer-events: none;
     /* Presses go down at once and spring back up, just past their size (utils/motion.ts). */
@@ -34,7 +34,7 @@
 #queueBtn:active > img,
 .xContainer:active > img,
 .librarySourcesClose:active > img,
-.sidebarPlaylistActions:active > span,
+.sidebarPlaylistActions:active > svg,
 .searchResultMenuButton:active > img {
     scale: 0.7;
     transition: scale var(--motion-press-down);
@@ -67,6 +67,7 @@
     .playlistEditCancel,
     .trackPlayButton,
     .homePlay,
+    .homeShade,
     .sidebarSettingsButton img
 ) {
     transition-property: background-color, border-color, color, opacity;
@@ -99,7 +100,7 @@
     .playlistEditCancel,
     .trackPlayButton
 ):hover,
-:where(.homeCardButton:hover .homePlay, .sidebarSettingsButton:hover img) {
+:where(.homeCard:hover .homePlay, .homeCard:hover .homeShade, .sidebarSettingsButton:hover img) {
     transition-duration: var(--motion-hover-duration);
     transition-timing-function: var(--motion-hover-ease);
 }

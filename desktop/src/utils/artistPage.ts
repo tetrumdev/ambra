@@ -64,9 +64,16 @@ export function artistSources(artist: CatalogArtist): Promise<CatalogArtist[]> {
  * so a namesake's records never leak in.
  */
 export function mergedArtistReleases(artist: CatalogArtist, sources: CatalogArtist[], releases: Record<string, { albums: CatalogAlbum[] }>): CatalogAlbum[] {
+  return bestEditions(trustedArtistSources(artist, sources, releases).flatMap(source => releases[source.id]?.albums ?? []));
+}
+
+/** This artist and the same-named artists elsewhere that share an album with it. */
+export function trustedArtistSources(artist: CatalogArtist, sources: CatalogArtist[], releases: Record<string, { albums: CatalogAlbum[] }>): CatalogArtist[] {
   const own = releases[artist.id];
   if (!own) return [];
   const identities = new Set(own.albums.map(albumIdentity));
-  const trusted = sources.filter(source => source.id === artist.id || !identities.size || releases[source.id]?.albums.some(album => identities.has(albumIdentity(album))));
-  return bestEditions(trusted.flatMap(source => releases[source.id]?.albums ?? []));
+  return sources.filter(source => source.id === artist.id || !identities.size || releases[source.id]?.albums.some(album => identities.has(albumIdentity(album))));
 }
+
+/** Biographies come from the richest catalog that has the artist; Spotify's aren't used. */
+export const biographyProviders = ["qobuz", "tidal"] as const;

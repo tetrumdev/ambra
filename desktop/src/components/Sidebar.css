@@ -216,14 +216,23 @@
     width: 28px;
     height: 28px;
     cursor: default;
-    border-radius: 100px;
     outline: none;
     align-items: center;
+    color: rgba(255, 255, 255, 0.5);
+    transition-property: color, filter;
 }
 
+.sidebarPlaylistActions svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+/* Like the now playing menu button: pointing at the dots only brightens them. */
 .sidebarPlaylistActions:hover,
+.sidebarPlaylistActions:focus-visible,
 .sidebarPlaylistActions[aria-expanded="true"] {
-    background: #151515;
+    color: white;
 }
 
 .playlistEditDialog {

@@ -133,6 +133,28 @@ impl QobuzProvider {
         Ok(())
     }
 
+    pub async fn rename_playlist(
+        &self,
+        id: &str,
+        name: &str,
+        _revision: &str,
+    ) -> ProviderResult<()> {
+        self.client
+            .playlist_api(
+                "update",
+                &[("playlist_id", id.into()), ("name", name.into())],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn delete_playlist(&self, id: &str) -> ProviderResult<()> {
+        self.client
+            .playlist_api("delete", &[("playlist_id", id.into())])
+            .await?;
+        Ok(())
+    }
+
     pub async fn remove_playlist_tracks(
         &self,
         id: &str,

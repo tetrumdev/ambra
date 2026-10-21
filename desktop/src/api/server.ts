@@ -623,3 +623,80 @@ export async function loadArtistProfile(artist: CatalogArtist, signal?: AbortSig
     return value;
   }, signal);
 }
+
+export type CreditGroup = { role: string; names: string[] };
+/** `source` is the catalog the credits came from; none when no catalog had any. */
+export type TrackCredits = { source: StreamingProvider | null; credits: CreditGroup[] };
+/** An empty `tracks` means the contributor is on every track. */
+export type AlbumCreditGroup = { role: string; contributors: { name: string; tracks: number[] }[] };
+export type AlbumInfo = {
+  source: StreamingProvider | null;
+  description: string | null;
+  descriptionSource: string | null;
+  label: string | null;
+  copyright: string | null;
+  credits: AlbumCreditGroup[];
+};
+export type ArtistBiography = { biography: string | null; biographySource: string | null };
+
+const trackCredits = new SearchCache<TrackCredits>(3_600_000, 200);
+const albumInfos = new SearchCache<AlbumInfo>(3_600_000, 80);
+const artistBiographies = new SearchCache<ArtistBiography>(3_600_000, 80);
+const rawEntityId = (id: string, provider: MusicProvider) => decodeURIComponent(providerEntityId(id, provider));
+const trackReference = (track: Track) => ({
+  provider: track.provider, trackId: track.providerTrackId, isrc: track.isrc, title: track.name, artist: track.artist,
+});
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(`${serverBaseUrl}${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json() as Promise<T>;
+}
+
+/** Who made the recording, from Qobuz or Tidal even when it plays from Spotify. Local files have none. */
+export async function loadTrackCredits(track: Track, signal?: AbortSignal): Promise<TrackCredits> {
+  if (track.provider === "local") return { source: null, credits: [] };
+  const key = `${track.provider}:${track.providerTrackId}`;
+  signal?.throwIfAborted();
+  const cached = trackCredits.get(key);
+  if (cached) return cached;
+  return sharedArtistRequest(`credits:${key}`, async () => {
+    const value = await postJson<TrackCredits>("/api/credits/track", trackReference(track));
+    trackCredits.set(key, value);
+    return value;
+  }, signal);
+}
+
+/** The release's description and combined credits; `track` helps find it on catalogs without UPC lookup. */
+export async function loadAlbumInfo(album: CatalogAlbum, track?: Track, signal?: AbortSignal): Promise<AlbumInfo> {
+  if (album.provider === "local") return { source: null, description: null, descriptionSource: null, label: null, copyright: null, credits: [] };
+  const key = `${album.provider}:${rawEntityId(album.id, album.provider)}`;
+  signal?.throwIfAborted();
+  const cached = albumInfos.get(key);
+  if (cached) return cached;
+  return sharedArtistRequest(`albumInfo:${key}:${track ? "track" : ""}`, async () => {
+    const value = await postJson<AlbumInfo>("/api/credits/album", {
+      provider: album.provider, albumId: rawEntityId(album.id, album.provider), title: album.title, upc: album.upc ?? track?.upc ?? null,
+      track: track && track.provider !== "local" ? trackReference(track) : null,
+    });
+    // Without a recording, a catalog that needs one wasn't tried yet.
+    if (value.source || track) albumInfos.set(key, value);
+    return value;
+  }, signal);
+}
+
+export async function loadArtistBiography(artist: CatalogArtist, signal?: AbortSignal): Promise<ArtistBiography> {
+  const key = artistKey(artist);
+  signal?.throwIfAborted();
+  const cached = artistBiographies.get(key) ?? artistProfiles.get(key);
+  if (cached) return { biography: cached.biography, biographySource: cached.biographySource };
+  return sharedArtistRequest(`biography:${key}`, async () => {
+    const response = await fetch(`${serverBaseUrl}/api/providers/${artist.provider}/artists/${providerEntityId(artist.id, artist.provider)}/biography`, { signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) throw new Error(await responseError(response));
+    const value = await response.json() as ArtistBiography;
+    artistBiographies.set(key, value);
+    return value;
+  }, signal);
+}

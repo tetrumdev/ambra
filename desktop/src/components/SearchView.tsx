@@ -11,6 +11,7 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
+import { showTrackCredits } from "../utils/trackCredits";
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
 import "./SearchView.css";
@@ -41,6 +42,8 @@ type OpenMenu = {
   trackId: GlobalTrackId;
   x: number;
   y: number;
+  /** Where the collection menu opens upward from near the bottom. */
+  flipY?: number;
 };
 
 type SearchResultProps = {
@@ -177,7 +180,7 @@ function SearchResult({
       <div className="trackLeading searchResultLeading">
         <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
           onClick={event => { event.stopPropagation(); playTrack(track.globalId); }}>
-          <img src="/Play.svg" alt="" aria-hidden="true" />
+          <img src="/play.svg" alt="" aria-hidden="true" />
         </button>
         <div className="searchResultArtwork">
           <TrackArtwork
@@ -279,6 +282,7 @@ export function SearchView({
       trackId,
       x: triggerRect.right - menuWidth,
       y: triggerRect.bottom + gap,
+      flipY: triggerRect.top - gap,
     });
   }
 
@@ -302,7 +306,11 @@ export function SearchView({
           onClose={() => setOpenMenu(null)}
           xPos={openMenu.x}
           yPos={openMenu.y}
-          actions={[{ label: "Add to Library", onSelect: () => addToLibrary(openMenu.trackId) }]}
+          flipY={openMenu.flipY}
+          actions={[
+            { label: "Add to Library", icon: "/add.svg", onSelect: () => addToLibrary(openMenu.trackId) },
+            { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(tracks.find(track => track.globalId === openMenu.trackId) ?? null) },
+          ]}
         />
       )}
 

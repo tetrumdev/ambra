@@ -15,8 +15,7 @@ export type PlaylistMenuOptions = {
 
 export type TrackCollectionAction = {
   label: string;
-  /** Only where the playback menu has the same item, so the two show the same icon. */
-  icon?: string;
+  icon: string;
   disabled?: boolean;
   onSelect: () => void;
 };
@@ -30,9 +29,11 @@ type TrackCollectionMenuProps = {
   playlistOptions?: PlaylistMenuOptions;
   /** "above" opens upward from yPos, for menus anchored near the bottom of the window. */
   placement?: "below" | "above";
+  /** Where a downward menu opens upward from instead, when it would run into the player bar. */
+  flipY?: number;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below" }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY }: TrackCollectionMenuProps) {
   const [choosingPlaylist, setChoosingPlaylist] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -52,15 +53,20 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   }
   const panel = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(panel);
-  const [position, setPosition] = useState({ left: xPos, top: yPos });
+  const [position, setPosition] = useState({ left: xPos, top: yPos, above: placement === "above" });
   useLayoutEffect(() => {
     const element = panel.current;
     if (!element) return;
     const reposition = () => {
       const { width, height } = element.getBoundingClientRect();
       const left = Math.max(4, Math.min(xPos, window.innerWidth - width - 4));
-      const top = Math.max(4, Math.min(placement === "above" ? yPos - height : yPos, window.innerHeight - height - 4));
-      setPosition(current => current.left === left && current.top === top ? current : { left, top });
+      // Only the menu's natural size decides the flip, so its open/close scale never flips it back.
+      const naturalHeight = element.offsetHeight || height;
+      const bottom = Math.min(window.innerHeight, document.getElementById("bottomInfoBar")?.getBoundingClientRect().top ?? Infinity) - 4;
+      const above = placement === "above"
+        || (flipY !== undefined && yPos + naturalHeight > bottom && flipY - naturalHeight >= 4);
+      const top = Math.max(4, Math.min(above ? (placement === "above" ? yPos : flipY!) - naturalHeight : yPos, window.innerHeight - naturalHeight - 4));
+      setPosition(current => current.left === left && current.top === top && current.above === above ? current : { left, top, above });
     };
     reposition();
     const observer = new ResizeObserver(reposition);
@@ -70,14 +76,14 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       observer.disconnect();
       window.removeEventListener("resize", reposition);
     };
-  }, [xPos, yPos, placement]);
+  }, [xPos, yPos, placement, flipY]);
   useEffect(() => { panel.current?.focus(); }, [choosingPlaylist]);
   const width = choosingPlaylist ? 260 : MENU_WIDTH;
   return (
     <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ ...position, transformOrigin: placement === "above" ? "left bottom" : "left top", width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
+      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top", width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem menuBack" onClick={() => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
           <div className="playlistMenuList">
@@ -91,7 +97,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
               const added = playlist.trackIds.includes(trackId);
               return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving} onClick={() => {
                 void save(() => playlistOptions.onAdd(playlist.id, trackId));
-              }}>{playlist.name}{added ? " ✓" : ""}</button>;
+              }}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />{playlist.name}{added ? " ✓" : ""}</button>;
                 })}
               </details>;
             })}
@@ -107,11 +113,11 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
         </> : <>
         {actions.map(action => (
           <button type="button" key={action.label} className="menuItem" disabled={action.disabled} onClick={() => { action.onSelect(); onClose(); }}>
-            {action.icon && <img className="menuIcon" src={action.icon} alt="" aria-hidden="true" />}
+            <img className="menuIcon" src={action.icon} alt="" aria-hidden="true" />
             {action.label}
           </button>
         ))}
-        {playlistOptions && <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(true)}>Add to Playlist</button>}
+        {playlistOptions && <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(true)}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />Add to Playlist</button>}
         </>}
       </div>
     </div>

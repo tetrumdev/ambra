@@ -60,23 +60,9 @@ pub(super) async fn change(
     Json(change): Json<PlaylistChange>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     validate_id(&id)?;
-    let key = format!("{}:{id}", provider_slug(provider));
-    let lock = {
-        let mut locks = state.playlist_mutations.lock().await;
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
-            lock
-        } else {
-            let lock = Arc::new(Mutex::new(()));
-            locks.insert(key, Arc::downgrade(&lock));
-            lock
-        }
-    };
+    let lock = mutation_lock(&state, provider, &id).await;
     let _guard = lock.lock().await;
-    let current = provider_call!(&state, provider, playlist, &id)?;
-    if !current.playlist.editable {
-        return Err(ApiError::bad_request("This service playlist is read-only."));
-    }
+    let current = editable_playlist(&state, provider, &id).await?;
     match change {
         PlaylistChange::Add { track } => {
             let target = matching_track(&state, provider, &track).await?;
@@ -122,8 +108,62 @@ pub(super) async fn change(
                 )?;
             }
         }
+        PlaylistChange::Rename { name } => {
+            let name = name.trim();
+            if name.is_empty() || name.chars().count() > 200 {
+                return Err(ApiError::bad_request("Enter a name up to 200 characters."));
+            }
+            if name != current.playlist.name {
+                provider_call!(
+                    &state,
+                    provider,
+                    rename_playlist,
+                    &id,
+                    name,
+                    &current.revision
+                )?;
+            }
+        }
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub(super) async fn delete(
+    State(state): State<AppState>,
+    Path((provider, id)): Path<(MusicProvider, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    validate_id(&id)?;
+    let lock = mutation_lock(&state, provider, &id).await;
+    let _guard = lock.lock().await;
+    editable_playlist(&state, provider, &id).await?;
+    provider_call!(&state, provider, delete_playlist, &id)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Serializes changes to one service playlist.
+async fn mutation_lock(state: &AppState, provider: MusicProvider, id: &str) -> Arc<Mutex<()>> {
+    let key = format!("{}:{id}", provider_slug(provider));
+    let mut locks = state.playlist_mutations.lock().await;
+    locks.retain(|_, lock| lock.strong_count() > 0);
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        lock
+    } else {
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+}
+
+async fn editable_playlist(
+    state: &AppState,
+    provider: MusicProvider,
+    id: &str,
+) -> Result<PlaylistContents, ApiError> {
+    let current = provider_call!(state, provider, playlist, id)?;
+    if !current.playlist.editable {
+        return Err(ApiError::bad_request("This service playlist is read-only."));
+    }
+    Ok(current)
 }
 
 fn validate_id(id: &str) -> Result<(), ApiError> {

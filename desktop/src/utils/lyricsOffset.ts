@@ -11,6 +11,8 @@ type LyricWindow = { startMs: number; endMs: number };
 
 // Line-only timings rarely carry ends; assume a line is sung for at most this long.
 const LINE_FALLBACK_MS = 6000;
+/** Longer than any sung line; a final line is sometimes timed as held through the whole outro. */
+export const MAX_LINE_MS = 15_000;
 
 /** Sung intervals on the audio timeline the lyrics currently assume. */
 function lyricWindows(lyrics: TrackLyrics): LyricWindow[] {
@@ -21,7 +23,7 @@ function lyricWindows(lyrics: TrackLyrics): LyricWindow[] {
       && segment.startMs !== null && segment.endMs !== null && segment.endMs > segment.startMs);
     const spans = timed.length > 1
       ? timed.map(segment => [segment.startMs!, segment.endMs!])
-      : [[line.startMs, line.endMs ?? Math.min(nextStart ?? Infinity, line.startMs + LINE_FALLBACK_MS)]];
+      : [[line.startMs, Math.min(line.endMs ?? Math.min(nextStart ?? Infinity, line.startMs + LINE_FALLBACK_MS), line.startMs + MAX_LINE_MS)]];
     for (const [start, end] of spans) {
       if (end > start) windows.push({ startMs: start - lyrics.offsetMs, endMs: end - lyrics.offsetMs });
     }
@@ -46,12 +48,15 @@ export type DetectedOffset = {
   confident: boolean;
   /** The correction at the best match even when it is not trusted; null when nothing could be scored. */
   bestMs: number | null;
+  /** Playback milliseconds where the singing stops; null when the recording can't tell. */
+  vocalEndMs: number | null;
 };
 
 function decide(evidence: OffsetEvidence): DetectedOffset {
   const correctionMs = trustedCorrection(evidence);
   const bestMs = bestCorrection(evidence);
-  return correctionMs === null ? { correctionMs: 0, confident: false, bestMs } : { correctionMs, confident: true, bestMs };
+  const vocalEndMs = evidence.vocalEndMs ?? null;
+  return correctionMs === null ? { correctionMs: 0, confident: false, bestMs, vocalEndMs } : { correctionMs, confident: true, bestMs, vocalEndMs };
 }
 
 // Evidence is kept across sessions so each song is analyzed once; whether it is trusted
@@ -68,13 +73,16 @@ function readStoredOffsets(): StoredOffsets {
     const offsets: StoredOffsets = {};
     for (const [trackId, entry] of Object.entries(value)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { timing, bestMs, prominence, margin } = entry as Record<string, unknown>;
+      const { timing, bestMs, prominence, margin, vocalEndMs } = entry as Record<string, unknown>;
       if (typeof timing !== "string" || typeof prominence !== "number" || !Number.isFinite(prominence)) continue;
+      // Analyzed before vocal endings were measured, so the song is analyzed again once.
+      if (!("vocalEndMs" in entry)) continue;
       offsets[trackId] = {
         timing,
         bestMs: typeof bestMs === "number" && Number.isFinite(bestMs) ? bestMs : null,
         prominence,
         margin: typeof margin === "number" && Number.isFinite(margin) ? margin : null,
+        vocalEndMs: typeof vocalEndMs === "number" && Number.isFinite(vocalEndMs) ? vocalEndMs : null,
       };
     }
     return offsets;

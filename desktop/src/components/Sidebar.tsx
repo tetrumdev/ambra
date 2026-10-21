@@ -25,8 +25,9 @@ type SidebarProps = {
   onCreatePlaylist: (name: string) => string | null;
   playlists: Playlist[];
   onSelectPlaylist: (playlistId: string) => void;
-  onRenamePlaylist: (id: string, name: string) => boolean;
-  onDeletePlaylist: (id: string) => boolean;
+  onRenamePlaylist: (id: string, name: string) => boolean | Promise<boolean>;
+  onDuplicatePlaylist: (playlist: Playlist) => void;
+  onDeletePlaylist: (id: string) => boolean | Promise<boolean>;
   serviceGroups: PlaylistServiceGroup[];
   servicePlaylistVisibility: Record<StreamingProvider, boolean>;
   playlistGroups: Record<PlaylistGroup, boolean>;
@@ -46,6 +47,7 @@ export function Sidebar({
   playlists,
   onSelectPlaylist,
   onRenamePlaylist,
+  onDuplicatePlaylist,
   onDeletePlaylist,
   serviceGroups,
   servicePlaylistVisibility,
@@ -130,6 +132,7 @@ export function Sidebar({
                   playlist={playlist}
                   onRename={onRenamePlaylist}
                   onDelete={onDeletePlaylist}
+                  actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]}
                 />
               </div>
             ))}
@@ -143,6 +146,7 @@ export function Sidebar({
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
                 {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
                   <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" data-tooltip={playlist.name} data-tooltip-overflow="" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
+                  <PlaylistActions playlist={playlist} onRename={playlist.editable ? onRenamePlaylist : undefined} onDelete={playlist.editable ? onDeletePlaylist : undefined} actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]} />
                 </div>)}
                 {group.error && <p className="sidebarSyncMessage" role="alert">{group.error}</p>}
                 </nav>

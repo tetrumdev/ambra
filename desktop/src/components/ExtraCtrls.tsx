@@ -200,7 +200,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
             }
           }}
         >
-          <img src="/volumeIconHigh.svg" alt="" id="volumeImg" />
+          <img src="/volume-high.svg" alt="" id="volumeImg" />
         </button>
         <span className="volumePercentage" aria-live="polite">
           {Math.round(volume)}%

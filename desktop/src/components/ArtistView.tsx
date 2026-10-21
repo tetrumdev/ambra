@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cachedArtistAlbums, cachedArtistProfile, loadArtistAlbums, loadArtistProfile, type ArtistProfile, type CatalogAlbum, type CatalogArtist } from "../api/server";
+import { cachedArtistAlbums, cachedArtistProfile, loadArtistAlbums, loadArtistBiography, loadArtistProfile, type ArtistBiography, type ArtistProfile, type CatalogAlbum, type CatalogArtist } from "../api/server";
 import { rememberArtistImage } from "../utils/artistImages";
 import { libraryAlbums } from "../utils/librarySections";
-import { artistBiography, artistReleaseSections, artistSources, mergedArtistReleases } from "../utils/artistPage";
+import { artistBiography, artistReleaseSections, artistSources, biographyProviders, mergedArtistReleases, trustedArtistSources } from "../utils/artistPage";
+import { musicProviderName } from "../utils/musicProviderName";
 import { entityKey, entityProvider, tracksForEntity } from "../utils/browse";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { CatalogAlbumGrid } from "./LibraryView";
@@ -19,6 +20,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const [profile, setProfile] = useState<ArtistProfile | undefined>(initialProfile);
   // The artist is one discography across services; this entry supplies the profile and popular tracks.
   const [sources, setSources] = useState<CatalogArtist[]>(initialSources);
+  const [sourcesFound, setSourcesFound] = useState(false);
   type Releases = Record<string, { albums: CatalogAlbum[]; nextOffset: number | null }>;
   const [releases, setReleases] = useState<Releases>(() => cached?.releases ?? Object.fromEntries(
     initialSources.flatMap(source => { const page = cachedArtistAlbums(source); return page ? [[source.id, page]] : []; }),
@@ -43,7 +45,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   useEffect(() => {
     if (artist.provider === "local") return;
     let live = true;
-    void artistSources({ ...artist, sources: initialSources }).then(found => { if (live) setSources(found); });
+    void artistSources({ ...artist, sources: initialSources }).then(found => { if (live) { setSources(found); setSourcesFound(true); } });
     return () => { live = false; };
   }, [artist.id, artist.provider]);
   const releaseController = useRef<AbortController | null>(null);
@@ -93,7 +95,29 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const shownPopular = useMemo(() => popular.slice(0, expandedPopular ? 10 : 5), [popular, expandedPopular]);
   const playable = popular.length ? popular : saved;
   const releaseSections = useMemo(() => artistReleaseSections(artist.provider === "local" ? libraryAlbums(saved).map(album => ({ id: album.id, provider: entityProvider(album.id), title: album.name, artist: album.artist, imageUrl: album.cover, releaseDate: album.releaseYear })) : albums), [artist.provider, saved, albums]);
-  const biography = useMemo(() => artistBiography(profile?.biography), [profile?.biography]);
+  // Undefined while the services that might have one are still being checked.
+  const [about, setAbout] = useState<(ArtistBiography & { provider: CatalogArtist["provider"] }) | null | undefined>(undefined);
+  const biographySources = useMemo(() => !sourcesFound || releasesLoading ? null
+    : biographyProviders.flatMap(provider => trustedArtistSources(artist, sources, releases).filter(source => source.provider === provider)),
+  [artist, sources, sourcesFound, releases, releasesLoading]);
+  const biographyKey = biographySources?.map(source => source.id).join("|");
+  useEffect(() => {
+    if (!biographySources) return;
+    const controller = new AbortController();
+    void (async () => {
+      for (const source of biographySources) {
+        try {
+          const found = await loadArtistBiography(source, controller.signal);
+          if (found.biography?.trim()) return { ...found, provider: source.provider };
+        } catch {
+          if (controller.signal.aborted) return undefined;
+        }
+      }
+      return null;
+    })().then(found => { if (!controller.signal.aborted) setAbout(found); });
+    return () => controller.abort();
+  }, [biographyKey]);
+  const biography = useMemo(() => artistBiography(about?.biography), [about?.biography]);
   const listProps = { playlistOptions: props.playlistOptions, onOpenEntity: props.onOpenEntity, savedTrackIds: savedIds, addToLibrary: (id: string) => { const track = [...popular, ...saved].find(track => track.globalId === id); if (track) props.onAddTrack(track); } };
   const trackList = (tracks: typeof saved, ranked = false) => <TrackList {...listProps} tracks={tracks} showRank={ranked}
     playTrack={id => props.onAction("play", ranked ? popular : saved, id)} playStandalone={id => props.onAction("standalone", tracks, id)}
@@ -106,7 +130,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
     headerNavigation={<button type="button" className="browseBack" onClick={props.onBack}>Back</button>}
     headerArtwork={<ArtistPortrait artist={profile?.artist ?? artist} eager expandable />}
     headerContent={<p className="entityByline">Artist</p>}
-    playbackActions={<button type="button" className="libraryShuffleBtn" disabled={!playable.length} onClick={() => props.onAction("queue", playable)}><img src="/addToQueue.svg" alt="" /><span>ADD TO QUEUE</span></button>}
+    playbackActions={<button type="button" className="libraryShuffleBtn" disabled={!playable.length} onClick={() => props.onAction("queue", playable)}><img src="/add-to-queue.svg" alt="" /><span>ADD TO QUEUE</span></button>}
     content={<>
       {profileLoading && <p className="artistStatus" role="status">Loading artist…</p>}
       {profileError && <p className="artistStatus" role="alert">{profileError} <button type="button" className="entityLink" onClick={retryProfile}>Retry</button></p>}
@@ -121,9 +145,12 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
       {releaseError && <p className="artistStatus" role="alert">{releaseError} <button type="button" className="entityLink" onClick={() => loadReleases([{ source: artist, offset: releases[artist.id]?.nextOffset ?? 0 }], true)}>Retry</button></p>}
       {moreReleases.length > 0 && <button type="button" className="artistTextAction" disabled={releasesLoading} onClick={() => loadReleases(moreReleases.map(source => ({ source, offset: releases[source.id]!.nextOffset! })))}>More releases</button>}
       {!!saved.length && <section><h2 className="entitySectionTitle">Saved songs</h2>{trackList(saved)}</section>}
-      {!!biography.length && <section className="artistAbout"><h2 className="entitySectionTitle">About</h2><div className="artistBiography" data-expanded={expandedBiography}>{biography.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
-        <button type="button" className="artistTextAction" onClick={() => setExpandedBiography(value => !value)}>{expandedBiography ? "Show less" : "Read more"}</button>
-        {profile?.biographySource && <p className="artistBiographySource">{profile.biographySource}</p>}
+      {artist.provider !== "local" && about !== undefined && <section className="artistAbout"><h2 className="entitySectionTitle">About</h2>
+        {!biography.length ? <p>No info is available for this artist.</p> : <>
+          <div className="artistBiography" data-expanded={expandedBiography}>{biography.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
+          <button type="button" className="artistTextAction" onClick={() => setExpandedBiography(value => !value)}>{expandedBiography ? "Show less" : "Read more"}</button>
+          <p className="artistBiographySource">{[about?.biographySource, about && `From ${musicProviderName(about.provider)}`].filter(Boolean).join(" · ")}</p>
+        </>}
       </section>}
     </>}
   />;

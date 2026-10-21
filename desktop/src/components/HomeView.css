@@ -107,22 +107,58 @@
     object-fit: cover;
 }
 
-.homePlay {
+.homeCard {
+    position: relative;
+}
+
+.homeShade {
     position: absolute;
     inset: 0;
-    display: grid;
-    place-items: center;
     background: #0006;
     opacity: 0;
+}
+
+/* Over the artwork, but only the button itself takes clicks; the rest of the card opens the menu. */
+.homePlayArea {
+    position: absolute;
+    top: 0;
+    left: 0;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    aspect-ratio: 1;
+    pointer-events: none;
+}
+
+.homePlay {
+    display: grid;
+    place-items: center;
+    width: 56px;
+    height: 56px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    opacity: 0;
+    pointer-events: auto;
 }
 
 .homePlay img {
     width: 32px;
     height: 32px;
+    transition: scale var(--motion-press-up);
 }
 
-.homeCardButton:hover .homePlay,
-.homeCardButton:focus-visible .homePlay {
+.homePlay:active img {
+    scale: 0.8;
+    transition: scale var(--motion-press-down);
+}
+
+.homeCard:hover .homeShade,
+.homeCard:hover .homePlay,
+.homeCardButton:focus-visible .homeShade,
+.homeCardButton:focus-visible + .homePlayArea .homePlay,
+.homePlay:focus-visible {
     opacity: 1;
 }
 
