@@ -13,6 +13,8 @@ type FluidGradientBackgroundProps = {
   coverId: string;
   /** Visible share of the field beside the cover after page overlays; 1 = none. */
   coverDim?: number;
+  /** How long a change in coverDim eases. */
+  coverDimMs?: number;
   active: boolean;
   animate?: boolean;
   /** The swirl drifts to a stop while playback is paused and gathers pace again when it resumes. */
@@ -20,7 +22,7 @@ type FluidGradientBackgroundProps = {
 };
 
 const COLOR_TRANSITION_MS = 1800;
-/** Matches the lyrics backdrop fade, so the separation eases with what is visible beside the cover. */
+/** Matches the lyrics backdrop fade by default, so the separation eases with what is visible beside the cover. */
 const COVER_DIM_TRANSITION_MS = 700;
 const EDGE_COMPONENTS = COVER_EDGE_ZONES * 4;
 const NOISE_TEXTURE_SIZE = 256;
@@ -247,6 +249,7 @@ export function FluidGradientBackground({
   separation,
   coverId,
   coverDim = 1,
+  coverDimMs = COVER_DIM_TRANSITION_MS,
   active,
   animate = true,
   playing = true,
@@ -266,7 +269,7 @@ export function FluidGradientBackground({
   const journey = journeyRef.current;
   const coverIdRef = useRef(coverId);
   const clampedDim = Math.min(1, Math.max(0.05, coverDim));
-  const coverDimRef = useRef({ from: clampedDim, to: clampedDim, startedAt: 0 });
+  const coverDimRef = useRef({ from: clampedDim, to: clampedDim, startedAt: 0, duration: coverDimMs });
   const resizeRef = useRef<(() => void) | null>(null);
   const transitionRef = useRef({
     from: paletteComponents(colors, weights, separation),
@@ -299,10 +302,10 @@ export function FluidGradientBackground({
     coverIdRef.current = coverId;
     const now = performance.now();
     const previous = coverDimRef.current;
-    const current = previous.from + (previous.to - previous.from) * easedProgress((now - previous.startedAt) / COVER_DIM_TRANSITION_MS);
+    const current = previous.from + (previous.to - previous.from) * easedProgress((now - previous.startedAt) / previous.duration);
     coverDimRef.current = reducedMotionRef.current || !activeRef.current
-      ? { from: clampedDim, to: clampedDim, startedAt: now }
-      : { from: current, to: clampedDim, startedAt: now };
+      ? { from: clampedDim, to: clampedDim, startedAt: now, duration: coverDimMs }
+      : { from: current, to: clampedDim, startedAt: now, duration: coverDimMs };
     resizeRef.current?.();
   }, [coverId, clampedDim]);
 
@@ -500,7 +503,7 @@ export function FluidGradientBackground({
       coverWasFlying = flying;
       gl.uniform4fv(shaderCover, cover);
       const dim = coverDimRef.current;
-      const dimProgress = easedProgress((now - dim.startedAt) / COVER_DIM_TRANSITION_MS);
+      const dimProgress = easedProgress((now - dim.startedAt) / dim.duration);
       gl.uniform1f(shaderCoverDim, dim.from + (dim.to - dim.from) * dimProgress);
       gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
       gl.uniform4fv(shaderEdgeDirection, palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2));

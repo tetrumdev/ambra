@@ -32,6 +32,8 @@ type BackgroundArtworkProps = ArtworkProps & {
   coverId?: string;
   /** Visible share of the background beside the cover; see coverSeparation. */
   coverDim?: number;
+  /** How long a change in coverDim eases, in step with the lyrics backdrop fading. */
+  coverDimMs?: number;
 };
 
 const EDGE_SAMPLE_SIZE = 16;
@@ -70,9 +72,11 @@ const albumKey = (track: Track) => JSON.stringify([track.provider, track.albumId
 /** How long a song's cover may load before a smaller copy stands in for it. */
 const COVER_WAIT_MS = 500;
 
-export function AlbumArtwork({ track, active, layout = "center", direction }: ArtworkProps & {
+export function AlbumArtwork({ track, active, layout = "center", resting = false, direction }: ArtworkProps & {
   active: boolean;
   layout?: "center" | "lyrics";
+  /** The lyrics left on their own at the end of the vocals, so the cover drifts to centre instead of gliding. */
+  resting?: boolean;
   /** 1 when the player moved forward, -1 when it went back; the next cover slides in from that side. */
   direction?: () => number;
 }) {
@@ -123,7 +127,7 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
     glide.current = element.animate([
       { transform: `translate(${dx}px, ${dy}px) translate(-50%, -50%) scale(${from.width / to.width})` },
       { transform: "translate(0px, 0px) translate(-50%, -50%) scale(1)" },
-    ], motion.smooth);
+    ], resting ? motion.drift : motion.smooth);
   }, [layout]);
 
   useEffect(() => {
@@ -174,7 +178,7 @@ export function AlbumArtwork({ track, active, layout = "center", direction }: Ar
   );
 }
 
-export function BackgroundArtwork({ track, active, animate, playing, coverId = "albumCover", coverDim = 1 }: BackgroundArtworkProps) {
+export function BackgroundArtwork({ track, active, animate, playing, coverId = "albumCover", coverDim = 1, coverDimMs }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
     colors: ["#000000", "#000000", "#000000", "#000000"],
     weights: [1, 0, 0, 0],
@@ -222,6 +226,7 @@ export function BackgroundArtwork({ track, active, animate, playing, coverId = "
         separation={separation}
         coverId={coverId}
         coverDim={coverDim}
+        coverDimMs={coverDimMs}
         active={active && !!track}
         animate={track ? animate : false}
         playing={playing}

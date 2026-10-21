@@ -46,6 +46,8 @@ type LyricsViewProps = {
   autoSync?: boolean;
   /** False while the view fades out behind the cover; the lyrics hold still meanwhile. */
   shown?: boolean;
+  /** Hidden because the song's vocals are over rather than by the listener, so the fade drifts slowly. */
+  resting?: boolean;
   /** The previous song's lyrics, drifting away as the next song's arrive. */
   leaving?: boolean;
   /** This song's lyrics are replacing another's on screen. */
@@ -1072,6 +1074,7 @@ export function LyricsView({
   motion = "system",
   autoSync = false,
   shown = true,
+  resting = false,
   leaving = false,
   arriving = false,
 }: LyricsViewProps) {
@@ -1258,6 +1261,7 @@ export function LyricsView({
       aria-label="Lyrics"
       aria-hidden={!shown}
       data-shown={shown}
+      data-resting={resting}
       data-leaving={leaving}
       data-arriving={arriving}
       data-loaded-late={loadedLate.current}
