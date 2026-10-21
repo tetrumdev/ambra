@@ -120,6 +120,20 @@ impl SpotifyProvider {
         revision: &str,
         ops: Vec<protocol::Op>,
     ) -> ProviderResult<()> {
+        self.send_changes(
+            &format!("/playlist/v2/playlist/{id}/changes"),
+            revision,
+            ops,
+        )
+        .await
+    }
+
+    async fn send_changes(
+        &self,
+        endpoint: &str,
+        revision: &str,
+        ops: Vec<protocol::Op>,
+    ) -> ProviderResult<()> {
         self.access_token(None).await?;
         let mut change = protocol::ListChanges::new();
         change.set_base_revision(general_purpose::STANDARD.decode(revision)?);
@@ -142,12 +156,7 @@ impl SpotifyProvider {
         );
         self.session
             .spclient()
-            .request_with_protobuf(
-                &reqwest::Method::POST,
-                &format!("/playlist/v2/playlist/{id}/changes"),
-                None,
-                &change,
-            )
+            .request_with_protobuf(&reqwest::Method::POST, endpoint, None, &change)
             .await?;
         Ok(())
     }
@@ -167,6 +176,84 @@ impl SpotifyProvider {
         op.set_kind(protocol::op::Kind::ADD);
         op.add = MessageField::some(addition);
         self.change_playlist(id, revision, vec![op]).await
+    }
+
+    pub async fn rename_playlist(
+        &self,
+        id: &str,
+        name: &str,
+        revision: &str,
+    ) -> ProviderResult<()> {
+        let mut attributes = protocol::ListAttributes::new();
+        attributes.set_name(name.to_owned());
+        let mut state = protocol::ListAttributesPartialState::new();
+        state.values = MessageField::some(attributes);
+        let mut update = protocol::UpdateListAttributes::new();
+        update.new_attributes = MessageField::some(state);
+        let mut op = protocol::Op::new();
+        op.set_kind(protocol::op::Kind::UPDATE_LIST_ATTRIBUTES);
+        op.update_list_attributes = MessageField::some(update);
+        self.change_playlist(id, revision, vec![op]).await
+    }
+
+    /// Spotify deletes a playlist by removing it from the user's rootlist.
+    pub async fn delete_playlist(&self, id: &str) -> ProviderResult<()> {
+        self.access_token(None).await?;
+        let mut revision = None;
+        let mut offset = 0;
+        let index = loop {
+            let bytes = self
+                .session
+                .spclient()
+                .get_rootlist(offset, Some(100))
+                .await?;
+            let page = SelectedListContent::parse_from_bytes(&bytes)?;
+            if revision
+                .as_ref()
+                .is_some_and(|revision: &Vec<u8>| revision.as_slice() != page.revision())
+            {
+                return Err(io::Error::other(
+                    "Spotify library changed while loading. Refresh and try again.",
+                )
+                .into());
+            }
+            revision = Some(page.revision().to_vec());
+            let contents = page.contents.get_or_default();
+            let found = contents.items.iter().position(|item| {
+                matches!(
+                    SpotifyUri::from_uri(item.uri()),
+                    Ok(SpotifyUri::Playlist { id: item_id, .. })
+                        if item_id.to_base62().is_ok_and(|item_id| item_id == id)
+                )
+            });
+            if let Some(found) = found {
+                break offset + found;
+            }
+            offset += contents.items.len();
+            if contents.items.is_empty()
+                || !contents.truncated()
+                || offset >= page.length().max(0) as usize
+            {
+                return Err(io::Error::other("Spotify playlist is not in your library").into());
+            }
+        };
+        let mut item = protocol::Item::new();
+        item.set_uri(format!("spotify:playlist:{id}"));
+        let mut removal = protocol::Rem::new();
+        removal.set_from_index(index as i32);
+        removal.set_length(1);
+        removal.set_items_as_key(true);
+        removal.items.push(item);
+        let mut op = protocol::Op::new();
+        op.set_kind(protocol::op::Kind::REM);
+        op.rem = MessageField::some(removal);
+        let user = self.session.username();
+        self.send_changes(
+            &format!("/playlist/v2/user/{user}/rootlist/changes"),
+            &general_purpose::STANDARD.encode(revision.unwrap_or_default()),
+            vec![op],
+        )
+        .await
     }
 
     pub async fn remove_playlist_tracks(

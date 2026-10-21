@@ -11,8 +11,9 @@ type PlaylistViewProps = Omit<
 > & {
   playlist: Playlist;
   artworkTracks: Track[];
-  /** Only AMBRA playlists can be renamed or improved here. */
-  onRename?: (id: string, name: string) => boolean;
+  /** Only editable playlists can be renamed or deleted, and only AMBRA playlists improved. */
+  onRename?: (id: string, name: string) => boolean | Promise<boolean>;
+  onDelete?: (id: string) => boolean | Promise<boolean>;
   onDuplicate: () => void;
   onImprove?: () => void;
   /** The scan the user asked for, on any playlist. */
@@ -33,6 +34,7 @@ export function PlaylistView({
   playlist,
   artworkTracks,
   onRename,
+  onDelete,
   onDuplicate,
   onImprove,
   improvementProgress,
@@ -65,10 +67,12 @@ export function PlaylistView({
             playlist={playlist}
             className="libraryMoreBtn"
             onRename={onRename}
+            onDelete={onDelete}
             actions={[
-              { label: "Duplicate Playlist", onSelect: onDuplicate },
+              { label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: onDuplicate },
               ...(onImprove ? [{
                 label: improvementProgress ? "Improving…" : "Improve Playlist",
+                icon: "/sparkle.svg",
                 disabled: Boolean(improvementProgress) || artworkTracks.length === 0,
                 onSelect: onImprove,
               }] : []),

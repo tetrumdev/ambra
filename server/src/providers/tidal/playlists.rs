@@ -3,7 +3,7 @@ use crate::playlists::{PlaylistContents, PlaylistEntry, ServicePlaylist};
 use serde_json::Value;
 
 impl TidalProvider {
-    async fn playlist_api(
+    pub(super) async fn v1_api(
         &self,
         method: reqwest::Method,
         path: &str,
@@ -74,7 +74,7 @@ impl TidalProvider {
             let mut offset = 0;
             loop {
                 let (page, _) = self
-                    .playlist_api(
+                    .v1_api(
                         reqwest::Method::GET,
                         &format!("users/{user}/{section}?limit=100&offset={offset}"),
                         &[],
@@ -112,7 +112,7 @@ impl TidalProvider {
             .ok_or_else(|| io::Error::other("Tidal user is missing"))?
             .user_id;
         let (metadata, _) = self
-            .playlist_api(reqwest::Method::GET, &format!("playlists/{id}"), &[], None)
+            .v1_api(reqwest::Method::GET, &format!("playlists/{id}"), &[], None)
             .await?;
         let playlist = tidal_playlist(&metadata, user)?;
         let mut entries = Vec::new();
@@ -120,7 +120,7 @@ impl TidalProvider {
         let mut offset = 0;
         loop {
             let (page, etag) = self
-                .playlist_api(
+                .v1_api(
                     reqwest::Method::GET,
                     &format!("playlists/{id}/items?limit=100&offset={offset}"),
                     &[],
@@ -182,7 +182,7 @@ impl TidalProvider {
         revision: &str,
     ) -> ProviderResult<()> {
         let (page, etag) = self
-            .playlist_api(
+            .v1_api(
                 reqwest::Method::GET,
                 &format!("playlists/{id}/items?limit=1&offset=0"),
                 &[],
@@ -198,7 +198,7 @@ impl TidalProvider {
         let index = page["totalNumberOfItems"]
             .as_u64()
             .ok_or_else(|| io::Error::other("Tidal playlist has no total"))?;
-        self.playlist_api(
+        self.v1_api(
             reqwest::Method::POST,
             &format!("playlists/{id}/items"),
             &[
@@ -208,6 +208,33 @@ impl TidalProvider {
                 ("onArtifactNotFound", "FAIL".into()),
             ],
             Some(revision),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn rename_playlist(
+        &self,
+        id: &str,
+        name: &str,
+        _revision: &str,
+    ) -> ProviderResult<()> {
+        self.v1_api(
+            reqwest::Method::POST,
+            &format!("playlists/{id}"),
+            &[("title", name.into())],
+            None,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn delete_playlist(&self, id: &str) -> ProviderResult<()> {
+        self.v1_api(
+            reqwest::Method::DELETE,
+            &format!("playlists/{id}"),
+            &[],
+            None,
         )
         .await?;
         Ok(())
@@ -224,7 +251,7 @@ impl TidalProvider {
             .map(|entry| entry.id.as_str())
             .collect::<Vec<_>>()
             .join(",");
-        self.playlist_api(
+        self.v1_api(
             reqwest::Method::DELETE,
             &format!("playlists/{id}/items/{indices}"),
             &[],

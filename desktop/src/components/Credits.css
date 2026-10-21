@@ -1,0 +1,63 @@
+.creditList {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    margin: 0;
+}
+
+.creditRow dt {
+    margin-bottom: 4px;
+    color: #a3a2a3;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.creditRow dd {
+    margin: 0;
+    color: white;
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.creditDetail {
+    margin-left: 6px;
+    color: #a3a2a3;
+    font-size: 12px;
+}
+
+.creditsDialog {
+    width: min(520px, calc(100vw - 32px));
+}
+
+.creditsDialog .creditsScroll {
+    max-height: min(60vh, 520px);
+    overflow-y: auto;
+    scrollbar-width: none;
+}
+
+.creditsSource,
+.albumInfoSource {
+    color: #8a898a;
+    font-size: 12px;
+}
+
+.creditsRetry {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: white;
+    font: inherit;
+    text-decoration: underline;
+    cursor: default;
+}
+
+.albumAbout .creditList {
+    margin-bottom: 24px;
+}
+
+.albumAbout .albumInfoRelease {
+    margin: 0 0 6px;
+    font-size: 0.8rem;
+}

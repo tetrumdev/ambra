@@ -93,8 +93,11 @@
     padding-right: 20px;
 }
 
-/* Into the fade's room, so the button sits just after the text. */
+/* Into the fade's room, so the button sits just after the text. Raised above the title,
+   whose filter would otherwise paint it over the button and take the overlapped clicks. */
 .songNameRow .songMenuButton {
+    position: relative;
+    z-index: 1;
     margin-left: -16px;
 }
 

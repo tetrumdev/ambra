@@ -9,6 +9,7 @@ import { useTrackReorder } from "../hooks/useTrackReorder";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
+import { showTrackCredits } from "../utils/trackCredits";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { ArtistLinks } from "./ArtistLinks";
@@ -33,6 +34,7 @@ type OpenMenu =
       trackId: GlobalTrackId;
       x: number;
       y: number;
+      flipY: number;
     };
 
 export type TrackListProps = {
@@ -192,6 +194,7 @@ export function TrackList({
       trackId,
       x: triggerRect.right - menuWidth,
       y: triggerRect.bottom + gap,
+      flipY: triggerRect.top - gap,
     });
   }
 
@@ -247,15 +250,19 @@ export function TrackList({
           onClose={() => setOpenMenu(null)}
           xPos={openMenu.x}
           yPos={openMenu.y}
+          flipY={openMenu.flipY}
           actions={[
             ...(removeTracks ? [{
               label: removalLabel,
+              icon: "/delete.svg",
               onSelect: () => removeTracks([openMenu.trackId]),
             }] : []),
             ...(addToLibrary && !savedTrackIds?.has(openMenu.trackId) ? [{
               label: "Add to Library",
+              icon: "/add.svg",
               onSelect: () => addToLibrary(openMenu.trackId),
             }] : []),
+            { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(tracks.find(track => track.globalId === openMenu.trackId) ?? null) },
           ]}
         />
       )}
@@ -354,7 +361,7 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
           onClick={event => { event.stopPropagation(); onAction("play", event, index); }}
           onMouseEnter={event => onAction("warm", event, index)}
           onMouseLeave={event => onAction("cancelWarm", event, index)}>
-          <img src="/Play.svg" alt="" aria-hidden="true" />
+          <img src="/play.svg" alt="" aria-hidden="true" />
         </button>
         {showArtwork && <div className="coverImgContainer" data-playback-menu-trigger>
           <TrackArtwork track={track} alt={`${track.album} album cover`} className="coverImg" draggable={false} />
@@ -391,7 +398,7 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
             selecting
               ? selected
                 ? "/select.svg"
-                : "/noSelect.svg"
+                : "/no-select.svg"
               : "/menu.svg"
           }
           alt={selecting ? "Selection status" : "Menu"}

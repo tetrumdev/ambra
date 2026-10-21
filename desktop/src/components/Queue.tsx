@@ -9,6 +9,7 @@ import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
+import { showTrackCredits } from "../utils/trackCredits";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { PerfProfiler } from "./PerfProfiler";
@@ -59,13 +60,15 @@ export function Queue(props: QueueProps) {
   const entries = useMemo(() => [...history, ...(current ? [current] : []), ...upcoming], [current, upcoming, history]);
   const ids = useMemo(() => entries.map(entry => entry.id), [entries]);
   const selection = useRangeSelection(ids);
-  const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number; flipY: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
   const columnHeaderRef = useRef<HTMLDivElement>(null);
   const historyBarRef = useRef<HTMLDivElement>(null);
   const followCurrent = useRef(true);
+  // Scrolled away from now playing, which offers the way back.
+  const [awayFromCurrent, setAwayFromCurrent] = useState(false);
   // History starts folded into a single row above now playing, so the queue opens on what is playing.
   const [historyOpen, setHistoryOpen] = useState(false);
   const historyShown = historyOpen && history.length > 0;
@@ -86,6 +89,7 @@ export function Queue(props: QueueProps) {
   const jumpToCurrent = useCallback(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = currentScrollTop();
     followCurrent.current = true;
+    setAwayFromCurrent(false);
   }, [currentScrollTop]);
   useLayoutEffect(() => {
     if (!followCurrent.current) return;
@@ -110,6 +114,11 @@ export function Queue(props: QueueProps) {
 
   function trackScrollPosition() {
     followCurrent.current = Math.abs((scrollRef.current?.scrollTop ?? 0) - currentScrollTop()) <= 24;
+    setAwayFromCurrent(!followCurrent.current);
+    const scroller = scrollRef.current;
+    const bar = historyBarRef.current;
+    setHistoryBarStuck(Boolean(scroller && bar && scroller.scrollTop > 0
+      && bar.getBoundingClientRect().top - scroller.getBoundingClientRect().top <= columnHeaderHeight + 1));
   }
 
   // Where now playing sat on screen just before history unfolded above it.
@@ -134,12 +143,15 @@ export function Queue(props: QueueProps) {
     const shift = Math.min(grown, Math.max(0, scroller.clientHeight / 2 - before));
     scroller.scrollTop += grown - shift;
   }, [historyOpen]);
-  // The history bar sticks under the column header, so folding and clearing stay in reach.
+  // The history bar sticks under the column header, so folding and clearing stay in reach. It
+  // sticks over the header's bottom fade, which would otherwise show rows scrolling between them.
   const [columnHeaderHeight, setColumnHeaderHeight] = useState(0);
+  // Stuck, the history bar carries the fade rows scroll under.
+  const [historyBarStuck, setHistoryBarStuck] = useState(false);
   useLayoutEffect(() => {
     const header = columnHeaderRef.current;
     if (!header) return;
-    const measure = () => setColumnHeaderHeight(header.offsetHeight);
+    const measure = () => setColumnHeaderHeight(header.offsetHeight - parseFloat(getComputedStyle(header).paddingBottom));
     measure();
     const observer = new ResizeObserver(measure);
     observer.observe(header);
@@ -200,7 +212,7 @@ export function Queue(props: QueueProps) {
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
       const trigger = event.currentTarget.hasAttribute("data-collection-menu-trigger");
-      setMenu({ entry, x: trigger ? rect.right - MENU_WIDTH : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY });
+      setMenu({ entry, x: trigger ? rect.right - MENU_WIDTH : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY, flipY: trigger ? rect.top - 4 : event.clientY });
     } else {
       setMenu(null);
       playEntry(entry);
@@ -213,9 +225,10 @@ export function Queue(props: QueueProps) {
   return (
     <PerfProfiler id="queue">
       {menu && <TrackCollectionMenu trackId={menu.entry.track.globalId} onClose={() => setMenu(null)}
-        xPos={menu.x} yPos={menu.y} actions={[
+        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} actions={[
           ...(!menu.entry.current ? [{ label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) }] : []),
-          { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", onSelect: () => removeEntries([menu.entry]) },
+          { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", icon: "/delete.svg", onSelect: () => removeEntries([menu.entry]) },
+          { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menu.entry.track) },
         ]} />}
       {selection.isSelecting && (
         <div className="selectionActionMenu" role="group" aria-label="Selected queue entries">
@@ -238,6 +251,7 @@ export function Queue(props: QueueProps) {
           data-selecting={selection.isSelecting ? "true" : undefined}>
           {entries.length > 0 && <TrackColumnHeader headerRef={columnHeaderRef} />}
           {history.length > 0 && <div className="queueHistoryBar" ref={historyBarRef}
+            data-stuck={historyBarStuck ? "true" : undefined}
             style={{ "--queue-column-header-height": `${columnHeaderHeight}px` } as React.CSSProperties}>
             <button type="button" className="queueSectionTitle queueHistoryToggle" aria-expanded={historyShown}
               aria-controls="queueHistory" onClick={toggleHistory}>
@@ -265,6 +279,14 @@ export function Queue(props: QueueProps) {
             {!entries.length && <p className="queueEmpty">Queue is empty</p>}
           </div>
         </div>
+        {current && awayFromCurrent && (
+          <button type="button" className="queueResume" onClick={jumpToCurrent}>
+            <svg viewBox="0 0 20 20" aria-hidden="true">
+              <path d="m6 4 8 6-8 6Z" />
+            </svg>
+            Back to now playing
+          </button>
+        )}
       </div>
     </PerfProfiler>
   );
@@ -336,7 +358,7 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, men
         <button type="button" className="trackPlayButton" disabled={entry.current}
           aria-label={entry.current ? `${entry.track.name} is playing` : `Play ${entry.track.name}`}
           onClick={event => onAction("play", event, entry)}>
-          <img src="/Play.svg" alt="" aria-hidden="true" />
+          <img src="/play.svg" alt="" aria-hidden="true" />
         </button>
         <div className="coverImgContainer"><TrackArtwork track={entry.track} alt={`${entry.track.album} album cover`} className="coverImg" draggable={false} /></div>
       </div>
@@ -352,7 +374,7 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, men
         aria-expanded={selecting ? undefined : menuOpen}
         onClick={event => onAction("menu", event, entry)}
         data-collection-menu-trigger data-collection-menu-open={menuOpen && !selecting ? "true" : undefined}>
-        <img src={selecting ? selected ? "/select.svg" : "/noSelect.svg" : "/menu.svg"}
+        <img src={selecting ? selected ? "/select.svg" : "/no-select.svg" : "/menu.svg"}
           alt={selecting ? "Selection status" : "Menu"} className={selecting ? "selectionIndicator" : undefined} />
       </button>
     </div>
