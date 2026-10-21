@@ -2,6 +2,7 @@
    but it is a place, not a collection: a smaller title, text actions instead of the
    play buttons, labelled sections and history folded away above now playing. */
 #queue .queueView {
+    position: relative;
     grid-column: 2;
     container: queue / inline-size;
     display: flex;
@@ -63,10 +64,11 @@
     height: 24px;
 }
 
-/* The header sits above the list rather than scrolling with it, so less fade is needed. */
+/* The same fade as playlists; it overlaps the list's top padding so the rows start where they did. */
 .queueView .columnInfo {
     padding-top: 18px;
-    padding-bottom: 12px;
+    padding-bottom: 24px;
+    margin-bottom: -12px;
     /* Its own layer, as in playlists (where the collapse transform gives it one); otherwise the
        web view can draw a scrolled row's composited cover over it. */
     will-change: transform;
@@ -112,9 +114,28 @@
     /* Stays under the column header while the plays scroll, so it can always fold them away. */
     position: sticky;
     top: var(--queue-column-header-height, 0px);
-    /* Under the column header (z-index 8), above the rows. */
-    z-index: 7;
+    /* Over the column header's fade (z-index 8), which it takes over once stuck. */
+    z-index: 9;
     background: #000;
+}
+
+.queueHistoryBar[data-stuck="true"]::after {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    height: 24px;
+    content: "";
+    background: linear-gradient(
+        to bottom,
+        rgb(0 0 0 / 1) 0%,
+        rgb(0 0 0 / 0.92) 20%,
+        rgb(0 0 0 / 0.75) 40%,
+        rgb(0 0 0 / 0.5) 60%,
+        rgb(0 0 0 / 0.22) 80%,
+        transparent 100%
+    );
+    pointer-events: none;
 }
 
 .queueHistoryBar .queueTextButton {
@@ -208,6 +229,48 @@
     font-size: 0.75rem;
     font-weight: 400;
     text-overflow: ellipsis;
+}
+
+/* The lyrics view's "Back to current line" pill (LyricsView.css), for now playing. */
+.queueResume {
+    position: absolute;
+    bottom: 24px;
+    left: 50%;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+    height: 42px;
+    padding: 0 18px;
+    border: 1px solid rgba(100, 100, 100, 0.4);
+    border-radius: 100px;
+    box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
+    color: white;
+    background: rgba(22, 22, 22, 0.4);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    font:
+        500 13px/1.4 "Stack Sans Text",
+        sans-serif;
+    white-space: nowrap;
+    cursor: default;
+    transform: translateX(-50%);
+    transition: scale var(--motion-press-up);
+    animation:
+        lyricsResumeAppear 250ms ease both,
+        lyricsControlsFade 250ms ease both;
+}
+
+.queueResume:active {
+    scale: 0.97;
+    transition: scale var(--motion-press-down);
+}
+
+.queueResume svg {
+    width: 14px;
+    height: 14px;
+    fill: currentColor;
 }
 
 .queueEmpty {

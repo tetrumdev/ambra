@@ -1,6 +1,7 @@
 //! Estimate one constant shift between synced lyrics and the playing recording.
 //! Lyrics timed against another edit or master are usually off by a fixed amount,
 //! so centre-panned vocal-band energy is matched against the lyric phrases.
+//! The same energy also shows when the singing actually stops, near the last phrase.
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use realfft::{RealFftPlanner, num_complex::Complex};
@@ -20,6 +21,19 @@ const DETREND_FRAMES: usize = 7_500 / FRAME_MS as usize;
 const ONSET_FRAMES: i64 = 300 / FRAME_MS;
 /// Shifts within one second of the best one belong to the same peak.
 const PEAK_FRAMES: i64 = 1_000 / FRAME_MS;
+/// Vocal level is read through this much smoothing, so a breath or a gap between words isn't an ending.
+const END_SMOOTHING_FRAMES: usize = 500 / FRAME_MS as usize;
+/// The singing is taken to stop between a little before the last phrase starts and a little
+/// after its timing ends; a final line is often timed as held through the whole outro.
+const END_SEARCH_BEFORE_FRAMES: i64 = 5_000 / FRAME_MS;
+const END_SEARCH_AFTER_FRAMES: i64 = 10_000 / FRAME_MS;
+/// How long the sung level is read for, back from the last phrase.
+const SUNG_FRAMES: i64 = 30_000 / FRAME_MS;
+/// Where the instrumental level is read, after the last phrase.
+const OUTRO_FROM_FRAMES: i64 = 5_000 / FRAME_MS;
+const OUTRO_FRAMES: i64 = 30_000 / FRAME_MS;
+/// Sung and instrumental levels closer than this (in natural-log power, about 4 dB) can't place an ending.
+const MIN_END_CONTRAST: f64 = 1.0;
 
 /// Each request supersedes the previous one, which stops decoding at its next packet.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -42,12 +56,15 @@ pub struct LyricOffset {
     prominence: f64,
     /// How far the best match leads the strongest rival peak; absent when there is no rival.
     margin: Option<f64>,
+    /// Playback milliseconds where the singing stops; absent when the recording can't tell.
+    vocal_end_ms: Option<i64>,
 }
 
 const UNCERTAIN: LyricOffset = LyricOffset {
     best_ms: None,
     prominence: 0.0,
     margin: None,
+    vocal_end_ms: None,
 };
 
 #[tauri::command]
@@ -75,7 +92,13 @@ pub async fn detect_lyric_offset(
         let envelope = vocal_envelope(source, generation).inspect_err(|error| {
             eprintln!("[lyric-sync] {label}: failed, {error}");
         })?;
-        Ok(best_offset(&envelope, &phrases, &label))
+        let mut offset = best_offset(&envelope.standardized, &phrases, &label);
+        // An untrusted shift still places the ending better than none, and the app checks
+        // the result against the lyrics it applies.
+        let shift = offset.best_ms.unwrap_or(0) / FRAME_MS;
+        offset.vocal_end_ms =
+            vocal_end(&envelope.level, &phrases, shift).map(|frame| frame * FRAME_MS);
+        Ok(offset)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -107,8 +130,14 @@ fn phrases(windows: &[LyricWindow]) -> Vec<(i64, i64)> {
         .collect()
 }
 
-/// Detrended, standardized log energy of centre-panned 250 Hz–4 kHz content per frame.
-fn vocal_envelope(source: String, generation: u64) -> Result<Vec<f64>, String> {
+struct Envelope {
+    /// Log energy of centre-panned 250 Hz–4 kHz content per frame.
+    level: Vec<f64>,
+    /// The same, detrended and standardized, for matching phrases.
+    standardized: Vec<f64>,
+}
+
+fn vocal_envelope(source: String, generation: u64) -> Result<Envelope, String> {
     let mut decoded = DecodedSource::open(source)?;
     let spec = decoded.spec();
     let rate = spec.sample_rate as usize;
@@ -185,10 +214,62 @@ fn vocal_envelope(source: String, generation: u64) -> Result<Vec<f64>, String> {
         / detrended.len() as f64)
         .sqrt()
         .max(1e-9);
-    Ok(detrended
-        .into_iter()
-        .map(|value| value / deviation)
-        .collect())
+    Ok(Envelope {
+        standardized: detrended
+            .into_iter()
+            .map(|value| value / deviation)
+            .collect(),
+        level: log,
+    })
+}
+
+/// The frame where the singing stops: the last time, around the final phrase, that the
+/// smoothed vocal level is nearer the sung level than the instrumental one that follows.
+fn vocal_end(level: &[f64], phrases: &[(i64, i64)], shift: i64) -> Option<i64> {
+    let frames = level.len() as i64;
+    let prefix = prefix_sums(level);
+    let smoothed = |frame: i64| {
+        let half = END_SMOOTHING_FRAMES as i64 / 2;
+        let (from, to) = ((frame - half).max(0), (frame + half + 1).min(frames));
+        (prefix[to as usize] - prefix[from as usize]) / (to - from).max(1) as f64
+    };
+    let median = |mut values: Vec<f64>| {
+        values.sort_by(f64::total_cmp);
+        values.get(values.len() / 2).copied()
+    };
+    let (last_start, last) = phrases
+        .iter()
+        .map(|&(start, end)| (start - shift, end - shift))
+        .max_by_key(|&(_, end)| end)?;
+    if last <= 0 || last >= frames {
+        return None;
+    }
+    let sung = median(
+        phrases
+            .iter()
+            .map(|&(start, end)| {
+                (
+                    (start - shift).max(last - SUNG_FRAMES).max(0),
+                    (end - shift).min(frames),
+                )
+            })
+            .flat_map(|(start, end)| start..end)
+            .map(smoothed)
+            .collect(),
+    )?;
+    let outro_start = last + OUTRO_FROM_FRAMES;
+    let outro_end = (outro_start + OUTRO_FRAMES).min(frames);
+    if outro_end - outro_start < OUTRO_FROM_FRAMES {
+        return None;
+    }
+    let outro = median((outro_start..outro_end).map(smoothed).collect())?;
+    if sung - outro < MIN_END_CONTRAST {
+        return None;
+    }
+    let threshold = outro + (sung - outro) / 2.0;
+    ((last_start - END_SEARCH_BEFORE_FRAMES).max(0)..(last + END_SEARCH_AFTER_FRAMES).min(frames))
+        .rev()
+        .find(|&frame| smoothed(frame) > threshold)
 }
 
 fn prefix_sums(values: &[f64]) -> Vec<f64> {
@@ -302,5 +383,6 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
         best_ms: Some(shifts[best] * FRAME_MS),
         prominence,
         margin,
+        vocal_end_ms: None,
     }
 }

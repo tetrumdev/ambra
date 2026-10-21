@@ -45,6 +45,8 @@ export type TrackCollectionViewProps = TrackListProps & {
   headerContent?: ReactNode;
   headerArtwork?: ReactNode;
   content?: ReactNode;
+  /** After the tracks, such as an album's credits. */
+  footer?: ReactNode;
   showPlaybackActions?: boolean;
   collapsibleHeader?: boolean;
   shuffleCollection?: () => void;
@@ -64,6 +66,7 @@ export function TrackCollectionView({
   headerContent,
   headerArtwork,
   content,
+  footer,
   showPlaybackActions = true,
   collapsibleHeader = false,
   shuffleCollection,
@@ -271,7 +274,7 @@ export function TrackCollectionView({
                 onClick={handlePlay}
                 disabled={isEmpty}
               >
-                <img src="/Play.svg" alt="" aria-hidden="true" />
+                <img src="/play.svg" alt="" aria-hidden="true" />
                 <span>PLAY</span>
               </button>
               <button
@@ -302,6 +305,7 @@ export function TrackCollectionView({
         </div>
       </div>
       {content ?? <TrackList {...trackListProps} />}
+      {footer}
     </div>
   );
 }

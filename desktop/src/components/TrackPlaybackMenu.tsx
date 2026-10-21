@@ -50,7 +50,7 @@ export function TrackPlaybackMenu({
             if (trackId !== null) playStandalone(trackId);
           }}
         >
-          <img id="menuPlayIcon" className="menuIcon" src="/Play.svg" />
+          <img id="menuPlayIcon" className="menuIcon" src="/play.svg" />
           Standalone Play
         </div>
         {playTrack && (
@@ -72,7 +72,7 @@ export function TrackPlaybackMenu({
             if (trackId !== null) playNext(trackId);
           }}
         >
-          <img id="menuPlayNextIcon" className="menuIcon" src="/playNext.svg" />
+          <img id="menuPlayNextIcon" className="menuIcon" src="/play-next.svg" />
           Play Next
         </div>
         <div
@@ -85,7 +85,7 @@ export function TrackPlaybackMenu({
           <img
             id="menuAddToQueueIcon"
             className="menuIcon"
-            src="/addToQueue.svg"
+            src="/add-to-queue.svg"
           />
           Add to Queue
         </div>
