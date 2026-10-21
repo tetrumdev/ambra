@@ -2,9 +2,11 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { ArtistLinks } from "./ArtistLinks";
+import { MenuDotsIcon } from "./MenuDotsIcon";
 import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionAction } from "./TrackCollectionMenu";
 import type { Track } from "../types/music";
 import "./SongInfo.css";
+import { showTrackCredits } from "../utils/trackCredits";
 
 type SongInfoProps = {
   track: Track | undefined;
@@ -27,11 +29,12 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
   // both album and artist links, so it needs neither.
   const actions: TrackCollectionAction[] = track && menu ? [
     ...(!menu.inLibrary && track.provider !== "local"
-      ? [{ label: "Add to Library", onSelect: () => menu.onAddToLibrary(track) }]
+      ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => menu.onAddToLibrary(track) }]
       : []),
     ...(menu.showAlbumLink
-      ? [{ label: "Go to Album", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(track) }) }]
+      ? [{ label: "Go to Album", icon: "/album.svg", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(track) }) }]
       : []),
+    { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(track) },
   ] : [];
   return (
     <div id="songInfo">
@@ -47,11 +50,7 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
             aria-expanded={menuAnchor !== null}
             onClick={(event) => setMenuAnchor(event.currentTarget.getBoundingClientRect())}
           >
-            <svg viewBox="0 0 20 20" aria-hidden="true">
-              <circle cx="4" cy="10" r="1.8" />
-              <circle cx="10" cy="10" r="1.8" />
-              <circle cx="16" cy="10" r="1.8" />
-            </svg>
+            <MenuDotsIcon />
           </button>
         )}
       </div>

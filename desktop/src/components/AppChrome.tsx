@@ -15,8 +15,8 @@ type AppChromeProps = {
 };
 
 const playerViews = [
-  { screen: "bigscreen", label: "Album art", icon: "/albumIcon.svg" },
-  { screen: "lyrics", label: "Lyrics", icon: "/lyricsIcon.svg" },
+  { screen: "bigscreen", label: "Album art", icon: "/album.svg" },
+  { screen: "lyrics", label: "Lyrics", icon: "/lyrics.svg" },
 ] as const;
 
 export function AppChrome({

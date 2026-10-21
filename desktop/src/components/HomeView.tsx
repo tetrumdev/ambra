@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { ProviderIcon } from "./ProviderIcon";
 import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
+import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
+import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
@@ -47,25 +50,55 @@ function HomeRow({ title, empty, children, hasItems }: {
   </section>;
 }
 
-function SongCards({ tracks, onPlay }: { tracks: Track[]; onPlay: (tracks: Track[], id: string) => void }) {
-  return tracks.map(track => <li className="homeCard" key={track.globalId}>
-    <button className="homeCardButton" type="button" aria-label={`Play ${track.name} by ${track.artist}`} onClick={() => onPlay(tracks, track.globalId)}>
-      <div className="homeArtwork">
-        <TrackArtwork track={track} alt="" />
-        <span className="homePlay" aria-hidden="true"><img src="/Play.svg" alt="" /></span>
+type OnAction = (action: EntityAction, tracks: Track[], id?: string) => void;
+
+/** Like a track row: the card opens the playback menu, and only its play button plays at once. */
+function SongCards({ tracks, onAction }: { tracks: Track[]; onAction: OnAction }) {
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  return <>
+    {tracks.map(track => <li className="homeCard" key={track.globalId}>
+      <button className="homeCardButton" type="button" aria-haspopup="menu" aria-label={`Options for ${track.name} by ${track.artist}`}
+        onClick={event => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          // Keyboard presses have no pointer position.
+          setMenu({ id: track.globalId, x: event.detail ? event.clientX : bounds.left, y: event.detail ? event.clientY : bounds.bottom });
+        }}>
+        <div className="homeArtwork">
+          <TrackArtwork track={track} alt="" />
+          <span className="homeShade" aria-hidden="true" />
+        </div>
+        <span className="homeCardTitle" data-tooltip={track.name} data-tooltip-overflow="">{track.name}</span>
+        <span className="homeCardDetail" data-tooltip={track.artist} data-tooltip-overflow="">{track.artist}</span>
+      </button>
+      <div className="homePlayArea">
+        <button type="button" className="homePlay" aria-label={`Play ${track.name} by ${track.artist}`} onClick={() => onAction("play", tracks, track.globalId)}>
+          <img src="/play.svg" alt="" />
+        </button>
       </div>
-      <span className="homeCardTitle" data-tooltip={track.name} data-tooltip-overflow="">{track.name}</span>
-      <span className="homeCardDetail" data-tooltip={track.artist} data-tooltip-overflow="">{track.artist}</span>
-    </button>
-  </li>);
+    </li>)}
+    {/* Portaled: a list can only hold items, and the row scrolls and clips. */}
+    {menu && createPortal(
+      <TrackPlaybackMenu
+        onClose={() => setMenu(null)}
+        xPos={menu.x}
+        yPos={menu.y}
+        trackId={menu.id}
+        playTrack={id => onAction("play", tracks, id)}
+        playStandalone={id => onAction("standalone", tracks, id)}
+        addToQueue={id => onAction("queue", tracks.filter(track => track.globalId === id))}
+        playNext={id => onAction("next", tracks, id)}
+      />,
+      document.body,
+    )}
+  </>;
 }
 
-export function HomeView({ entries, tracks, playlists, error, onPlay, onSelectPlaylist, registerScrollElement }: {
+export function HomeView({ entries, tracks, playlists, error, onAction, onSelectPlaylist, registerScrollElement }: {
   entries: ListeningEntry[];
   tracks: Track[];
   playlists: Playlist[];
   error: string | null;
-  onPlay: (tracks: Track[], id: string) => void;
+  onAction: OnAction;
   onSelectPlaylist: (id: string) => void;
   registerScrollElement: (element: HTMLDivElement | null) => void;
 }) {
@@ -80,7 +113,7 @@ export function HomeView({ entries, tracks, playlists, error, onPlay, onSelectPl
     <header className="homeHeader"><h1 className="libraryTitle">Welcome Back</h1></header>
     {error && <p className="homeError" role="alert">{error}</p>}
     <HomeRow title="Recently played" empty="Play some music to start your listening history." hasItems={recent.length > 0}>
-      <SongCards tracks={recent} onPlay={onPlay} />
+      <SongCards tracks={recent} onAction={onAction} />
     </HomeRow>
     <HomeRow title="Your playlists" empty="Create a playlist or connect a music service to see your playlists here." hasItems={playlists.length > 0}>
       {playlists.map(playlist => {
@@ -101,7 +134,7 @@ export function HomeView({ entries, tracks, playlists, error, onPlay, onSelectPl
       })}
     </HomeRow>
     <HomeRow title="Haven’t played in a while" empty="Songs you last played over 30 days ago will appear here." hasItems={older.length > 0}>
-      <SongCards tracks={older} onPlay={onPlay} />
+      <SongCards tracks={older} onAction={onAction} />
     </HomeRow>
   </div>;
 }

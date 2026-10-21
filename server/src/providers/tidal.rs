@@ -1,3 +1,4 @@
+mod credits;
 mod playlists;
 
 use std::{
@@ -466,7 +467,9 @@ impl TidalProvider {
             .map(|_| "Popular tracks couldn't be loaded.".to_owned());
         Ok(ArtistProfileMetadata {
             artist,
-            biography: biography.as_ref().map(|bio| bio.text.clone()),
+            biography: biography
+                .as_ref()
+                .map(|bio| crate::credits::plain_tidal_text(&bio.text)),
             biography_source: biography.map(|bio| bio.source),
             popular_track_ids: top
                 .map(|page| {

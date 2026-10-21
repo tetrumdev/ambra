@@ -1,3 +1,4 @@
+mod credits;
 mod playlists;
 
 use crate::media_cache::MediaCache;
@@ -169,7 +170,7 @@ pub async fn serve() -> ServerResult<()> {
         .route("/api/auth/{provider}/complete", post(complete_auth))
         .route("/api/library", get(library))
         .route("/api/providers/{provider}/playlists", get(playlists::list))
-        .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change))
+        .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change).delete(playlists::delete))
         .route("/api/library/tracks", post(add_track))
         .route("/api/library/tracks/remove", post(remove_tracks))
         .route("/api/search/tracks", get(search_tracks))
@@ -199,6 +200,12 @@ pub async fn serve() -> ServerResult<()> {
             "/api/providers/{provider}/tracks/{track_id}/playback",
             get(track_playback),
         )
+        .route(
+            "/api/providers/{provider}/artists/{artist_id}/biography",
+            get(credits::artist_biography),
+        )
+        .route("/api/credits/track", post(credits::track))
+        .route("/api/credits/album", post(credits::album))
         .route("/api/quality/artwork", post(resolve_artwork_quality))
         .route("/api/artwork/thumbnail", get(artwork_thumbnail))
         .route("/api/artwork/palette", get(artwork_palette))

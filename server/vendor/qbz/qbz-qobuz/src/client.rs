@@ -2548,7 +2548,7 @@ impl QobuzClient {
 
     /// Access playlist pages and mutations with the existing authenticated signing path.
     pub async fn playlist_api(&self, operation: &str, params: &[(&str, String)]) -> Result<Value> {
-        if !["getUserPlaylists", "get", "addTracks", "deleteTracks"].contains(&operation) {
+        if !["getUserPlaylists", "get", "addTracks", "deleteTracks", "update", "delete"].contains(&operation) {
             return Err(ApiError::ApiResponse("Unsupported playlist operation".to_string()));
         }
         let url = format!("https://www.qobuz.com/api.json/0.2/playlist/{operation}");
