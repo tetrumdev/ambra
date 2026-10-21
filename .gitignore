@@ -23,6 +23,8 @@ dist-ssr
 *.sln
 *.sw?
 /server/target/
+# Built by scripts/build-server-sidecar.ts for every app build.
+/desktop/src-tauri/binaries/
 /server/*-session.json
 /server/.*-session.json
 /server/*-metadata-cache.json
