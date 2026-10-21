@@ -12,13 +12,13 @@ const providerNames: Record<SearchProvider, string> = {
 };
 
 const providerIcons: Record<SearchProvider, string> = {
-  all: "/routedSearch.svg",
-  tidal: "/tidalIcon.svg",
-  qobuz: "/qobuzIcon.svg",
-  spotify: "/spotifyIcon.svg",
+  all: "/routed-search.svg",
+  tidal: "/tidal.svg",
+  qobuz: "/qobuz.svg",
+  spotify: "/spotify.svg",
 };
 
-const searchIcon = "/searchIcon.svg";
+const searchIcon = "/search.svg";
 
 /** Asks the bar to expand and take focus: "select" picks the whole query, "end" types on after it. */
 export type SearchFocusRequest = { id: number; caret: "select" | "end" };

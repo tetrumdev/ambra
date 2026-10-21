@@ -12,6 +12,9 @@
     width: 1.45em;
 }
 
-.providerIcon[data-provider="local"] {
-    width: 2.6em;
+.providerName {
+    width: auto;
+    height: auto;
+    opacity: 1;
+    vertical-align: baseline;
 }

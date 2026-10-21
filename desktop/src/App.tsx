@@ -40,7 +40,7 @@ import {
   savePreferences,
   type AppScreen,
 } from "./utils/preferences";
-import type { GlobalTrackId, Track } from "./types/music";
+import type { GlobalTrackId, Playlist, Track } from "./types/music";
 import { configuredSearchProviders, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
 import {
   collectionQueueContext,
@@ -64,6 +64,7 @@ import { usePlaylists } from "./hooks/usePlaylists";
 import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
+import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
 
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
@@ -220,7 +221,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   // When one song's lyrics replace another's, the old view stays a moment to drift out.
   const lyricsHandoff = useRef<{ track: typeof lyricsTrack; leaving: NonNullable<typeof lyricsTrack>[] }>({ track: lyricsTrack, leaving: [] });
   // During a long instrumental ending the lyrics step aside for the cover until the pointer moves.
-  const lyricsResting = useLyricsRest(player.currentTrack, player.clock, isLyricsView && showLyrics);
+  const lyricsResting = useLyricsRest(player.currentTrack, player.clock, isLyricsView && showLyrics, preferences.ui.autoSyncLyrics);
   const lyricsOnStage = showLyrics && !lyricsResting;
   // Opening the player shows its lyrics at once; switching between them and the cover fades (LyricsView.css).
   const [lyricsShown, setLyricsShown] = useState(lyricsOnStage && isPlayerView);
@@ -372,6 +373,19 @@ function App({ localOnly }: { localOnly: boolean }) {
     : libraryQueueContext(
         sortCollectionTracks(library.tracks, collectionSort),
       );
+
+  const duplicatePlaylist = (playlist: Playlist) => {
+    const id = playlistStore.duplicate(playlist.name, playlistTracks(playlist, availableTracks));
+    if (id) setSelectedPlaylistId(id);
+  };
+  const isServicePlaylist = (id: string) => servicePlaylistStore.playlists.some(playlist => playlist.id === id);
+  const renamePlaylist = (id: string, name: string) =>
+    isServicePlaylist(id) ? servicePlaylistStore.rename(id, name) : playlistStore.rename(id, name);
+  const deletePlaylist = async (id: string) => {
+    if (!await (isServicePlaylist(id) ? servicePlaylistStore.deletePlaylist(id) : playlistStore.deletePlaylist(id))) return false;
+    setSelectedPlaylistId(current => current === id ? null : current);
+    return true;
+  };
 
   const removeFromCollection = (trackIds: GlobalTrackId[]) => {
     if (selectedPlaylist) {
@@ -735,6 +749,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   };
 
   const onEntityAction = useStableCallback((action: EntityAction, tracks: Track[], id?: string) => { void entityAction(action, tracks, id); });
+  const libraryTrackIds = useMemo(() => new Set(library.tracks.map(track => track.globalId)), [library.tracks]);
   const addEntityTrack = useStableCallback((track: Track) => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); });
   // The now-playing title's library menu.
   const currentTrackId = player.currentTrack?.globalId;
@@ -1072,12 +1087,9 @@ function App({ localOnly }: { localOnly: boolean }) {
             changeScreen("library");
           }}
           onCreatePlaylist={createPlaylist}
-          onRenamePlaylist={playlistStore.rename}
-          onDeletePlaylist={(id) => {
-            if (!playlistStore.deletePlaylist(id)) return false;
-            if (selectedPlaylistId === id) setSelectedPlaylistId(null);
-            return true;
-          }}
+          onRenamePlaylist={renamePlaylist}
+          onDuplicatePlaylist={duplicatePlaylist}
+          onDeletePlaylist={deletePlaylist}
           playlists={playlistStore.playlists}
           serviceGroups={servicePlaylistStore.groups}
           servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
@@ -1157,7 +1169,7 @@ function App({ localOnly }: { localOnly: boolean }) {
           />
         ) : isHomeView ? (
           <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
-            error={listeningHistory.error} onPlay={(tracks, id) => onEntityAction("play", tracks, id)}
+            error={listeningHistory.error} onAction={onEntityAction}
             onSelectPlaylist={id => {
               setBrowseEntity(null); navigation.current = [];
               setSelectedPlaylistId(id);
@@ -1168,11 +1180,11 @@ function App({ localOnly }: { localOnly: boolean }) {
             key={selectedPlaylist.id}
             playlist={selectedPlaylist}
             artworkTracks={baseCollectionTracks}
-            onRename={selectedPlaylist.provider ? undefined : playlistStore.rename}
-            onDuplicate={() => {
-              const id = playlistStore.duplicate(selectedPlaylist.name, baseCollectionTracks);
-              if (id) setSelectedPlaylistId(id);
-            }}
+            onRename={selectedPlaylist.editable === false ? undefined : renamePlaylist}
+            onDuplicate={() => duplicatePlaylist(selectedPlaylist)}
+            onDelete={selectedPlaylist.editable === false ? undefined : deletePlaylist}
+            savedTrackIds={libraryTrackIds}
+            addToLibrary={id => { const track = baseCollectionTracks.find(track => track.globalId === id); if (track) addEntityTrack(track); }}
             onImprove={selectedPlaylist.provider ? undefined : () => playlistImprovement.improve(selectedPlaylist.id)}
             improvementProgress={playlistImprovement.progress}
             improvementReport={playlistImprovement.reports[selectedPlaylist.id]}
@@ -1190,6 +1202,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         )}
       </main>
 
+      <TrackCreditsDialog />
       <NowPlayingBar
         onOpenEntity={openEntity}
         songMenu={currentSongMenu}

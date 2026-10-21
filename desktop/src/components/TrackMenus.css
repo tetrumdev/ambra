@@ -57,7 +57,7 @@
 }
 
 .menuItem:has(> .menuIcon) {
-    grid-template-columns: 18px 1fr;
+    grid-template-columns: 20px 1fr;
 }
 
 .menuItem:hover,
@@ -71,12 +71,29 @@
 }
 
 .menuIcon {
-    max-width: 18px;
-    max-height: 15px;
+    width: 15px;
+    height: 15px;
     object-fit: contain;
     flex-shrink: 0;
     grid-column: 1;
+    justify-self: center;
 }
+
+/* Sized to look alike rather than to share a box: each icon's size blends its outer extent
+   with how much of it is ink, so a solid circle shrinks and thin lines grow. A few are nudged
+   toward where their weight sits, like the play triangle whose mass is on its left. */
+.menuIcon[src="/play.svg"] { width: 12.3px; height: 14.2px; translate: 1px 0; }
+.menuIcon[src="/skip.svg"] { width: 16.2px; height: 10.4px; translate: 0.75px 0; }
+.menuIcon[src="/play-next.svg"] { width: 17.9px; height: 10.5px; }
+.menuIcon[src="/add-to-queue.svg"] { width: 17.1px; height: 11.1px; }
+.menuIcon[src="/add.svg"] { width: 15.3px; height: 15.3px; }
+.menuIcon[src="/delete.svg"] { width: 12.8px; height: 12.8px; }
+.menuIcon[src="/credits.svg"] { width: 14px; height: 12.4px; }
+.menuIcon[src="/playlist-add.svg"] { width: 18px; height: 10.4px; }
+.menuIcon[src="/album.svg"] { width: 13.7px; height: 13.7px; }
+.menuIcon[src="/edit.svg"] { width: 14.9px; height: 15px; translate: 0 -1px; }
+.menuIcon[src="/duplicate.svg"] { width: 14.6px; height: 14.6px; }
+.menuIcon[src="/sparkle.svg"] { width: 22px; height: 22px; }
 
 #trackCollectionMenu {
     overflow-y: auto;
