@@ -180,6 +180,32 @@ async fn save_streaming_cache(app: tauri::AppHandle, json: String) -> Result<(),
         .map_err(|error| format!("Could not save the streaming library cache: {error}"))?
 }
 
+fn service_playlist_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    cache_directory(app).map(|directory| directory.join("service-playlists.json"))
+}
+
+// Streaming-service playlists are copies of what each service owns, cached for the
+// same reasons as the streaming library so they open without a network round trip.
+#[tauri::command]
+async fn load_service_playlist_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    let path = service_playlist_cache_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || match fs::read_to_string(&path) {
+        Ok(encoded) => Ok(Some(encoded)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("Could not read {}: {error}", path.display())),
+    })
+    .await
+    .map_err(|error| format!("Could not load the playlist cache: {error}"))?
+}
+
+#[tauri::command]
+async fn save_service_playlist_cache(app: tauri::AppHandle, json: String) -> Result<(), String> {
+    let path = service_playlist_cache_path(&app)?;
+    tauri::async_runtime::spawn_blocking(move || write_file_atomic(&path, json.as_bytes()))
+        .await
+        .map_err(|error| format!("Could not save the playlist cache: {error}"))?
+}
+
 #[tauri::command]
 async fn load_cached_music(app: tauri::AppHandle) -> Result<Vec<Track>, String> {
     tauri::async_runtime::spawn_blocking(move || load_cached_music_blocking(&app))
@@ -979,6 +1005,8 @@ pub fn run() {
             startup_elapsed_ms,
             load_streaming_cache,
             save_streaming_cache,
+            load_service_playlist_cache,
+            save_service_playlist_cache,
             load_cached_music,
             local_music_directory,
             scan_music,

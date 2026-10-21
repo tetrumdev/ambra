@@ -146,11 +146,6 @@ impl DecodedSource {
             .map(|channels| channels.count())
             .filter(|channels| *channels > 0)
             .ok_or_else(|| format!("The channel layout is unknown for {source}"))?;
-        let bits_per_sample = codec_parameters
-            .bits_per_coded_sample
-            .or(codec_parameters.bits_per_sample)
-            .unwrap_or(32)
-            .clamp(8, 32) as u16;
         let decoder = symphonia::default::get_codecs()
             .make_audio_decoder(codec_parameters, &AudioDecoderOptions::default())
             .map_err(|error| format!("Could not create an audio decoder for {source}: {error}"))?;
@@ -186,6 +181,13 @@ impl DecodedSource {
             .or(codec_parameters.bits_per_sample)
             .filter(|depth| *depth > 0);
         let is_pcm = codec.starts_with("pcm");
+        // Output never exceeds 24 bits. Lossless integer sources up to 24 bits pass through
+        // untouched; lossy float decodes and deeper masters sit on no 24-bit grid, so they
+        // are dithered down to the device like processed audio.
+        let lossless = is_pcm || codec == "flac" || codec == "alac";
+        let exact_bits = bit_depth.filter(|depth| lossless && *depth <= 24);
+        let bits_per_sample = exact_bits.unwrap_or(24).max(8) as u16;
+        let requantize = exact_bits.is_none();
         let bitrate_kbps = if is_pcm {
             bit_depth
                 .map(|depth| f64::from(sample_rate) * f64::from(depth) * channels as f64 / 1000.0)
@@ -213,6 +215,7 @@ impl DecodedSource {
                 sample_rate,
                 channels,
                 bits_per_sample,
+                requantize,
             },
             duration_seconds,
             audio_quality,
