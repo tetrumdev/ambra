@@ -39,3 +39,19 @@ desktop-state.json
 !.env.example
 /.vite/
 /src-tauri/
+
+# AI assistant / agent files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.cursor/
+.cursorrules
+.windsurf/
+.windsurfrules
+.codex/
+.gemini/
+GEMINI.md
+.aider*
+.continue/
+.github/copilot-instructions.md
