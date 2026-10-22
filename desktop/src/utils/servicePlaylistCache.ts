@@ -8,10 +8,23 @@ import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 const CACHE_KEY = "ambra.service-playlists.v1";
 const SAVE_DELAY_MS = 1000;
 
+/**
+ * Raised when the server describes tracks differently, so contents cached before then are
+ * fetched again. 2: publishers, producers and band members are no longer listed as artists.
+ */
+export const TRACK_DETAILS_VERSION = 2;
+
 export type CachedPlaylistContents = ServicePlaylistContents & {
   /** When these contents were last fetched from the service, in epoch milliseconds. */
   fetchedAt: number;
+  /** The `TRACK_DETAILS_VERSION` they were fetched under; absent before versions were kept. */
+  detailsVersion?: number;
 };
+
+/** Whether cached contents predate how the server now describes tracks. */
+export function outdatedContents(cached: CachedPlaylistContents | undefined) {
+  return cached !== undefined && (cached.detailsVersion ?? 1) < TRACK_DETAILS_VERSION;
+}
 
 export type ServicePlaylistCache = {
   version: 1;
@@ -40,6 +53,7 @@ function parseContents(value: unknown): CachedPlaylistContents | null {
     tracks: normalizeCachedTracks(value.tracks),
     unavailableCount: typeof value.unavailableCount === "number" ? value.unavailableCount : 0,
     fetchedAt: value.fetchedAt,
+    ...(typeof value.detailsVersion === "number" ? { detailsVersion: value.detailsVersion } : {}),
   };
 }
 

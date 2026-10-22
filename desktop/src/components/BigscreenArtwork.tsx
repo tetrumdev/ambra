@@ -8,6 +8,7 @@ import {
 import {
   cachedBigscreenArtwork,
   preloadBigscreenArtwork,
+  settledBigscreenArtwork,
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
 import {
@@ -75,7 +76,7 @@ const COVER_WAIT_MS = 500;
 export function AlbumArtwork({ track, active, layout = "center", resting = false, direction }: ArtworkProps & {
   active: boolean;
   layout?: "center" | "lyrics";
-  /** The lyrics left on their own at the end of the vocals, so the cover drifts to centre instead of gliding. */
+  /** The lyrics left on their own at the end of the vocals, or are returning on their own with the next song, so the cover drifts instead of gliding. */
   resting?: boolean;
   /** 1 when the player moved forward, -1 when it went back; the next cover slides in from that side. */
   direction?: () => number;
@@ -136,7 +137,12 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
     const cached = cachedBigscreenArtwork(track);
     if (cached) {
       show(cached, key);
-      return;
+      if (settledBigscreenArtwork(track)) return;
+      // A fallback cover stays up while a larger one is looked for again.
+      void preloadBigscreenArtwork(track).then((source) => {
+        if (!cancelled && source && source !== cached) show(source, key);
+      });
+      return () => { cancelled = true; };
     }
     // Hold the last cover briefly instead of flashing a blank, then let the thumbnail stand in.
     const timer = setTimeout(() => { if (!cancelled) show(thumbnailArtwork(track), key); }, COVER_WAIT_MS);

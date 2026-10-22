@@ -1,6 +1,6 @@
 import { configuredSearchProviders, loadArtistAlbums, loadArtistProfile, searchServerCatalog, type CatalogAlbum, type CatalogArtist } from "../api/server";
 import { rememberArtistImage } from "./artistImages";
-import { albumIdentity, bestEditions, searchText } from "./catalogRanking";
+import { bestEditions, sameAlbum, searchText } from "./catalogRanking";
 
 export function prefetchArtistPage(artist: CatalogArtist) {
   if (artist.provider === "local") return;
@@ -71,8 +71,8 @@ export function mergedArtistReleases(artist: CatalogArtist, sources: CatalogArti
 export function trustedArtistSources(artist: CatalogArtist, sources: CatalogArtist[], releases: Record<string, { albums: CatalogAlbum[] }>): CatalogArtist[] {
   const own = releases[artist.id];
   if (!own) return [];
-  const identities = new Set(own.albums.map(albumIdentity));
-  return sources.filter(source => source.id === artist.id || !identities.size || releases[source.id]?.albums.some(album => identities.has(albumIdentity(album))));
+  return sources.filter(source => source.id === artist.id || !own.albums.length
+    || releases[source.id]?.albums.some(album => own.albums.some(mine => sameAlbum(mine, album))));
 }
 
 /** Biographies come from the richest catalog that has the artist; Spotify's aren't used. */

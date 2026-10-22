@@ -33,6 +33,21 @@ export function isSettingsShortcut(event: KeyPress) {
   return event.code === "Comma" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
 }
 
+/** App history uses the same directions as browser navigation keys and mouse side buttons. */
+export function navigationShortcut(event: KeyPress): "back" | "forward" | null {
+  if (isUnmodifiedKey(event, "BrowserBack")) return "back";
+  if (isUnmodifiedKey(event, "BrowserForward")) return "forward";
+  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.code === "ArrowLeft") return "back";
+    if (event.code === "ArrowRight") return "forward";
+  }
+  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
+    if (event.code === "BracketLeft") return "back";
+    if (event.code === "BracketRight") return "forward";
+  }
+  return null;
+}
+
 /** Whether keys pressed here are being typed, so single-letter shortcuts must leave them alone. */
 export function isTypingTarget(target: EventTarget | null) {
   return target instanceof HTMLElement
@@ -47,7 +62,7 @@ export function isBrowserFindShortcut(event: KeyPress) {
 // Shortcuts the WebView would answer with browser behavior (reload, print,
 // view source, caret browsing...). A native app has none of these.
 const BROWSER_MODIFIED_KEYS = new Set(["KeyR", "KeyP", "KeyU", "KeyS", "KeyO", "KeyJ"]);
-const BROWSER_FUNCTION_KEYS = new Set(["F5", "F7", "BrowserBack", "BrowserForward", "BrowserRefresh"]);
+const BROWSER_FUNCTION_KEYS = new Set(["F5", "F7", "BrowserRefresh"]);
 
 export function isBrowserShortcut(event: KeyPress) {
   if (BROWSER_FUNCTION_KEYS.has(event.code)) return true;

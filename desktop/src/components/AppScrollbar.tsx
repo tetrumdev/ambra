@@ -28,6 +28,8 @@ export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProp
   useEffect(() => {
     const rail = railRef.current;
     const thumb = thumbRef.current;
+    // A screen without a scroll area has nothing to scroll, so the rail's column collapses (AppScrollbar.css).
+    if (thumb && !scrollElement) thumb.hidden = true;
     if (!scrollElement || !rail || !thumb) return;
 
     const updatePosition = () => {

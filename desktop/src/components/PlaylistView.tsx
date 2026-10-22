@@ -26,8 +26,9 @@ function improvementMessage(progress: PlaylistImprovementProgress | null, report
   if (progress) return `Checking ${progress.done} of ${progress.total} songs…`;
   if (report?.error) return report.error;
   const upgraded = report?.upgrades.length ?? 0;
-  if (upgraded === 0) return "Every song is already the best-sounding copy available.";
-  return `Upgraded ${upgraded} song${upgraded === 1 ? "" : "s"} to a better-sounding copy.`;
+  // A change can also return a song to its own album, so it isn't always a higher resolution.
+  if (upgraded === 0) return "Every song is already on the best copy of its album.";
+  return `Moved ${upgraded} song${upgraded === 1 ? "" : "s"} to a better copy of ${upgraded === 1 ? "its" : "their"} album.`;
 }
 
 export function PlaylistView({

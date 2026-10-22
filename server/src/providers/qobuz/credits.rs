@@ -48,9 +48,11 @@ fn qobuz_credits(track: &qbz_models::Track) -> Vec<CreditGroup> {
     let performers = parse_performers(track.performers.as_deref().unwrap_or_default());
     track_credits(performers.into_iter().flat_map(|performer| {
         let name = performer.name;
+        // Qobuz credits are names only; the app finds artist pages for them by name.
         performer.roles.into_iter().map(move |role| Contribution {
             name: name.clone(),
             role: format_role_label(&role),
+            artist_id: None,
         })
     }))
 }

@@ -1,8 +1,9 @@
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { ArtistLinks } from "./ArtistLinks";
+import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { prefetchArtistPage } from "../utils/artistPage";
@@ -71,19 +72,6 @@ function albumQuality(album: CatalogAlbum) {
   return album.maximumSamplingRateKHz
     ? `${album.maximumBitDepth}-bit/${Number(album.maximumSamplingRateKHz.toFixed(1))} kHz`
     : `${album.maximumBitDepth}-bit`;
-}
-
-/** One link per credited album artist, falling back to plain text when the service gave no IDs. */
-function AlbumArtistLinks({ album, onOpenEntity }: { album: CatalogAlbum; onOpenEntity: (entity: BrowseEntity) => void }) {
-  const artists = album.artists?.filter((artist) => artist.providerId) ?? [];
-  if (!artists.length) return <>{album.artist}</>;
-  return <>{artists.map((artist, index) => <Fragment key={artist.providerId}>
-    {index > 0 && ", "}
-    <button type="button" className="entityLink" onClick={(event) => {
-      event.stopPropagation();
-      onOpenEntity({ kind: "artist", artist: { id: `${album.provider}:${artist.providerId}`, provider: album.provider, name: artist.name, imageUrl: artist.imageUrl } });
-    }}>{artist.name}</button>
-  </Fragment>)}</>;
 }
 
 /**
