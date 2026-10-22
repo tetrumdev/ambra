@@ -53,8 +53,88 @@
     cursor: default;
 }
 
-.albumAbout .creditList {
-    margin-bottom: 24px;
+/* Versions read like the app's other lists: cover, title, then service and quality, with
+   the same dividers and hover as track rows. */
+.albumVersionList {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    border-top: 1px solid #535353;
+}
+.albumVersionList li {
+    border-bottom: 1px solid #535353;
+}
+.albumVersion {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    padding: 10px 4px;
+    border: 0;
+    color: white;
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: default;
+}
+.albumVersion:hover,
+.albumVersion:focus-visible {
+    background-color: #151515;
+}
+.albumVersion[aria-current="true"] {
+    background-color: #352000;
+}
+.albumVersionCover {
+    width: 48px;
+    height: 48px;
+    border-radius: 4px;
+    object-fit: cover;
+    background: #1d1d1d;
+}
+.albumVersionText {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+.albumVersionTitle {
+    overflow: hidden;
+    font-size: 14px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+.albumVersionEdition {
+    color: #a3a2a3;
+}
+.albumVersionExplicit {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 4px;
+    border-radius: 3px;
+    background: #a3a2a3;
+    color: black;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 15px;
+    vertical-align: 1px;
+}
+.albumVersionDetails {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: #a3a2a3;
+    font-size: 12px;
+}
+.albumVersionDetails .providerIcon {
+    width: 14px;
+    height: 14px;
+    flex: none;
+}
+.albumVersionState {
+    color: #a3a2a3;
+    font-size: 12px;
 }
 
 .albumAbout .albumInfoRelease {

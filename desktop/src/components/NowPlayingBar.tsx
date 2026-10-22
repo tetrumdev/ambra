@@ -105,20 +105,31 @@ export function NowPlayingBar({
   const isEmpty = track === undefined;
   const quality = track && showAudioQuality ? formatAudioQuality(track, audioQuality) : null;
 
-  // A new song's title and thumbnail ease in from the side the player moved towards,
-  // the way the big cover does. Nothing waits on it, so it takes the slower, gentler timing.
+  // A new song's details ease in from the side the player moved towards, the way the big
+  // cover does. Only what actually changed moves: the next song on the same album slides in
+  // its title, while the album, artist and cover it shares stay put. Nothing waits on it,
+  // so it takes the slower, gentler timing.
   const bar = useRef<HTMLDivElement>(null);
-  const shownSong = useRef(track?.globalId);
+  const shownSong = useRef(track);
   useLayoutEffect(() => {
-    if (shownSong.current === track?.globalId) return;
-    shownSong.current = track?.globalId;
+    const previous = shownSong.current;
+    if (previous?.globalId === track?.globalId) return;
+    shownSong.current = track;
     if (!bar.current || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const step = direction?.() ?? 1;
-    // The whole thumbnail moves, not just its image, so its white backing never shows around a shrunken cover.
     const arrive = [{ opacity: 0, transform: `translateX(${step * 14}px)` }, { opacity: 1, transform: "none" }];
-    bar.current.querySelector("#songInfo")?.animate(arrive, motion.smooth);
-    bar.current.querySelector("#compactArtwork")?.animate(arrive, motion.smooth);
-  }, [track?.globalId, direction]);
+    const artists = (song: Track | undefined) => song?.artists.map((artist) => artist.name).join(", ") ?? song?.artist;
+    const changed: [string, boolean][] = [
+      [".songNameRow", previous?.name !== track?.name],
+      ["#albumName", previous?.album !== track?.album],
+      ["#artistName", artists(previous) !== artists(track)],
+      // The whole thumbnail moves, not just its image, so its white backing never shows around a shrunken cover.
+      ["#compactArtwork", previous?.cover !== track?.cover],
+    ];
+    for (const [selector, differs] of changed) {
+      if (differs || !previous) bar.current.querySelector(selector)?.animate(arrive, motion.smooth);
+    }
+  }, [track, direction]);
 
   return (
     <div id="bottomInfoBar" ref={bar} data-variant={variant}>

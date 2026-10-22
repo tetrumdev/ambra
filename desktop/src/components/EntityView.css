@@ -49,6 +49,21 @@
     color: #aaa;
     font-size: 0.85rem;
 }
+.entityBylineAction {
+    margin-left: 14px;
+    padding: 0;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    cursor: pointer;
+}
+.entityBylineAction:hover,
+.entityBylineAction:focus-visible {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
 .libraryHeaderNavigation {
     padding: 0 30px 16px;
 }

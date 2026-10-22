@@ -13,7 +13,7 @@ function albumKey(track: Track) {
   return `${track.provider}:${track.albumId ?? `${track.artist}:${track.album}:${track.albumVersion ?? ""}`}`;
 }
 export function albumForTrack(track: Track): CatalogAlbum {
-  return { id: albumKey(track), provider: track.provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, imageUrl: track.fullCover ?? track.cover, releaseDate: track.releaseDate, version: track.albumVersion, upc: track.upc };
+  return { id: albumKey(track), provider: track.provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, artists: track.albumArtists, imageUrl: track.fullCover ?? track.cover, releaseDate: track.releaseDate, version: track.albumVersion, upc: track.upc, maximumBitDepth: track.maximumBitDepth, maximumSamplingRateKHz: track.maximumSamplingRateKHz };
 }
 export function artistForTrack(track: Track, artist: TrackArtist = track.artists[0] ?? { providerId: track.artist, name: track.artist, imageUrl: null }): CatalogArtist {
   return { id: `${track.provider}:${artist.providerId || artist.name}`, provider: track.provider, name: artist.name, imageUrl: artist.imageUrl };

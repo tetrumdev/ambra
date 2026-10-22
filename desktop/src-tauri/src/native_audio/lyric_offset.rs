@@ -32,8 +32,12 @@ const SUNG_FRAMES: i64 = 30_000 / FRAME_MS;
 /// Where the instrumental level is read, after the last phrase.
 const OUTRO_FROM_FRAMES: i64 = 5_000 / FRAME_MS;
 const OUTRO_FRAMES: i64 = 30_000 / FRAME_MS;
-/// Sung and instrumental levels closer than this (in natural-log power, about 4 dB) can't place an ending.
-const MIN_END_CONTRAST: f64 = 1.0;
+/// Sung and instrumental levels closer than this (in natural-log power, about 2.6 dB) can't place an ending.
+/// A dense outro in the vocal band can sit this close to the singing and still be told apart.
+const MIN_END_CONTRAST: f64 = 0.6;
+/// The sung level is read this far up its spread: lyric windows also cover breaths, gaps and
+/// final lines timed lazily into the outro, which would otherwise drag it toward the instrumental.
+const SUNG_QUANTILE: f64 = 0.75;
 
 /// Each request supersedes the previous one, which stops decoding at its next packet.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
@@ -85,14 +89,20 @@ pub async fn detect_lyric_offset(
             .unwrap_or("?")
             .to_owned();
         let phrases = phrases(&windows);
-        if phrases.len() < MIN_PHRASES {
-            eprintln!("[lyric-sync] {label}: uncertain, {} phrases (need {MIN_PHRASES})", phrases.len());
+        if phrases.is_empty() {
             return Ok(UNCERTAIN);
         }
         let envelope = vocal_envelope(source, generation).inspect_err(|error| {
             eprintln!("[lyric-sync] {label}: failed, {error}");
         })?;
-        let mut offset = best_offset(&envelope.standardized, &phrases, &label);
+        // Lines timed back to back merge into a few long phrases, too few to place a shift,
+        // but the ending can still be heard; lazily timed final lines are the ones that need it.
+        let mut offset = if phrases.len() < MIN_PHRASES {
+            eprintln!("[lyric-sync] {label}: uncertain, {} phrases (need {MIN_PHRASES})", phrases.len());
+            UNCERTAIN
+        } else {
+            best_offset(&envelope.standardized, &phrases, &label)
+        };
         // An untrusted shift still places the ending better than none, and the app checks
         // the result against the lyrics it applies.
         let shift = offset.best_ms.unwrap_or(0) / FRAME_MS;
@@ -233,9 +243,11 @@ fn vocal_end(level: &[f64], phrases: &[(i64, i64)], shift: i64) -> Option<i64> {
         let (from, to) = ((frame - half).max(0), (frame + half + 1).min(frames));
         (prefix[to as usize] - prefix[from as usize]) / (to - from).max(1) as f64
     };
-    let median = |mut values: Vec<f64>| {
+    let quantile = |mut values: Vec<f64>, quantile: f64| {
         values.sort_by(f64::total_cmp);
-        values.get(values.len() / 2).copied()
+        values
+            .get(((values.len() as f64 * quantile) as usize).min(values.len().saturating_sub(1)))
+            .copied()
     };
     let (last_start, last) = phrases
         .iter()
@@ -244,7 +256,7 @@ fn vocal_end(level: &[f64], phrases: &[(i64, i64)], shift: i64) -> Option<i64> {
     if last <= 0 || last >= frames {
         return None;
     }
-    let sung = median(
+    let sung = quantile(
         phrases
             .iter()
             .map(|&(start, end)| {
@@ -256,13 +268,14 @@ fn vocal_end(level: &[f64], phrases: &[(i64, i64)], shift: i64) -> Option<i64> {
             .flat_map(|(start, end)| start..end)
             .map(smoothed)
             .collect(),
+        SUNG_QUANTILE,
     )?;
     let outro_start = last + OUTRO_FROM_FRAMES;
     let outro_end = (outro_start + OUTRO_FRAMES).min(frames);
     if outro_end - outro_start < OUTRO_FROM_FRAMES {
         return None;
     }
-    let outro = median((outro_start..outro_end).map(smoothed).collect())?;
+    let outro = quantile((outro_start..outro_end).map(smoothed).collect(), 0.5)?;
     if sung - outro < MIN_END_CONTRAST {
         return None;
     }
@@ -386,3 +399,4 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
         vocal_end_ms: None,
     }
 }
+

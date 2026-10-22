@@ -5,7 +5,8 @@ import { nativeAudioSource } from "../utils/nativeAudioSource";
 import { ProviderIcon } from "./ProviderIcon";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
-import { useTrackReorder } from "../hooks/useTrackReorder";
+import { useTrackReorder, type ReorderRules } from "../hooks/useTrackReorder";
+import { movePackaged, packageDrop, packageIndex } from "../utils/playlistPackages";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
@@ -54,6 +55,10 @@ export type TrackListProps = {
   addToLibrary?: (trackId: GlobalTrackId) => void;
   showProviderIcon?: boolean;
   reorderTracks?: (orderedTrackIds: GlobalTrackId[]) => void;
+  /** Songs bound to play together; shown joined, and moved as one by their first song. */
+  packages?: GlobalTrackId[][];
+  bindTracks?: (trackIds: GlobalTrackId[]) => void;
+  unbindTracks?: (trackIds: GlobalTrackId[]) => void;
   sort?: TrackSort;
   onSortChange?: (sort: TrackSort) => void;
 };
@@ -86,6 +91,9 @@ export function TrackList({
   playlistOptions,
   showProviderIcon = false,
   reorderTracks,
+  packages,
+  bindTracks,
+  unbindTracks,
   sort = null,
   onSortChange,
 }: TrackListProps) {
@@ -99,6 +107,16 @@ export function TrackList({
     [tracks],
   );
   const selection = useRangeSelection(trackIds);
+  // Only the packaged songs this list shows; a song missing from it can't hold a package open.
+  const shownPackages = useMemo(() => {
+    const shown = new Set(trackIds);
+    return (packages ?? []).map(pack => pack.filter(id => shown.has(id))).filter(pack => pack.length >= 2);
+  }, [packages, trackIds]);
+  const packed = useMemo(() => packageIndex(shownPackages), [shownPackages]);
+  const reorderRules = useMemo<ReorderRules | undefined>(() => shownPackages.length ? {
+    resolve: (sourceId, target) => packageDrop(shownPackages, sourceId, target),
+    move: (ids, sourceId, target) => movePackaged(ids, shownPackages, sourceId, target),
+  } : undefined, [shownPackages]);
   const firstTrack = tracks[0];
   useEffect(() => {
     if (!isTauri() || !firstTrack) return;
@@ -114,7 +132,14 @@ export function TrackList({
       setOpenMenu(null);
       clearTimeout(warmTimer.current);
     },
+    undefined,
+    undefined,
+    reorderRules,
   );
+  // A package's first song carries the whole package.
+  const draggedPackage = draggedTrackId !== null && packed.get(draggedTrackId)?.[0] === draggedTrackId
+    ? packed.get(draggedTrackId)!
+    : null;
 
   const columnHeaderRef = useRef<HTMLDivElement>(null);
   const draggedIndex = useMemo(
@@ -146,6 +171,18 @@ export function TrackList({
   function handleTrackContextMenu(event: React.MouseEvent, index: number) {
     if (!removeTracks) return;
     selectTrack(event, index);
+  }
+
+  const selectionPackaged = [...selection.selectedIds].some(id => packed.has(id));
+  function bindSelection() {
+    if (!bindTracks || selection.selectedIds.size < 2) return;
+    bindTracks([...selection.selectedIds]);
+    selection.clear();
+  }
+  function unbindSelection() {
+    if (!unbindTracks || !selectionPackaged) return;
+    unbindTracks([...selection.selectedIds]);
+    selection.clear();
   }
 
   function removeSelection() {
@@ -278,6 +315,17 @@ export function TrackList({
           >
             Remove
           </button>
+          {bindTracks && (
+            <button type="button" disabled={selection.selectedIds.size < 2} onClick={bindSelection}
+              data-tooltip="Always play these songs together, in order, even when shuffled">
+              Bind
+            </button>
+          )}
+          {unbindTracks && selectionPackaged && (
+            <button type="button" onClick={unbindSelection}>
+              Unbind
+            </button>
+          )}
           <button type="button" onClick={selection.clear}>
             Cancel
           </button>
@@ -287,6 +335,7 @@ export function TrackList({
       {virtual.topSpace > 0 && <VirtualSpacer position="top" height={virtual.topSpace} />}
       {tracks.slice(virtual.start, virtual.end).map((track, windowIndex) => {
         const index = virtual.start + windowIndex;
+        const pack = packed.get(track.globalId);
         return (
           <TrackRow key={track.globalId} track={track} index={index}
             onOpenEntity={onOpenEntity ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
@@ -296,7 +345,9 @@ export function TrackList({
             collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
             showProviderIcon={showProviderIcon}
             reorderable={Boolean(reorderTracks)}
-            dragging={draggedTrackId === track.globalId}
+            dragging={draggedTrackId === track.globalId || Boolean(draggedPackage?.includes(track.globalId))}
+            packageIndex={pack?.indexOf(track.globalId)}
+            packageSize={pack?.length}
             dropPosition={
               dropTarget?.trackId === track.globalId
                 ? dropTarget.position
@@ -314,7 +365,7 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, dropPosition, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, onAction, onPointerDown }: {
   track: Track;
   index: number;
   onOpenEntity?: (entity: BrowseEntity) => void;
@@ -330,6 +381,9 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
   showProviderIcon: boolean;
   reorderable: boolean;
   dragging: boolean;
+  /** Position within its package, when the song is bound to others. */
+  packageIndex?: number;
+  packageSize?: number;
   dropPosition: DropPosition | null;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, index: number) => void;
@@ -346,6 +400,8 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
       }
       data-reorderable={reorderable ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined}
+      data-package={packageIndex === undefined || packageSize === undefined ? undefined
+        : packageIndex === 0 ? "first" : packageIndex === packageSize - 1 ? "last" : "middle"}
       data-drop-position={dropPosition ?? undefined}
       data-track-id={track.globalId}
       data-virtual-item=""

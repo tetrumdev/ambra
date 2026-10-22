@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { Track } from "../types/music";
-import { removePlaylistTracks, reorderPlaylistTracks } from "../utils/playlists";
-import { addPlaylistTrack, emptyPlaylists, parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY, savePlaylistSnapshot, type PlaylistSnapshot } from "../utils/playlistStorage";
+import { bindPlaylistTracks, removePlaylistTracks, reorderPlaylistTracks, unbindPlaylistTracks } from "../utils/playlists";
+import { addPlaylistTrack, emptyPlaylists, parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY, savePlaylistSnapshot, withPackages, type PlaylistSnapshot } from "../utils/playlistStorage";
 import { getPersistentItem } from "../utils/persistentStorage";
 import { subscribeServerState } from "../utils/serverState";
 
@@ -61,7 +61,10 @@ export function usePlaylists() {
       ...current.current,
       tracks: [...saved.values()],
       playlists: current.current.playlists.map(playlist => playlist.id === id
-        ? { ...playlist, trackIds: [...new Set(playlist.trackIds.map(trackId => replacements.get(trackId)?.globalId ?? trackId))] }
+        ? withPackages(
+          { ...playlist, trackIds: [...new Set(playlist.trackIds.map(trackId => replacements.get(trackId)?.globalId ?? trackId))] },
+          playlist.packages?.map(pack => pack.map(trackId => replacements.get(trackId)?.globalId ?? trackId)),
+        )
         : playlist),
     });
   }
@@ -90,6 +93,8 @@ export function usePlaylists() {
       });
     },
     removeTracks: (id: string, ids: string[]) => commit({ ...current.current, playlists: removePlaylistTracks(current.current.playlists, id, ids) }),
+    bindTracks: (id: string, ids: string[]) => ids.length >= 2 && commit({ ...current.current, playlists: bindPlaylistTracks(current.current.playlists, id, ids) }),
+    unbindTracks: (id: string, ids: string[]) => commit({ ...current.current, playlists: unbindPlaylistTracks(current.current.playlists, id, ids) }),
     reorderTracks: (id: string, orderedTrackIds: string[]) => commit({
       ...current.current,
       playlists: reorderPlaylistTracks(

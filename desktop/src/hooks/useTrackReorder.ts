@@ -3,6 +3,13 @@ import { moveTrackId, type DropPosition } from "../utils/trackCollectionOrder";
 
 type DropTarget = { trackId: string; position: DropPosition };
 
+/** Custom drop rules, such as packaged songs moving together; by default any row takes a drop. */
+export type ReorderRules = {
+  /** Where a drop over this row actually lands, or null when the dragged song can't go there. */
+  resolve: (sourceId: string, target: DropTarget) => DropTarget | null;
+  move: (trackIds: string[], sourceId: string, target: DropTarget) => string[];
+};
+
 // Pointer gestures bypass the native file-drop handler in desktop webviews.
 export function useTrackReorder(
   trackIds: string[],
@@ -11,9 +18,10 @@ export function useTrackReorder(
   scrollRef?: RefObject<HTMLElement | null>,
   /** Rows anywhere inside this element accept drops; by default only the dragged row's own list does. */
   dropScopeRef?: RefObject<HTMLElement | null>,
+  rules?: ReorderRules,
 ) {
-  const latest = useRef({ trackIds, reorderTracks, onStart, scrollRef, dropScopeRef });
-  latest.current = { trackIds, reorderTracks, onStart, scrollRef, dropScopeRef };
+  const latest = useRef({ trackIds, reorderTracks, onStart, scrollRef, dropScopeRef, rules });
+  latest.current = { trackIds, reorderTracks, onStart, scrollRef, dropScopeRef, rules };
   const cleanup = useRef<(() => void) | null>(null);
   const suppressClick = useRef(false);
   const [draggedTrackId, setDraggedTrackId] = useState<string | null>(null);
@@ -77,6 +85,8 @@ export function useTrackReorder(
           trackId: over.dataset.trackId!,
           position: y < rect.top + rect.height / 2 ? "before" : "after",
         };
+        const rules = latest.current.rules;
+        if (rules) destination = rules.resolve(sourceId, destination);
       }
       const next = destination;
       setDropTarget(current => current?.trackId === next?.trackId && current?.position === next?.position ? current : next);
@@ -146,7 +156,10 @@ export function useTrackReorder(
       const dropped = destination;
       stop();
       if (dragging && dropped) {
-        latest.current.reorderTracks?.(moveTrackId(latest.current.trackIds, sourceId, dropped.trackId, dropped.position));
+        const { trackIds, rules } = latest.current;
+        latest.current.reorderTracks?.(rules
+          ? rules.move(trackIds, sourceId, dropped)
+          : moveTrackId(trackIds, sourceId, dropped.trackId, dropped.position));
       }
     }
 

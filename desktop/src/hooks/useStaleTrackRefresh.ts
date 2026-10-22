@@ -52,7 +52,10 @@ export function useStaleTrackRefresh(
               fresh.nativeCover !== track.nativeCover ||
               fresh.audio !== track.audio ||
               fresh.name !== track.name ||
-              fresh.album !== track.album
+              fresh.album !== track.album ||
+              // Artist credits are cleaned up over time (publishers, producers, band members).
+              fresh.artists.map((artist) => artist.name).join("\n") !==
+                track.artists.map((artist) => artist.name).join("\n")
             ) {
               onRefreshedRef.current(fresh);
             }

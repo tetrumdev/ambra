@@ -1,5 +1,6 @@
 import type { Playlist, Track } from "../types/music";
 import { setPersistentItem } from "./persistentStorage";
+import { normalizePackages } from "./playlistPackages";
 
 export const PLAYLIST_STORAGE_KEY = "ambra.playlists.v1";
 export type PlaylistSnapshot = { version: 1; playlists: Playlist[]; tracks: Track[] };
@@ -30,10 +31,24 @@ export function parsePlaylistSnapshot(raw: string | null): PlaylistSnapshot {
       || typeof item.name !== "string" || !item.name.trim() || !Array.isArray(item.trackIds)
       || !item.trackIds.every(id => typeof id === "string")) throw new Error("Invalid playlist data");
     ids.add(item.id);
-    return { id: item.id, name: item.name, trackIds: [...new Set(item.trackIds as string[])] };
+    const trackIds = [...new Set(item.trackIds as string[])];
+    // Packages are optional and only advisory; malformed ones are dropped rather than failing the load.
+    const storedPackages = Array.isArray(item.packages)
+      ? item.packages.filter((pack): pack is string[] => Array.isArray(pack) && pack.every(id => typeof id === "string"))
+      : [];
+    return withPackages({ id: item.id, name: item.name, trackIds }, storedPackages);
   });
   if (!value.tracks.every(isSavedTrack)) throw new Error("Invalid saved playlist track");
   return { version: 1, playlists, tracks: value.tracks };
+}
+
+/** The playlist with its packages tidied against its songs; no `packages` key when it has none. */
+export function withPackages(playlist: Playlist, packages = playlist.packages ?? []): Playlist {
+  const normalized = normalizePackages(playlist.trackIds, packages);
+  const { packages: _previous, ...rest } = playlist;
+  return normalized.packages.length
+    ? { ...rest, trackIds: normalized.trackIds, packages: normalized.packages }
+    : { ...rest, trackIds: normalized.trackIds };
 }
 
 export function addPlaylistTrack(snapshot: PlaylistSnapshot, playlistId: string, track: Track): PlaylistSnapshot {

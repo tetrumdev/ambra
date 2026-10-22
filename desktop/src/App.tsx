@@ -30,9 +30,11 @@ import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
+import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
 import {
   loadPreferences,
@@ -47,7 +49,7 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
-import { isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey } from "./utils/keyboard";
+import { isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey, navigationShortcut } from "./utils/keyboard";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { enterView } from "./utils/viewMotion";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
@@ -55,6 +57,7 @@ import { preloadLyrics } from "./utils/lyricsCache";
 import { prepareLyricSync } from "./utils/lyricsOffset";
 
 import { playlistTracks } from "./utils/playlists";
+import { groupPackagedTracks } from "./utils/playlistPackages";
 import {
   sortCollectionTracks,
   type TrackSort,
@@ -65,6 +68,12 @@ import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
+
+/** On Windows the style change takes keyboard focus from the page, so shortcuts like Space stop until it's clicked. */
+async function setWindowFullscreen(fullscreen: boolean) {
+  await getCurrentWindow().setFullscreen(fullscreen);
+  await getCurrentWebview().setFocus();
+}
 
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
@@ -77,7 +86,6 @@ function App({ localOnly }: { localOnly: boolean }) {
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
-  const navigation = useRef<Array<{ entity: BrowseEntity | null; screen: AppScreen; playlistId: string | null; section: LibrarySection }>>([]);
   const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => {
     const known = new Map(current.map(track => [track.globalId, track]));
     // Keep the same array when nothing changed so App and its memos don't rerun.
@@ -221,7 +229,8 @@ function App({ localOnly }: { localOnly: boolean }) {
   // When one song's lyrics replace another's, the old view stays a moment to drift out.
   const lyricsHandoff = useRef<{ track: typeof lyricsTrack; leaving: NonNullable<typeof lyricsTrack>[] }>({ track: lyricsTrack, leaving: [] });
   // During a long instrumental ending the lyrics step aside for the cover until the pointer moves.
-  const lyricsResting = useLyricsRest(player.currentTrack, player.clock, isLyricsView && showLyrics, preferences.ui.autoSyncLyrics);
+  // Settling back after the next song starts drifts too, as gently as the lyrics left.
+  const { resting: lyricsResting, gentle: lyricsDrift } = useLyricsRest(player.currentTrack, player.clock, isLyricsView && showLyrics, preferences.ui.autoSyncLyrics);
   const lyricsOnStage = showLyrics && !lyricsResting;
   // Opening the player shows its lyrics at once; switching between them and the cover fades (LyricsView.css).
   const [lyricsShown, setLyricsShown] = useState(lyricsOnStage && isPlayerView);
@@ -275,6 +284,18 @@ function App({ localOnly }: { localOnly: boolean }) {
   if (screen === "home" || screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
+  const underlyingScreen = screen === "bigscreen" || screen === "lyrics" ? playerReturnScreenRef.current : screen;
+  const { back: goBack, forward: goForward } = usePageNavigation({
+    screen: underlyingScreen === "queue" ? queueReturnScreenRef.current : underlyingScreen,
+    entity: browseEntity, playlistId: selectedPlaylistId, section: librarySection,
+    settingsTab, search: preferences.search,
+  }, page => {
+    setBrowseEntity(page.entity);
+    setSelectedPlaylistId(page.playlistId);
+    setLibrarySection(page.section);
+    setSettingsTab(page.settingsTab);
+    setPreferences(current => ({ ...current, search: page.search, ui: { ...current.ui, screen: page.screen } }));
+  });
   const latestSessionRef = useRef({ preferences, player });
   latestSessionRef.current = { preferences, player };
   const [activeScrollElement, setActiveScrollElement] =
@@ -361,15 +382,17 @@ function App({ localOnly }: { localOnly: boolean }) {
   const baseCollectionTracks = selectedPlaylist
     ? playlistTracks(selectedPlaylist, availableTracks)
     : library.tracks;
+  const collectionPackages = selectedPlaylist?.packages;
   const collectionTracks = useMemo(
-    () => sortCollectionTracks(baseCollectionTracks, collectionSort),
-    [baseCollectionTracks, collectionSort],
+    // Packaged songs stay together, in their own order, however the playlist is sorted.
+    () => groupPackagedTracks(sortCollectionTracks(baseCollectionTracks, collectionSort), collectionPackages ?? []),
+    [baseCollectionTracks, collectionSort, collectionPackages],
   );
   const activeCollectionContext = selectedPlaylist
     ? collectionQueueContext(collectionTracks, {
         kind: "playlist",
         id: selectedPlaylist.id,
-      })
+      }, collectionPackages)
     : libraryQueueContext(
         sortCollectionTracks(library.tracks, collectionSort),
       );
@@ -470,10 +493,8 @@ function App({ localOnly }: { localOnly: boolean }) {
       }
 
       try {
-        const appWindow = getCurrentWindow();
-        const isFullscreen = await appWindow.isFullscreen();
-        const nextFullscreen = !isFullscreen;
-        await appWindow.setFullscreen(nextFullscreen);
+        const nextFullscreen = !(await getCurrentWindow().isFullscreen());
+        await setWindowFullscreen(nextFullscreen);
         f11FullscreenRef.current = nextFullscreen;
         setIsFullscreen(nextFullscreen);
       } catch (error) {
@@ -525,22 +546,22 @@ function App({ localOnly }: { localOnly: boolean }) {
 
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
-      if (!isUnmodifiedKey(event, "Escape")) return;
+      if (event.defaultPrevented || !isUnmodifiedKey(event, "Escape")) return;
       // Let search, menus, and playlist dialogs handle their own Escape.
-      if (event.target instanceof Element && event.target.closest("#searchBar, #trackMenuBackdrop, [data-click-menu-backdrop], dialog[open]"))
+      if (document.querySelector("#trackMenuBackdrop, [data-click-menu-backdrop], dialog[open]")
+        || (event.target instanceof Element && event.target.closest("#searchBar")))
         return;
+      if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") return;
       event.preventDefault();
       event.stopPropagation();
 
       if (event.repeat) return;
-      if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") { goBack(); return; }
       leaveScreen();
 
       if (f11FullscreenRef.current && isTauri()) {
         try {
-          const appWindow = getCurrentWindow();
-          if (!(await appWindow.isFullscreen())) {
-            await appWindow.setFullscreen(true);
+          if (!(await getCurrentWindow().isFullscreen())) {
+            await setWindowFullscreen(true);
           }
         } catch (error) {
           console.error("Could not preserve fullscreen:", error);
@@ -549,25 +570,41 @@ function App({ localOnly }: { localOnly: boolean }) {
       }
     };
 
-    // The mouse's back button steps back the same way (WebView history would do nothing).
-    const handleMouseBack = (event: MouseEvent) => {
+    const navigate = (direction: "back" | "forward") => {
+      if (document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop]")) return;
+      if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") {
+        if (direction === "back") leaveScreen();
+        return;
+      }
+      if (direction === "back") goBack();
+      else goForward();
+    };
+    const handleNavigationKey = (event: KeyboardEvent) => {
+      const direction = navigationShortcut(event);
+      if (!direction || event.defaultPrevented) return;
+      event.preventDefault();
+      if (!event.repeat) navigate(direction);
+    };
+    const handleMouseNavigation = (event: MouseEvent) => {
       if (event.button !== 3 && event.button !== 4) return;
       event.preventDefault();
-      if (event.type !== "mouseup" || event.button !== 3) return;
-      if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") goBack();
-      else if (screen !== "library") leaveScreen();
+      if (event.type === "mouseup") navigate(event.button === 3 ? "back" : "forward");
     };
 
-    window.addEventListener("keydown", handleKeyDown, true);
-    window.addEventListener("mousedown", handleMouseBack, true);
-    window.addEventListener("mouseup", handleMouseBack, true);
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleNavigationKey, true);
+    window.addEventListener("mousedown", handleMouseNavigation, true);
+    window.addEventListener("mouseup", handleMouseNavigation, true);
+    window.addEventListener("auxclick", handleMouseNavigation, true);
 
     return () => {
-      window.removeEventListener("keydown", handleKeyDown, true);
-      window.removeEventListener("mousedown", handleMouseBack, true);
-      window.removeEventListener("mouseup", handleMouseBack, true);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keydown", handleNavigationKey, true);
+      window.removeEventListener("mousedown", handleMouseNavigation, true);
+      window.removeEventListener("mouseup", handleMouseNavigation, true);
+      window.removeEventListener("auxclick", handleMouseNavigation, true);
     };
-  }, [browseEntity, screen]);
+  }, [screen, goBack, goForward]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -699,7 +736,7 @@ function App({ localOnly }: { localOnly: boolean }) {
     };
   }, []);
 
-  // Player views and queue return to where they were opened from; search returns to the library.
+  // Player views and queue return to the page where they were opened.
   const leaveScreen = () => setPreferences((current) => ({
     ...current,
     ui: {
@@ -712,16 +749,8 @@ function App({ localOnly }: { localOnly: boolean }) {
             : "library",
     },
   }));
-  const goBack = useStableCallback(() => {
-    const previous = navigation.current.pop();
-    if (!previous) { setBrowseEntity(null); return; }
-    setBrowseEntity(previous.entity); setSelectedPlaylistId(previous.playlistId); setLibrarySection(previous.section);
-    setPreferences(current => ({ ...current, ui: { ...current.ui, screen: previous.screen } }));
-  });
   const openEntity = useStableCallback((entity: BrowseEntity) => {
-    if (browseEntity && entityKey(entity) === entityKey(browseEntity)) return;
-    // Going back never reopens the player: it returns to the screen beneath it.
-    navigation.current.push({ entity: browseEntity, screen: isPlayerView ? playerReturnScreenRef.current : screen, playlistId: selectedPlaylistId, section: librarySection });
+    if (browseEntity && entityKey(entity) === entityKey(browseEntity) && !isPlayerView && screen !== "queue") return;
     setBrowseEntity(entity); setSelectedPlaylistId(null);
     setPreferences(current => ({ ...current, ui: { ...current.ui, screen: "library" } }));
   });
@@ -787,7 +816,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       setPreferences((current) => ({ ...current, search: { ...current.search, query: nextQuery } }));
       return;
     }
-    setBrowseEntity(null); navigation.current = [];
+    setBrowseEntity(null);
     setPreferences((current) => ({
       ...current,
       ui: {
@@ -945,7 +974,7 @@ function App({ localOnly }: { localOnly: boolean }) {
 
   const openQueue = () => changeScreen("queue");
   const openSettings = () => {
-    setBrowseEntity(null); navigation.current = [];
+    setBrowseEntity(null);
     setSelectedPlaylistId(null);
     changeScreen("settings");
   };
@@ -980,6 +1009,12 @@ function App({ localOnly }: { localOnly: boolean }) {
       playNext(activeCollectionContext, trackId),
     removeTracks: selectedPlaylist?.provider && (!selectedPlaylist.editable || servicePlaylistStore.busy.has(selectedPlaylist.id)) ? undefined : removeFromCollection,
     reorderTracks: selectedPlaylist?.provider ? undefined : reorderCollectionTracks,
+    // Only AMBRA's own playlists can bind songs into packages; the library and service playlists can't hold them.
+    ...(selectedPlaylist && !selectedPlaylist.provider ? {
+      packages: collectionPackages,
+      bindTracks: (trackIds: GlobalTrackId[]) => playlistStore.bindTracks(selectedPlaylist.id, trackIds),
+      unbindTracks: (trackIds: GlobalTrackId[]) => playlistStore.unbindTracks(selectedPlaylist.id, trackIds),
+    } : {}),
     sort: collectionSort,
     onSortChange: changeCollectionSort,
     shuffleCollection,
@@ -1013,14 +1048,14 @@ function App({ localOnly }: { localOnly: boolean }) {
         <div className="playerStage" data-open={isPlayerView}>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
             playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1}
-            coverDimMs={lyricsResting ? motion.drift.duration : undefined} />
+            coverDimMs={lyricsDrift ? motion.drift.duration : undefined} />
           {isPlayerView && [
             ...leavingLyrics.map((track) => ({ track, leaving: true })),
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
           ].map(({ track, leaving }) => <LyricsView key={track.globalId}
             track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
             motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
-            shown={!leaving && lyricsShown} resting={!leaving && lyricsResting} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
+            shown={!leaving && lyricsShown} resting={!leaving && lyricsDrift} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
         </div>
       )}
       {(player.currentTrack || isPlayerView) && (
@@ -1028,7 +1063,7 @@ function App({ localOnly }: { localOnly: boolean }) {
           track={player.currentTrack}
           active={isPlayerView}
           layout={lyricsOnStage ? "lyrics" : "center"}
-          resting={lyricsResting}
+          resting={lyricsDrift}
           direction={skipDirection}
         />
       )}
@@ -1066,7 +1101,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
           isHomeActive={isHomeView && !isQueueView}
           onOpenHome={() => {
-            setBrowseEntity(null); navigation.current = [];
+            setBrowseEntity(null);
             setSelectedPlaylistId(null);
             changeScreen("home");
           }}
@@ -1075,13 +1110,13 @@ function App({ localOnly }: { localOnly: boolean }) {
           activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
           activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
           onOpenLibrarySection={(section) => {
-            setBrowseEntity(null); navigation.current = [];
+            setBrowseEntity(null);
             setSelectedPlaylistId(null);
             setLibrarySection(section);
             changeScreen("library");
           }}
           onOpenLibrary={() => {
-            setBrowseEntity(null); navigation.current = [];
+            setBrowseEntity(null);
             setSelectedPlaylistId(null);
             setLibrarySection("overview");
             changeScreen("library");
@@ -1098,7 +1133,7 @@ function App({ localOnly }: { localOnly: boolean }) {
             ...current, ui: { ...current.ui, playlistGroups: { ...current.ui.playlistGroups, [group]: expanded } },
           })}
           onSelectPlaylist={(id) => {
-            setBrowseEntity(null); navigation.current = [];
+            setBrowseEntity(null);
             setSelectedPlaylistId(id);
             changeScreen("library");
           }}
@@ -1171,7 +1206,7 @@ function App({ localOnly }: { localOnly: boolean }) {
           <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
             error={listeningHistory.error} onAction={onEntityAction}
             onSelectPlaylist={id => {
-              setBrowseEntity(null); navigation.current = [];
+              setBrowseEntity(null);
               setSelectedPlaylistId(id);
               changeScreen("library");
             }} registerScrollElement={registerScrollElement} />
@@ -1202,7 +1237,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         )}
       </main>
 
-      <TrackCreditsDialog />
+      <TrackCreditsDialog onOpenArtist={(artist) => openEntity({ kind: "artist", artist })} />
       <NowPlayingBar
         onOpenEntity={openEntity}
         songMenu={currentSongMenu}

@@ -6,16 +6,19 @@ import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import { detectLyricOffset, MAX_LINE_MS, type DetectedOffset } from "../utils/lyricsOffset";
 import { lyricSyncOverride } from "../utils/lyricsSyncOverrides";
 import { usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
+import { motion } from "../utils/motion";
 
 /** The lyrics rest this long after their last line ends, once it has finished highlighting. */
 const SETTLE_MS = 3_000;
 /** When the vocals clearly drop away during the last line, the lyrics rest this soon after. */
-const VOCAL_SETTLE_MS = 5_000;
+const VOCAL_SETTLE_MS = 3_000;
 /** A measured ending outside the last line, give or take this, belongs to some other passage. */
 const VOCAL_END_BEFORE_MS = 2_000;
 const VOCAL_END_AFTER_MS = 5_000;
 /** Only an instrumental ending at least this long hands the stage to the cover. */
 const MIN_OUTRO_MS = 60_000;
+/** A heard ending outranks a last line timed lazily through the outro, so a shorter one is enough. */
+const MIN_HEARD_OUTRO_MS = 20_000;
 /** Pointer or key activity brings the lyrics back for this long before they rest again. */
 const WAKE_MS = 5_000;
 
@@ -44,16 +47,18 @@ function restingFrom(track: Track | undefined, lyrics: TrackLyrics | undefined, 
     && vocalEndMs >= lastStartPlaybackMs - VOCAL_END_BEFORE_MS
     && vocalEndMs <= lastSungMs - lyrics.offsetMs - correctionMs + VOCAL_END_AFTER_MS;
   const endSeconds = (heard ? vocalEndMs : lastPlaybackMs) / 1000;
-  if (track.durationSeconds - endSeconds < MIN_OUTRO_MS / 1000) return Infinity;
+  if (track.durationSeconds - endSeconds < (heard ? MIN_HEARD_OUTRO_MS : MIN_OUTRO_MS) / 1000) return Infinity;
   return endSeconds + (heard ? VOCAL_SETTLE_MS : SETTLE_MS) / 1000;
 }
 
 /**
- * True while a long instrumental ending plays with nobody touching the app, so the player
- * can hand the stage to the cover. Any pointer or key activity brings the lyrics back, and
- * they rest again once it stops.
+ * `resting` is true while a long instrumental ending plays with nobody touching the app, so
+ * the player can hand the stage to the cover. Any pointer or key activity brings the lyrics
+ * back, and they rest again once it stops. `gentle` also covers the rest ending on its own,
+ * when the next song starts, so the lyrics drift back as slowly as they left; being woken by
+ * the listener stays quick.
  */
-export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, enabled: boolean, autoSync: boolean): boolean {
+export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, enabled: boolean, autoSync: boolean): { resting: boolean; gentle: boolean } {
   const [lyrics, setLyrics] = useState(() => (track ? cachedLyrics(track) : undefined));
   useEffect(() => {
     setLyrics(enabled && track ? cachedLyrics(track) : undefined);
@@ -108,5 +113,19 @@ export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, en
     };
   }, [enabled, outro]);
 
-  return outro && !awake;
+  const resting = outro && !awake;
+  // Read during render, so the moves this render starts already take the drifting timing.
+  const settle = useRef({ resting, until: 0 });
+  if (settle.current.resting && !resting && !awake && enabled) settle.current.until = performance.now() + motion.drift.duration;
+  if (resting) settle.current.until = 0;
+  settle.current.resting = resting;
+  const settling = performance.now() < settle.current.until;
+  const [, settled] = useState(0);
+  useEffect(() => {
+    if (!settling) return;
+    const timer = setTimeout(() => settled((value) => value + 1), settle.current.until - performance.now());
+    return () => clearTimeout(timer);
+  }, [settling]);
+
+  return { resting, gentle: resting || settling };
 }

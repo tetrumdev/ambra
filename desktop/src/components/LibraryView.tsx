@@ -226,7 +226,9 @@ export function CatalogAlbumGrid({ albums, onOpenEntity }: { albums: CatalogAlbu
   return <VirtualEntityGrid items={albums} label="Albums" cacheKey="catalog-album-grid" renderItem={(album, index) => <article className="libraryEntityCard" role="listitem" aria-posinset={index + 1} aria-setsize={albums.length} key={album.id} data-virtual-item="">
     <button type="button" className="libraryEntityButton" onClick={() => onOpenEntity({ kind: "album", album })}>
       <ArtworkImage className="libraryAlbumCover" src={album.imageUrl} alt={`${album.title} album cover`} loading="lazy" />
-      <h2 data-tooltip={album.title} data-tooltip-overflow="">{album.title}</h2><p>{album.artist}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</p>
+      <h2 data-tooltip={album.title} data-tooltip-overflow="">{album.title}</h2>
+      {/* The version sits with the details, where a long title can't cut it off, so an instrumental edition isn't mistaken for a duplicate. */}
+      <p>{album.artist}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}{album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` · ${album.version}` : ""}</p>
     </button>
   </article>} />;
 }

@@ -84,12 +84,10 @@ installTooltips();
 window.addEventListener("keydown", (event) => {
   if (isBrowserFindShortcut(event)) event.preventDefault();
 }, true);
-// Development keeps reload and friends.
-if (!import.meta.env.DEV) {
-  window.addEventListener("keydown", (event) => {
-    if (isBrowserShortcut(event)) event.preventDefault();
-  }, true);
-}
+// Development blocks them too; code changes still reload through Vite.
+window.addEventListener("keydown", (event) => {
+  if (isBrowserShortcut(event)) event.preventDefault();
+}, true);
 
 mark("first-render");
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
@@ -97,3 +95,4 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <Root />
   </React.StrictMode>,
 );
+

@@ -71,10 +71,22 @@ body,
     box-sizing: border-box;
 }
 
-.stateStartup h1 { font-size: 24px; }
-.stateStartup p { max-width: 640px; overflow-wrap: anywhere; }
-.stateTitlebar { position: fixed; top: 0; left: 0; right: 0; height: 32px; }
-.stateStartup button, .stateSaveError button {
+.stateStartup h1 {
+    font-size: 24px;
+}
+.stateStartup p {
+    max-width: 640px;
+    overflow-wrap: anywhere;
+}
+.stateTitlebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 32px;
+}
+.stateStartup button,
+.stateSaveError button {
     color: white;
     background: #333;
     border: 1px solid #888;
@@ -92,7 +104,9 @@ body,
     padding: 1px 12px;
     border-top: 1px solid #cf9d62;
     background: #382818;
-    font: 13px/18px "Stack Sans Text", sans-serif;
+    font:
+        13px/18px "Stack Sans Text",
+        sans-serif;
 }
 .stateSaveError span {
     min-width: 0;
@@ -162,7 +176,10 @@ button img {
 .volumeControlContainer,
 .devAudioControls,
 #extraCtrls #queueBtn {
-    transition: opacity 0.25s ease, visibility 0.25s, filter 0.15s;
+    transition:
+        opacity 0.25s ease,
+        visibility 0.25s,
+        filter 0.15s;
 }
 
 /* Children inherit visibility, so their own transitions must not include it. */

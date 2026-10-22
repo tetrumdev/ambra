@@ -157,7 +157,10 @@ export type CatalogArtist = {
   /** The same artist on every service it was found on, this entry included. */
   sources?: CatalogArtist[];
 };
-export type CatalogAlbum = { id: string; provider: MusicProvider; title: string; artist: string; artists?: TrackArtist[]; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; releaseType?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null };
+export type CatalogAlbum = { id: string; provider: MusicProvider; title: string; artist: string; artists?: TrackArtist[]; imageUrl: string | null; upc?: string | null; releaseDate?: string | null; releaseType?: string | null; version?: string | null; explicit?: boolean | null; maximumBitDepth?: number | null; maximumSamplingRateKHz?: number | null;
+  /** All editions and services consolidated into this album, including this copy. */
+  versions?: CatalogAlbum[];
+};
 export type SearchPage = {
   artists?: CatalogArtist[];
   albums?: CatalogAlbum[];
@@ -303,6 +306,10 @@ export function highestQualityAlbumArtwork(album: {
         );
       }
       const artwork = (await response.json()) as ArtworkQuality;
+      // The source cover may only have won because a larger one couldn't be reached. The server
+      // remembers lookups that completed, so asking again is cheap and picks up a recovery.
+      if (artwork.url === album.coverUrl && artworkQualityRequests.get(cacheKey) === request)
+        artworkQualityRequests.delete(cacheKey);
       return artwork;
     })
     .catch((reason: unknown) => {
@@ -521,7 +528,7 @@ export async function searchServerCatalog(query: string, provider: StreamingProv
     }
     if (track.albumId) {
       page.albums ??= [];
-      page.albums.push({id: track.albumId.startsWith(`${provider}:`) ? track.albumId : `${provider}:${track.albumId}`, provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, imageUrl: track.cover, upc: track.upc, releaseDate: track.releaseDate, version: track.albumVersion});
+      page.albums.push({id: track.albumId.startsWith(`${provider}:`) ? track.albumId : `${provider}:${track.albumId}`, provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, artists: track.albumArtists, imageUrl: track.cover, upc: track.upc, releaseDate: track.releaseDate, version: track.albumVersion, maximumBitDepth: track.maximumBitDepth, maximumSamplingRateKHz: track.maximumSamplingRateKHz});
     }
   }
   const missingArtist = credit && !page.artists?.some(artist => textRelevance(artist.name, credit) === 5) ? credit : null;
@@ -624,11 +631,12 @@ export async function loadArtistProfile(artist: CatalogArtist, signal?: AbortSig
   }, signal);
 }
 
-export type CreditGroup = { role: string; names: string[] };
+/** `artistIds` maps names to their artist page on the source catalog, when it gave one. */
+export type CreditGroup = { role: string; names: string[]; artistIds?: Record<string, string> };
 /** `source` is the catalog the credits came from; none when no catalog had any. */
 export type TrackCredits = { source: StreamingProvider | null; credits: CreditGroup[] };
 /** An empty `tracks` means the contributor is on every track. */
-export type AlbumCreditGroup = { role: string; contributors: { name: string; tracks: number[] }[] };
+export type AlbumCreditGroup = { role: string; contributors: { name: string; artistId?: string; tracks: number[] }[] };
 export type AlbumInfo = {
   source: StreamingProvider | null;
   description: string | null;
