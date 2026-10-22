@@ -1,7 +1,7 @@
 import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, type StreamingProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { searchTrackTitle } from "./catalogRanking";
-import { bestQualityRecording, sameRecording } from "./searchRanking";
+import { bestPlaylistCopy, sameRecording } from "./searchRanking";
 
 const CONCURRENCY = 3;
 
@@ -12,14 +12,19 @@ async function withPlayback(track: Track, signal: AbortSignal) {
 
 async function bestCopy(track: Track, providers: StreamingProvider[], signal: AbortSignal) {
   const query = `${searchTrackTitle(track.name)} ${track.artist}`;
-  const pages = await Promise.all(providers.map(provider =>
-    searchServerCatalog(query, provider, signal).then(page => page.tracks).catch(() => [] as Track[])));
-  const matches = pages.flat().filter(candidate => candidate.globalId !== track.globalId && sameRecording(track, candidate));
+  const searches = providers.map(provider => ({ provider, query }));
+  // A title search stops at 20 results, which a popular song's compilations can fill before its
+  // album appears. Qobuz answers an ISRC with every release of that recording.
+  if (track.isrc && providers.includes("qobuz")) searches.push({ provider: "qobuz", query: track.isrc });
+  const pages = await Promise.all(searches.map(search =>
+    searchServerCatalog(search.query, search.provider, signal).then(page => page.tracks).catch(() => [] as Track[])));
+  const seen = new Set([track.globalId]);
+  const matches = pages.flat().filter(candidate => !seen.has(candidate.globalId) && seen.add(candidate.globalId) && sameRecording(track, candidate));
   const resolved = await Promise.all(matches.map(candidate => withPlayback(candidate, signal)));
-  return bestQualityRecording(await withPlayback(track, signal), resolved);
+  return bestPlaylistCopy(await withPlayback(track, signal), resolved);
 }
 
-/** Finds a better-sounding copy of each streamed song across every connected service. */
+/** Finds the copy each streamed song should be on, across every connected service (see `bestPlaylistCopy`). */
 export async function findPlaylistUpgrades(
   tracks: Track[],
   onProgress: (done: number) => void,

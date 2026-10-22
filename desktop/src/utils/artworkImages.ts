@@ -7,6 +7,8 @@ const thumbnails = new Map<string, Promise<HTMLImageElement>>();
 const fullSize = new Map<string, Promise<HTMLImageElement>>();
 const bigscreenSources = new Map<string, string>();
 const bigscreenRequests = new Map<string, Promise<string | null>>();
+// Covers that fell back to the provider's own image, which may only mean a larger one was briefly unreachable.
+const provisionalBigscreenSources = new Set<string>();
 const UPCOMING_BIGSCREEN_ARTWORK_COUNT = 2;
 
 export function cachedArtwork(url: string): boolean {
@@ -60,10 +62,16 @@ export function cachedBigscreenArtwork(track: Track) {
   return source && fullSize.has(source) ? source : null;
 }
 
+/** Whether the cached cover is final, or a fallback worth resolving again. */
+export function settledBigscreenArtwork(track: Track) {
+  return !provisionalBigscreenSources.has(bigscreenArtworkKey(track));
+}
+
 export function preloadBigscreenArtwork(track: Track) {
   const key = bigscreenArtworkKey(track);
   const source = bigscreenSources.get(key);
-  if (source) return preloadArtwork(source, true).then(() => source).catch(() => null);
+  if (source && !provisionalBigscreenSources.has(key))
+    return preloadArtwork(source, true).then(() => source).catch(() => null);
 
   const pending = bigscreenRequests.get(key);
   if (pending) return pending;
@@ -75,9 +83,14 @@ export function preloadBigscreenArtwork(track: Track) {
     if (!source) return null;
 
     await preloadArtwork(source, true);
+    bigscreenSources.delete(key);
     bigscreenSources.set(key, source);
+    if (track.provider !== "local" && source === track.nativeCover) provisionalBigscreenSources.add(key);
+    else provisionalBigscreenSources.delete(key);
     while (bigscreenSources.size > 12) {
-      bigscreenSources.delete(bigscreenSources.keys().next().value!);
+      const oldest = bigscreenSources.keys().next().value!;
+      bigscreenSources.delete(oldest);
+      provisionalBigscreenSources.delete(oldest);
     }
     return source;
   })().catch(() => null).finally(() => {

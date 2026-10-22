@@ -25,7 +25,12 @@ function performance(track: Track) {
 }
 
 function albumFamily(track: Track) {
-  return normalized(track.album).replace(/\b(deluxe|expanded|special|anniversary|legacy|collector s|edition|remaster|remastered|reissue)\b|\b(?:19|20)\d{2}\b/g, " ")
+  return albumTitleFamily(track.album);
+}
+
+/** An album title without edition notes, so a deluxe or remastered release matches its original. */
+export function albumTitleFamily(albumTitle: string) {
+  return normalized(albumTitle).replace(/\b(full dynamic range|deluxe|expanded|special|anniversary|legacy|collector s|edition|remaster|remastered|reissue)\b|\b(?:19|20)\d{2}\b/g, " ")
     .replace(/\s+/g, " ").trim();
 }
 
@@ -39,19 +44,29 @@ export function sameRecording(left: Track, right: Track) {
   if (!title(left.name) || title(left.name) !== title(right.name)) return false;
   if (left.durationSeconds <= 0 || right.durationSeconds <= 0) return false;
   const durationDifference = Math.abs(left.durationSeconds - right.durationSeconds);
-  const tolerance = remaster(left) || remaster(right) ? 15 : Math.min(8, Math.max(2, left.durationSeconds * 0.02));
+  // Releases pad a track differently, which outweighs a percentage of a seconds-long grindcore song.
+  const veryShort = left.durationSeconds < 30 && right.durationSeconds < 30;
+  const tolerance = remaster(left) || remaster(right) ? 15 : veryShort ? 5 : Math.min(8, Math.max(2, left.durationSeconds * 0.02));
   if (durationDifference > tolerance) return false;
   // Differing identifiers require release evidence, not just a similar title and duration.
   if (leftIsrc && rightIsrc && leftIsrc !== rightIsrc) {
     const a = albumFamily(left), b = albumFamily(right);
-    return Boolean(a && b && (a === b || compilation(left) || compilation(right) || ((remaster(left) || remaster(right)) && (a.startsWith(`${b} `) || b.startsWith(`${a} `)))));
+    return Boolean(a && b && (a === b || compilation(left) || compilation(right) || single(left) || single(right)
+      || ((remaster(left) || remaster(right)) && (a.startsWith(`${b} `) || b.startsWith(`${a} `)))));
   }
   return true;
 }
 
 function compilation(track: Track) {
   // A soundtrack can be the original release; do not classify every soundtrack as a compilation.
-  return /\b(greatest hits|best of|anthology|compilation|box set|rock anthems|various artists)\b/i.test(track.album);
+  return /\b(greatest hits|best of|anthology|compilation|box set|rock anthems|various artists)\b/i.test(track.album)
+    // A label sampler is credited to Various Artists rather than named like one.
+    || (track.albumArtists ?? []).some(artist => /^various( artists)?$/i.test(artist.name.trim()));
+}
+
+/** A single named after the song, which carries the album's recording under its own release ID. */
+function single(track: Track) {
+  return albumFamily(track) === title(track.name);
 }
 
 function lossless(track: Track) {
@@ -85,15 +100,57 @@ function soundQuality(track: Track) {
   return [Number(isLossless), track.maximumBitDepth ?? (isLossless ? 16 : 0), track.maximumSamplingRateKHz ?? (isLossless ? 44.1 : 0)];
 }
 
-/** The best-sounding copy of the same recording with the same explicitness; the original wins ties. */
+/**
+ * The best-sounding copy of the same recording with the same explicitness; the original wins ties.
+ * Among equally good copies, one on the song's own album wins, then any that isn't a compilation,
+ * so a song isn't moved to a regional greatest-hits disc just because it was found first.
+ */
 export function bestQualityRecording(original: Track, candidates: Track[]) {
+  const release = (track: Track) => [Number(albumFamily(track) === albumFamily(original)), Number(!compilation(track))];
+  const compare = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
   let best = original;
   for (const candidate of candidates) {
     if (candidate.provider === "local" || candidate.explicit !== original.explicit || !sameRecording(original, candidate)) continue;
-    const [a, b] = [soundQuality(candidate), soundQuality(best)];
-    if ((a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0) > 0) best = candidate;
+    const quality = compare(soundQuality(candidate), soundQuality(best));
+    if (quality > 0 || (quality === 0 && best !== original && compare(release(candidate), release(best)) > 0)) best = candidate;
   }
   return best;
+}
+
+/** Whether two album titles are one album, counting editions such as "OK Computer OKNOTOK 1997 2017". */
+function sameAlbumFamily(left: Track, right: Track) {
+  const [a, b] = [albumFamily(left), albumFamily(right)];
+  return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
+}
+
+function released(track: Track) {
+  return track.releaseDate && /^\d{4}/.test(track.releaseDate) ? track.releaseDate : null;
+}
+
+/**
+ * The copy a playlist should keep. A song belongs to the album it first came out on (the
+ * earliest-dated release of the recording, or its current album when dates are unknown and
+ * that isn't a compilation), so it's upgraded to the best-sounding copy of that album from
+ * any service or edition. It only moves to another album to go from lossy to lossless when
+ * its own album has no lossless copy; a higher resolution isn't worth leaving the album for.
+ * A song already moved to a later compilation goes back to its album when that has a lossless copy.
+ */
+export function bestPlaylistCopy(original: Track, candidates: Track[]) {
+  const copies = [original, ...candidates.filter(candidate => candidate.provider !== "local"
+    && candidate.explicit === original.explicit && sameRecording(original, candidate))];
+  const compare = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
+  // Among equally good copies the current one stays; otherwise the album's own release, then the earliest.
+  const release = (track: Track) => [Number(!compilation(track)), -Number((released(track) ?? "9999").slice(0, 4))];
+  const best = (list: Track[]) => list.reduce((top, copy) => {
+    const quality = compare(soundQuality(copy), soundQuality(top));
+    return quality > 0 || (quality === 0 && top !== original && compare(release(copy), release(top)) > 0) ? copy : top;
+  }, list.includes(original) ? original : list[0]);
+  const dated = copies.filter(released).sort((a, b) => released(a)!.localeCompare(released(b)!));
+  const home = dated[0] ?? (compilation(original) ? copies.find(copy => !compilation(copy)) : undefined) ?? original;
+  const fromHome = best(copies.filter(copy => sameAlbumFamily(copy, home)));
+  if (lossless(fromHome)) return fromHome;
+  const anywhere = best(copies);
+  return lossless(anywhere) ? anywhere : fromHome;
 }
 
 function relevance(track: Track, query: string) {
@@ -162,6 +219,8 @@ export function deduplicateSearchResults(tracks: Track[]) {
 export function rankSearchResults(tracks: Track[], query: string) {
   return groupSearchResults(tracks, query)
     .filter(group => group.relevance > 0)
-    .sort((a, b) => b.relevance - a.relevance || b.fusionScore - a.fusionScore || a.track.globalId.localeCompare(b.track.globalId))
+    // Among equally relevant results, a copy found only on compilations follows the album's own.
+    .sort((a, b) => b.relevance - a.relevance || Number(compilation(a.track)) - Number(compilation(b.track))
+      || b.fusionScore - a.fusionScore || a.track.globalId.localeCompare(b.track.globalId))
     .map(group => group.track);
 }

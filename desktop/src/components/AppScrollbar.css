@@ -12,9 +12,14 @@
     padding-top: 3px;
 }
 
-/* With nothing to scroll the empty rail's divider reads as a stray line. */
+/* With nothing to scroll there is no rail at all: its column collapses, so the screen and the
+   controls aligned to it reach the window edge instead of stopping at an empty strip. */
+:root:has(.appScrollbarThumb[hidden]) {
+    --scrollbar-column-width: 0px;
+}
+
 .appScrollbar:has(> .appScrollbarThumb[hidden]) {
-    border-left-color: transparent;
+    visibility: hidden;
 }
 
 .appScrollbarThumb {

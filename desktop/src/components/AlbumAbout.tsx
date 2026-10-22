@@ -3,10 +3,8 @@ import { loadAlbumInfo, type AlbumInfo, type CatalogAlbum } from "../api/server"
 import type { Track } from "../types/music";
 import { artistBiography } from "../utils/artistPage";
 import { musicProviderName } from "../utils/musicProviderName";
-import { trackRanges } from "../utils/trackCredits";
-import { CreditList } from "./CreditList";
 
-/** The album's description and everyone credited across its tracks, from Qobuz or Tidal. */
+/** The album's description and release details, from Qobuz or Tidal; its credits open from the header. */
 export function AlbumAbout({ album, track }: { album: CatalogAlbum; track?: Track }) {
   const [info, setInfo] = useState<AlbumInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -23,15 +21,6 @@ export function AlbumAbout({ album, track }: { album: CatalogAlbum; track?: Trac
     return () => controller.abort();
   }, [album.id, album.provider, hasTrack, attempt]);
   const description = useMemo(() => artistBiography(info?.description), [info?.description]);
-  const rows = useMemo(() => (info?.credits ?? []).map(group => ({
-    role: group.role,
-    entries: group.contributors.map(contributor => ({
-      name: contributor.name,
-      detail: contributor.tracks.length
-        ? `${contributor.tracks.length === 1 ? "Track" : "Tracks"} ${trackRanges(contributor.tracks)}`
-        : undefined,
-    })),
-  })), [info]);
 
   if (album.provider === "local") return null;
   return (
@@ -52,7 +41,6 @@ export function AlbumAbout({ album, track }: { album: CatalogAlbum; track?: Trac
             <button type="button" className="artistTextAction" onClick={() => setExpanded(value => !value)}>{expanded ? "Show less" : "Read more"}</button>
             {info.descriptionSource && <p className="artistBiographySource">{info.descriptionSource}</p>}
           </>}
-          {!!rows.length && <><h2 className="entitySectionTitle">Credits</h2><CreditList rows={rows} /></>}
           {(info.label || info.copyright) && (
             <p className="albumInfoRelease">{[info.label, info.copyright].filter(Boolean).join(" · ")}</p>
           )}

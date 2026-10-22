@@ -46,7 +46,7 @@ type LyricsViewProps = {
   autoSync?: boolean;
   /** False while the view fades out behind the cover; the lyrics hold still meanwhile. */
   shown?: boolean;
-  /** Hidden because the song's vocals are over rather than by the listener, so the fade drifts slowly. */
+  /** Hidden because the song's vocals are over, or returning on its own as the next song starts, so the fade drifts slowly. */
   resting?: boolean;
   /** The previous song's lyrics, drifting away as the next song's arrive. */
   leaving?: boolean;
@@ -984,6 +984,8 @@ function SyncMenu({
     };
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
       setOpen(false);
       trigger.current?.focus();
     };
