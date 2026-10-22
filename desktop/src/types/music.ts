@@ -71,6 +71,8 @@ export type Playlist = {
   remoteId?: string;
   editable?: boolean;
   trackCount?: number;
+  /** Consecutive songs bound to always play together, in order, even when shuffled. */
+  packages?: GlobalTrackId[][];
 };
 
 export type QueueSource = {

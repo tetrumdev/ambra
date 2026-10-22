@@ -72,14 +72,42 @@ function editionLabel(text: string) {
   const words = searchText(text).split(" ").filter(Boolean);
   return words.length > 0 && words.every(word => editionWords.has(word) || /^\d+(st|nd|rd|th)?$/.test(word));
 }
-/** The album an edition belongs to: its title and version without remaster or deluxe labels. */
-export function albumIdentity(album: CatalogAlbum) {
-  const title = album.title
+/** Remove edition annotations while retaining titles such as 1989 and Live at Wembley. */
+export function albumBaseTitle(title: string) {
+  return title
     .replace(/\s*[([]([^)\]]*)[)\]]/g, (whole, label: string) => editionLabel(label) ? "" : whole)
     .replace(/\s+[-–—:]\s+([^-–—:]+)$/, (whole, label: string) => editionLabel(label) ? "" : whole);
-  const version = album.version && !editionLabel(album.version) ? album.version : "";
-  return `${searchText(album.artist)}|${searchText(title)}|${searchText(version)}`;
 }
+/** The album an edition belongs to: its title and version without remaster or deluxe labels. */
+export function albumIdentity(album: CatalogAlbum) {
+  const version = album.version && !editionLabel(album.version) ? album.version : "";
+  // Some services repeat the version in the title ("… (Instrumental)"); others keep it separate.
+  const title = searchText(albumBaseTitle(album.title));
+  const bare = version && title.endsWith(` ${searchText(version)}`) ? title.slice(0, -searchText(version).length - 1) : title;
+  return `${bare}|${searchText(version)}`;
+}
+
+/** Everyone credited on an album, by name; services list collaborators differently. */
+function albumArtistNames(album: CatalogAlbum) {
+  const names = album.artists?.length
+    ? album.artists.map(artist => artist.name)
+    : album.artist.split(/\s*(?:,|&|\band\b|\bx\b|\bwith\b|\bfeat\.?|\bft\.?)\s*/i);
+  return new Set(names.map(searchText).filter(Boolean));
+}
+
+/**
+ * Whether two catalog albums are one album: the same title and version once edition labels
+ * are set aside, credited to at least one of the same artists. "Her Loss" by Drake and by
+ * Drake, 21 Savage is one album; two artists' "Greatest Hits" are not.
+ */
+export function sameAlbum(left: CatalogAlbum, right: CatalogAlbum) {
+  if (albumIdentity(left) !== albumIdentity(right)) return false;
+  const theirs = albumArtistNames(right);
+  return [...albumArtistNames(left)].some(name => theirs.has(name));
+}
+
+// A choice is filed under each credited artist, so a service listing collaborators differently still finds it.
+const preferenceKeys = (album: CatalogAlbum) => [...albumArtistNames(album)].map(name => `${name}|${albumIdentity(album)}`);
 const losslessProviders = new Set(["qobuz", "tidal", "local"]);
 /** Higher is better: explicit, then bit depth and sample rate, with lossless services assumed CD quality. */
 function editionQuality(album: CatalogAlbum): number[] {
@@ -89,15 +117,62 @@ function editionQuality(album: CatalogAlbum): number[] {
 
 const compareEditions = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
 
+// The version the listener picked for each album, by album identity; it opens instead of the
+// best-sounding copy wherever the album's editions are gathered into one.
+const PREFERRED_VERSIONS_KEY = "ambra.album-versions.v1";
+
+function preferredVersions(): Record<string, string> {
+  try {
+    const value: unknown = JSON.parse(globalThis.localStorage?.getItem(PREFERRED_VERSIONS_KEY) ?? "{}");
+    return typeof value === "object" && value !== null ? value as Record<string, string> : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remembers which copy of an album to open from now on. */
+export function preferAlbumVersion(album: CatalogAlbum) {
+  try {
+    const choice = `${album.provider}:${album.id}`;
+    globalThis.localStorage?.setItem(PREFERRED_VERSIONS_KEY, JSON.stringify({
+      ...preferredVersions(),
+      ...Object.fromEntries(preferenceKeys(album).map(key => [key, choice])),
+    }));
+  } catch {
+    // Without storage the choice lasts until the album is gathered again.
+  }
+}
+
+/** Whether this copy is the one the listener picked for its album. */
+export function isPreferredAlbumVersion(album: CatalogAlbum) {
+  const preferred = preferredVersions();
+  return preferenceKeys(album).some(key => preferred[key] === `${album.provider}:${album.id}`);
+}
+
+/** Keep the individual catalog copies available after choosing a representative, which a picked version overrides. */
+function withAlbumVersions(album: CatalogAlbum, copies: CatalogAlbum[]): CatalogAlbum {
+  const versions = new Map<string, CatalogAlbum>();
+  for (const copy of copies.flatMap(copy => [copy, ...(copy.versions ?? [])])) {
+    const { versions: _, ...source } = copy;
+    versions.set(`${source.provider}:${source.id}`, source);
+  }
+  const chosen = preferredVersions();
+  const preferred = preferenceKeys(album).map(key => versions.get(chosen[key] ?? "")).find(Boolean);
+  return { ...(preferred ?? album), versions: [...versions.values()] };
+}
+
 /** One copy per album: every edition and service collapses into its best-sounding copy; earlier wins ties. */
 export function bestEditions(albums: CatalogAlbum[]): CatalogAlbum[] {
-  const best = new Map<string, CatalogAlbum>();
+  const best: CatalogAlbum[] = [];
   for (const album of albums) {
-    const identity = albumIdentity(album);
-    const current = best.get(identity);
-    if (!current || compareEditions(editionQuality(album), editionQuality(current)) > 0) best.set(identity, album);
+    const index = best.findIndex(current => [current, ...(current.versions ?? [])].some(copy => sameAlbum(copy, album)));
+    const current = index < 0 ? undefined : best[index];
+    const representative = !current || compareEditions(editionQuality(album), editionQuality(current)) > 0 ? album : current;
+    const merged = withAlbumVersions(representative, current ? [current, album] : [album]);
+    if (index < 0) best.push(merged);
+    else best[index] = merged;
   }
-  return [...best.values()];
+  return best;
 }
 
 export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackCredit[] = []) {
@@ -116,15 +191,16 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
   const terms = searchText(query).split(" ").filter(term => editionWords.has(term) || /^\d{4}$/.test(term));
   const asked = (album: CatalogAlbum) => terms.filter(term => searchText(`${album.title} ${album.version ?? ""}`).split(" ").includes(term)).length;
   // Every edition and service of one album collapses into its best copy; earlier results win ties.
-  const groups: { identity: string; album: CatalogAlbum; fusion: number; providers: Set<string> }[] = [];
+  const groups: { album: CatalogAlbum; copies: CatalogAlbum[]; fusion: number; providers: Set<string> }[] = [];
   const ranks = new Map<string, number>();
   const seen = new Set<string>();
   for (const item of values) {
-    if (seen.has(item.id)) continue;
-    seen.add(item.id);
-    const identity = albumIdentity(item);
-    let group = groups.find(group => group.identity === identity);
-    if (!group) { group = {identity, album: item, fusion: 0, providers: new Set()}; groups.push(group); }
+    const key = `${item.provider}:${item.id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    let group = groups.find(group => group.copies.some(copy => sameAlbum(copy, item)));
+    if (!group) { group = {album: item, copies: [], fusion: 0, providers: new Set()}; groups.push(group); }
+    group.copies.push(item);
     if (!group.providers.has(item.provider)) {
       const rank = (ranks.get(item.provider) ?? 0) + 1;
       ranks.set(item.provider, rank);
@@ -134,7 +210,7 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
     const a = [asked(item), ...editionQuality(item)], b = [asked(group.album), ...editionQuality(group.album)];
     if (compareEditions(a, b) > 0) group.album = item;
   }
-  return groups.sort((a, b) => score(b.album) - score(a.album) || b.fusion - a.fusion).map(group => group.album);
+  return groups.sort((a, b) => score(b.album) - score(a.album) || b.fusion - a.fusion).map(group => withAlbumVersions(group.album, group.copies));
 }
 
 // Match a title and its actual credited artist together. Artist names embedded in

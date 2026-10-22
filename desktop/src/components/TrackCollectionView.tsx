@@ -45,8 +45,10 @@ export type TrackCollectionViewProps = TrackListProps & {
   headerContent?: ReactNode;
   headerArtwork?: ReactNode;
   content?: ReactNode;
-  /** After the tracks, such as an album's credits. */
+  /** After the tracks, such as an album's description. */
   footer?: ReactNode;
+  /** One more item after the track count and length, such as an album's audio quality. */
+  summaryDetail?: string | null;
   showPlaybackActions?: boolean;
   collapsibleHeader?: boolean;
   shuffleCollection?: () => void;
@@ -71,6 +73,7 @@ export function TrackCollectionView({
   collapsibleHeader = false,
   shuffleCollection,
   summary,
+  summaryDetail,
   ...trackListProps
 }: TrackCollectionViewProps) {
   const { tracks, playTrack } = trackListProps;
@@ -299,6 +302,12 @@ export function TrackCollectionView({
                 <span className="playlistLength">
                   {formatTotalDuration(totalDurationSeconds)}
                 </span>
+              </>
+            )}
+            {summaryDetail && (
+              <>
+                <span className="separator">•</span>
+                <span className="collectionQuality">{summaryDetail}</span>
               </>
             )}
           </div>}
