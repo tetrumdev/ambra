@@ -422,6 +422,9 @@ pub struct AlbumSummary {
     pub label: Option<Label>,
     /// Genre (when returned, e.g. on favorites track album objects).
     pub genre: Option<Genre>,
+    /// First release date of the album's content (ISO YYYY-MM-DD), when returned.
+    #[serde(default)]
+    pub release_date_original: Option<String>,
 }
 
 /// Album model

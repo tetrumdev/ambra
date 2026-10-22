@@ -32,7 +32,13 @@ export function searchQueueContext(tracks: Track[], id: string, selectedTrack?: 
   return collectionQueueContext(selectedTracks, { kind: "search", id });
 }
 
-export function collectionQueueContext(tracks: Track[], source: QueueContext["source"]): QueueContext {
+/** `packages` bind songs that shuffle as one, keyed by the collection and each package's first song. */
+export function collectionQueueContext(
+  tracks: Track[],
+  source: QueueContext["source"],
+  packages: GlobalTrackId[][] = [],
+): QueueContext {
+  const packageOf = new Map(packages.flatMap((pack) => pack.map((id) => [id, `${source.id}:${pack[0]}`] as const)));
   return {
     source,
     entries: tracks.map((track, index) => ({
@@ -41,7 +47,7 @@ export function collectionQueueContext(tracks: Track[], source: QueueContext["so
         ...source,
         entryId: index + 1,
       },
-      shufflePackageId: null,
+      shufflePackageId: packageOf.get(track.globalId) ?? null,
     })),
   };
 }
