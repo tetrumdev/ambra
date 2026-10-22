@@ -440,6 +440,7 @@ impl QobuzProvider {
             image: album.image.clone(),
             label: album.label.clone(),
             genre: album.genre.clone(),
+            release_date_original: album.release_date_original.clone(),
         };
         let tracks = album
             .tracks
@@ -572,7 +573,8 @@ fn map_search_track(track: Track) -> TrackMetadata {
         version: None,
         artists: artists.clone(),
         cover_url: summary.image.best().cloned(),
-        release_date: None,
+        // Lets the app tell the album a song first came out on from later compilations.
+        release_date: summary.release_date_original.clone(),
         label: summary.label.as_ref().map(|label| label.name.clone()),
         genres: summary
             .genre
@@ -664,7 +666,8 @@ fn map_track(
                     .as_ref()
                     .and_then(|dates| dates.original.clone())
                     .or_else(|| album.release_date_original.clone())
-            }),
+            })
+            .or_else(|| summary.release_date_original.clone()),
             label: full_album
                 .and_then(|album| album.label.as_ref())
                 .map(|label| label.name.clone())
@@ -745,6 +748,12 @@ fn unknown_artist() -> ArtistMetadata {
 /// fronts the track, so prefer their main then featured artists, reusing IDs and
 /// portraits from artists already known by name. Without such credits, keep the
 /// `performer`.
+///
+/// Qobuz also marks publishers ("Warner Chappell Music Publishing Ltd."), producers
+/// and a band's individual members as main artists. Only the act and its real
+/// collaborators are performers, so the lead act always stays, featured artists stay,
+/// and another main artist is dropped when it has a behind-the-scenes role, is a
+/// member playing in a group's recording, or is another spelling of someone credited.
 fn track_artists(
     performers: Option<&str>,
     performer: Option<ArtistMetadata>,
@@ -752,31 +761,138 @@ fn track_artists(
 ) -> Vec<ArtistMetadata> {
     let known: Vec<&ArtistMetadata> = performer.iter().chain(album_artists).collect();
     let credits = parse_performers(performers.unwrap_or_default());
-    let mut artists = Vec::new();
-    for wanted in ["mainartist", "featuredartist"] {
-        let credited = credits.iter().filter(|credit| {
-            credit
-                .roles
+    let roles = |credit: &qbz_qobuz::performers::Performer| -> Vec<String> {
+        credit
+            .roles
+            .iter()
+            .map(|role| {
+                role.chars()
+                    .filter(|c| c.is_alphanumeric())
+                    .collect::<String>()
+                    .to_lowercase()
+            })
+            .collect()
+    };
+    let has_role = |credit: &qbz_qobuz::performers::Performer, wanted: &str| {
+        roles(credit).iter().any(|role| role == wanted)
+    };
+    let mains: Vec<_> = credits
+        .iter()
+        .filter(|credit| has_role(credit, "mainartist"))
+        .collect();
+    // The `performer` leads when it is one of the main artists; credits list them in no set order.
+    let lead = performer
+        .as_ref()
+        .and_then(|performer| {
+            mains
                 .iter()
-                .any(|role| role.replace(' ', "").eq_ignore_ascii_case(wanted))
-        });
-        for credit in credited {
-            let artist = known
+                .find(|credit| credit.name.eq_ignore_ascii_case(&performer.name))
+        })
+        .or(mains.first())
+        .copied();
+    let lead_is_group =
+        lead.is_some_and(|lead| roles(lead).iter().all(|role| is_artist_role(role)));
+    let mut kept = Vec::new();
+    if let Some(lead) = lead {
+        kept.push(lead);
+    }
+    for credit in mains.iter().copied().filter(|credit| Some(*credit) != lead) {
+        let credit_roles = roles(credit);
+        let behind_the_scenes = credit_roles
+            .iter()
+            .any(|role| is_behind_the_scenes_role(role))
+            || is_publisher_name(&credit.name);
+        let member = lead_is_group
+            && credit_roles
                 .iter()
-                .find(|artist| artist.name.eq_ignore_ascii_case(&credit.name))
-                .map(|artist| (*artist).clone())
-                .unwrap_or_else(|| ArtistMetadata {
-                    provider_id: String::new(),
-                    name: credit.name.clone(),
-                    image_url: None,
-                });
-            push_unique_artist(&mut artists, artist);
+                .any(|role| !is_artist_role(role) && !is_writing_role(role));
+        let variant = credits
+            .iter()
+            .any(|other| !std::ptr::eq(other, credit) && names_overlap(&credit.name, &other.name));
+        if !behind_the_scenes && !member && !variant {
+            kept.push(credit);
         }
+    }
+    kept.extend(
+        credits
+            .iter()
+            .filter(|credit| has_role(credit, "featuredartist") && !has_role(credit, "mainartist")),
+    );
+
+    let mut artists = Vec::new();
+    for credit in kept {
+        let artist = known
+            .iter()
+            .find(|artist| artist.name.eq_ignore_ascii_case(&credit.name))
+            .map(|artist| (*artist).clone())
+            .unwrap_or_else(|| ArtistMetadata {
+                provider_id: String::new(),
+                name: credit.name.clone(),
+                image_url: None,
+            });
+        push_unique_artist(&mut artists, artist);
     }
     if artists.is_empty() {
         artists.push(performer.unwrap_or_else(unknown_artist));
     }
     artists
+}
+
+fn is_artist_role(role: &str) -> bool {
+    matches!(role, "mainartist" | "featuredartist" | "artist")
+}
+
+fn is_writing_role(role: &str) -> bool {
+    ["writer", "composer", "lyricist", "songwriter", "author"]
+        .iter()
+        .any(|word| role.contains(word))
+}
+
+fn is_behind_the_scenes_role(role: &str) -> bool {
+    [
+        "publisher",
+        "producer",
+        "engineer",
+        "mixer",
+        "mixing",
+        "mastering",
+        "programm",
+        "label",
+        "copyright",
+        "aandr",
+        "coordinat",
+        "management",
+        "studio",
+    ]
+    .iter()
+    .any(|word| role.contains(word))
+}
+
+fn is_publisher_name(name: &str) -> bool {
+    let name = name.to_lowercase();
+    name.contains("publishing") || name == "copyright control"
+}
+
+/// Whether one name is the other plus extra words, like "Edward Van Halen" and
+/// "Van Halen", or "TED" and "Ted Templeman".
+fn names_overlap(name: &str, other: &str) -> bool {
+    let words = |name: &str| -> Vec<String> {
+        name.split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect()
+    };
+    let (name, other) = (words(name), words(other));
+    if name.is_empty() || other.is_empty() || name == other {
+        return false;
+    }
+    let (short, long) = if name.len() < other.len() {
+        (&name, &other)
+    } else {
+        (&other, &name)
+    };
+    long.windows(short.len())
+        .any(|window| window == short.as_slice())
 }
 
 fn push_unique_artist(artists: &mut Vec<ArtistMetadata>, artist: ArtistMetadata) {
@@ -911,7 +1027,8 @@ fn save_session(session: &UserSession) -> ProviderResult<()> {
 fn track_metadata_cache_path() -> PathBuf {
     // v2: artists come from main/featured credits. The version bump makes
     // tracks cached with a producer as their artist load again.
-    crate::storage::cache_path("qobuz-metadata-cache.v2.json")
+    // v3: publishers, producers and band members credited as main artists are dropped.
+    crate::storage::cache_path("qobuz-metadata-cache.v3.json")
 }
 
 fn load_track_metadata_cache(path: &Path) -> HashMap<String, TrackMetadata> {
@@ -986,6 +1103,60 @@ mod tests {
         let names: Vec<_> = artists.iter().map(|artist| artist.name.as_str()).collect();
         assert_eq!(names, ["A", "C", "B"]);
         assert_eq!(artists[0].provider_id, "1");
+    }
+
+    fn names(artists: &[ArtistMetadata]) -> Vec<&str> {
+        artists.iter().map(|artist| artist.name.as_str()).collect()
+    }
+
+    #[test]
+    fn drops_a_publisher_credited_as_main_artist() {
+        let artists = track_artists(
+            Some(
+                "Radiohead, MainArtist - Warner Chappell Music Publishing Ltd., MainArtist, MusicPublisher",
+            ),
+            Some(artist("1", "Radiohead")),
+            &[],
+        );
+        assert_eq!(names(&artists), ["Radiohead"]);
+        let artists = track_artists(
+            Some("QT, MainArtist - Copyright Control, MainArtist"),
+            Some(artist("1", "QT")),
+            &[],
+        );
+        assert_eq!(names(&artists), ["QT"]);
+    }
+
+    #[test]
+    fn drops_band_members_and_producers_of_a_group() {
+        let artists = track_artists(
+            Some(
+                "Van Halen, MainArtist - MICHAEL ANTHONY, MainArtist, Bass Guitar, Background Vocals -                  Edward Van Halen, MainArtist - Alex Van Halen, MainArtist, Drums -                  David Lee Roth, MainArtist, Lead Vocals - Ted Templeman, MainArtist, Producer -                  TED, MainArtist - Eddie Van Halen, Writer, Guitar",
+            ),
+            Some(artist("1", "Van Halen")),
+            &[],
+        );
+        assert_eq!(names(&artists), ["Van Halen"]);
+    }
+
+    #[test]
+    fn keeps_collaborators_and_a_producing_lead() {
+        let artists = track_artists(
+            Some(
+                "Metro Boomin, MainArtist, Producer, Mixing Engineer, Programmer - Future, MainArtist -                  Don Toliver, FeaturedArtist",
+            ),
+            Some(artist("1", "Metro Boomin")),
+            &[],
+        );
+        assert_eq!(names(&artists), ["Metro Boomin", "Future", "Don Toliver"]);
+        let artists = track_artists(
+            Some(
+                "Luisss, MainArtist - Tana, MainArtist, Mixing Engineer, Vocalist - yvngxchris, FeaturedArtist",
+            ),
+            Some(artist("1", "Tana")),
+            &[],
+        );
+        assert_eq!(names(&artists), ["Tana", "Luisss", "yvngxchris"]);
     }
 
     #[test]

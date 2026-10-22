@@ -18,7 +18,7 @@ import {
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
-import { isUnmodifiedKey } from "../utils/keyboard";
+import { isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
 
@@ -875,14 +875,10 @@ export function useAudioPlayer(
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!isUnmodifiedKey(event, "Space")) return;
 
-      const target = event.target;
-      if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          target.closest("input, textarea, select, [contenteditable='true']"))
-      ) {
-        return;
-      }
+      // Only text entry keeps Space for itself. A slider such as the progress bar keeps focus
+      // after it's dragged, and the page puts focus back on it whenever the window refocuses
+      // (as toggling fullscreen does), so treating it like a text box left Space dead.
+      if (isTypingTarget(event.target)) return;
 
       event.preventDefault();
       if (!event.repeat) void togglePlayback();

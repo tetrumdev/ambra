@@ -3,7 +3,7 @@ import { serviceAuthStatus, type StreamingProvider } from "../api/server";
 import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
 import type { Playlist, Track } from "../types/music";
 import { musicProviderName } from "../utils/musicProviderName";
-import { loadServicePlaylistCache, saveServicePlaylistCache, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
+import { loadServicePlaylistCache, outdatedContents, saveServicePlaylistCache, TRACK_DETAILS_VERSION, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
 
 export type PlaylistServiceGroup = {
   provider: StreamingProvider;
@@ -24,7 +24,7 @@ const OPEN_REVALIDATE_MS = 5 * 60_000;
 type LoadMode = "preload" | "open" | "force";
 
 function needsFetch(cached: CachedPlaylistContents | undefined, playlist: Playlist, mode: LoadMode) {
-  if (!cached || mode === "force") return true;
+  if (!cached || mode === "force" || outdatedContents(cached)) return true;
   if (cached.playlist.name !== playlist.name || cached.playlist.trackCount !== playlist.trackCount) return true;
   return mode === "open" && Date.now() - cached.fetchedAt > OPEN_REVALIDATE_MS;
 }
@@ -61,7 +61,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     const promise = servicePlaylistContents(playlist.provider, playlist.remoteId, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]))
       .then(result => {
         if (!alive.current || controller.signal.aborted) return;
-        currentContents.current = { ...currentContents.current, [playlist.id]: { ...result, fetchedAt: Date.now() } };
+        currentContents.current = { ...currentContents.current, [playlist.id]: { ...result, fetchedAt: Date.now(), detailsVersion: TRACK_DETAILS_VERSION } };
         setContents(currentContents.current);
         setErrors(current => { const next = { ...current }; delete next[playlist.id]; return next; });
       })
@@ -170,6 +170,23 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     const playlist = currentGroups.current.flatMap(group => group.playlists).find(playlist => playlist.id === selectedId);
     if (playlist) void load(playlist);
   }, [selectedId, load, hydrated]);
+
+  // Contents cached before the server described tracks differently refetch quietly, so stale
+  // details (like a publisher listed as an artist) don't outlive the change. The cached copy
+  // stays on screen meanwhile.
+  useEffect(() => {
+    if (!enabled || !hydrated) return;
+    const outdated = groups.flatMap(group => group.playlists).filter(playlist => outdatedContents(currentContents.current[playlist.id]));
+    let cancelled = false;
+    let next = 0;
+    const workers = Array.from({ length: Math.min(2, outdated.length) }, async () => {
+      while (!cancelled && next < outdated.length) {
+        await load(outdated[next++], "preload");
+      }
+    });
+    void Promise.all(workers);
+    return () => { cancelled = true; };
+  }, [enabled, hydrated, groups, load]);
 
   useEffect(() => {
     if (!enabled || !preloadHome) return;

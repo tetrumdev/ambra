@@ -63,8 +63,10 @@ function decide(evidence: OffsetEvidence): DetectedOffset {
 // is decided on read, so it follows the tuning as the listener's corrections refine it.
 const storageKey = "ambra.lyrics-autosync.v2";
 const MAX_TRACKS = 2000;
+/** Raised when vocal endings are measured differently, so songs where none was found are heard again. */
+const ENDING_VERSION = 3;
 
-type StoredOffsets = Record<string, OffsetEvidence & { timing: string }>;
+type StoredOffsets = Record<string, OffsetEvidence & { timing: string; ending?: number }>;
 
 function readStoredOffsets(): StoredOffsets {
   try {
@@ -73,16 +75,18 @@ function readStoredOffsets(): StoredOffsets {
     const offsets: StoredOffsets = {};
     for (const [trackId, entry] of Object.entries(value)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { timing, bestMs, prominence, margin, vocalEndMs } = entry as Record<string, unknown>;
+      const { timing, bestMs, prominence, margin, vocalEndMs, ending } = entry as Record<string, unknown>;
       if (typeof timing !== "string" || typeof prominence !== "number" || !Number.isFinite(prominence)) continue;
       // Analyzed before vocal endings were measured, so the song is analyzed again once.
       if (!("vocalEndMs" in entry)) continue;
+      if (vocalEndMs === null && ending !== ENDING_VERSION) continue;
       offsets[trackId] = {
         timing,
         bestMs: typeof bestMs === "number" && Number.isFinite(bestMs) ? bestMs : null,
         prominence,
         margin: typeof margin === "number" && Number.isFinite(margin) ? margin : null,
         vocalEndMs: typeof vocalEndMs === "number" && Number.isFinite(vocalEndMs) ? vocalEndMs : null,
+        ...(typeof ending === "number" ? { ending } : {}),
       };
     }
     return offsets;
@@ -95,7 +99,7 @@ function storeOffset(trackId: string, timing: string, evidence: OffsetEvidence) 
   const offsets = readStoredOffsets();
   // Reinserting keeps the most recently analyzed tracks at the end.
   delete offsets[trackId];
-  offsets[trackId] = { timing, ...evidence };
+  offsets[trackId] = { timing, ...evidence, ending: ENDING_VERSION };
   const trackIds = Object.keys(offsets);
   for (const stale of trackIds.slice(0, Math.max(0, trackIds.length - MAX_TRACKS))) delete offsets[stale];
   try {

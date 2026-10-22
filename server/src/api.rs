@@ -588,24 +588,32 @@ async fn resolve_artwork_quality(
         let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
             qobuz_max_artwork_url(&request.cover_url)
         } else if let (Some(qobuz), Some(upc)) = (state.qobuz.get(), upc.as_deref()) {
-            qobuz.exact_album_artwork_by_upc(upc).await.ok().flatten()
+            qobuz
+                .exact_album_artwork_by_upc(upc)
+                .await
+                .map_err(|_| ())?
         } else {
             None
         };
-        let url = qobuz_url.filter(|url| url != &request.cover_url)?;
-        let (width, height) = cached_artwork_dimensions(&state, &url).await?;
-        Some(ArtworkCandidate {
+        let Some(url) = qobuz_url.filter(|url| url != &request.cover_url) else {
+            return Ok::<_, ()>(None);
+        };
+        // An alternative that exists but can't be inspected is a failed lookup, not a miss.
+        let (width, height) = cached_artwork_dimensions(&state, &url).await.ok_or(())?;
+        Ok(Some(ArtworkCandidate {
             provider: "qobuz".to_owned(),
             url,
             width,
             height,
             colors: Vec::new(),
-        })
+        }))
     };
     let (source_dimensions, qobuz) = tokio::join!(
         cached_artwork_dimensions(&state, &request.cover_url),
         alternative,
     );
+    let complete = qobuz.is_ok();
+    let qobuz = qobuz.ok().flatten();
     let source_dimensions = source_dimensions
         .ok_or_else(|| ApiError::upstream("Could not inspect source artwork dimensions"))?;
     let source = ArtworkCandidate {
@@ -617,7 +625,8 @@ async fn resolve_artwork_quality(
     };
     let best = highest_resolution(source, qobuz);
 
-    {
+    // Remembering a lookup that failed would pin the smaller cover until the server restarts.
+    if complete {
         let mut cache = state.artwork_quality_cache.write().await;
         if cache.len() >= 512 {
             if let Some(oldest) = cache

@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from "react";
-import { loadTrackCredits, type TrackCredits } from "../api/server";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { loadTrackCredits, type CatalogArtist, type TrackCredits } from "../api/server";
 import type { Track } from "../types/music";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import { musicProviderName } from "../utils/musicProviderName";
 import { showTrackCredits, useShownTrackCredits } from "../utils/trackCredits";
 import { CreditList } from "./CreditList";
+import { useCreditArtists } from "../utils/creditArtists";
 
-export function TrackCreditsDialog() {
+export function TrackCreditsDialog({ onOpenArtist }: { onOpenArtist: (artist: CatalogArtist) => void }) {
   const shown = useShownTrackCredits();
   // The closing dialog keeps showing its song while it fades.
   const [track, setTrack] = useState<Track | null>(shown);
@@ -14,6 +15,10 @@ export function TrackCreditsDialog() {
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const dialog = useRef<HTMLDialogElement>(null);
+  const names = useMemo(() => credits?.credits.flatMap(group => group.names) ?? [], [credits]);
+  const catalogIds = useMemo(() => Object.assign({}, ...(credits?.credits.map(group => group.artistIds ?? {}) ?? [])) as Record<string, string>, [credits]);
+  const trackList = useMemo(() => track ? [track] : [], [track]);
+  const artistFor = useCreditArtists(names, credits?.source ?? null, catalogIds, trackList);
 
   useEffect(() => {
     if (shown) {
@@ -60,7 +65,8 @@ export function TrackCreditsDialog() {
         ) : credits.credits.length ? (
           <>
             <div className="creditsScroll">
-              <CreditList rows={credits.credits.map(group => ({ role: group.role, entries: group.names.map(name => ({ name })) }))} />
+              <CreditList rows={credits.credits.map(group => ({ role: group.role, entries: group.names.map(name => ({ name })) }))}
+                artistFor={artistFor} onOpenArtist={artist => { showTrackCredits(null); onOpenArtist(artist); }} />
             </div>
             {credits.source && <p className="creditsSource">Credits from {musicProviderName(credits.source)}</p>}
           </>

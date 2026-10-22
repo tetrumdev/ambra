@@ -89,6 +89,12 @@ fn tidal_credits(credits: &Value) -> Vec<CreditGroup> {
                 contributor["name"].as_str().map(|name| Contribution {
                     name: name.to_owned(),
                     role: role.clone(),
+                    // Present when the contributor has an artist page on TIDAL.
+                    artist_id: match &contributor["id"] {
+                        Value::Number(id) => Some(id.to_string()),
+                        Value::String(id) => Some(id.clone()),
+                        _ => None,
+                    },
                 })
             })
     }))

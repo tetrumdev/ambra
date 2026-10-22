@@ -8,8 +8,8 @@
 .libraryView,
 .searchView {
     --library-leading-width: 100px;
-    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
-        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr)
+        minmax(100px, 1fr) minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
@@ -42,8 +42,8 @@
 }
 
 .playlistView {
-    --library-columns: var(--library-leading-width) minmax(140px, 2fr) minmax(100px, 1fr)
-        minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr)
+        minmax(100px, 1fr) minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
     --playlist-artwork-scale: 1;
     --playlist-title-progress: 0;
     --playlist-title-scale: 1;
@@ -73,7 +73,14 @@
     padding-top: 0;
     padding-bottom: 0;
     /* Keeps the expanded footprint while the visible header shrinks. */
-    clip-path: inset(-16px 0 calc(var(--playlist-expanded-header-height) - var(--playlist-current-header-height)) 0);
+    clip-path: inset(
+        -16px 0
+            calc(
+                var(--playlist-expanded-header-height) -
+                    var(--playlist-current-header-height)
+            )
+            0
+    );
 }
 
 .playlistView .libraryHeader::before {
@@ -102,7 +109,10 @@
 .playlistView .libraryHeaderArtwork {
     transform: scale(var(--playlist-artwork-scale));
     transform-origin: left top;
-    border-radius: calc((8px - 5px * var(--playlist-title-progress)) / var(--playlist-artwork-scale));
+    border-radius: calc(
+        (8px - 5px * var(--playlist-title-progress)) /
+            var(--playlist-artwork-scale)
+    );
 }
 
 .playlistArtworkGrid {
@@ -142,7 +152,9 @@
     font-size: 4rem;
     line-height: 1.08;
     /* Width follows the scaled text inside the fixed header footprint. */
-    width: calc((100% + var(--playlist-title-shift)) / var(--playlist-title-scale));
+    width: calc(
+        (100% + var(--playlist-title-shift)) / var(--playlist-title-scale)
+    );
     /* Clipped sideways only: the tight line height would otherwise cut off descenders and accents. */
     overflow-x: clip;
     overflow-y: visible;
@@ -178,7 +190,12 @@
 .playlistView .columnInfo {
     /* Both fixed boxes stick together; only the painted edge follows the collapse. */
     top: calc(var(--playlist-expanded-header-height) + 16px);
-    transform: translateY(calc(var(--playlist-current-header-height) - var(--playlist-expanded-header-height)));
+    transform: translateY(
+        calc(
+            var(--playlist-current-header-height) -
+                var(--playlist-expanded-header-height)
+        )
+    );
     padding-top: 10px;
     padding-bottom: 24px;
 }
@@ -673,7 +690,10 @@
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
-    grid-template-columns: var(--resized-library-columns, var(--library-columns));
+    grid-template-columns: var(
+        --resized-library-columns,
+        var(--library-columns)
+    );
     gap: 15px;
     display: grid;
     align-items: baseline;
@@ -765,7 +785,10 @@
     box-sizing: border-box;
     width: 100%;
     min-width: 0;
-    grid-template-columns: var(--resized-library-columns, var(--library-columns));
+    grid-template-columns: var(
+        --resized-library-columns,
+        var(--library-columns)
+    );
     grid-template-rows: 100%;
     gap: 15px;
     text-align: left;
@@ -829,6 +852,19 @@
 .libraryItem[data-selected="true"],
 .libraryItem[data-selected="true"]:hover {
     background-color: #352000;
+}
+
+/* Songs bound into a package read as one block: no dividers inside it, and a faint warmth
+   of the selection's amber across every row of it (utils/playlistPackages.ts). The gradient
+   is see-through, so hover and selection colors still fade in beneath it rather than it
+   having to be removed. */
+.libraryItem[data-package] {
+    background-image: linear-gradient(90deg, rgba(53, 32, 0, 0.5), transparent);
+}
+
+.libraryItem[data-package="first"],
+.libraryItem[data-package="middle"] {
+    border-bottom-color: transparent;
 }
 
 .selectionActionMenu {

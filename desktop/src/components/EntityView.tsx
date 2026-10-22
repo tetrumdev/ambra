@@ -14,10 +14,13 @@ import {
   type BrowseEntity,
 } from "../utils/browse";
 import { AlbumArtwork } from "./AlbumArtwork";
+import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { TrackCollectionView } from "./TrackCollectionView";
 import type { PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { ArtistView } from "./ArtistView";
 import { AlbumAbout } from "./AlbumAbout";
+import { AlbumCreditsDialog, AlbumVersionsDialog } from "./AlbumDialogs";
+import { albumAudioQuality } from "../utils/albumVersions";
 import "./EntityView.css";
 
 export type EntityPage = {
@@ -65,7 +68,8 @@ function AlbumView({
     () => new Set(saved.map((track) => track.globalId)),
     [saved],
   );
-  const [entire, setEntire] = useState(cached?.entire ?? !saved.length);
+  const [showEntire, setEntire] = useState(cached?.entire ?? !saved.length);
+  const entire = showEntire || !saved.length;
   const [catalogTracks, setCatalogTracks] = useState<Track[] | undefined>(
     cached?.tracks,
   );
@@ -99,7 +103,17 @@ function AlbumView({
   }, [key, catalogTracks, entire, props.cache, props.rememberTracks]);
   const tracks =
     entire && album.provider !== "local" ? (catalogTracks ?? []) : saved;
+  const quality = useMemo(() => albumAudioQuality(catalogTracks ?? saved), [catalogTracks, saved]);
+  const [dialog, setDialog] = useState<"credits" | "versions" | null>(null);
+  const streamed = album.provider !== "local";
   return (
+    <>
+    {streamed && <>
+      <AlbumCreditsDialog album={album} tracks={catalogTracks ?? saved} open={dialog === "credits"} onClose={() => setDialog(null)}
+        onOpenArtist={(artist) => props.onOpenEntity({ kind: "artist", artist })} />
+      <AlbumVersionsDialog album={album} open={dialog === "versions"} onClose={() => setDialog(null)}
+        onSelect={(version) => props.onOpenEntity({ kind: "album", album: version })} />
+    </>}
     <TrackCollectionView
       className="entityView albumView"
       title={album.title}
@@ -129,10 +143,15 @@ function AlbumView({
       headerContent={
         <>
           <p className="entityByline">
-            {album.artist}
+            <AlbumArtistLinks album={album} tracks={catalogTracks ?? saved} onOpenEntity={props.onOpenEntity} />
             {album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}
+            {streamed && <>
+              <button type="button" className="entityBylineAction" onClick={() => setDialog("credits")}>Credits</button>
+              <button type="button" className="entityBylineAction" onClick={() => setDialog("versions")}>Versions</button>
+            </>}
           </p>
-          {album.provider !== "local" && (
+          {/* Without saved songs there's nothing to switch between. */}
+          {streamed && saved.length > 0 && (
             <nav className="browseScope" aria-label="Album songs">
               <button
                 type="button"
@@ -203,10 +222,12 @@ function AlbumView({
       }}
       onOpenEntity={props.onOpenEntity}
       footer={<AlbumAbout album={album} track={(catalogTracks ?? saved)[0]} />}
+      summaryDetail={quality}
       showTrackNumbers
       showArtwork={false}
       savedTrackIds={savedTrackIds}
       registerScrollElement={props.registerScrollElement}
     />
+    </>
   );
 }
