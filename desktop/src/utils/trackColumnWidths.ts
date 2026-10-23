@@ -17,6 +17,13 @@ export const trackColumns = [
 ] as const;
 
 export type ColumnKey = typeof trackColumns[number]["key"];
+
+/** Standard columns a list can do without; the song's name is all that's needed to know it. */
+export const hideableTrackColumns = ["artist", "album", "duration"] as const;
+export type HideableColumnKey = typeof hideableTrackColumns[number];
+export function isHideableColumn(key: string): key is HideableColumnKey {
+  return (hideableTrackColumns as readonly string[]).includes(key);
+}
 export type OptionalColumnKey = typeof optionalTrackColumns[number]["key"];
 export type ColumnWidths = Partial<Record<ColumnKey, number>>;
 
