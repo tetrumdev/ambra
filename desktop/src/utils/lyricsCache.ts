@@ -1,10 +1,21 @@
 import { trackLyrics } from "../api/server";
-import type { TrackLyrics } from "../types/lyrics";
+import { needsLyricsRetry, type TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { SearchCache } from "./searchCache";
 
 const lyricsCache = new SearchCache<TrackLyrics>(30 * 60_000, 12);
 const requests = new Map<string, Promise<TrackLyrics>>();
+const listeners = new Set<() => void>();
+let revision = 0;
+
+export function subscribeLyrics(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+export function lyricsRevision(): number {
+  return revision;
+}
 
 /** Everything a lyrics lookup depends on; a change to any of it is a different lookup. */
 export function lyricsKey(track: Track): string {
@@ -35,10 +46,12 @@ export function loadLyrics(track: Track): Promise<TrackLyrics> {
 
   // A view unmount must not cancel a request shared with queue preloading.
   // Bound its lifetime independently, including the API's automatic retry.
-  const request = trackLyrics(track, AbortSignal.timeout(55_000))
+  const request = trackLyrics(track, AbortSignal.timeout(60_000))
     .then((lyrics) => {
-      if (lyrics.status !== "unavailable" || lyrics.failedProviders.length === 0)
+      if (!needsLyricsRetry(lyrics))
         lyricsCache.set(key, lyrics);
+      revision++;
+      for (const listener of listeners) listener();
       return lyrics;
     })
     .finally(() => requests.delete(key));

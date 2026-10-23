@@ -46,5 +46,6 @@ export function usePageNavigation(page: AppPage, restore: (page: AppPage) => voi
   });
   const back = useStableCallback(() => move("back"));
   const forward = useStableCallback(() => move("forward"));
-  return { back, forward };
+  const canGo = useStableCallback((direction: "back" | "forward") => history.current[direction].length > 0);
+  return { back, forward, canGo };
 }

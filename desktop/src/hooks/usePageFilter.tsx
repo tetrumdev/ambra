@@ -38,11 +38,42 @@ export function useReportPageMatches(count: number | null) {
   useEffect(() => () => reportMatches(list, null), [list, reportMatches]);
 }
 
-/** The songs of `tracks` the page filter lets through. */
+export type PageReveal = {
+  /** The page's only match, shown in place rather than on its own; null otherwise. */
+  target: string | null;
+  /** Changes each time the match is found anew, so the list scrolls to it once per find. */
+  key: string | null;
+  /** True until the listener clicks, scrolls or types after it was found. */
+  breathing: boolean;
+};
+
+/**
+ * When the whole page has one match, a list that holds it keeps all its songs and points at
+ * that one instead of narrowing to it. `matchedIds` are this list's matches.
+ */
+export function usePageReveal(matchedIds: readonly string[], filtering: boolean): PageReveal {
+  const { matches, query } = usePageFilter();
+  const target = filtering && matches === 1 && matchedIds.length === 1 ? matchedIds[0] : null;
+  const key = target === null ? null : `${query}\n${target}`;
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const breathing = key !== null && dismissed !== key;
+  useEffect(() => {
+    if (!breathing) return;
+    const dismiss = () => setDismissed(key);
+    const events = ["pointerdown", "wheel", "keydown", "touchstart"] as const;
+    for (const event of events) window.addEventListener(event, dismiss, { capture: true, passive: true });
+    return () => { for (const event of events) window.removeEventListener(event, dismiss, { capture: true }); };
+  }, [breathing, key]);
+  return { target, key, breathing };
+}
+
+/** The songs of `tracks` the page filter lets through, or all of them around the page's only match. */
 export function usePageFilteredTracks<T extends Track>(tracks: T[]) {
   const { terms } = usePageFilter();
   const filtering = terms.length > 0;
-  const shown = useMemo(() => filtering ? tracks.filter(track => trackMatches(track, terms)) : tracks, [tracks, terms, filtering]);
-  useReportPageMatches(filtering ? shown.length : null);
-  return { shown, filtering };
+  const matched = useMemo(() => filtering ? tracks.filter(track => trackMatches(track, terms)) : tracks, [tracks, terms, filtering]);
+  const matchedIds = useMemo(() => filtering ? matched.map(track => track.globalId) : [], [matched, filtering]);
+  useReportPageMatches(filtering ? matched.length : null);
+  const reveal = usePageReveal(matchedIds, filtering);
+  return { shown: reveal.target ? tracks : matched, filtering: filtering && !reveal.target, reveal };
 }

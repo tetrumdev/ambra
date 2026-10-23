@@ -54,35 +54,6 @@
 .artistTextAction:disabled {
     opacity: var(--disabled-opacity);
 }
-.artistAbout {
-    margin: 48px 30px 64px;
-    border-top: 1px solid #535353;
-    max-width: 900px;
-}
-.artistAbout .entitySectionTitle {
-    margin: 28px 0 16px;
-}
-.artistAbout p {
-    color: #aaa;
-    font-size: 0.9rem;
-    line-height: 1.7;
-}
-.artistBiography[data-expanded="false"] {
-    display: -webkit-box;
-    -webkit-line-clamp: 6;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
-}
-.artistBiography p {
-    margin: 0 0 14px;
-}
-.artistAbout .artistTextAction {
-    margin-left: 0;
-}
-.artistAbout .artistBiographySource {
-    font-size: 0.75rem;
-    color: #777;
-}
 @media (max-width: 700px) {
     .artistView .libraryHeader {
         gap: 20px;

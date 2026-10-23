@@ -19,6 +19,9 @@ import { TrackCollectionView } from "./TrackCollectionView";
 import type { PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { ArtistView } from "./ArtistView";
 import { AlbumAbout } from "./AlbumAbout";
+import { AboutDialog } from "./AboutDialog";
+import { TrackColumnsContext, useTrackColumns } from "../hooks/useTrackColumns";
+import type { ColumnKey } from "../utils/trackColumnWidths";
 import { AlbumCreditsDialog, AlbumVersionsDialog } from "./AlbumDialogs";
 import { albumAudioQuality } from "../utils/albumVersions";
 import "./EntityView.css";
@@ -31,9 +34,9 @@ export type EntityPage = {
   sources?: CatalogArtist[];
   releases?: Record<string, { albums: CatalogAlbum[]; nextOffset: number | null }>;
   expandedPopular?: boolean;
-  expandedBiography?: boolean;
 };
 export type EntityAction = "play" | "standalone" | "queue" | "next" | "shuffle";
+const albumExcludedColumns: readonly ColumnKey[] = ["album", "quality", "year", "genre"];
 export type EntityViewProps = {
   entity: BrowseEntity;
   cache: Map<string, EntityPage>;
@@ -58,6 +61,8 @@ function AlbumView({
   album,
   ...props
 }: EntityViewProps & { album: CatalogAlbum }) {
+  const columns = useTrackColumns();
+  const albumColumns = useMemo(() => ({ ...columns, excluded: albumExcludedColumns }), [columns]);
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
   const saved = useMemo(
@@ -104,15 +109,18 @@ function AlbumView({
   const tracks =
     entire && album.provider !== "local" ? (catalogTracks ?? []) : saved;
   const quality = useMemo(() => albumAudioQuality(catalogTracks ?? saved), [catalogTracks, saved]);
-  const [dialog, setDialog] = useState<"credits" | "versions" | null>(null);
+  const [dialog, setDialog] = useState<"credits" | "versions" | "about" | null>(null);
   const streamed = album.provider !== "local";
   return (
-    <>
+    <TrackColumnsContext.Provider value={albumColumns}>
     {streamed && <>
       <AlbumCreditsDialog album={album} tracks={catalogTracks ?? saved} open={dialog === "credits"} onClose={() => setDialog(null)}
         onOpenArtist={(artist) => props.onOpenEntity({ kind: "artist", artist })} />
       <AlbumVersionsDialog album={album} open={dialog === "versions"} onClose={() => setDialog(null)}
         onSelect={(version) => props.onOpenEntity({ kind: "album", album: version })} />
+      <AboutDialog title={album.title} subtitle={album.artist} open={dialog === "about"} onClose={() => setDialog(null)}>
+        <AlbumAbout album={album} track={(catalogTracks ?? saved)[0]} />
+      </AboutDialog>
     </>}
     <TrackCollectionView
       className="entityView albumView"
@@ -148,6 +156,7 @@ function AlbumView({
             {streamed && <>
               <button type="button" className="entityBylineAction" onClick={() => setDialog("credits")}>Credits</button>
               <button type="button" className="entityBylineAction" onClick={() => setDialog("versions")}>Versions</button>
+              <button type="button" className="entityBylineAction" aria-haspopup="dialog" onClick={() => setDialog("about")}>About</button>
             </>}
           </p>
           {/* Without saved songs there's nothing to switch between. */}
@@ -221,13 +230,12 @@ function AlbumView({
         if (track) props.onAddTrack(track);
       }}
       onOpenEntity={props.onOpenEntity}
-      footer={<AlbumAbout album={album} track={(catalogTracks ?? saved)[0]} />}
       summaryDetail={quality}
       showTrackNumbers
       showArtwork={false}
       savedTrackIds={savedTrackIds}
       registerScrollElement={props.registerScrollElement}
     />
-    </>
+    </TrackColumnsContext.Provider>
   );
 }
