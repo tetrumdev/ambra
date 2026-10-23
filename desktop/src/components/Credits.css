@@ -37,8 +37,7 @@
     scrollbar-width: none;
 }
 
-.creditsSource,
-.albumInfoSource {
+.creditsSource {
     color: #8a898a;
     font-size: 12px;
 }
@@ -137,7 +136,17 @@
     font-size: 12px;
 }
 
-.albumAbout .albumInfoRelease {
-    margin: 0 0 6px;
-    font-size: 0.8rem;
+.aboutDialog .aboutContent p {
+    margin: 0 0 14px;
+    line-height: 1.7;
+}
+
+.aboutDialog .aboutContent .creditsSource {
+    color: #8a898a;
+    font-size: 12px;
+}
+
+.aboutDialog .aboutContent > :last-child,
+.aboutDialog .aboutContent > div > :last-child {
+    margin-bottom: 0;
 }

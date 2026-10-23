@@ -130,38 +130,6 @@
     pointer-events: none;
 }
 
-.homePlay {
-    display: grid;
-    place-items: center;
-    width: 56px;
-    height: 56px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    opacity: 0;
-    pointer-events: auto;
-}
-
-.homePlay img {
-    width: 32px;
-    height: 32px;
-    transition: scale var(--motion-press-up);
-}
-
-.homePlay:active img {
-    scale: 0.8;
-    transition: scale var(--motion-press-down);
-}
-
-.homeCard:hover .homeShade,
-.homeCard:hover .homePlay,
-.homeCardButton:focus-visible .homeShade,
-.homeCardButton:focus-visible + .homePlayArea .homePlay,
-.homePlay:focus-visible {
-    opacity: 1;
-}
-
 .homeCardButton:hover .homeCardTitle,
 .homeCardButton:focus-visible .homeCardTitle {
     text-decoration: underline;

@@ -4,12 +4,15 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { TrackList, type TrackListProps } from "./TrackList";
 import { secureRandomInt } from "../utils/queueModel";
 import { formatTotalDuration } from "../utils/totalDuration";
 import { staggerRows } from "../utils/viewMotion";
+import { useTrackColumns } from "../hooks/useTrackColumns";
+import { optionalColumnsTemplate } from "../utils/trackColumnWidths";
 
 // Gap between the stuck playlist header's contents and the top of the view.
 const COLLAPSED_HEADER_INSET = 16;
@@ -76,6 +79,7 @@ export function TrackCollectionView({
   summaryDetail,
   ...trackListProps
 }: TrackCollectionViewProps) {
+  const { extra, excluded } = useTrackColumns();
   const { tracks, playTrack } = trackListProps;
   const summaryCount = summary?.count ?? tracks.length;
   const summaryUnit = summary?.unit ?? "track";
@@ -251,6 +255,7 @@ export function TrackCollectionView({
   return (
     <div
       className={`libraryView smoothScroll ${className}${collapsibleHeader ? " playlistView" : ""}`}
+      style={excluded ? { "--library-extra-columns": optionalColumnsTemplate(extra.filter(key => !excluded.includes(key))) } as CSSProperties : undefined}
       ref={setScrollElement}
       onScroll={
         collapsibleHeader

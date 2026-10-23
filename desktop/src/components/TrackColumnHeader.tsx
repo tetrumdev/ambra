@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
 import { useTrackColumns } from "../hooks/useTrackColumns";
 import { nextTrackSort, type TrackSort } from "../utils/trackCollectionOrder";
-import { isOptionalColumn, optionalTrackColumns, resizeColumnPair, trackColumns, type ColumnKey, type ColumnWidths } from "../utils/trackColumnWidths";
+import { isHideableColumn, isOptionalColumn, resizeColumnPair, trackColumns, type ColumnKey, type ColumnWidths } from "../utils/trackColumnWidths";
+import { MenuDotsIcon } from "./MenuDotsIcon";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import "./TrackColumnHeader.css";
 
@@ -16,11 +17,11 @@ type Props = {
 export function TrackColumnHeader({ headerRef, sort = null, onSortChange }: Props) {
   const preferred = useRef<ColumnWidths | null>(null);
   const cleanup = useRef<(() => void) | null>(null);
-  const { extra } = useTrackColumns();
-  const shownColumns = trackColumns.filter(column => !isOptionalColumn(column.key) || extra.includes(column.key));
+  const { extra, hidden, excluded = [] } = useTrackColumns();
+  const shownColumns = trackColumns.filter(column => !excluded.includes(column.key) && (isOptionalColumn(column.key) ? extra.includes(column.key) : !isHideableColumn(column.key) || !hidden.includes(column.key)));
 
   // Columns added or removed invalidate widths dragged for the old set.
-  const columnSet = extra.join(",");
+  const columnSet = [...extra, ...hidden.map(key => `-${key}`), ...excluded.map(key => `!${key}`)].join(",");
   useLayoutEffect(() => {
     preferred.current = null;
     headerRef.current?.parentElement?.style.removeProperty("--resized-library-columns");
@@ -182,9 +183,9 @@ function anchorPosition(button: HTMLElement) {
   return { top: rect.bottom + 6, right: window.innerWidth - rect.right };
 }
 
-/** Chooses the optional columns, which every song list then shows. */
+/** Chooses every column but the song's name, for every song list. */
 function ColumnPicker() {
-  const { extra, setExtra } = useTrackColumns();
+  const { extra, setExtra, hidden, setHidden, excluded = [] } = useTrackColumns();
   const [position, setPosition] = useState<{ top: number; right: number } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
@@ -237,15 +238,20 @@ function ColumnPicker() {
   return <div className="columnPicker">
     <button ref={button} type="button" className="columnPickerButton" aria-label="Choose columns" data-tooltip="Choose columns"
       aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
-      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12M2 8h12M2 13h12M6 1.5v3M10 6.5v3M5 11.5v3" /></svg>
+      <MenuDotsIcon />
     </button>
     {position && <div ref={menu} className="columnPickerMenu" role="menu" aria-label="Columns" onKeyDown={moveFocus}
       style={{ top: position.top, right: position.right }}>
       <span className="columnPickerHeading" aria-hidden="true">Show columns</span>
-      {optionalTrackColumns.map(column => {
-        const checked = extra.includes(column.key);
-        return <button key={column.key} type="button" role="menuitemcheckbox" aria-checked={checked} className="columnPickerOption"
-          onClick={() => setExtra(checked ? extra.filter(key => key !== column.key) : [...extra, column.key])}>
+      {trackColumns.filter(column => column.key !== "track" && !excluded.includes(column.key)).map(column => {
+        const key = column.key;
+        const checked = isOptionalColumn(key) ? extra.includes(key) : isHideableColumn(key) && !hidden.includes(key);
+        const toggle = () => {
+          if (isOptionalColumn(key)) setExtra(checked ? extra.filter(other => other !== key) : [...extra, key]);
+          else if (isHideableColumn(key)) setHidden(checked ? [...hidden, key] : hidden.filter(other => other !== key));
+        };
+        return <button key={key} type="button" role="menuitemcheckbox" aria-checked={checked} className="columnPickerOption"
+          onClick={toggle}>
           <span className="columnPickerCheck" aria-hidden="true" />{column.label}
         </button>;
       })}

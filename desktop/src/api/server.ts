@@ -9,7 +9,7 @@ import type {
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
-import { parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
+import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
 
 export const serverBaseUrl = (
   import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147"
@@ -98,10 +98,12 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   if (track.isrc) query.set("isrc", track.isrc);
   if (track.version) query.set("version", track.version);
   if (track.provider === "spotify") query.set("spotifyId", track.providerTrackId);
+  let retryDelay = 1000;
+  let partial: TrackLyrics | undefined;
   for (let attempt = 0; ; attempt++) {
     // Give temporary connection/upstream failures one automatic retry before
     // asking the listener to retry. Each attempt gets its own timeout.
-    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, 1000));
+    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, retryDelay));
     signal.throwIfAborted();
     let response: Response;
     try {
@@ -120,7 +122,15 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
       if (attempt === 0 && [502, 503, 504].includes(response.status)) continue;
       throw new Error(message);
     }
-    return parseTrackLyrics(await response.json());
+    const lyrics = parseTrackLyrics(await response.json());
+    if (attempt === 0 && needsLyricsRetry(lyrics)) {
+      // The server reports provider failures in a successful HTTP response too.
+      // Allow its default five-second provider cooldown to expire before retrying.
+      partial = lyrics;
+      retryDelay = 5000;
+      continue;
+    }
+    return lyrics.status === "unavailable" && partial?.status === "lyrics" ? partial : lyrics;
   }
 }
 

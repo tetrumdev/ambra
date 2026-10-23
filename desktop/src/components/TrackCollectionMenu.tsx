@@ -97,7 +97,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
               const added = playlist.trackIds.includes(trackId);
               return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving} onClick={() => {
                 void save(() => playlistOptions.onAdd(playlist.id, trackId));
-              }}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />{playlist.name}{added ? " ✓" : ""}</button>;
+              }}>{playlist.name}{added ? " ✓" : ""}</button>;
                 })}
               </details>;
             })}

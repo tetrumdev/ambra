@@ -41,6 +41,12 @@ export type TrackLyrics = {
   failedProviders: string[];
 };
 
+/** A failed provider may still have synced lyrics that the fallback did not supply. */
+export function needsLyricsRetry(lyrics: TrackLyrics): boolean {
+  return lyrics.failedProviders.length > 0
+    && (lyrics.status === "unavailable" || (lyrics.status === "lyrics" && lyrics.sync === "none"));
+}
+
 const timing = (value: unknown): value is number | null => value === null
   || (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 86_400_000);
 const optionalText = (value: unknown) => value === null || typeof value === "string";

@@ -1,11 +1,13 @@
 import { categoryOrder, rankArtists, rankAlbums } from "./catalogRanking";
 import type { CatalogArtist, CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
 import type { Track } from "../types/music";
-import { deduplicateSearchResults, rankSearchResults } from "./searchRanking";
+import { everyCopy, groupSearchResults, rankSearchGroups } from "./searchRanking";
 import { musicProviderName } from "./musicProviderName";
 
 export type SearchSnapshot = {
   results: Track[];
+  /** Every copy found, services and editions included, grouped by recording. */
+  allResults: Track[];
   artists: CatalogArtist[];
   albums: CatalogAlbum[];
   candidates: Track[];
@@ -54,7 +56,9 @@ export class SearchSession {
   snapshot(): SearchSnapshot {
     const sources = [...this.sources.values()];
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
-    const results = this.options.combined ? rankSearchResults(candidates, this.options.query) : deduplicateSearchResults(candidates);
+    // Grouping preserves the native order of a single provider's recordings.
+    const groups = this.options.combined ? rankSearchGroups(candidates, this.options.query) : groupSearchResults(candidates, "");
+    const results = groups.map(group => group.track);
     const artistCandidates = sources.flatMap(source => source.artists);
     const albumCandidates = sources.flatMap(source => source.albums);
     const intent = categoryOrder(this.options.query, results, artistCandidates, albumCandidates, candidates)[0];
@@ -67,6 +71,7 @@ export class SearchSession {
       artists,
       albums,
       results,
+      allResults: everyCopy(groups),
       isSearching: sources.some(source => source.pending),
       hasMore: sources.some(source => source.nextOffset !== null && !source.error),
       error: this.sources.size === 0 ? "No music services are connected." : errors.length ? `Some services could not be searched: ${errors.join(", ")}. Please try again.` : null,
@@ -96,7 +101,7 @@ export class SearchSession {
     }
     // The first visible list is consolidated when sources finish close together.
     // A slow/offline source can delay useful results by at most the bounded grace period.
-    this.options.onUpdate(this.initialResultsReleased ? next : { ...next, results: [], candidates: [], artists: [], albums: [] });
+    this.options.onUpdate(this.initialResultsReleased ? next : { ...next, results: [], allResults: [], candidates: [], artists: [], albums: [] });
   }
 
   replaceTrack(track: Track) {

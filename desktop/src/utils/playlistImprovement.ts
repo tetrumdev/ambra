@@ -1,7 +1,7 @@
 import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, type StreamingProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { searchTrackTitle } from "./catalogRanking";
-import { bestPlaylistCopy, compareSoundQuality, sameAlbumFamily, sameFormat, sameRecording } from "./searchRanking";
+import { albumTitleFamily, bestPlaylistCopy, compareSoundQuality, sameAlbumFamily, sameFormat, sameRecording } from "./searchRanking";
 
 const CONCURRENCY = 3;
 
@@ -54,9 +54,59 @@ export function packageCopies(members: Track[], copies: Track[][]): Track[] | nu
   return !matched || compareSoundQuality(best[0], members[0]) > 0 ? best : null;
 }
 
+/** Songs counted as one album: its title without edition notes, by its lead artist. */
+function albumKey(track: Track) {
+  const artist = (track.albumArtists[0]?.name ?? track.artist).toLowerCase().trim();
+  const album = albumTitleFamily(track.album);
+  return album && artist ? `${album}\n${artist}` : null;
+}
+
+/**
+ * Moves songs that share an album onto one service, so it plays from one place in one
+ * format. A song only moves to a copy that sounds at least as good as the one it would have
+ * kept; the service chosen is the one the most songs can be on, then the one most are already on.
+ * `chosen` is each song's copy so far and is updated in place; `copies` are every copy found.
+ */
+export function unifyAlbumServices(chosen: Map<GlobalTrackId, Track>, copies: Map<GlobalTrackId, Track[]>) {
+  const albums = new Map<string, GlobalTrackId[]>();
+  for (const [id, copy] of chosen) {
+    const key = albumKey(copy);
+    if (key) albums.set(key, [...albums.get(key) ?? [], id]);
+  }
+  for (const ids of albums.values()) {
+    const providers = new Set(ids.map(id => chosen.get(id)!.provider));
+    if (ids.length < 2 || providers.size < 2) continue;
+    // The copy each song could have on a service: same recording, same album, never worse-sounding.
+    // Among equals, the very release its album-mates there are on, then the plainest title.
+    const copyOn = (id: GlobalTrackId, provider: Track["provider"]) => {
+      const current = chosen.get(id)!;
+      if (current.provider === provider) return current;
+      const releases = new Set(ids.map(other => chosen.get(other)!).filter(copy => copy.provider === provider).map(copy => copy.albumId));
+      return (copies.get(id) ?? [])
+        .filter(copy => copy.provider === provider && copy.explicit === current.explicit && sameRecording(current, copy)
+          && sameAlbumFamily(copy, current) && compareSoundQuality(copy, current) >= 0)
+        .sort((a, b) => compareSoundQuality(b, a) || Number(releases.has(b.albumId)) - Number(releases.has(a.albumId))
+          || a.name.length - b.name.length)[0];
+    };
+    const score = (provider: Track["provider"]) => [
+      ids.filter(id => copyOn(id, provider)).length,
+      ids.filter(id => chosen.get(id)!.provider === provider).length,
+    ];
+    const target = [...providers].reduce((best, provider) => {
+      const [a, b] = [score(provider), score(best)];
+      return (a[0] - b[0] || a[1] - b[1]) > 0 ? provider : best;
+    });
+    for (const id of ids) {
+      const copy = copyOn(id, target);
+      if (copy) chosen.set(id, copy);
+    }
+  }
+}
+
 /**
  * Finds the copy each streamed song should be on, across every connected service: a song alone
- * follows `bestPlaylistCopy`, and a package's songs move together (`packageCopies`).
+ * follows `bestPlaylistCopy`, and a package's songs move together (`packageCopies`). Songs from
+ * one album then gather on one service (`unifyAlbumServices`).
  */
 export async function findPlaylistUpgrades(
   tracks: Track[],
@@ -89,10 +139,13 @@ export async function findPlaylistUpgrades(
     const moved = packageCopies(members, members.map(member => found.get(member.globalId)!));
     moved?.forEach((copy, index) => { if (copy.globalId !== members[index].globalId) upgrades.set(members[index].globalId, copy); });
   }
+  const chosen = new Map<GlobalTrackId, Track>();
   for (const [id, [current, ...candidates]] of found) {
-    if (packaged.has(id)) continue;
-    const best = bestPlaylistCopy(current, candidates);
-    if (best.globalId !== id) upgrades.set(id, best);
+    if (!packaged.has(id)) chosen.set(id, bestPlaylistCopy(current, candidates));
+  }
+  unifyAlbumServices(chosen, found);
+  for (const [id, copy] of chosen) {
+    if (copy.globalId !== id) upgrades.set(id, copy);
   }
   return upgrades;
 }

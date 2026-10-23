@@ -14,7 +14,6 @@ import {
   TrackCollectionView,
   type TrackCollectionViewProps,
 } from "./TrackCollectionView";
-import { LibrarySourcesDialog } from "./LibrarySourcesDialog";
 import { ArtworkImage } from "./ArtworkImage";
 import { formatTotalDuration } from "../utils/totalDuration";
 import { PerfProfiler } from "./PerfProfiler";
@@ -29,7 +28,6 @@ type LibraryViewProps = Omit<
 > & {
   section: LibrarySection;
   onSectionChange: (section: LibrarySection) => void;
-  onRescanLocalMusic: () => Promise<number>;
 };
 
 const VIRTUALIZE_AFTER_ENTITIES = 80;
@@ -161,7 +159,6 @@ function AlbumSection({ albums, onOpenEntity }: { albums: LibraryAlbum[]; onOpen
 export function LibraryView({
   section,
   onSectionChange,
-  onRescanLocalMusic,
   ...props
 }: LibraryViewProps) {
   const artists = useMemo(() => libraryArtists(props.tracks), [props.tracks]);
@@ -173,9 +170,6 @@ export function LibraryView({
       <div className="libraryView smoothScroll" ref={props.registerScrollElement}>
         <div className="libraryHeader">
           <h1 className="libraryTitle">My Library</h1>
-          <LibrarySourcesDialog
-            onRescanLocalMusic={onRescanLocalMusic}
-          />
         </div>
         <nav className="libraryOverview" aria-label="Library sections">
           {librarySections.map(({ id, label }) => (
@@ -203,11 +197,6 @@ export function LibraryView({
     <TrackCollectionView
       {...props}
       title={librarySections.find(item => item.id === section)!.label}
-      headerContent={
-        <LibrarySourcesDialog
-          onRescanLocalMusic={onRescanLocalMusic}
-        />
-      }
       removalLabel="Remove from Library"
       showPlaybackActions={section !== "artists"}
       summary={

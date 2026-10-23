@@ -3,7 +3,7 @@ import { ArtistLinks } from "./ArtistLinks";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { prefetchArtistPage } from "../utils/artistPage";
@@ -24,6 +24,8 @@ type SearchViewProps = {
   query: string;
   provider: SearchProvider;
   tracks: Track[];
+  /** Every copy found, services and editions included, for a section's "show all". */
+  allTracks: Track[];
   candidates: Track[];
   artists: CatalogArtist[];
   albums: CatalogAlbum[];
@@ -216,6 +218,7 @@ export function SearchView({
   query,
   provider,
   tracks,
+  allTracks,
   candidates,
   artists,
   albums,
@@ -237,11 +240,28 @@ export function SearchView({
     root.current = element;
     registerScrollElement(element);
   }, [registerScrollElement]);
-  useResultGlide(root, [tracks, artists, albums]);
-  const [featuredTrack, ...remainingTracks] = tracks.slice(0, 5);
+  // Each section shows its five best until asked for all; for tracks, "all" is every copy
+  // found, so a particular service or edition can be picked without narrowing the search.
+  const [expanded, setExpanded] = useState<ReadonlySet<"tracks" | "artists" | "albums">>(new Set());
+  useEffect(() => setExpanded(new Set()), [query, provider]);
+  const toggleSection = (section: "tracks" | "artists" | "albums") => setExpanded(current => {
+    const next = new Set(current);
+    if (!next.delete(section)) next.add(section);
+    return next;
+  });
+  const shownTracks = useMemo(() => expanded.has("tracks") ? allTracks : tracks.slice(0, 5), [expanded, allTracks, tracks]);
+  const shownArtists = useMemo(() => expanded.has("artists") ? artists : artists.slice(0, 5), [expanded, artists]);
+  const shownAlbums = useMemo(() => expanded.has("albums") ? albums : albums.slice(0, 5), [expanded, albums]);
+  const showAll = (section: "tracks" | "artists" | "albums", total: number) => (expanded.has(section) || total > 5) && (
+    <button type="button" className="searchShowAll" aria-expanded={expanded.has(section)} onClick={() => toggleSection(section)}>
+      {expanded.has(section) ? "Show fewer" : "Show all"}
+    </button>
+  );
+  useResultGlide(root, [shownTracks, shownArtists, shownAlbums]);
+  const [featuredTrack, ...remainingTracks] = shownTracks;
   const order = categoryOrder(query, tracks, artists, albums, candidates);
   const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
-  const count = Math.min(tracks.length, 5) + Math.min(artists.length, 5) + Math.min(albums.length, 5);
+  const count = shownTracks.length + shownArtists.length + shownAlbums.length;
   const status = isSearching ? `Searching ${providerNames[provider]}…` : `${count} results from ${error ? "available services" : providerNames[provider]}`;
 
   function openActions(event: React.MouseEvent, trackId: GlobalTrackId) {
@@ -324,7 +344,7 @@ export function SearchView({
       <div className="searchContent">
       <div className="searchSectionLayout">
       <section className="searchTrackSection" data-primary={order[0] === "tracks"} style={sectionStyle("tracks")} aria-labelledby="searchTracksHeading">
-      <h2 id="searchTracksHeading" className="searchSectionTitle">Tracks</h2>
+      <h2 className="searchSectionTitle"><span id="searchTracksHeading">Tracks</span>{showAll("tracks", allTracks.length)}</h2>
       {!featuredTrack && <p className="searchSectionEmpty">{isSearching ? "Searching tracks…" : "No tracks found"}</p>}
       {featuredTrack && (
         <div id="searchResults">
@@ -361,17 +381,17 @@ export function SearchView({
       </section>
       <div className="searchEntitySections">
         <section data-primary={order[0] === "artists"} style={sectionStyle("artists")} aria-labelledby="searchArtistsHeading">
-          <h2 id="searchArtistsHeading">Artists</h2>
+          <h2><span id="searchArtistsHeading">Artists</span>{showAll("artists", artists.length)}</h2>
           {!artists.length && <p className="searchEntityEmpty">{isSearching ? "Searching artists…" : "No artists found"}</p>}
-          {artists.slice(0, 5).map(artist => <button type="button" className="searchEntity searchArtist" key={artist.id} data-glide={`artist:${artist.id}`} onPointerEnter={() => prefetchArtistPage(artist)} onFocus={() => prefetchArtistPage(artist)} onClick={() => onOpenEntity({ kind: "artist", artist })}>
+          {shownArtists.map(artist => <button type="button" className="searchEntity searchArtist" key={artist.id} data-glide={`artist:${artist.id}`} onPointerEnter={() => prefetchArtistPage(artist)} onFocus={() => prefetchArtistPage(artist)} onClick={() => onOpenEntity({ kind: "artist", artist })}>
             <ArtistPortrait key={artist.id} artist={artist} />
             <div className="searchEntityInfo"><strong>{artist.name}</strong><small>Artist</small></div>
           </button>)}
         </section>
         <section data-primary={order[0] === "albums"} style={sectionStyle("albums")} aria-labelledby="searchAlbumsHeading">
-          <h2 id="searchAlbumsHeading">Albums</h2>
+          <h2><span id="searchAlbumsHeading">Albums</span>{showAll("albums", albums.length)}</h2>
           {!albums.length && <p className="searchEntityEmpty">{isSearching ? "Searching albums…" : "No albums found"}</p>}
-          {albums.slice(0, 5).map(album => {
+          {shownAlbums.map(album => {
             const title = `${album.title}${album.version && !album.title.toLowerCase().includes(album.version.toLowerCase()) ? ` (${album.version})` : ""}`;
             const quality = albumQuality(album);
             const open = () => onOpenEntity({ kind: "album", album });

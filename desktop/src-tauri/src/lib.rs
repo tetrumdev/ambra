@@ -1007,7 +1007,7 @@ pub fn run() {
                 .ok()
                 .map(|directory| directory.join("ambra-server.log"));
             app.manage(BundledBackend::start(server_log));
-            #[cfg(target_os = "windows")]
+            #[cfg(any(target_os = "windows", target_os = "macos"))]
             keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
@@ -1055,6 +1055,8 @@ pub fn run() {
 
     app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            #[cfg(target_os = "macos")]
+            keyboard::cleanup();
             app.state::<BundledBackend>().stop();
         }
     });

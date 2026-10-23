@@ -50,6 +50,8 @@ type AudioPlayer = {
   clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
+  previousActivation: number;
+  nextActivation: number;
   playbackError: string | null;
   isSessionRestored: boolean;
   togglePlayback: () => Promise<void>;
@@ -129,6 +131,8 @@ export function useAudioPlayer(
   const setCurrentTime = clock.set;
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [previousActivation, setPreviousActivation] = useState(0);
+  const [nextActivation, setNextActivation] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [isSessionRestored, setIsSessionRestored] = useState(false);
   const [nativeQuality, setNativeQuality] = useState<{
@@ -508,6 +512,7 @@ export function useAudioPlayer(
   );
 
   const previous = useCallback(() => {
+    if (currentTrackIdRef.current) setPreviousActivation((activation) => activation + 1);
     if (usesNativeAudio) {
       if (clock.get() > 3) {
         seek(0);
@@ -547,6 +552,7 @@ export function useAudioPlayer(
   }, [activeAudio, seek, switchToTrack, usesNativeAudio]);
 
   const next = useCallback(() => {
+    if (currentTrackIdRef.current) setNextActivation((activation) => activation + 1);
     if (usesNativeAudio) {
       void (async () => {
         try {
@@ -1098,6 +1104,8 @@ export function useAudioPlayer(
     clock,
     duration,
     isPlaying,
+    previousActivation,
+    nextActivation,
     playbackError,
     isSessionRestored,
     togglePlayback,

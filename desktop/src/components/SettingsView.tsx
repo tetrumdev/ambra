@@ -10,14 +10,15 @@ import { musicProviderName } from "../utils/musicProviderName";
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
 import { DspPanel } from "./settings/DspPanel";
+import { LocalSettings } from "./settings/LocalSettings";
 import { Segmented, SettingRow, Toggle } from "./settings/SettingsControls";
 import "./SettingsView.css";
 
-type Props = { onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
 const DESKTOP_ONLY = "Desktop app only";
 
-export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
+export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
@@ -72,7 +73,7 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
       </header>
       {!audio.native && <p className="settingsMuted">Choosing devices needs the desktop app.</p>}
       {audio.loading ? <p className="settingsMuted" role="status">Loading outputs…</p> : <div className="settingsOutputs">
-        {audio.settings.outputs.map(output => <OutputCard key={output.id} output={output}
+        {audio.settings.outputs.filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <OutputCard key={output.id} output={output}
           onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
       </div>}
     </section>
@@ -84,25 +85,27 @@ export function SettingsView({ onServiceConnected, tab, onTabChange: setTab, sho
     <section id="settings-panel-services" role="region" aria-labelledby="settings-tab-services" hidden={tab !== "services"}>
       <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected} />
     </section>
+
+    <section id="settings-panel-local" role="region" aria-labelledby="settings-tab-local" hidden={tab !== "local"}>
+      <LocalSettings onRescanLocalMusic={onRescanLocalMusic} />
+    </section>
   </div>;
 }
 
 function OutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPreset: (presetId: string) => void }) {
   const audio = useAudioSettings()!;
-  const connected = output.id === "" || audio.devices.some(device => device.id === output.id);
   const selected = audio.settings.selectedOutputId === output.id;
   const update = (change: Partial<OutputSettings>) =>
     audio.update(current => ({ ...current, outputs: current.outputs.map(item => item.id === output.id ? { ...item, ...change } : item) }));
-  return <article className="settingsOutput" data-selected={selected || undefined} data-disconnected={!connected || undefined}>
+  return <article className="settingsOutput" data-selected={selected || undefined}>
     <div className="settingsOutputHeader">
       <input className="settingsOutputName" aria-label={`Name for ${output.name}`} key={output.name} defaultValue={output.name} maxLength={200}
         disabled={audio.saving} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
         onBlur={e => { const name = e.currentTarget.value.trim(); if (name && name !== output.name) void update({ name }); else e.currentTarget.value = output.name; }} />
       {selected && <span className="settingsChip settingsChipActive">Playing here</span>}
       {output.id === "" && <span className="settingsChip">Follows system</span>}
-      {!connected && <span className="settingsChip">Disconnected</span>}
       <span className="settingsOutputSpacer" />
-      {!selected && <button type="button" className="settingsPill" disabled={!audio.native || audio.saving || !output.enabled || !connected}
+      {!selected && <button type="button" className="settingsPill" disabled={!audio.native || audio.saving || !output.enabled}
         onClick={() => void audio.update(current => ({ ...current, selectedOutputId: output.id }))}>Play here</button>}
       <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
       <Toggle label={`Show ${output.name} in player`} checked={output.enabled} disabled={audio.saving} onChange={enabled => void update({ enabled })} />
