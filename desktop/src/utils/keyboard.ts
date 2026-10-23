@@ -70,3 +70,21 @@ export function isBrowserShortcut(event: KeyPress) {
   if (event.ctrlKey && !event.metaKey && event.code === "KeyH") return true;
   return (event.ctrlKey || event.metaKey) && !event.altKey && BROWSER_MODIFIED_KEYS.has(event.code);
 }
+
+/** A shortcut named by the character it types, so it follows the keyboard layout: "/" is Shift+7 on some. */
+export function isCharacterKey(event: KeyboardEvent, character: string) {
+  return event.key === character && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+// Controls that use the arrow keys themselves: sliders, menus, lists and column resizing.
+const ARROW_KEY_OWNERS = "input[type='range'], [role='slider'], [role='menu'], [role='listbox'], [role='radiogroup'], [role='tablist'], select, .columnResizeHandle";
+
+/**
+ * Whether a single-key playback shortcut may act: nothing is being typed, nothing open such as a
+ * menu or dialog has the keyboard, and, for arrows, the focused control has no use of its own for them.
+ */
+export function acceptsPlaybackShortcut(event: KeyboardEvent, arrows = false, ignoreOpenMenus = false) {
+  if (event.defaultPrevented || isTypingTarget(event.target)) return false;
+  if (!ignoreOpenMenus && document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop], .columnPickerMenu")) return false;
+  return !arrows || !(event.target instanceof Element && event.target.closest(ARROW_KEY_OWNERS));
+}

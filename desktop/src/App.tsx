@@ -49,9 +49,16 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
-import { isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey, navigationShortcut } from "./utils/keyboard";
+import { acceptsPlaybackShortcut, isCharacterKey, isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey, navigationShortcut } from "./utils/keyboard";
+import { PageFilterBar } from "./components/PageFilterBar";
+import { UpdateNotice } from "./components/UpdateNotice";
+import { useAutomaticUpdateChecks } from "./hooks/useAppUpdate";
+import { PageFilterProvider } from "./hooks/usePageFilter";
+import { TrackColumnsContext, type TrackColumnsStore } from "./hooks/useTrackColumns";
+import { optionalColumnsTemplate, orderedOptionalColumns } from "./utils/trackColumnWidths";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { enterView } from "./utils/viewMotion";
+import { isSongEnding } from "./utils/songEnding";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
 import { prepareLyricSync } from "./utils/lyricsOffset";
@@ -75,14 +82,18 @@ async function setWindowFullscreen(fullscreen: boolean) {
   await getCurrentWebview().setFocus();
 }
 
+/** How long playback may stop before the display is allowed to sleep again. */
+const DISPLAY_WAKE_RELEASE_DELAY_MS = 5_000;
+
 function App({ localOnly }: { localOnly: boolean }) {
   const [preferences, setPreferences] = useState(() => {
     const saved = loadPreferences();
     return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
   });
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("outputs");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
+  useAutomaticUpdateChecks();
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
@@ -170,6 +181,9 @@ function App({ localOnly }: { localOnly: boolean }) {
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
   }, listeningHistory.recordPlay);
+  // Read by timers that outlive a render, such as the player controls fading out.
+  const playerDurationRef = useRef(player.duration);
+  playerDurationRef.current = player.duration;
   useStaleTrackRefresh(
     playlistStore.tracks,
     library.isServerReachable,
@@ -385,8 +399,8 @@ function App({ localOnly }: { localOnly: boolean }) {
   const collectionPackages = selectedPlaylist?.packages;
   const collectionTracks = useMemo(
     // Packaged songs stay together, in their own order, however the playlist is sorted.
-    () => groupPackagedTracks(sortCollectionTracks(baseCollectionTracks, collectionSort), collectionPackages ?? []),
-    [baseCollectionTracks, collectionSort, collectionPackages],
+    () => groupPackagedTracks(sortCollectionTracks(baseCollectionTracks, collectionSort, listeningHistory.stats), collectionPackages ?? []),
+    [baseCollectionTracks, collectionSort, collectionPackages, listeningHistory.stats],
   );
   const activeCollectionContext = selectedPlaylist
     ? collectionQueueContext(collectionTracks, {
@@ -394,7 +408,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         id: selectedPlaylist.id,
       }, collectionPackages)
     : libraryQueueContext(
-        sortCollectionTracks(library.tracks, collectionSort),
+        sortCollectionTracks(library.tracks, collectionSort, listeningHistory.stats),
       );
 
   const duplicatePlaylist = (playlist: Playlist) => {
@@ -481,6 +495,24 @@ function App({ localOnly }: { localOnly: boolean }) {
     };
   }, [isFullscreen]);
 
+  // Fullscreen in the player with music playing, the display stays on, like a video player's.
+  // Letting go waits a moment, so the gap between songs doesn't hand the screen back.
+  const keepDisplayAwake = isFullscreen === true && isPlayerView && player.isPlaying;
+  useEffect(() => {
+    if (!isTauri()) return;
+    const send = (awake: boolean) => void invoke("set_display_wake", { awake })
+      .catch(error => console.warn("Could not change display sleep:", error));
+    if (keepDisplayAwake) {
+      send(true);
+      return;
+    }
+    const release = setTimeout(() => send(false), DISPLAY_WAKE_RELEASE_DELAY_MS);
+    return () => clearTimeout(release);
+  }, [keepDisplayAwake]);
+  useEffect(() => () => {
+    if (isTauri()) void invoke("set_display_wake", { awake: false }).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (!isUnmodifiedKey(event, "F11") || event.repeat) return;
@@ -551,6 +583,14 @@ function App({ localOnly }: { localOnly: boolean }) {
       if (document.querySelector("#trackMenuBackdrop, [data-click-menu-backdrop], dialog[open]")
         || (event.target instanceof Element && event.target.closest("#searchBar")))
         return;
+      // Settings is a place you visit rather than a page of its own, so Escape returns from it too.
+      if (screen === "settings") {
+        // A text field in settings keeps Escape for itself.
+        if (isTypingTarget(event.target)) return;
+        event.preventDefault();
+        if (!event.repeat && !goBack()) changeScreen("library");
+        return;
+      }
       if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") return;
       event.preventDefault();
       event.stopPropagation();
@@ -610,8 +650,9 @@ function App({ localOnly }: { localOnly: boolean }) {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!isUnmodifiedKey(event, "KeyF")) return;
       if (
-        event.target instanceof Element &&
-        event.target.closest("#searchBar")
+        isTypingTarget(event.target) ||
+        (event.target instanceof Element &&
+        event.target.closest("#searchBar"))
       ) {
         return;
       }
@@ -666,12 +707,15 @@ function App({ localOnly }: { localOnly: boolean }) {
     }
 
     let idleTimer: ReturnType<typeof setTimeout>;
+    // The controls fade out after a song's change, never into it.
+    const becomeIdle = () => {
+      if (isSongEnding(player.clock.get(), playerDurationRef.current)) idleTimer = setTimeout(becomeIdle, 500);
+      else root.setAttribute("data-bigscreen-idle", "true");
+    };
     const markActive = () => {
       root.removeAttribute("data-bigscreen-idle");
       clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        root.setAttribute("data-bigscreen-idle", "true");
-      }, 10_000);
+      idleTimer = setTimeout(becomeIdle, 10_000);
     };
 
     markActive();
@@ -1033,6 +1077,41 @@ function App({ localOnly }: { localOnly: boolean }) {
     if (!isPlayerView) enterView(mainRef.current?.lastElementChild);
   }, [viewKey, isPlayerView]);
 
+  // / filters the songs on the page; each page starts unfiltered.
+  const [pageFilter, setPageFilter] = useState<{ view: string; query: string; focus: number } | null>(null);
+  useEffect(() => setPageFilter(current => current && current.view !== viewKey ? null : current), [viewKey]);
+  const activePageFilter = pageFilter?.view === viewKey && !isPlayerView ? pageFilter : null;
+  const handlePageFilterShortcut = useStableCallback((event: KeyboardEvent) => {
+    if (!isCharacterKey(event, "/") || isPlayerView || ["search", "home", "settings"].includes(viewKey)) return;
+    if (!acceptsPlaybackShortcut(event) || !mainRef.current?.querySelector(".columnInfo")) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    setPageFilter(current => ({
+      view: viewKey,
+      query: current?.view === viewKey ? current.query : "",
+      focus: (current?.focus ?? 0) + 1,
+    }));
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handlePageFilterShortcut);
+    return () => window.removeEventListener("keydown", handlePageFilterShortcut);
+  }, [handlePageFilterShortcut]);
+
+  // Optional columns are one choice for every song list, spliced into their grids from the root.
+  const chosenTrackColumns = preferences.ui.trackColumns;
+  useLayoutEffect(() => {
+    const template = optionalColumnsTemplate(chosenTrackColumns);
+    if (template) document.documentElement.style.setProperty("--library-extra-columns", template);
+    else document.documentElement.style.removeProperty("--library-extra-columns");
+  }, [chosenTrackColumns]);
+  const trackColumns = useMemo<TrackColumnsStore>(() => ({
+    extra: chosenTrackColumns,
+    setExtra: columns => setPreferences(current => ({
+      ...current, ui: { ...current.ui, trackColumns: orderedOptionalColumns(columns).map(column => column.key) },
+    })),
+    stats: listeningHistory.stats,
+  }), [chosenTrackColumns, listeningHistory.stats]);
+
   return (
     <>
       <AppChrome
@@ -1068,6 +1147,8 @@ function App({ localOnly }: { localOnly: boolean }) {
         />
       )}
 
+      <TrackColumnsContext.Provider value={trackColumns}>
+      <PageFilterProvider query={activePageFilter?.query ?? ""}>
       {/* Stays mounted, hidden, behind the player, so closing it is instant and every scroll position holds. */}
       <main ref={mainRef} className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
         data-hidden={isPlayerView || undefined} inert={isPlayerView && searchSummon !== "on"}>
@@ -1168,6 +1249,9 @@ function App({ localOnly }: { localOnly: boolean }) {
             deleteEntries={deleteQueueEntries}
             deleteHistoryEntries={queue.removeHistoryEntries}
             registerScrollElement={registerScrollElement}
+            playlistOptions={playlistOptions}
+            savedTrackIds={libraryTrackIds}
+            addToLibrary={addEntityTrack}
           />
         ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
           onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
@@ -1236,6 +1320,12 @@ function App({ localOnly }: { localOnly: boolean }) {
           />
         )}
       </main>
+      {activePageFilter && <PageFilterBar query={activePageFilter.query} focusRequest={activePageFilter.focus}
+        onQueryChange={query => setPageFilter(current => current && { ...current, query })}
+        onClose={() => setPageFilter(null)} />}
+      </PageFilterProvider>
+      </TrackColumnsContext.Provider>
+      {!isPlayerView && <UpdateNotice />}
 
       <TrackCreditsDialog onOpenArtist={(artist) => openEntity({ kind: "artist", artist })} />
       <NowPlayingBar

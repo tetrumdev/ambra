@@ -22,6 +22,8 @@ export type AudioQuality = {
   channels: number;
   bitrateKbps: number | null;
   bitrateIsEstimate: boolean;
+  /** The level change volume normalization applies; absent while the song plays unchanged. */
+  normalizationGainDb?: number | null;
 };
 
 export type Track = {

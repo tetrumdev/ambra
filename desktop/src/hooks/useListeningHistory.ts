@@ -5,7 +5,9 @@ import { isSavedTrack } from "../utils/playlistStorage";
 import { parseQueueSnapshot } from "../utils/queueStorage";
 
 const storageKey = "ambra.listening-history.v1";
-export type ListeningEntry = { track: Track; lastPlayedAt: number };
+/** `playCount` started being kept after listening history did; older entries count one play. */
+export type ListeningEntry = { track: Track; lastPlayedAt: number; playCount?: number };
+export type TrackPlayStats = { plays: number; lastPlayedAt: number };
 
 function loadHistory(): ListeningEntry[] {
   const raw = getPersistentItem(storageKey);
@@ -15,7 +17,8 @@ function loadHistory(): ListeningEntry[] {
     if (saved?.version !== 1 || !Array.isArray(saved.entries)
       || !saved.entries.every((entry: ListeningEntry) => entry && isSavedTrack(entry.track)
         && entry.track.globalId.length > 0 && !ids.has(entry.track.globalId) && ids.add(entry.track.globalId)
-        && Number.isSafeInteger(entry.lastPlayedAt) && entry.lastPlayedAt > 0 && entry.lastPlayedAt <= 8.64e15)) {
+        && Number.isSafeInteger(entry.lastPlayedAt) && entry.lastPlayedAt > 0 && entry.lastPlayedAt <= 8.64e15
+        && (entry.playCount === undefined || (Number.isSafeInteger(entry.playCount) && entry.playCount > 0)))) {
       throw new Error("Invalid listening history");
     }
     return saved.entries;
@@ -65,8 +68,15 @@ export function useListeningHistory() {
   }, [initial.entries, save]);
 
   const recordPlay = useCallback((track: Track) => {
-    save([{ track, lastPlayedAt: Date.now() }, ...current.current.filter(entry => entry.track.globalId !== track.globalId)]);
+    const previous = current.current.find(entry => entry.track.globalId === track.globalId);
+    save([
+      { track, lastPlayedAt: Date.now(), playCount: (previous?.playCount ?? (previous ? 1 : 0)) + 1 },
+      ...current.current.filter(entry => entry !== previous),
+    ]);
   }, [save]);
   const tracks = useMemo(() => entries.map(entry => entry.track), [entries]);
-  return { entries, tracks, error, recordPlay };
+  const stats = useMemo(() => new Map<string, TrackPlayStats>(entries.map(entry => [
+    entry.track.globalId, { plays: entry.playCount ?? 1, lastPlayedAt: entry.lastPlayedAt },
+  ])), [entries]);
+  return { entries, tracks, stats, error, recordPlay };
 }

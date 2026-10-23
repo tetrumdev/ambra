@@ -16,6 +16,7 @@ use qbz_qobuz::{QobuzClient, performers::parse_performers};
 use tokio::sync::Mutex;
 
 use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
+use crate::loudness::Loudness;
 use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
     TrackMetadata, search_next_offset,
@@ -33,6 +34,8 @@ pub struct QobuzProvider {
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
     playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     albums: Arc<Mutex<HashMap<String, Album>>>,
+    /// Tracks without loudness values are remembered too, so each is asked about once.
+    loudness: Arc<Mutex<HashMap<String, Loudness>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -120,6 +123,7 @@ impl QobuzProvider {
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
             playback_fetches: Arc::new(Mutex::new(HashMap::new())),
             albums: Arc::new(Mutex::new(HashMap::new())),
+            loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         }
@@ -411,6 +415,10 @@ impl QobuzProvider {
         }
 
         let track = self.client.get_track(numeric_track_id).await?;
+        self.loudness
+            .lock()
+            .await
+            .insert(track_id.to_owned(), track_loudness(&track));
         if !track.streamable {
             return Err(io::Error::other("Qobuz reports that this track is not streamable").into());
         }
@@ -488,6 +496,26 @@ impl QobuzProvider {
             "Qobuz metadata cache",
             save_track_metadata_cache,
         );
+    }
+
+    /// The track's ReplayGain values. Qobuz reports no album gain.
+    pub async fn loudness(&self, track_id: &str) -> Loudness {
+        if let Some(loudness) = self.loudness.lock().await.get(track_id).copied() {
+            return loudness;
+        }
+        let Ok(numeric_track_id) = validate_track_id(track_id) else {
+            return Loudness::default();
+        };
+        // A failed lookup may succeed later, so only an answer is remembered.
+        let Ok(track) = self.client.get_track(numeric_track_id).await else {
+            return Loudness::default();
+        };
+        let loudness = track_loudness(&track);
+        self.loudness
+            .lock()
+            .await
+            .insert(track_id.to_owned(), loudness);
+        loudness
     }
 
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
@@ -903,6 +931,15 @@ fn push_unique_artist(artists: &mut Vec<ArtistMetadata>, artist: ArtistMetadata)
         })
     {
         artists.push(artist);
+    }
+}
+
+fn track_loudness(track: &Track) -> Loudness {
+    let info = track.audio_info.unwrap_or_default();
+    Loudness {
+        track_gain_db: info.replaygain_track_gain,
+        track_peak: info.replaygain_track_peak.filter(|peak| *peak > 0.0),
+        ..Loudness::default()
     }
 }
 

@@ -118,7 +118,7 @@ export function bestQualityRecording(original: Track, candidates: Track[]) {
 }
 
 /** Whether two album titles are one album, counting editions such as "OK Computer OKNOTOK 1997 2017". */
-function sameAlbumFamily(left: Track, right: Track) {
+export function sameAlbumFamily(left: Track, right: Track) {
   const [a, b] = [albumFamily(left), albumFamily(right)];
   return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
 }
@@ -127,30 +127,46 @@ function released(track: Track) {
   return track.releaseDate && /^\d{4}/.test(track.releaseDate) ? track.releaseDate : null;
 }
 
+/** A regional pressing, such as "Greatest Hits In Japan", which is rarely the release anyone means. */
+function regional(track: Track) {
+  return /\b(in japan|japan(ese)? (edition|version)|\(japan\)|us edition|uk edition|international (edition|version))\b/i.test(`${track.album} ${track.albumVersion ?? ""}`);
+}
+
+const compareScores = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
+
+/** Bit depth and sample rate decide whether a DAC must switch between two songs. */
+export function sameFormat(left: Track, right: Track) {
+  return compareScores(soundQuality(left), soundQuality(right)) === 0;
+}
+
+/** Lossless first, then bit depth, then sample rate. */
+export function compareSoundQuality(left: Track, right: Track) {
+  return compareScores(soundQuality(left), soundQuality(right));
+}
+
 /**
- * The copy a playlist should keep. A song belongs to the album it first came out on (the
- * earliest-dated release of the recording, or its current album when dates are unknown and
- * that isn't a compilation), so it's upgraded to the best-sounding copy of that album from
- * any service or edition. It only moves to another album to go from lossy to lossless when
- * its own album has no lossless copy; a higher resolution isn't worth leaving the album for.
- * A song already moved to a later compilation goes back to its album when that has a lossless copy.
+ * The copy a playlist should keep. Never a worse-sounding one: a song only moves for a better
+ * copy, or for an equally good one when it sits on a compilation or regional pressing and the
+ * other doesn't. Among equally good new copies, a proper album beats a compilation or regional
+ * pressing, then one on the song's current album, then the earliest release.
  */
 export function bestPlaylistCopy(original: Track, candidates: Track[]) {
-  const copies = [original, ...candidates.filter(candidate => candidate.provider !== "local"
-    && candidate.explicit === original.explicit && sameRecording(original, candidate))];
-  const compare = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
-  // Among equally good copies the current one stays; otherwise the album's own release, then the earliest.
-  const release = (track: Track) => [Number(!compilation(track)), -Number((released(track) ?? "9999").slice(0, 4))];
-  const best = (list: Track[]) => list.reduce((top, copy) => {
-    const quality = compare(soundQuality(copy), soundQuality(top));
-    return quality > 0 || (quality === 0 && top !== original && compare(release(copy), release(top)) > 0) ? copy : top;
-  }, list.includes(original) ? original : list[0]);
-  const dated = copies.filter(released).sort((a, b) => released(a)!.localeCompare(released(b)!));
-  const home = dated[0] ?? (compilation(original) ? copies.find(copy => !compilation(copy)) : undefined) ?? original;
-  const fromHome = best(copies.filter(copy => sameAlbumFamily(copy, home)));
-  if (lossless(fromHome)) return fromHome;
-  const anywhere = best(copies);
-  return lossless(anywhere) ? anywhere : fromHome;
+  const release = (track: Track) => [Number(!compilation(track) && !regional(track)), Number(sameAlbumFamily(track, original)),
+    -Number((released(track) ?? "9999").slice(0, 4))];
+  let best = original;
+  for (const candidate of candidates) {
+    if (candidate.provider === "local" || candidate.explicit !== original.explicit || !sameRecording(original, candidate)) continue;
+    const quality = compareSoundQuality(candidate, best);
+    if (quality > 0) best = candidate;
+    else if (quality === 0) {
+      // The current copy only gives way to a proper album; any other tie keeps it.
+      const wins = best === original
+        ? release(candidate)[0] > release(original)[0]
+        : compareScores(release(candidate), release(best)) > 0;
+      if (wins) best = candidate;
+    }
+  }
+  return best;
 }
 
 function relevance(track: Track, query: string) {

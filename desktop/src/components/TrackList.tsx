@@ -17,7 +17,9 @@ import { ArtistLinks } from "./ArtistLinks";
 import { trackArtistNames } from "../utils/trackArtists";
 import { PerfProfiler } from "./PerfProfiler";
 import { TrackColumnHeader } from "./TrackColumnHeader";
+import { TrackExtraCells } from "./TrackExtraCells";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
+import { usePageFilteredTracks } from "../hooks/usePageFilter";
 import {
   type DropPosition,
   type TrackSort,
@@ -79,7 +81,7 @@ function formatTime(time: number) {
 }
 
 export function TrackList({
-  tracks,
+  tracks: allTracks,
   onOpenEntity, savedTrackIds, showTrackNumbers = false, showRank = false, showArtwork = true,
   playTrack,
   playStandalone,
@@ -90,13 +92,21 @@ export function TrackList({
   addToLibrary,
   playlistOptions,
   showProviderIcon = false,
-  reorderTracks,
+  reorderTracks: reorderAllTracks,
   packages,
   bindTracks,
   unbindTracks,
   sort = null,
   onSortChange,
 }: TrackListProps) {
+  const { shown: tracks, filtering } = usePageFilteredTracks(allTracks);
+  // A filtered list hides songs, so reordering it can't say where they belong.
+  const reorderTracks = filtering ? undefined : reorderAllTracks;
+  // Ranks and fallback numbers keep counting the whole list while it is filtered.
+  const positions = useMemo(
+    () => filtering ? new Map(allTracks.map((track, index) => [track.globalId, index])) : null,
+    [allTracks, filtering],
+  );
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
   const showDiscNumbers = useMemo(() => tracks.some(track => (track.discNumber ?? 1) > 1), [tracks]);
   const entityActions = useRef(onOpenEntity);
@@ -337,7 +347,7 @@ export function TrackList({
         const index = virtual.start + windowIndex;
         const pack = packed.get(track.globalId);
         return (
-          <TrackRow key={track.globalId} track={track} index={index}
+          <TrackRow key={track.globalId} track={track} index={index} position={positions?.get(track.globalId) ?? index}
             onOpenEntity={onOpenEntity ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
             selected={selection.selectedIds.has(track.globalId)}
             selecting={selection.isSelecting}
@@ -365,9 +375,11 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, onAction, onPointerDown }: {
   track: Track;
   index: number;
+  /** Where the song sits in the whole, unfiltered list. */
+  position: number;
   onOpenEntity?: (entity: BrowseEntity) => void;
   saved?: boolean;
   showTrackNumbers: boolean;
@@ -427,13 +439,14 @@ const TrackRow = memo(function TrackRow({ track, index, onOpenEntity, saved, sho
         className={`trackName trackDescriptor${showProviderIcon ? " trackNameWithProvider" : ""}`}
         data-playback-menu-trigger
       >
-        <span className="trackTitleText">{(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? index + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? index + 1}</>}</small>}{track.name}{saved && <small className="savedTrackBadge">Saved</small>}</span>
+        <span className="trackTitleText">{(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? position + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? position + 1}</>}</small>}{track.name}{saved && <small className="savedTrackBadge">Saved</small>}</span>
         {showProviderIcon && (
           <ProviderIcon provider={track.provider} />
         )}
       </span>
       <span className="artistName trackDescriptor">{onOpenEntity ? <ArtistLinks track={track} onOpenEntity={onOpenEntity} /> : trackArtistNames(track)}</span>
       <span className="albumName trackDescriptor">{onOpenEntity ? <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button> : track.album}</span>
+      <TrackExtraCells track={track} />
       <span
         className="trackDuration trackDescriptor"
         data-playback-menu-trigger
