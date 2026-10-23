@@ -27,11 +27,16 @@ use librespot_oauth::{OAuthClient, OAuthClientBuilder, OAuthToken};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::loudness::Loudness;
 use crate::models::{
     AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, TrackMetadata,
 };
 
 const SPOTIFY_OGG_HEADER_END: u64 = 0xa7;
+/// Where Spotify's Ogg header stores track gain, track peak, album gain and album peak (f32 LE).
+const SPOTIFY_LOUDNESS_OFFSET: u64 = 144;
+/// Spotify's gains bring songs to -14 LUFS; ReplayGain's reference is 4 dB lower.
+const SPOTIFY_REFERENCE_OFFSET_DB: f64 = -4.0;
 const DEFAULT_OAUTH_PORT: u16 = 8898;
 const AUDIO_CACHE_LIMIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const OAUTH_REFRESH_MARGIN: Duration = Duration::from_secs(60);
@@ -681,6 +686,41 @@ impl SpotifyProvider {
 impl PreparedSpotifyStream {
     pub fn content_length(&self) -> u64 {
         self.content_length
+    }
+
+    /// The loudness Spotify stores in the file's header. Blocks while that part downloads.
+    pub fn read_loudness(&mut self) -> Loudness {
+        if self.header_offset == 0 {
+            return Loudness::default();
+        }
+        let mut bytes = [0_u8; 16];
+        if self
+            .reader
+            .seek(SeekFrom::Start(SPOTIFY_LOUDNESS_OFFSET))
+            .and_then(|_| self.reader.read_exact(&mut bytes))
+            .is_err()
+        {
+            return Loudness::default();
+        }
+        let value = |index: usize| {
+            let start = index * 4;
+            f64::from(f32::from_le_bytes([
+                bytes[start],
+                bytes[start + 1],
+                bytes[start + 2],
+                bytes[start + 3],
+            ]))
+        };
+        let gain = |value: f64| {
+            (value.is_finite() && value.abs() <= 40.0).then_some(value + SPOTIFY_REFERENCE_OFFSET_DB)
+        };
+        let peak = |value: f64| (value.is_finite() && value > 0.0 && value <= 4.0).then_some(value);
+        Loudness {
+            track_gain_db: gain(value(0)),
+            track_peak: peak(value(1)),
+            album_gain_db: gain(value(2)),
+            album_peak: peak(value(3)),
+        }
     }
 
     pub fn mime_type(&self) -> &'static str {

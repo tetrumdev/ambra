@@ -11,7 +11,7 @@ function codecName(codec: string | null | undefined) {
   return codec.toUpperCase();
 }
 
-export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) {
+function qualityFields(track: Track, decoded?: AudioQuality | null) {
   const reported = track.quality ?? "";
   const reportedCodec = codecName(reported.match(/^(Ogg Vorbis|FLAC|ALAC|AAC|MP3|PCM|WAV|AIFF|Opus)\b/i)?.[1]);
   const codec = decoded ? codecName(decoded.codec) : reportedCodec;
@@ -33,6 +33,11 @@ export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) 
     ? reportedBitrate ?? decodedBitrate
     : decodedBitrate ?? reportedBitrate;
   const estimated = bitrate != null && decoded?.bitrateIsEstimate === true && reportedBitrate == null;
+  return { codec, lossless, bitDepth, sampleRate, channels, bitrate, estimated };
+}
+
+export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) {
+  const { codec, lossless, bitDepth, sampleRate, channels, bitrate, estimated } = qualityFields(track, decoded);
   const hiRes = lossless && ((bitDepth ?? 0) > 16 || (sampleRate ?? 0) > 48);
   const name = lossless
     ? hiRes ? "Hi-Res Lossless" : bitDepth === 16 && sampleRate === 44.1 ? "CD Quality" : "Lossless"
@@ -50,6 +55,30 @@ export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) 
     description: [
       decoded ? "Source audio before output conversion." : "Reported source quality; decoded details are not available yet.",
       estimated ? "Average encoded bitrate estimated from file size and duration, including container metadata." : null,
+      decoded?.normalizationGainDb != null && Number.isFinite(decoded.normalizationGainDb)
+        ? `Volume normalized by ${decoded.normalizationGainDb > 0 ? "+" : "−"}${Math.abs(decoded.normalizationGainDb).toFixed(1)} dB.`
+        : null,
     ].filter(Boolean).join(" "),
   };
+}
+
+/** A song's reported quality in a few characters, for a track list column: "FLAC 24/96", "Ogg Vorbis 320". */
+export function compactAudioQuality(track: Track) {
+  const { codec, lossless, bitDepth, sampleRate, bitrate } = qualityFields(track);
+  const depth = bitDepth ?? (lossless ? positive(track.maximumBitDepth) : null);
+  const rate = sampleRate ?? (lossless ? positive(track.maximumSamplingRateKHz) : null);
+  if (lossless && depth && rate) return `${codec} ${depth}/${Number(rate.toFixed(1))}`;
+  if (codec && bitrate) return `${codec} ${Math.round(bitrate)}`;
+  return codec;
+}
+
+/** Orders songs from the lowest quality to the highest; lossless always outranks lossy. */
+export function audioQualityRank(track: Track) {
+  const { codec, lossless, bitDepth, sampleRate, bitrate } = qualityFields(track);
+  if (lossless) {
+    const depth = bitDepth ?? positive(track.maximumBitDepth) ?? 16;
+    const rate = sampleRate ?? positive(track.maximumSamplingRateKHz) ?? 44.1;
+    return 1_000_000 + depth * 1_000 + rate;
+  }
+  return codec ? bitrate ?? 1 : 0;
 }

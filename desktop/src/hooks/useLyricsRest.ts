@@ -7,6 +7,7 @@ import { detectLyricOffset, MAX_LINE_MS, type DetectedOffset } from "../utils/ly
 import { lyricSyncOverride } from "../utils/lyricsSyncOverrides";
 import { usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
 import { motion } from "../utils/motion";
+import { useSongEnding } from "../utils/songEnding";
 
 /** The lyrics rest this long after their last line ends, once it has finished highlighting. */
 const SETTLE_MS = 3_000;
@@ -113,7 +114,11 @@ export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, en
     };
   }, [enabled, outro]);
 
-  const resting = outro && !awake;
+  // In the song's last seconds the lyrics stay where they are, leaving the stage to the next song's arrival.
+  const ending = useSongEnding(clock, track?.durationSeconds) && enabled;
+  const held = useRef(false);
+  if (!ending) held.current = outro && !awake;
+  const resting = held.current;
   // Read during render, so the moves this render starts already take the drifting timing.
   const settle = useRef({ resting, until: 0 });
   if (settle.current.resting && !resting && !awake && enabled) settle.current.until = performance.now() + motion.drift.duration;

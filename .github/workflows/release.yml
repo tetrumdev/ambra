@@ -49,10 +49,15 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update bundles the app's updater verifies against the public key in tauri.conf.json.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: desktop
           tauriScript: bun run tauri
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          # Update bundles need the signing key, so only release builds make them; latest.json lists them.
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config src-tauri/tauri.updater.conf.json
+          includeUpdaterJson: true
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: AMBRA v__VERSION__
           releaseBody: See the assets below to download AMBRA for macOS (.dmg) or Windows (.exe).
