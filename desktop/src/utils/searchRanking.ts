@@ -8,7 +8,8 @@ function normalized(value: string) {
 
 function title(value: string) {
   return normalized(value
-    .replace(/\s*[([](?:feat\.?|ft\.?|featuring)\s+[^)\]]*[)\]]/gi, "")
+    // "(with John Legend)" credits a guest like "feat." does; a bare "with" is part of a title.
+    .replace(/\s*[([]\s*(?:feat\.?|ft\.?|featuring|with)\s+[^)\]]*[)\]]/gi, "")
     .replace(/\s+(?:feat\.?|ft\.?|featuring)\s+.*$/gi, ""))
     .replace(/\b(?:19|20)\d{2}\s+remaster(?:ed)?\b|\bremaster(?:ed)?(?:\s+(?:19|20)\d{2})?\b|\balbum version\b|\boriginal version\b/g, " ")
     .replace(/\s+/g, " ").trim();
@@ -34,6 +35,11 @@ export function albumTitleFamily(albumTitle: string) {
     .replace(/\s+/g, " ").trim();
 }
 
+/** Album families that are one album, such as "heroes villains" and "heroes villains heroes version". */
+function relatedFamilies(a: string, b: string) {
+  return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
+}
+
 export function sameRecording(left: Track, right: Track) {
   if (left.globalId === right.globalId) return true;
   if (!normalized(left.artist) || normalized(left.artist) !== normalized(right.artist)) return false;
@@ -51,8 +57,10 @@ export function sameRecording(left: Track, right: Track) {
   // Differing identifiers require release evidence, not just a similar title and duration.
   if (leftIsrc && rightIsrc && leftIsrc !== rightIsrc) {
     const a = albumFamily(left), b = albumFamily(right);
-    return Boolean(a && b && (a === b || compilation(left) || compilation(right) || single(left) || single(right)
-      || ((remaster(left) || remaster(right)) && (a.startsWith(`${b} `) || b.startsWith(`${a} `)))));
+    // Each edition of an album, like "HEROES & VILLAINS (Heroes Version)", can give the same
+    // recording its own ISRC; a near-identical length shows it is the same take.
+    const edition = relatedFamilies(a, b) && (remaster(left) || remaster(right) || durationDifference <= 2);
+    return Boolean(a && b && (a === b || edition || compilation(left) || compilation(right) || single(left) || single(right)));
   }
   return true;
 }
@@ -82,9 +90,16 @@ function requestedEdition(track: Track, query: string) {
     .reduce((score, term) => score + Number(edition.split(" ").includes(term)), 0);
 }
 
+/** The album's own title, with no edition such as "(Heroes Version)" after it. */
+function plainEdition(track: Track) {
+  return !track.albumVersion && normalized(track.album) === albumFamily(track);
+}
+
+/**
+ * Which copy stands for a recording. A total order, so the same song shows the same copy
+ * whatever was searched and whichever service answered first.
+ */
 function compareEdition(left: Track, right: Track, query: string) {
-  // Keep the first provider-ranked appearance when edition evidence is tied.
-  // Catalog IDs do not indicate which release is the original.
   return requestedEdition(left, query) - requestedEdition(right, query)
     || Number(left.explicit) - Number(right.explicit)
     || Number(compilation(right)) - Number(compilation(left))
@@ -92,7 +107,15 @@ function compareEdition(left: Track, right: Track, query: string) {
     || Number(lossless(left)) - Number(lossless(right))
     || (left.maximumBitDepth ?? (lossless(left) ? 16 : 0)) - (right.maximumBitDepth ?? (lossless(right) ? 16 : 0))
     || (left.maximumSamplingRateKHz ?? (lossless(left) ? 44.1 : 0)) - (right.maximumSamplingRateKHz ?? (lossless(right) ? 44.1 : 0))
-    || Number(remaster(left)) - Number(remaster(right));
+    || Number(remaster(left)) - Number(remaster(right))
+    // The album itself over one of its editions, and a plainly titled copy over one that
+    // spells out its guests, which variant releases tend to.
+    || Number(plainEdition(left)) - Number(plainEdition(right))
+    || right.name.trim().length - left.name.trim().length
+    || (right.releaseDate ?? "9999").localeCompare(left.releaseDate ?? "9999")
+    // Nothing tells the copies apart; settle it the same way every time.
+    || (right.albumId ?? "").localeCompare(left.albumId ?? "")
+    || right.globalId.localeCompare(left.globalId);
 }
 
 function soundQuality(track: Track) {
@@ -119,8 +142,7 @@ export function bestQualityRecording(original: Track, candidates: Track[]) {
 
 /** Whether two album titles are one album, counting editions such as "OK Computer OKNOTOK 1997 2017". */
 export function sameAlbumFamily(left: Track, right: Track) {
-  const [a, b] = [albumFamily(left), albumFamily(right)];
-  return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
+  return relatedFamilies(albumFamily(left), albumFamily(right));
 }
 
 function released(track: Track) {
@@ -227,16 +249,19 @@ export function groupSearchResults(tracks: Track[], query: string): RecordingGro
   return groups;
 }
 
-export function deduplicateSearchResults(tracks: Track[]) {
-  // Grouping preserves the native order of a single provider's recordings.
-  return groupSearchResults(tracks, "").map(group => group.track);
-}
-
-export function rankSearchResults(tracks: Track[], query: string) {
+export function rankSearchGroups(tracks: Track[], query: string) {
   return groupSearchResults(tracks, query)
     .filter(group => group.relevance > 0)
     // Among equally relevant results, a copy found only on compilations follows the album's own.
     .sort((a, b) => b.relevance - a.relevance || Number(compilation(a.track)) - Number(compilation(b.track))
-      || b.fusionScore - a.fusionScore || a.track.globalId.localeCompare(b.track.globalId))
-    .map(group => group.track);
+      || b.fusionScore - a.fusionScore || a.track.globalId.localeCompare(b.track.globalId));
+}
+
+export function rankSearchResults(tracks: Track[], query: string) {
+  return rankSearchGroups(tracks, query).map(group => group.track);
+}
+
+/** Every copy of every recording, each recording's chosen copy first, for "show all". */
+export function everyCopy(groups: RecordingGroup[]) {
+  return groups.flatMap(group => [group.track, ...group.alternatives.filter(copy => copy !== group.track)]);
 }

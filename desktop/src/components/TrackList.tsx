@@ -1,5 +1,5 @@
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
 import { ProviderIcon } from "./ProviderIcon";
@@ -20,6 +20,7 @@ import { TrackColumnHeader } from "./TrackColumnHeader";
 import { TrackExtraCells } from "./TrackExtraCells";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import { usePageFilteredTracks } from "../hooks/usePageFilter";
+import { revealListItem } from "../utils/revealListItem";
 import {
   type DropPosition,
   type TrackSort,
@@ -99,7 +100,7 @@ export function TrackList({
   sort = null,
   onSortChange,
 }: TrackListProps) {
-  const { shown: tracks, filtering } = usePageFilteredTracks(allTracks);
+  const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
   // A filtered list hides songs, so reordering it can't say where they belong.
   const reorderTracks = filtering ? undefined : reorderAllTracks;
   // Ranks and fallback numbers keep counting the whole list while it is filtered.
@@ -166,6 +167,12 @@ export function TrackList({
     overscanRows: 10,
     pinnedIndex: draggedIndex,
   });
+  // The page's only match stays among its neighbours; the list jumps to it once per find.
+  const revealIndex = reveal.target ? tracks.findIndex(track => track.globalId === reveal.target) : -1;
+  useLayoutEffect(() => {
+    const list = columnHeaderRef.current?.parentElement;
+    if (reveal.key && revealIndex >= 0 && list) revealListItem(list, revealIndex, virtual.start);
+  }, [reveal.key]);
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();
@@ -363,6 +370,7 @@ export function TrackList({
                 ? dropTarget.position
                 : null
             }
+            revealed={reveal.breathing && reveal.target === track.globalId}
             onAction={onRowAction}
             onPointerDown={onPointerDown}
           />
@@ -375,7 +383,7 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, onAction, onPointerDown }: {
   track: Track;
   index: number;
   /** Where the song sits in the whole, unfiltered list. */
@@ -397,6 +405,8 @@ const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, 
   packageIndex?: number;
   packageSize?: number;
   dropPosition: DropPosition | null;
+  /** The filter's only match, breathing until the listener does anything. */
+  revealed: boolean;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, index: number) => void;
 }) {
@@ -415,6 +425,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, 
       data-package={packageIndex === undefined || packageSize === undefined ? undefined
         : packageIndex === 0 ? "first" : packageIndex === packageSize - 1 ? "last" : "middle"}
       data-drop-position={dropPosition ?? undefined}
+      data-revealed={revealed ? "true" : undefined}
       data-track-id={track.globalId}
       data-virtual-item=""
       draggable={false}

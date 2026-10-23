@@ -9,7 +9,6 @@ export function AlbumAbout({ album, track }: { album: CatalogAlbum; track?: Trac
   const [info, setInfo] = useState<AlbumInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [expanded, setExpanded] = useState(false);
   // A recording helps find the release where a UPC can't, so wait for the tracklist when it's coming.
   const hasTrack = Boolean(track);
   useEffect(() => {
@@ -24,29 +23,27 @@ export function AlbumAbout({ album, track }: { album: CatalogAlbum; track?: Trac
 
   if (album.provider === "local") return null;
   return (
-    <section className="artistAbout albumAbout" aria-busy={!info && !error}>
+    <div aria-busy={!info && !error}>
       {error ? (
-        <p className="artistStatus" role="alert">
+        <p role="alert">
           {error} <button type="button" className="entityLink" onClick={() => setAttempt(value => value + 1)}>Retry</button>
         </p>
       ) : !info ? (
-        <p className="artistStatus" role="status">Loading album info…</p>
+        <p role="status">Loading album info…</p>
       ) : !info.source ? (
-        <><h2 className="entitySectionTitle">About</h2><p>No info is available for this album.</p></>
+        <p>No info is available for this album.</p>
       ) : (
         <>
           {!!description.length && <>
-            <h2 className="entitySectionTitle">About</h2>
-            <div className="artistBiography" data-expanded={expanded}>{description.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
-            <button type="button" className="artistTextAction" onClick={() => setExpanded(value => !value)}>{expanded ? "Show less" : "Read more"}</button>
-            {info.descriptionSource && <p className="artistBiographySource">{info.descriptionSource}</p>}
+            {description.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+            {info.descriptionSource && <p className="creditsSource">{info.descriptionSource}</p>}
           </>}
           {(info.label || info.copyright) && (
-            <p className="albumInfoRelease">{[info.label, info.copyright].filter(Boolean).join(" · ")}</p>
+            <p>{[info.label, info.copyright].filter(Boolean).join(" · ")}</p>
           )}
-          <p className="albumInfoSource">Info from {musicProviderName(info.source)}</p>
+          <p className="creditsSource">Info from {musicProviderName(info.source)}</p>
         </>
       )}
-    </section>
+    </div>
   );
 }

@@ -10,6 +10,7 @@ import { HomeView } from "./components/HomeView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
 import { AppScrollbar } from "./components/AppScrollbar";
+import { NavigationSwipe } from "./components/NavigationSwipe";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { LyricsView } from "./components/LyricsView";
@@ -55,7 +56,7 @@ import { UpdateNotice } from "./components/UpdateNotice";
 import { useAutomaticUpdateChecks } from "./hooks/useAppUpdate";
 import { PageFilterProvider } from "./hooks/usePageFilter";
 import { TrackColumnsContext, type TrackColumnsStore } from "./hooks/useTrackColumns";
-import { optionalColumnsTemplate, orderedOptionalColumns } from "./utils/trackColumnWidths";
+import { hideableTrackColumns, optionalColumnsTemplate, orderedOptionalColumns } from "./utils/trackColumnWidths";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { enterView } from "./utils/viewMotion";
 import { isSongEnding } from "./utils/songEnding";
@@ -90,11 +91,11 @@ function App({ localOnly }: { localOnly: boolean }) {
     const saved = loadPreferences();
     return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
   });
-  const [settingsTab, setSettingsTab] = useState<SettingsTab>("general");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
   useAutomaticUpdateChecks();
-  const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(null);
+  const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(localOnly ? null : preferences.ui.navigation?.entity ?? null);
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
   const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => {
@@ -105,13 +106,13 @@ function App({ localOnly }: { localOnly: boolean }) {
     return [...known.values()];
   }), []);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
-    null,
+    localOnly ? null : preferences.ui.navigation?.playlistId ?? null,
   );
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
-    useState<LibrarySection>(localOnly ? "tracks" : "overview");
+    useState<LibrarySection>(localOnly ? "tracks" : preferences.ui.navigation?.section ?? "overview");
   const [collectionSorts, setCollectionSorts] = useState<
     Record<string, TrackSort>
   >({});
@@ -282,12 +283,12 @@ function App({ localOnly }: { localOnly: boolean }) {
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
-  const f11FullscreenRef = useRef(false);
   const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue">>(
-    screen === "home" || screen === "search" || screen === "settings" ? screen : "library",
+    preferences.ui.navigation?.queueReturnScreen
+      ?? (screen === "home" || screen === "search" || screen === "settings" ? screen : "library"),
   );
   const playerReturnScreenRef =
-    useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>("library");
+    useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>(preferences.ui.navigation?.playerReturnScreen ?? "library");
   if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
   // While the player is open, the screen hidden behind it keeps what it showed.
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
@@ -299,7 +300,7 @@ function App({ localOnly }: { localOnly: boolean }) {
     queueReturnScreenRef.current = screen;
   }
   const underlyingScreen = screen === "bigscreen" || screen === "lyrics" ? playerReturnScreenRef.current : screen;
-  const { back: goBack, forward: goForward } = usePageNavigation({
+  const { back: goBack, forward: goForward, canGo: canGoInHistory } = usePageNavigation({
     screen: underlyingScreen === "queue" ? queueReturnScreenRef.current : underlyingScreen,
     entity: browseEntity, playlistId: selectedPlaylistId, section: librarySection,
     settingsTab, search: preferences.search,
@@ -310,8 +311,22 @@ function App({ localOnly }: { localOnly: boolean }) {
     setSettingsTab(page.settingsTab);
     setPreferences(current => ({ ...current, search: page.search, ui: { ...current.ui, screen: page.screen } }));
   });
-  const latestSessionRef = useRef({ preferences, player });
-  latestSessionRef.current = { preferences, player };
+  const sessionPreferences = useMemo(() => ({
+    ...preferences,
+    ui: {
+      ...preferences.ui,
+      navigation: localOnly ? preferences.ui.navigation : {
+        playerReturnScreen: playerReturnScreenRef.current,
+        queueReturnScreen: queueReturnScreenRef.current,
+        entity: browseEntity,
+        playlistId: selectedPlaylistId,
+        section: librarySection,
+        settingsTab,
+      },
+    },
+  }), [preferences, localOnly, browseEntity, selectedPlaylistId, librarySection, settingsTab]);
+  const latestSessionRef = useRef({ preferences: sessionPreferences, player });
+  latestSessionRef.current = { preferences: sessionPreferences, player };
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
@@ -343,6 +358,8 @@ function App({ localOnly }: { localOnly: boolean }) {
   });
   const servicePlaylistError = servicePlaylistStore.error
     ?? (selectedPlaylist ? servicePlaylistStore.errors[selectedPlaylist.id] : null);
+  const [playlistErrorDismissed, setPlaylistErrorDismissed] = useState(false);
+  useEffect(() => setPlaylistErrorDismissed(false), [servicePlaylistError]);
   const activeViewKey = isQueueView
     ? "queue"
     : isSettingsView
@@ -463,7 +480,6 @@ function App({ localOnly }: { localOnly: boolean }) {
       try {
         const fullscreen = await appWindow.isFullscreen();
         if (!disposed) {
-          f11FullscreenRef.current = fullscreen;
           setIsFullscreen(fullscreen);
         }
       } catch (error) {
@@ -514,20 +530,16 @@ function App({ localOnly }: { localOnly: boolean }) {
   }, []);
 
   useEffect(() => {
+    // macOS owns its fullscreen command and the shortcut assigned to it.
+    if (!isTauri() || !navigator.userAgent.includes("Windows")) return;
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (!isUnmodifiedKey(event, "F11") || event.repeat) return;
 
       event.preventDefault();
 
-      if (!isTauri()) {
-        setIsFullscreen(false);
-        return;
-      }
-
       try {
         const nextFullscreen = !(await getCurrentWindow().isFullscreen());
         await setWindowFullscreen(nextFullscreen);
-        f11FullscreenRef.current = nextFullscreen;
         setIsFullscreen(nextFullscreen);
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
@@ -576,11 +588,28 @@ function App({ localOnly }: { localOnly: boolean }) {
     };
   }, []);
 
+  const canNavigate = useStableCallback((direction: "back" | "forward") => {
+    if (document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop], .columnPickerMenu")) return false;
+    if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") return direction === "back";
+    return canGoInHistory(direction);
+  });
+  const navigate = useStableCallback((direction: "back" | "forward") => {
+    if (!canNavigate(direction)) return false;
+    if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") {
+      leaveScreen();
+      return true;
+    }
+    return direction === "back" ? goBack() : goForward();
+  });
+
   useEffect(() => {
-    const handleKeyDown = async (event: KeyboardEvent) => {
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || !isUnmodifiedKey(event, "Escape")) return;
+      // Dialogs keep their native Escape dismissal; elsewhere it must not leave fullscreen.
+      if (document.querySelector("dialog[open]")) return;
+      event.preventDefault();
       // Let search, menus, and playlist dialogs handle their own Escape.
-      if (document.querySelector("#trackMenuBackdrop, [data-click-menu-backdrop], dialog[open]")
+      if (document.querySelector("#trackMenuBackdrop, [data-click-menu-backdrop]")
         || (event.target instanceof Element && event.target.closest("#searchBar")))
         return;
       // Settings is a place you visit rather than a page of its own, so Escape returns from it too.
@@ -597,28 +626,8 @@ function App({ localOnly }: { localOnly: boolean }) {
 
       if (event.repeat) return;
       leaveScreen();
-
-      if (f11FullscreenRef.current && isTauri()) {
-        try {
-          if (!(await getCurrentWindow().isFullscreen())) {
-            await setWindowFullscreen(true);
-          }
-        } catch (error) {
-          console.error("Could not preserve fullscreen:", error);
-        }
-        return;
-      }
     };
 
-    const navigate = (direction: "back" | "forward") => {
-      if (document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop]")) return;
-      if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") {
-        if (direction === "back") leaveScreen();
-        return;
-      }
-      if (direction === "back") goBack();
-      else goForward();
-    };
     const handleNavigationKey = (event: KeyboardEvent) => {
       const direction = navigationShortcut(event);
       if (!direction || event.defaultPrevented) return;
@@ -644,7 +653,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       window.removeEventListener("mouseup", handleMouseNavigation, true);
       window.removeEventListener("auxclick", handleMouseNavigation, true);
     };
-  }, [screen, goBack, goForward]);
+  }, [screen, goBack, goForward, navigate]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -736,8 +745,8 @@ function App({ localOnly }: { localOnly: boolean }) {
   }, [screen, preferences.ui.playerView]);
 
   useEffect(() => {
-    savePreferences(preferences);
-  }, [preferences]);
+    savePreferences(sessionPreferences);
+  }, [sessionPreferences]);
 
   // Saved straight from the clock, so playing never rerenders the app: every 5 s while playing, exactly while paused.
   useEffect(() => {
@@ -1104,13 +1113,23 @@ function App({ localOnly }: { localOnly: boolean }) {
     if (template) document.documentElement.style.setProperty("--library-extra-columns", template);
     else document.documentElement.style.removeProperty("--library-extra-columns");
   }, [chosenTrackColumns]);
+  // Standard columns left out are dropped from every grid by the root's stylesheet (LibraryView.css).
+  const hiddenTrackColumns = preferences.ui.hiddenTrackColumns;
+  useLayoutEffect(() => {
+    if (hiddenTrackColumns.length) document.documentElement.dataset.hiddenColumns = hiddenTrackColumns.join(" ");
+    else delete document.documentElement.dataset.hiddenColumns;
+  }, [hiddenTrackColumns]);
   const trackColumns = useMemo<TrackColumnsStore>(() => ({
     extra: chosenTrackColumns,
     setExtra: columns => setPreferences(current => ({
       ...current, ui: { ...current.ui, trackColumns: orderedOptionalColumns(columns).map(column => column.key) },
     })),
+    hidden: hiddenTrackColumns,
+    setHidden: columns => setPreferences(current => ({
+      ...current, ui: { ...current.ui, hiddenTrackColumns: hideableTrackColumns.filter(key => columns.includes(key)) },
+    })),
     stats: listeningHistory.stats,
-  }), [chosenTrackColumns, listeningHistory.stats]);
+  }), [chosenTrackColumns, hiddenTrackColumns, listeningHistory.stats]);
 
   return (
     <>
@@ -1178,7 +1197,6 @@ function App({ localOnly }: { localOnly: boolean }) {
           </button>
         )}
         {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
-        {!isQueueView && !isSettingsView && servicePlaylistError && <p className="playlistSyncError" role="alert">{servicePlaylistError}</p>}
         {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
           isHomeActive={isHomeView && !isQueueView}
           onOpenHome={() => {
@@ -1220,7 +1238,7 @@ function App({ localOnly }: { localOnly: boolean }) {
           }}
         />}
         {isSettingsView ? (
-          <SettingsView tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
+          <SettingsView onRescanLocalMusic={library.rescanLocalMusic} tab={settingsTab} onTabChange={setSettingsTab} registerScrollElement={registerScrollElement} showAudioQuality={preferences.ui.showAudioQuality}
             onServiceConnected={() => {
               refreshSearchProviders();
               void servicePlaylistStore.refresh();
@@ -1240,6 +1258,7 @@ function App({ localOnly }: { localOnly: boolean }) {
             onAnimateSwirl={animateSwirl => setPreferences(current => ({ ...current, ui: { ...current.ui, animateSwirl } }))} />
         ) : isQueueView ? (
           <Queue
+            onOpenEntity={openEntity}
             currentEntry={queue.currentEntry}
             upcomingEntries={queue.upcomingEntries}
             historyEntries={queue.historyEntries}
@@ -1263,6 +1282,7 @@ function App({ localOnly }: { localOnly: boolean }) {
             query={searchQuery}
             provider={searchProvider}
             tracks={search.results}
+            allTracks={search.allResults}
             candidates={search.candidates}
             isSearching={search.isSearching}
             artists={search.artists}
@@ -1316,7 +1336,6 @@ function App({ localOnly }: { localOnly: boolean }) {
             {...collectionViewProps}
             section={librarySection}
             onSectionChange={setLibrarySection}
-            onRescanLocalMusic={library.rescanLocalMusic}
           />
         )}
       </main>
@@ -1326,6 +1345,17 @@ function App({ localOnly }: { localOnly: boolean }) {
       </PageFilterProvider>
       </TrackColumnsContext.Provider>
       {!isPlayerView && <UpdateNotice />}
+      {!isPlayerView && !isQueueView && !isSettingsView && servicePlaylistError && !playlistErrorDismissed && (
+        <div className="playlistSyncError" role="alert" data-playback-error={!!player.playbackError}>
+          <span data-tooltip={servicePlaylistError} data-tooltip-overflow="">{servicePlaylistError}</span>
+          <button type="button" aria-label="Dismiss playlist error" data-tooltip="Dismiss"
+            onClick={() => setPlaylistErrorDismissed(true)}>
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+              <path d="m3 3 6 6m0-6-6 6" />
+            </svg>
+          </button>
+        </div>
+      )}
 
       <TrackCreditsDialog onOpenArtist={(artist) => openEntity({ kind: "artist", artist })} />
       <NowPlayingBar
@@ -1338,6 +1368,8 @@ function App({ localOnly }: { localOnly: boolean }) {
         clock={player.clock}
         duration={player.duration}
         isPlaying={player.isPlaying}
+        previousActivation={player.previousActivation}
+        nextActivation={player.nextActivation}
         playbackError={player.playbackError}
         audioDecks={player.audioDecks}
         onPrevious={player.previous}
@@ -1350,6 +1382,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       />
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
+      <NavigationSwipe canNavigate={canNavigate} navigate={navigate} contextKey={`${screen}:${activeViewKey}:${settingsTab}`} />
     </>
   );
 }
