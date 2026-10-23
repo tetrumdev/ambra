@@ -1,5 +1,6 @@
 import type { SearchProvider, StreamingProvider } from "../api/server";
 import { getPersistentItem, removePersistentItem, setPersistentItem } from "./persistentStorage";
+import { orderedOptionalColumns, type OptionalColumnKey } from "./trackColumnWidths";
 
 export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
@@ -19,6 +20,8 @@ export type AppPreferences = {
     playerView: PlayerView;
     playlistGroups: Record<PlaylistGroup, boolean>;
     servicePlaylistVisibility: Record<StreamingProvider, boolean>;
+    /** Optional columns shown in every song list. */
+    trackColumns: OptionalColumnKey[];
   };
   search: {
     query: string;
@@ -45,6 +48,7 @@ export const defaultPreferences: AppPreferences = {
     playerView: "bigscreen",
     playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
     servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
+    trackColumns: [],
   },
   search: {
     query: "",
@@ -116,11 +120,15 @@ function migratePreferences(value: unknown): AppPreferences {
     }
   }
 
+  const trackColumns = Array.isArray(ui.trackColumns)
+    ? orderedOptionalColumns(ui.trackColumns.filter((key): key is string => typeof key === "string")).map(column => column.key)
+    : [];
+
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility, trackColumns },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -139,7 +147,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, playlistGroups, servicePlaylistVisibility, trackColumns },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -170,6 +178,7 @@ function migratePreferences(value: unknown): AppPreferences {
           playerView,
           playlistGroups,
           servicePlaylistVisibility,
+          trackColumns,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -204,6 +213,7 @@ function migratePreferences(value: unknown): AppPreferences {
           playerView,
           playlistGroups,
           servicePlaylistVisibility,
+          trackColumns,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },

@@ -1,66 +1,1048 @@
-/* Layout only: keep settings plain so its visual design can evolve separately. */
-#settings { grid-template-columns: 180px minmax(0, 1fr); }
-.settingsSidebar { grid-column: 1; grid-row: 1; padding: 42px 20px calc(var(--player-height) + 20px); border-right: 1px solid #333; overflow-y: auto; font-family: "Stack Sans Text", sans-serif; }
-.settingsSidebar h2 { margin: 28px 0 16px; font-size: 16px; }
-.settingsSidebar nav { display: flex; flex-direction: column; align-items: flex-start; gap: 16px; }
-.settingsSidebar button { font: inherit; font-size: 13px; color: #aaa; border: 0; padding: 0; background: none; text-align: left; }
-.settingsSidebar button[aria-current="page"] { color: white; text-decoration: underline; text-underline-offset: 4px; }
-.settingsView { padding-top: 42px; }
-.settingsView h2 { font-size: 19px; margin: 0 0 12px; }
-.settingsView h3 { font-size: 15px; margin: 0 0 12px; }
-.settingsView p { color: #aaa; font-size: 13px; line-height: 1.5; }
-.settingsView section { max-width: 1050px; }
-.settingsView [hidden] { display: none !important; }
-.settingsSectionHeading, .settingsOutputTitle, .settingsEditorHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.settingsOutputCard { padding: 0 0 24px; margin-bottom: 24px; border-bottom: 1px solid #333; }
-.settingsOutputTitle strong, .settingsOutputTitle > div > span { display: block; }
-.settingsOutputTitle > div > span { font-size: 12px; color: #aaa; margin-top: 6px; }
-.settingsInlineToggle { display: flex; align-items: center; gap: 12px; font-size: 12px; }
-.settingsView label:not(.settingsToggleRow, .settingsInlineToggle) { display: grid; gap: 8px; font-size: 12px; }
-.settingsView input:not([type="checkbox"], [type="file"]), .settingsView select { box-sizing: border-box; width: 100%; min-width: 0; font: inherit; color: white; background: #171717; border: 1px solid #555; border-radius: 0; padding: 6px; color-scheme: dark; }
-.settingsView button { font: inherit; font-size: 12px; }
-.settingsButton { color: white; background: none; border: 1px solid #555; border-radius: 0; padding: 6px 10px; }
-.settingsTextButton { color: #bbb; background: none; border: 0; padding: 6px; }
-.settingsView button:disabled { opacity: var(--disabled-opacity); }
-.settingsView input[type="checkbox"] { accent-color: white; }
-.settingsView .settingsMotionSelect { width: auto; flex-shrink: 0; }
-.settingsOutputFields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.settingsFieldHelp { color: #aaa; font-size: 11px; line-height: 1.5; }
-.settingsOutputActions, .settingsActions, .settingsEditorFooter { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.settingsDspLayout { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 24px; }
-.settingsPresetList { display: flex; flex-direction: column; gap: 16px; }
-.settingsPreset { text-align: left; color: #aaa; background: none; border: 0; padding: 0; overflow-wrap: anywhere; }
-.settingsPreset strong, .settingsPreset span { display: block; }
-.settingsPreset span { font-size: 11px; margin-top: 5px; }
-.settingsPreset[aria-pressed="true"] { color: white; }
-.settingsDspEditor { min-width: 0; }
-.settingsEditorHeading > label:first-child { flex: 1; }
-.settingsSignalPath { display: flex; flex-wrap: wrap; gap: 16px; margin: 20px 0; font-size: 12px; color: #aaa; }
-.settingsGainFields { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-bottom: 24px; }
-.settingsEqTable { overflow-x: auto; margin-bottom: 28px; }
-.settingsEqTable table { width: 100%; min-width: 400px; border-collapse: collapse; }
-.settingsEqTable th { font-size: 11px; text-align: left; font-weight: normal; color: #aaa; padding: 0 5px 10px; }
-.settingsEqTable td { padding: 4px 5px; }
-.settingsEqTable td:nth-child(2) { width: 120px; }
-.settingsImpulse { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 12px 0; font-size: 12px; overflow-wrap: anywhere; }
-.settingsImpulse small { display: block; margin-top: 4px; color: #aaa; }
-.settingsEditorFooter { border-top: 1px solid #333; padding-top: 16px; margin-top: 24px; }
-.settingsDspStatus { display: grid; gap: 8px; font-size: 12px; border-top: 1px solid #333; padding-top: 16px; margin-top: 30px; }
-.settingsError { color: var(--error-text) !important; overflow-wrap: anywhere; }
-.settingsSrOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
-.settingsServiceRow { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 0; border-bottom: 1px solid #333; }
-.settingsServiceRow > div { min-width: 0; }
-.settingsServiceRow h3 { margin-bottom: 6px; }
-.settingsServiceRow p { margin: 0; }
-.settingsServiceRow button { flex: none; min-width: 86px; }
-.settingsCallbackForm { margin-top: 24px; }
-.settingsCallbackForm > div { display: flex; gap: 10px; }
-.settingsCallbackForm button { flex: none; }
-.settingsView .settingsServiceMessage { color: #b9d7b9; }
-@media (max-width: 1050px) {
-  .settingsOutputFields { grid-template-columns: 1fr; }
-  .settingsDspLayout { grid-template-columns: 1fr; }
-  .settingsPresetList { flex-direction: row; flex-wrap: wrap; }
+/* Settings, in the library's language: the same sidebar, serif page titles, pill buttons and
+   the player's glass. The toggle switch itself lives in App.css. */
+
+/* ---------- Sidebar: the library sidebar's place, width and type. ---------- */
+.settingsSidebar {
+    grid-column: 1;
+    grid-row: 1;
+    box-sizing: border-box;
+    height: 100%;
+    padding: 30px 20px calc(var(--player-height) + 20px) 30px;
+    border-right: 1px solid #535353;
+    overflow-y: auto;
+    font-family: "Stack Sans Text", sans-serif;
 }
-.settingsView .settingsToggle { appearance: auto; width: auto; height: auto; padding: 0; border-radius: 0; background: none; }
-.settingsView .settingsToggle::before { display: none; }
+
+.settingsSidebar h2 {
+    margin: 26px 0 18px;
+    color: white;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.settingsSidebar nav {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+}
+
+.settingsSidebar nav button {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    font-size: 1rem;
+    text-align: left;
+}
+
+.settingsBack {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: #b3b3b3;
+    font: inherit;
+    font-size: 0.9rem;
+}
+
+.settingsBack svg {
+    width: 8px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+.settingsBack:hover,
+.settingsBack:focus-visible {
+    color: white;
+}
+
+
+/* ---------- Page ---------- */
+.settingsView section {
+    max-width: 960px;
+}
+
+.settingsView [hidden] {
+    display: none !important;
+}
+
+.settingsPageHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 28px;
+}
+
+.settingsTitle {
+    flex: 1;
+    margin: 0;
+    font-family: "Source Serif 4", serif;
+    font-size: 3rem;
+    font-weight: 500;
+    line-height: 1.1;
+}
+
+.settingsMuted,
+.settingsView p.settingsMuted {
+    margin: 0;
+    color: #8f8f8f;
+    font-size: 0.85rem;
+    line-height: 1.5;
+}
+
+.settingsError {
+    color: var(--error-text) !important;
+    font-size: 0.85rem;
+    overflow-wrap: anywhere;
+}
+
+/* ---------- Groups and rows ---------- */
+.settingsGroup {
+    max-width: 680px;
+    margin-bottom: 36px;
+}
+
+.settingsGroup > h2 {
+    margin: 0 0 4px;
+    color: #8f8f8f;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.settingRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    min-height: 56px;
+    padding: 8px 0;
+    border-bottom: 1px solid #222;
+}
+
+.settingRowText {
+    min-width: 0;
+}
+
+.settingRowLabel,
+.settingRowHint {
+    display: block;
+}
+
+.settingRowLabel {
+    color: white;
+    font-size: 0.95rem;
+}
+
+.settingRowHint {
+    margin-top: 2px;
+    color: #8f8f8f;
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+}
+
+.settingRowControl {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 12px;
+}
+
+/* ---------- Controls ---------- */
+.settingsPill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    padding: 0 16px;
+    border: 1px solid #5a5a5a;
+    border-radius: 100px;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.settingsPill:hover:not(:disabled),
+.settingsPill:focus-visible {
+    border-color: white;
+}
+
+.settingsPillPrimary {
+    border-color: transparent;
+    background: white;
+    color: black;
+}
+
+.settingsPillPrimary:hover:not(:disabled),
+.settingsPillPrimary:focus-visible {
+    background: #dcdcdc;
+}
+
+.settingsPillDone {
+    border-color: #333;
+    color: #8f8f8f;
+}
+
+.settingsLink {
+    padding: 4px 2px;
+    border: 0;
+    background: none;
+    color: #b3b3b3;
+    font: inherit;
+    font-size: 0.85rem;
+}
+
+.settingsLink:hover:not(:disabled),
+.settingsLink:focus-visible {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+.settingsView button:disabled,
+.settingsView input:disabled,
+.settingsView select:disabled {
+    opacity: var(--disabled-opacity);
+}
+
+.settingsSegmented {
+    display: inline-flex;
+    justify-self: start;
+    width: fit-content;
+    padding: 3px;
+    border: 1px solid #3a3a3a;
+    border-radius: 100px;
+    background: #111;
+}
+
+.settingsSegmented button {
+    height: 28px;
+    padding: 0 14px;
+    border: 0;
+    border-radius: 100px;
+    background: transparent;
+    color: #b3b3b3;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: background-color var(--motion-hover), color var(--motion-hover);
+}
+
+.settingsSegmented button:not([aria-checked="true"]):hover:not(:disabled) {
+    color: white;
+}
+
+.settingsSegmented button[aria-checked="true"] {
+    background: white;
+    color: black;
+}
+
+.settingsView input[type="number"],
+.settingsView input[type="text"],
+.settingsView input:not([type]),
+.settingsView select {
+    box-sizing: border-box;
+    height: 34px;
+    min-width: 0;
+    padding: 0 12px;
+    border: 1px solid #3a3a3a;
+    border-radius: 10px;
+    outline: none;
+    background: #111;
+    color: white;
+    color-scheme: dark;
+    font: inherit;
+    font-size: 0.85rem;
+    user-select: text;
+}
+
+.settingsView input:focus-visible,
+.settingsView select:focus-visible {
+    border-color: #8a8a8a;
+}
+
+.settingsChip {
+    flex: none;
+    padding: 3px 10px;
+    border: 1px solid #3a3a3a;
+    border-radius: 100px;
+    color: #b3b3b3;
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.settingsChipActive {
+    border-color: transparent;
+    background: white;
+    color: black;
+}
+
+/* ---------- Outputs ---------- */
+.settingsOutputs {
+    display: grid;
+    gap: 14px;
+    margin-top: 16px;
+}
+
+.settingsShowInPlayer {
+    color: #8f8f8f;
+    font-size: 0.8rem;
+}
+
+.settingsOutput {
+    padding: 18px 20px 20px;
+    border: 1px solid #262626;
+    border-radius: 16px;
+    background: #0b0b0b;
+}
+
+.settingsOutput[data-selected] {
+    border-color: #4a4a4a;
+}
+
+.settingsOutput[data-disconnected] .settingsOutputName {
+    color: #8f8f8f;
+}
+
+.settingsOutputHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 18px;
+}
+
+.settingsView input.settingsOutputName {
+    width: auto;
+    min-width: 120px;
+    max-width: 320px;
+    height: 32px;
+    margin-left: -8px;
+    padding: 0 8px;
+    border-color: transparent;
+    background: transparent;
+    font-size: 1.1rem;
+    font-weight: 600;
+    field-sizing: content;
+}
+
+.settingsView input.settingsOutputName:hover,
+.settingsView input.settingsOutputName:focus-visible {
+    border-color: #3a3a3a;
+}
+
+.settingsOutputSpacer {
+    flex: 1;
+}
+
+.settingsOutputFields {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+    align-items: start;
+}
+
+.settingsField {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.settingsField > span:first-child {
+    color: #8f8f8f;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.settingsFieldRow {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.settingsFieldRow select {
+    flex: 1;
+    width: 100%;
+}
+
+.settingsUnitInput input {
+    width: 100px;
+}
+
+.settingsUnitInput small,
+.settingsFieldHint {
+    color: #8f8f8f;
+    font-size: 0.75rem;
+}
+
+/* ---------- Services ---------- */
+.settingsServiceRow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    max-width: 680px;
+    padding: 16px 0;
+    border-bottom: 1px solid #222;
+}
+
+.settingsServiceIcon {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+}
+
+.settingsServiceRow > div {
+    flex: 1;
+    min-width: 0;
+}
+
+.settingsServiceRow h3 {
+    margin: 0;
+    font-size: 0.95rem;
+    font-weight: 400;
+}
+
+.settingsServiceRow p {
+    margin: 2px 0 0;
+    color: #8f8f8f;
+    font-size: 0.8rem;
+}
+
+.settingsServiceRow button {
+    flex: none;
+    min-width: 96px;
+    justify-content: center;
+}
+
+.settingsCallbackForm {
+    display: grid;
+    gap: 8px;
+    max-width: 680px;
+    margin-top: 24px;
+    font-size: 0.9rem;
+}
+
+.settingsCallbackForm > div {
+    display: flex;
+    gap: 10px;
+}
+
+.settingsCallbackForm input {
+    flex: 1;
+}
+
+.settingsView .settingsServiceMessage {
+    color: #b9d7b9;
+    font-size: 0.85rem;
+}
+
+/* ---------- DSP ---------- */
+.dspLayout {
+    display: grid;
+    grid-template-columns: 190px minmax(0, 1fr);
+    gap: 28px;
+    align-items: start;
+}
+
+.dspPresets {
+    position: sticky;
+    top: 0;
+    display: grid;
+    gap: 4px;
+}
+
+.dspPresetItem {
+    display: grid;
+    gap: 3px;
+    padding: 10px 12px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: transparent;
+    color: #b3b3b3;
+    font: inherit;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+.dspPresetItem strong {
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.dspPresetItem span {
+    color: #7d7d7d;
+    font-size: 0.75rem;
+}
+
+.dspPresetItem em {
+    color: #f1d6a2;
+    font-size: 0.72rem;
+    font-style: normal;
+}
+
+.dspPresetItem:hover {
+    color: white;
+    background: #111;
+}
+
+.dspPresetItem[aria-pressed="true"] {
+    border-color: #3a3a3a;
+    background: #151515;
+    color: white;
+}
+
+.dspEditor {
+    min-width: 0;
+    padding-bottom: 80px;
+}
+
+.dspEditorHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+}
+
+.settingsView input.dspPresetName {
+    flex: 1;
+    min-width: 160px;
+    height: 44px;
+    margin-left: -10px;
+    padding: 0 10px;
+    border-color: transparent;
+    background: transparent;
+    font-family: "Source Serif 4", serif;
+    font-size: 1.8rem;
+    font-weight: 500;
+}
+
+.settingsView input.dspPresetName:hover,
+.settingsView input.dspPresetName:focus-visible {
+    border-color: #3a3a3a;
+}
+
+.dspUsedBy {
+    margin: 2px 0 20px !important;
+}
+
+/* The signal path, source to device, like Roon's: each stage dims when it does nothing. */
+.dspSignalPath {
+    display: flex;
+    margin: 0 0 18px;
+    padding: 0;
+    overflow-x: auto;
+    list-style: none;
+    counter-reset: none;
+}
+
+.dspSignalPath li {
+    position: relative;
+    display: grid;
+    flex: 1 1 0;
+    gap: 2px;
+    min-width: 0;
+    padding: 10px 10px 10px 20px;
+    border-top: 1px solid #2c2c2c;
+    border-bottom: 1px solid #2c2c2c;
+    background: #0d0d0d;
+}
+
+.dspSignalPath li:first-child {
+    padding-left: 14px;
+    border-left: 1px solid #2c2c2c;
+    border-radius: 12px 0 0 12px;
+}
+
+.dspSignalPath li:last-child {
+    border-right: 1px solid #2c2c2c;
+    border-radius: 0 12px 12px 0;
+}
+
+/* A chevron between stages. */
+.dspSignalPath li + li::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -6px;
+    width: 10px;
+    height: 10px;
+    border-top: 1px solid #444;
+    border-right: 1px solid #444;
+    background: #0d0d0d;
+    transform: translateY(-50%) rotate(45deg);
+}
+
+.dspSignalPath span {
+    color: #7d7d7d;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.dspSignalPath span,
+.dspSignalPath strong {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dspSignalPath strong {
+    color: white;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.dspSignalPath li[data-off] strong {
+    color: #5c5c5c;
+}
+
+.dspSignalPath[data-bypassed] li:not(:first-child, :last-child) strong {
+    color: #5c5c5c;
+    text-decoration: line-through;
+}
+
+.dspSignalPath em {
+    color: #ff8a80;
+    font-size: 0.72rem;
+    font-style: normal;
+}
+
+.dspSignalPath li[data-clipping] {
+    background: #1d0d0c;
+}
+
+.dspWarning {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 18px;
+    padding: 10px 10px 10px 16px;
+    border: 1px solid #4a3a1c;
+    border-radius: 14px;
+    background: #17120a;
+    color: #f1d6a2;
+    font-size: 0.85rem;
+}
+
+.dspGains {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 28px;
+}
+
+.dspGain {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) 70px;
+    align-items: center;
+    gap: 14px;
+}
+
+.dspGain > span {
+    color: #b3b3b3;
+    font-size: 0.85rem;
+}
+
+.dspGain output {
+    color: white;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+/* The volume slider's look (ExtraCtrls.css), filled up to the value. */
+.dspGain input[type="range"] {
+    width: 100%;
+    height: 24px;
+    margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+}
+
+.dspGain input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 4px;
+    background: linear-gradient(to right, white var(--fill), #3a3a3a var(--fill));
+}
+
+.dspGain input[type="range"]::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    border-radius: 50%;
+    background: white;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+.dspSection {
+    margin-bottom: 32px;
+}
+
+.dspSectionHeader {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.dspSectionHeader h2 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.dspSectionActions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ---------- EQ graph ---------- */
+.eqGraph {
+    overflow: hidden;
+    border: 1px solid #262626;
+    border-radius: 16px;
+    background: radial-gradient(120% 140% at 50% 0%, #161616 0%, #070707 70%);
+    touch-action: none;
+}
+
+.eqGraph svg {
+    display: block;
+    cursor: crosshair;
+}
+
+.eqGrid line {
+    stroke: #1f1f1f;
+    stroke-width: 1;
+}
+
+.eqGrid line[data-zero] {
+    stroke: #3d3d3d;
+}
+
+.eqGrid text {
+    fill: #666;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 10px;
+}
+
+.eqCurve {
+    fill: none;
+    stroke: white;
+    stroke-width: 2;
+    stroke-linejoin: round;
+}
+
+.eqBandCurve {
+    fill: none;
+    stroke: rgb(255 255 255 / 0.35);
+    stroke-width: 1.25;
+    stroke-dasharray: 4 4;
+}
+
+.eqNode {
+    cursor: grab;
+    outline: none;
+}
+
+.eqNode:active {
+    cursor: grabbing;
+}
+
+.eqNodeHit {
+    fill: transparent;
+}
+
+.eqNodeDot {
+    fill: #0b0b0b;
+    stroke: white;
+    stroke-width: 1.5;
+    transition: r var(--motion-hover);
+}
+
+.eqNode text {
+    fill: white;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    pointer-events: none;
+}
+
+.eqNode:hover .eqNodeDot,
+.eqNode:focus-visible .eqNodeDot {
+    r: 12px;
+}
+
+.eqNode[data-selected] .eqNodeDot {
+    fill: white;
+}
+
+.eqNode[data-selected] text {
+    fill: black;
+}
+
+.eqNode[data-off] .eqNodeDot {
+    stroke: #666;
+    stroke-dasharray: 2 2;
+}
+
+.eqNode[data-off] text {
+    fill: #666;
+}
+
+.dspHint {
+    margin: 10px 0 14px;
+    color: #6f6f6f;
+    font-size: 0.75rem;
+}
+
+.dspBandChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+}
+
+.dspBandChip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px 0 4px;
+    border: 1px solid #333;
+    border-radius: 100px;
+    background: transparent;
+    color: #d0d0d0;
+    font: inherit;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.dspBandChip b {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #262626;
+    font-size: 0.68rem;
+}
+
+.dspBandChip span {
+    color: #8f8f8f;
+}
+
+.dspBandChip[aria-selected="true"] {
+    border-color: white;
+    color: white;
+}
+
+.dspBandChip[aria-selected="true"] b {
+    background: white;
+    color: black;
+}
+
+.dspBandChip[data-off] {
+    opacity: 0.5;
+}
+
+.dspBandInspector {
+    display: grid;
+    gap: 14px;
+    padding: 14px 16px;
+    border: 1px solid #262626;
+    border-radius: 16px;
+    background: #0d0d0d;
+}
+
+.dspBandNumber {
+    display: grid;
+    place-items: center;
+    align-self: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 50%;
+    background: white;
+    color: black;
+    font-size: 0.85rem;
+    font-weight: 700;
+}
+
+.dspBandInspectorRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+}
+
+.dspBandInspectorRow + .dspBandInspectorRow {
+    gap: 20px;
+}
+
+/* The band's switch and removal close the top row, on its right. */
+.dspBandInspector .settingsToggle {
+    margin-left: auto;
+}
+
+.dspNumber {
+    display: grid;
+    gap: 4px;
+}
+
+.dspNumber > span:first-child {
+    color: #8f8f8f;
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.dspNumberInput {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.dspNumberInput input {
+    width: 76px;
+    font-variant-numeric: tabular-nums;
+}
+
+.dspNumberInput small {
+    color: #8f8f8f;
+    font-size: 0.75rem;
+}
+
+.dspImpulses {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.dspImpulses li {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 10px 14px;
+    border: 1px solid #262626;
+    border-radius: 14px;
+    background: #0d0d0d;
+}
+
+.dspImpulseRate {
+    flex: none;
+    padding: 3px 10px;
+    border-radius: 100px;
+    background: white;
+    color: black;
+    font-size: 0.72rem;
+    font-weight: 700;
+}
+
+.dspImpulseName {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.9rem;
+    overflow-wrap: anywhere;
+}
+
+.dspImpulseName small {
+    display: block;
+    margin-top: 2px;
+    color: #8f8f8f;
+    font-size: 0.75rem;
+}
+
+.dspEmpty {
+    display: grid;
+    justify-items: start;
+    gap: 10px;
+    padding: 36px;
+    border: 1px dashed #333;
+    border-radius: 18px;
+}
+
+.dspEmpty h2 {
+    margin: 0;
+    font-family: "Source Serif 4", serif;
+    font-size: 1.8rem;
+    font-weight: 500;
+}
+
+.dspFootnote {
+    margin-top: 12px !important;
+    font-size: 0.75rem !important;
+}
+
+/* Unsaved changes wait in the player's glass, in the corner above it. */
+.settingsSaveBar {
+    position: fixed;
+    right: 30px;
+    bottom: calc(var(--player-height) + 18px);
+    z-index: 12;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 6px 6px 6px 18px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.5);
+    font-size: 0.85rem;
+    animation: settingsSaveBarIn var(--motion-enter);
+}
+
+@keyframes settingsSaveBarIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .settingsSaveBar {
+        animation: none;
+    }
+}
+
+@media (max-width: 1050px) {
+    .settingsOutputFields,
+    .dspGains {
+        grid-template-columns: 1fr;
+    }
+
+    .dspLayout {
+        grid-template-columns: 1fr;
+    }
+
+    .dspPresets {
+        position: static;
+        display: flex;
+        flex-wrap: wrap;
+    }
+}

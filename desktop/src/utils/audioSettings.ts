@@ -4,11 +4,13 @@ export type EqBand = { enabled: boolean; kind: "peak" | "lowShelf" | "highShelf"
 export type ImpulseFile = { id: string; name: string; sampleRate: number; channels: number; frames: number };
 export type DspPreset = { id: string; name: string; enabled: boolean; headroomDb: number; outputGainDb: number; bands: EqBand[]; convolution: ImpulseFile[] };
 export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; presetId: string | null; volume: number };
-export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[] };
+/** One constant gain per song or album; never compression or limiting. */
+export type NormalizationMode = "off" | "track" | "album";
+export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[]; normalization: NormalizationMode };
 export type NativeAudioDevice = { id: string; name: string; isDefault: boolean };
 export type DspStatus = { presetName: string | null; active: boolean; sampleRate: number | null; peakDbfs: number | null; clippedSamples: number; warnings: string[] };
 
-export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], outputs: [
+export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], normalization: "off", outputs: [
   { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, presetId: null, volume: 100 },
 ] });
 const storageKey = "ambra.audio-settings.v1";
@@ -40,6 +42,8 @@ export function loadAudioSettings(): AudioSettings {
           || (output.presetId !== null && !presets.has(output.presetId))) throw new Error("Invalid output");
         outputs.add(output.id);
       }
+      // Settings saved before normalization existed leave it off.
+      if (!["off", "track", "album"].includes(value.normalization)) value.normalization = "off";
       if (outputs.has("") && outputs.has(value.selectedOutputId)) return value;
     }
   } catch { /* A corrupt working copy must not prevent startup. */ }
