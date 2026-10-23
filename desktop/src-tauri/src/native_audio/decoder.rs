@@ -23,7 +23,10 @@ use symphonia::core::{
     units::{Time, Timestamp},
 };
 
-use super::{AudioQuality, StreamSpec};
+use super::{
+    AudioQuality, StreamSpec,
+    loudness::{self, LoudnessInfo, LoudnessMeter},
+};
 
 const HTTP_INITIAL_CACHE_BYTES: u64 = 128 * 1024;
 const HTTP_STARTUP_WINDOW_BYTES: u64 = 1024 * 1024;
@@ -68,6 +71,8 @@ pub struct DecodedSource {
     audio_quality: AudioQuality,
     scratch: Vec<f64>,
     scratch_pending: bool,
+    loudness: LoudnessInfo,
+    meter: Option<LoudnessMeter>,
 }
 
 impl DecodedSource {
@@ -103,15 +108,19 @@ impl DecodedSource {
 
         let mut duration_hint = None;
         let mut hls_segment_start = 0.0;
+        let mut reported_loudness = LoudnessInfo::default();
         let media_source: Box<dyn MediaSource> = if is_hls {
             let (hls, segment_start) =
                 HlsSource::open_at(&source, hls_position_seconds.unwrap_or_default())
                     .map_err(|error| error.to_string())?;
             duration_hint = Some(hls.duration_seconds);
             hls_segment_start = segment_start;
+            reported_loudness = hls.loudness;
             Box::new(hls)
         } else if is_http_source(&source) {
-            Box::new(HttpRangeSource::open(&source).map_err(|error| error.to_string())?)
+            let http = HttpRangeSource::open(&source).map_err(|error| error.to_string())?;
+            reported_loudness = http.loudness;
+            Box::new(http)
         } else {
             let path = file_path(&source);
             Box::new(
@@ -123,9 +132,10 @@ impl DecodedSource {
         let source_bytes = media_source.byte_len();
         let stream = MediaSourceStream::new(media_source, Default::default());
         let format_options = FormatOptions::default().seek_index_fill_period_ms(100);
-        let format = symphonia::default::get_probe()
+        let mut format = symphonia::default::get_probe()
             .probe(&hint, stream, format_options, MetadataOptions::default())
             .map_err(|error| format!("Could not identify {source}: {error}"))?;
+        let tagged_loudness = embedded_loudness(format.as_mut());
 
         let track = format
             .default_track(TrackType::Audio)
@@ -204,8 +214,20 @@ impl DecodedSource {
             channels,
             bitrate_kbps,
             bitrate_is_estimate: !is_pcm,
+            normalization_gain_db: None,
         };
 
+        let cache_key = loudness::cache_key(&source);
+        let loudness = cache_key
+            .as_deref()
+            .map(loudness::measured_info)
+            .unwrap_or_default()
+            .or(tagged_loudness)
+            .or(reported_loudness);
+        // Only a decode from the very start can measure the whole song.
+        let meter = cache_key
+            .filter(|_| hls_position_seconds.is_none_or(|position| position <= 0.0))
+            .and_then(|key| LoudnessMeter::start(key, channels, sample_rate));
         let mut decoded = Self {
             source,
             format,
@@ -221,6 +243,8 @@ impl DecodedSource {
             audio_quality,
             scratch: Vec::with_capacity(16_384 * channels),
             scratch_pending: false,
+            loudness,
+            meter,
         };
         if let Some(position_seconds) = hls_position_seconds {
             decoded.skip_frames((position_seconds - hls_segment_start).max(0.0))?;
@@ -240,9 +264,15 @@ impl DecodedSource {
         self.audio_quality.clone()
     }
 
+    pub fn loudness(&self) -> LoudnessInfo {
+        self.loudness
+    }
+
     pub fn seek(&mut self, position_seconds: f64) -> Result<(), String> {
         let time = Time::try_from_secs_f64(position_seconds.max(0.0))
             .ok_or_else(|| "The requested seek position is invalid".to_owned())?;
+        // A skipped stretch would make the measurement describe part of the song.
+        self.meter = None;
         let seek_result = self.format.seek(
             SeekMode::Accurate,
             SeekTo::Time {
@@ -270,7 +300,12 @@ impl DecodedSource {
         loop {
             let packet = match self.format.next_packet() {
                 Ok(Some(packet)) => packet,
-                Ok(None) => return Ok(None),
+                Ok(None) => {
+                    if let Some(meter) = self.meter.take() {
+                        meter.finish();
+                    }
+                    return Ok(None);
+                }
                 Err(SymphoniaError::ResetRequired) => {
                     return Err(format!(
                         "The audio stream layout changed while decoding {}",
@@ -289,6 +324,11 @@ impl DecodedSource {
                 Ok(decoded) => {
                     decoded.copy_to_vec_interleaved(&mut self.scratch);
                     if !self.scratch.is_empty() {
+                        if let Some(meter) = self.meter.as_mut()
+                            && !meter.add(&self.scratch)
+                        {
+                            self.meter = None;
+                        }
                         return Ok(Some(&self.scratch));
                     }
                 }
@@ -326,6 +366,26 @@ impl DecodedSource {
     }
 }
 
+/// ReplayGain tags from every metadata revision the probe found, container and ID3 alike.
+fn embedded_loudness(format: &mut dyn FormatReader) -> LoudnessInfo {
+    let mut metadata = format.metadata();
+    let mut loudness = LoudnessInfo::default();
+    loop {
+        if let Some(revision) = metadata.current() {
+            let tags = revision
+                .media
+                .tags
+                .iter()
+                .chain(revision.per_track.iter().flat_map(|track| &track.metadata.tags));
+            loudness = loudness.or(LoudnessInfo::from_tags(tags));
+        }
+        if metadata.pop().is_none() {
+            break;
+        }
+    }
+    loudness
+}
+
 fn is_http_source(source: &str) -> bool {
     source.starts_with("http://") || source.starts_with("https://")
 }
@@ -348,13 +408,15 @@ struct HlsSource {
     current: Option<Cursor<Vec<u8>>>,
     position: u64,
     duration_seconds: f64,
+    loudness: LoudnessInfo,
 }
 
 impl HlsSource {
     fn open_at(url: &str, position_seconds: f64) -> io::Result<(Self, f64)> {
         let client = http_client()?;
         let playlist_url = Url::parse(url).map_err(io_other)?;
-        let (_, _, playlist_bytes) = get_bytes_with_retry(&client, playlist_url.as_str(), None)?;
+        let (_, playlist_headers, playlist_bytes) =
+            get_bytes_with_retry(&client, playlist_url.as_str(), None)?;
         let playlist = String::from_utf8(playlist_bytes).map_err(io_other)?;
         let playlist = parse_hls_playlist(&playlist_url, &playlist)?;
         let (segment_index, segment_start) = playlist.segment_at(position_seconds);
@@ -374,6 +436,7 @@ impl HlsSource {
                 current: None,
                 position: 0,
                 duration_seconds: playlist.duration_seconds,
+                loudness: LoudnessInfo::from_headers(&playlist_headers),
             },
             segment_start,
         ))
@@ -530,6 +593,7 @@ struct HttpRangeSource {
     cache_start: u64,
     cache: Vec<u8>,
     initial_cache: Vec<u8>,
+    loudness: LoudnessInfo,
 }
 
 impl HttpRangeSource {
@@ -556,6 +620,7 @@ impl HttpRangeSource {
             cache_start: 0,
             initial_cache: bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec(),
             cache: bytes,
+            loudness: LoudnessInfo::from_headers(&headers),
         })
     }
 

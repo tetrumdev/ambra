@@ -21,17 +21,19 @@ try {
   await page.keyboard.press("Alt+ArrowRight"); await heading("Tracks");
   await mouseHistory(3); await heading("My Library");
   await mouseHistory(4); await heading("Tracks");
+  // Settings opens on General, and Escape leaves it like any place you visit.
   await page.keyboard.press("Control+Comma");
-  await page.locator('#settings-tab-outputs[aria-current="page"]').waitFor();
-  await page.keyboard.press("Escape");
-  await page.locator('#settings-tab-outputs[aria-current="page"]').waitFor();
-  await page.getByRole("button", { name: "General", exact: true }).click();
   await page.locator('#settings-tab-general[aria-current="page"]').waitFor();
-  await page.keyboard.press("Alt+ArrowLeft");
+  await page.keyboard.press("Escape"); await heading("Tracks");
+  await page.keyboard.press("Control+Comma");
+  await page.locator('#settings-tab-general[aria-current="page"]').waitFor();
+  await page.getByRole("button", { name: "Outputs", exact: true }).click();
   await page.locator('#settings-tab-outputs[aria-current="page"]').waitFor();
+  await page.keyboard.press("Alt+ArrowLeft");
+  await page.locator('#settings-tab-general[aria-current="page"]').waitFor();
   await page.keyboard.press("Alt+ArrowLeft"); await heading("Tracks");
   await page.keyboard.press("Alt+ArrowRight");
-  await page.locator('#settings-tab-outputs[aria-current="page"]').waitFor();
+  await page.locator('#settings-tab-general[aria-current="page"]').waitFor();
   await page.keyboard.press("Alt+ArrowLeft"); await heading("Tracks");
   await sidebar("Albums").click(); await heading("Albums");
   await page.keyboard.press("Alt+ArrowRight"); await heading("Albums");

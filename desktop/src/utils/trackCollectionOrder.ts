@@ -1,6 +1,8 @@
 import type { GlobalTrackId, Track } from "../types/music";
+import type { TrackPlayStats } from "../hooks/useListeningHistory";
+import { audioQualityRank } from "./audioQuality";
 
-export type TrackSortKey = "track" | "artist" | "album" | "duration";
+export type TrackSortKey = "track" | "artist" | "album" | "duration" | "quality" | "year" | "genre" | "plays" | "lastPlayed";
 export type TrackSortDirection = "descending" | "ascending";
 export type TrackSort = {
   key: TrackSortKey;
@@ -28,6 +30,7 @@ export function nextTrackSort(
 export function sortCollectionTracks<T extends Track>(
   tracks: T[],
   sort: TrackSort,
+  stats?: ReadonlyMap<GlobalTrackId, TrackPlayStats>,
 ): T[] {
   if (!sort) return tracks;
 
@@ -41,6 +44,16 @@ export function sortCollectionTracks<T extends Track>(
         return track.album;
       case "duration":
         return track.durationSeconds;
+      case "quality":
+        return audioQualityRank(track);
+      case "year":
+        return Number(track.releaseDate?.slice(0, 4)) || 0;
+      case "genre":
+        return track.genres[0] ?? "";
+      case "plays":
+        return stats?.get(track.globalId)?.plays ?? 0;
+      case "lastPlayed":
+        return stats?.get(track.globalId)?.lastPlayedAt ?? 0;
     }
   };
   // Down means reading A–Z / low–high from the top of the list.

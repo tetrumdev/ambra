@@ -9,6 +9,7 @@ mod artwork_cache;
 mod artwork_quality;
 mod credits;
 mod http_client;
+mod loudness;
 mod lyrics;
 mod media_cache;
 mod models;

@@ -34,13 +34,15 @@ export function usePageNavigation(page: AppPage, restore: (page: AppPage) => voi
     state.current = page;
   });
 
+  /** False when there's no page in that direction. */
   const move = useStableCallback((direction: "back" | "forward") => {
     const state = history.current;
     const target = state[direction].pop();
-    if (!target) return;
+    if (!target) return false;
     state[direction === "back" ? "forward" : "back"].push(state.current);
     state.current = target;
     restore(target);
+    return true;
   });
   const back = useStableCallback(() => move("back"));
   const forward = useStableCallback(() => move("forward"));

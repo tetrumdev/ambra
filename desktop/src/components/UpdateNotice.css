@@ -1,0 +1,73 @@
+/* Sits above the player on the left, clear of the page filter on the right. */
+.updateNotice {
+    position: fixed;
+    left: 20px;
+    bottom: calc(var(--player-height) + 18px);
+    z-index: 12;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-sizing: border-box;
+    height: 42px;
+    padding: 0 6px 0 14px;
+    border: 1px solid rgb(255 255 255 / 0.14);
+    border-radius: 10px;
+    background: rgb(14 14 14 / 0.9);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.55);
+    color: white;
+    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-size: 0.85rem;
+    white-space: nowrap;
+}
+
+.updateNotice:not(:has(button)) {
+    padding-right: 14px;
+}
+
+.updateNoticeInstall {
+    height: 28px;
+    margin: 0;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 7px;
+    background: white;
+    color: black;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.updateNoticeInstall:hover,
+.updateNoticeInstall:focus-visible {
+    background: #dcdcdc;
+}
+
+.updateNoticeDismiss {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: #9a9a9a;
+}
+
+.updateNoticeDismiss svg {
+    width: 11px;
+    height: 11px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+}
+
+.updateNoticeDismiss:hover,
+.updateNoticeDismiss:focus-visible {
+    background: #2a2a2a;
+    color: white;
+}
