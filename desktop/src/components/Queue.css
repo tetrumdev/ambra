@@ -8,7 +8,7 @@
     display: flex;
     flex-direction: column;
     width: 100%;
-    height: calc(100% - var(--player-height));
+    height: 100%;
     min-width: 0;
     min-height: 0;
     font: 300 0.9rem "Stack Sans Text", Inter, sans-serif;
@@ -61,7 +61,7 @@
 }
 
 .queueView #queueList::after {
-    height: 24px;
+    height: calc(var(--player-height) + 24px);
 }
 
 /* The same fade as playlists; it overlaps the list's top padding so the rows start where they did. */
@@ -196,7 +196,7 @@
 }
 
 .queueView .queueItem[data-current="true"]:hover {
-    background-color: #242424;
+    background-color: #1c1c1c;
 }
 
 .queueView .queueItem[data-current="true"] .trackTitleText {
@@ -234,7 +234,7 @@
 /* The lyrics view's "Back to current line" pill (LyricsView.css), for now playing. */
 .queueResume {
     position: absolute;
-    bottom: 24px;
+    bottom: calc(var(--player-height) + 24px);
     left: 50%;
     z-index: 10;
     display: flex;

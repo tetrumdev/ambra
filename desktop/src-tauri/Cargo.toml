@@ -44,6 +44,7 @@ hound = "3.5"
 ebur128 = "0.1.10"
 
 [target.'cfg(target_os = "macos")'.dependencies]
+block = "0.1.6"
 cocoa = "0.24.1"
 objc = "0.2.7"
 coreaudio-rs = "0.13"

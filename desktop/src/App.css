@@ -27,6 +27,7 @@
     -webkit-text-size-adjust: 100%;
     text-align: center;
     overflow: hidden;
+    overscroll-behavior-x: none;
     isolation: isolate;
     user-select: none;
     -webkit-user-select: none;
@@ -47,6 +48,7 @@ body,
     height: 100%;
     margin: 0;
     overflow-x: hidden;
+    overscroll-behavior-x: none;
 }
 
 #root {

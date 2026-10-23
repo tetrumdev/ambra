@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
+import { needsLyricsRetry } from "../types/lyrics";
 import type { Track } from "../types/music";
 import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
@@ -1253,7 +1254,7 @@ export function LyricsView({
   );
 
   const unavailableDuringFailure =
-    lyrics?.status === "unavailable" && lyrics.failedProviders.length > 0;
+    lyrics !== null && needsLyricsRetry(lyrics);
   // Lyrics that had to load rise in over the loading text, as cached ones arrive with the page.
   const loadedLate = useRef(false);
   if (track && !error && !lyrics) loadedLate.current = true;

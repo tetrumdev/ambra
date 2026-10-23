@@ -1,3 +1,31 @@
+/* The standard columns every song list can leave out, set from the column picker
+   (App.tsx). An empty track drops the column from the grid; its cells hide with it. */
+:root {
+    --library-artist-column: minmax(100px, 1fr);
+    --library-album-column: minmax(120px, 1.5fr);
+    --library-duration-column: minmax(64px, 0.55fr);
+    --library-duration-fixed: 64px;
+}
+
+:root[data-hidden-columns~="artist"] {
+    --library-artist-column: ;
+}
+
+:root[data-hidden-columns~="album"] {
+    --library-album-column: ;
+}
+
+:root[data-hidden-columns~="duration"] {
+    --library-duration-column: ;
+    --library-duration-fixed: ;
+}
+
+:root[data-hidden-columns~="artist"] :is(.artistColumn, .libraryItem .artistName),
+:root[data-hidden-columns~="album"] :is(.albumColumn, .libraryItem .albumName),
+:root[data-hidden-columns~="duration"] :is(.durationColumn, .libraryItem .trackDuration) {
+    display: none;
+}
+
 .libraryView::before,
 .searchView::before {
     display: block;
@@ -9,7 +37,7 @@
 .searchView {
     --library-leading-width: 100px;
     --library-columns: var(--library-leading-width) minmax(140px, 2fr)
-        minmax(100px, 1fr) minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
+        var(--library-artist-column) var(--library-album-column) var(--library-duration-column) 40px;
     overflow-y: auto;
     overflow-x: hidden;
     min-height: 0;
@@ -26,8 +54,8 @@
 /* Song lists also hold the optional columns chosen from their header, set on the root. */
 .libraryView {
     --library-columns: var(--library-leading-width) minmax(140px, 2fr)
-        minmax(100px, 1fr) minmax(120px, 1.5fr) var(--library-extra-columns,)
-        minmax(64px, 0.55fr) 40px;
+        var(--library-artist-column) var(--library-album-column) var(--library-extra-columns,)
+        var(--library-duration-column) 40px;
 }
 
 .libraryView::after,
@@ -50,8 +78,8 @@
 
 .playlistView {
     --library-columns: var(--library-leading-width) minmax(140px, 2fr)
-        minmax(100px, 1fr) minmax(120px, 1.5fr) var(--library-extra-columns,)
-        minmax(64px, 0.55fr) 40px;
+        var(--library-artist-column) var(--library-album-column) var(--library-extra-columns,)
+        var(--library-duration-column) 40px;
     --playlist-artwork-scale: 1;
     --playlist-title-progress: 0;
     --playlist-title-scale: 1;
@@ -218,174 +246,6 @@
     content: "";
     background: #000;
     pointer-events: none;
-}
-
-.librarySourcesTrigger {
-    position: absolute;
-    /* Sits 8px below the search pill (10px top + 42px tall, in <main>). The
-       header starts after the content spacer, so subtract that back out. */
-    top: calc(10px + 42px + 8px - var(--content-top-spacer));
-    /* Shares the search pill's right edge. */
-    right: 20px;
-    display: grid;
-    width: 34px;
-    height: 34px;
-    padding: 0 0 2px;
-    place-items: center;
-    border: 1px solid #535353;
-    border-radius: 50%;
-    background: rgba(9, 9, 9, 0.82);
-    color: white;
-    font:
-        300 24px/1 "Stack Sans Text",
-        sans-serif;
-    cursor: default;
-}
-
-.librarySourcesTrigger:hover,
-.librarySourcesTrigger:focus-visible {
-    border-color: #888;
-    background: #1b1b1b;
-    outline: none;
-}
-
-.librarySourcesDialog {
-    box-sizing: border-box;
-    width: min(560px, calc(100vw - 32px));
-    max-height: min(720px, calc(100vh - 48px));
-    padding: 0;
-    overflow: auto;
-    border: 1px solid #535353;
-    border-radius: 18px;
-    background: rgba(18, 18, 18, 0.88);
-    color: white;
-    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.58);
-    backdrop-filter: blur(18px);
-    font-family: "Stack Sans Text", Inter, sans-serif;
-}
-
-.librarySourcesDialog::backdrop {
-    background: rgba(0, 0, 0, 0.58);
-    backdrop-filter: blur(3px);
-}
-
-.librarySourcesPanel {
-    padding: 24px;
-}
-
-.librarySourcesHeading,
-.librarySourceRow {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-}
-
-.librarySourcesHeading {
-    align-items: flex-start;
-    padding-bottom: 20px;
-}
-
-.librarySourcesHeading h2,
-.librarySourceRow h3 {
-    margin: 0;
-}
-
-.librarySourcesHeading h2 {
-    font-family: "Source Serif 4", serif;
-    font-size: 1.8rem;
-    font-weight: 500;
-}
-
-.librarySourcesHeading p,
-.librarySourceRow p {
-    margin: 5px 0 0;
-    color: #aaa;
-    font-size: 0.8rem;
-    line-height: 1.45;
-}
-
-.librarySourcesClose {
-    display: grid;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    place-items: center;
-    border: 0;
-    background: transparent;
-    opacity: 0.65;
-    cursor: default;
-    transition: opacity 0.25s ease;
-}
-
-.librarySourcesClose img {
-    width: 14px;
-    height: 14px;
-}
-
-.librarySourcesClose:hover,
-.librarySourcesClose:focus-visible {
-    opacity: 1;
-}
-
-.librarySourceRow {
-    min-height: 60px;
-    padding: 14px 0;
-    border-top: 1px solid #3d3d3d;
-}
-
-.librarySourceRow > div:first-child {
-    min-width: 0;
-}
-
-.librarySourceRow h3 {
-    font-size: 0.95rem;
-    font-weight: 600;
-}
-
-.librarySourceActions {
-    display: flex;
-    flex: none;
-    gap: 8px;
-}
-
-.librarySourceRow button {
-    min-width: 86px;
-    height: 34px;
-    padding: 0 14px;
-    border: 1px solid #666;
-    border-radius: 999px;
-    background: transparent;
-    color: white;
-    font: inherit;
-    font-size: 0.78rem;
-    cursor: default;
-}
-
-.librarySourceRow button:hover:not(:disabled) {
-    border-color: white;
-    background: white;
-    color: black;
-}
-
-.librarySourceRow button:disabled {
-    color: #777;
-    cursor: default;
-}
-
-.librarySourcesMessage,
-.librarySourcesError {
-    margin: 16px 0 0;
-    font-size: 0.8rem;
-}
-
-.librarySourcesMessage {
-    color: #b9d7b9;
-}
-
-.librarySourcesError {
-    color: var(--error-text);
-    overflow-wrap: anywhere;
 }
 
 .libraryOverview {
@@ -1108,4 +968,26 @@
     width: 20px;
     height: 20px;
     object-fit: contain;
+}
+
+/* The filter's only match, shown in place among its neighbours: it breathes until the
+   listener clicks, scrolls or types (hooks/usePageFilter.tsx). */
+.libraryItem[data-revealed="true"] {
+    animation: revealBreathe 2.4s ease-in-out infinite alternate;
+}
+
+@keyframes revealBreathe {
+    from {
+        background-color: #000;
+    }
+    to {
+        background-color: #2c2c2c;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .libraryItem[data-revealed="true"] {
+        animation: none;
+        background-color: #262626;
+    }
 }
