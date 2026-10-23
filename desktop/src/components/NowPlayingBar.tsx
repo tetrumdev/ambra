@@ -70,6 +70,8 @@ type NowPlayingBarProps = {
   clock: PlaybackClock;
   duration: number;
   isPlaying: boolean;
+  previousActivation: number;
+  nextActivation: number;
   playbackError?: string | null;
   audioDecks: AudioDeckController;
   onPrevious: () => void;
@@ -93,6 +95,8 @@ export function NowPlayingBar({
   clock,
   duration,
   isPlaying,
+  previousActivation,
+  nextActivation,
   playbackError,
   audioDecks,
   onPrevious,
@@ -157,6 +161,8 @@ export function NowPlayingBar({
       <div id="playbackCluster">
         <PlayerControls
           isPlaying={isPlaying}
+          previousActivation={previousActivation}
+          nextActivation={nextActivation}
           onPrevious={onPrevious}
           onTogglePlayback={onTogglePlayback}
           onNext={onNext}

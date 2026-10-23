@@ -3,7 +3,6 @@
 #volumeBtn,
 #queueBtn,
 .xContainer,
-.librarySourcesClose,
 .sidebarPlaylistActions,
 .searchResultMenuButton {
     transition-duration: 0.15s;
@@ -12,7 +11,6 @@
 #volumeBtn:active,
 #queueBtn:active,
 .xContainer:active,
-.librarySourcesClose:active,
 .sidebarPlaylistActions:active,
 .searchResultMenuButton:active {
     filter: brightness(70%);
@@ -22,7 +20,6 @@
 #volumeBtn > #volumeImg,
 #queueBtn > img,
 .xContainer > img,
-.librarySourcesClose > img,
 .sidebarPlaylistActions > svg,
 .searchResultMenuButton > img {
     pointer-events: none;
@@ -33,7 +30,6 @@
 #volumeBtn:active > #volumeImg,
 #queueBtn:active > img,
 .xContainer:active > img,
-.librarySourcesClose:active > img,
 .sidebarPlaylistActions:active > svg,
 .searchResultMenuButton:active > img {
     scale: 0.7;
@@ -53,8 +49,6 @@
     .playlistEditButtons button,
     .lyricsSyncNudges button,
     .lyricsMessage button,
-    .librarySourcesTrigger,
-    .librarySourceRow button,
     .playbackError button,
     .sidebarBtn,
     .sidebarPlaylistGroup > summary,
@@ -86,8 +80,6 @@
     .playlistEditButtons button,
     .lyricsSyncNudges button,
     .lyricsMessage button,
-    .librarySourcesTrigger,
-    .librarySourceRow button,
     .playbackError button,
     .sidebarBtn,
     .sidebarPlaylistGroup > summary,

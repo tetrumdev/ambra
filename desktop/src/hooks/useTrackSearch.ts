@@ -4,7 +4,7 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { groupSearchResults } from "../utils/searchRanking";
 import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
 
-const empty: SearchSnapshot = { results: [], candidates: [], artists: [], albums: [], isSearching: false, hasMore: false, error: null, canRetry: false };
+const empty: SearchSnapshot = { results: [], allResults: [], candidates: [], artists: [], albums: [], isSearching: false, hasMore: false, error: null, canRetry: false };
 const resolvedTracks = new Map<string, { track: Track; expires: number }>();
 
 function cachedTrack(track: Track) {

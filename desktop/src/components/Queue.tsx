@@ -13,11 +13,14 @@ import { showTrackCredits } from "../utils/trackCredits";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { TrackExtraCells } from "./TrackExtraCells";
-import { usePageFilter, useReportPageMatches } from "../hooks/usePageFilter";
+import { usePageFilter, usePageReveal, useReportPageMatches, type PageReveal } from "../hooks/usePageFilter";
+import { revealListItem } from "../utils/revealListItem";
 import { trackMatches } from "../utils/trackFilter";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { trackArtistNames } from "../utils/trackArtists";
+import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { ArtistLinks } from "./ArtistLinks";
 import "./LibraryView.css";
 import "./Queue.css";
 
@@ -35,6 +38,7 @@ export type QueueProps = {
   playlistOptions?: PlaylistMenuOptions;
   savedTrackIds?: ReadonlySet<string>;
   addToLibrary?: (track: Track) => void;
+  onOpenEntity: (entity: BrowseEntity) => void;
 };
 
 type DisplayEntry = {
@@ -45,7 +49,8 @@ type DisplayEntry = {
   current?: boolean;
   played?: boolean;
 };
-type RowAction = "select" | "menu" | "play";
+type MenuKind = "playback" | "collection";
+type RowAction = "select" | MenuKind | "play";
 type EntryAction = (action: RowAction, event: React.MouseEvent<HTMLElement>, entry: DisplayEntry) => void;
 
 function queueEntry(entry: QueueEntry, current = false): DisplayEntry {
@@ -64,17 +69,29 @@ export function Queue(props: QueueProps) {
   const history = useMemo(() => props.historyEntries.map(entry => ({
     id: `history:${entry.historyId}`, track: entry.track, historyId: entry.historyId, played: true,
   })), [props.historyEntries]);
-  // The page filter narrows every section; reordering waits until it is cleared.
+  // History starts folded into a single row above now playing, so the queue opens on what is playing.
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // The page filter narrows every section, searching history only while it is unfolded;
+  // reordering waits until it is cleared.
   const { terms } = usePageFilter();
   const filtering = terms.length > 0;
-  const shownHistory = useMemo(() => filtering ? history.filter(entry => trackMatches(entry.track, terms)) : history, [history, terms, filtering]);
-  const shownUpcoming = useMemo(() => filtering ? upcoming.filter(entry => trackMatches(entry.track, terms)) : upcoming, [upcoming, terms, filtering]);
-  const shownCurrent = current && (!filtering || trackMatches(current.track, terms)) ? current : undefined;
-  useReportPageMatches(filtering ? shownHistory.length + (shownCurrent ? 1 : 0) + shownUpcoming.length : null);
+  const matchedHistory = useMemo(() => filtering && historyOpen ? history.filter(entry => trackMatches(entry.track, terms)) : [], [history, terms, filtering, historyOpen]);
+  const matchedUpcoming = useMemo(() => filtering ? upcoming.filter(entry => trackMatches(entry.track, terms)) : [], [upcoming, terms, filtering]);
+  const matchedCurrent = filtering && current && trackMatches(current.track, terms) ? current : undefined;
+  const matchedIds = useMemo(() => [...matchedHistory, ...(matchedCurrent ? [matchedCurrent] : []), ...matchedUpcoming].map(entry => entry.id),
+    [matchedHistory, matchedCurrent, matchedUpcoming]);
+  useReportPageMatches(filtering ? matchedIds.length : null);
+  // A lone match is shown where it sits rather than on its own.
+  const reveal = usePageReveal(matchedIds, filtering);
+  const narrowed = filtering && !reveal.target;
+  const shownHistory = narrowed ? matchedHistory : history;
+  const shownUpcoming = narrowed ? matchedUpcoming : upcoming;
+  const shownCurrent = narrowed ? matchedCurrent : current;
   const entries = useMemo(() => [...shownHistory, ...(shownCurrent ? [shownCurrent] : []), ...shownUpcoming], [shownCurrent, shownUpcoming, shownHistory]);
   const ids = useMemo(() => entries.map(entry => entry.id), [entries]);
-  const selection = useRangeSelection(ids);
-  const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number; flipY: number } | null>(null);
+  const selectableIds = useMemo(() => ids.filter(id => id !== current?.id), [ids, current?.id]);
+  const selection = useRangeSelection(selectableIds);
+  const [menu, setMenu] = useState<{ kind: MenuKind; entry: DisplayEntry; x: number; y: number; flipY: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef<HTMLElement>(null);
   const tailRef = useRef<HTMLDivElement>(null);
@@ -83,9 +100,7 @@ export function Queue(props: QueueProps) {
   const followCurrent = useRef(true);
   // Scrolled away from now playing, which offers the way back.
   const [awayFromCurrent, setAwayFromCurrent] = useState(false);
-  // History starts folded into a single row above now playing, so the queue opens on what is playing.
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const historyShown = (historyOpen || filtering) && shownHistory.length > 0;
+  const historyShown = historyOpen && shownHistory.length > 0;
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
     scrollRef.current = element;
     props.registerScrollElement(element);
@@ -184,7 +199,7 @@ export function Queue(props: QueueProps) {
     props.reorderEntries(others.slice(0, split).map(id => refs.get(id)!), others.slice(split).map(id => refs.get(id)!));
   }, [entries, current, props.reorderEntries]);
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
-    ids, filtering ? undefined : reorder, () => setMenu(null), scrollRef, scrollRef,
+    ids, narrowed ? undefined : reorder, () => setMenu(null), scrollRef, scrollRef,
   );
   // Up next rows count from 0, but sit after history and now playing in the shared list.
   const upcomingOffset = shownHistory.length + (shownCurrent ? 1 : 0);
@@ -197,6 +212,7 @@ export function Queue(props: QueueProps) {
   }, [signature, selection.clear]);
 
   function playEntry(entry: DisplayEntry) {
+    if (entry.current) return;
     if (entry.historyId) props.replayHistory(entry.historyId);
     else if (entry.queueId !== undefined) props.jumpTo(entry.queueId);
   }
@@ -212,37 +228,42 @@ export function Queue(props: QueueProps) {
 
   const actions = useRef<EntryAction>(() => {});
   actions.current = (action, event, entry) => {
+    if (entry.current && action !== "collection") return;
     if (suppressClick.current && !entry.current && action !== "select") return;
-    if (action === "select" || selection.isSelecting) {
+    if (!entry.current && (action === "select" || selection.isSelecting)) {
       event.preventDefault();
       event.stopPropagation();
       setMenu(null);
-      selection.toggle(ids.indexOf(entry.id), event.shiftKey);
+      selection.toggle(selectableIds.indexOf(entry.id), event.shiftKey);
     } else if (action === "play") {
       event.stopPropagation();
       setMenu(null);
       playEntry(entry);
-    } else if (action === "menu") {
+    } else if (action === "playback" || action === "collection") {
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
-      const trigger = event.currentTarget.hasAttribute("data-collection-menu-trigger");
-      setMenu({ entry, x: trigger ? rect.right - MENU_WIDTH : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY, flipY: trigger ? rect.top - 4 : event.clientY });
-    } else {
-      setMenu(null);
-      playEntry(entry);
+      const trigger = action === "collection";
+      setMenu({ kind: action, entry, x: trigger ? rect.right - MENU_WIDTH : event.clientX, y: trigger ? rect.bottom + 4 : event.clientY, flipY: trigger ? rect.top - 4 : event.clientY });
     }
   };
   const onAction = useCallback<EntryAction>((action, event, entry) => actions.current(action, event, entry), []);
-  const rowProps = { selecting: selection.isSelecting, selectedIds: selection.selectedIds, menuEntryId: menu?.entry.id, onAction };
+  const rowProps = { selecting: selection.isSelecting, selectedIds: selection.selectedIds, menuEntryId: menu?.entry.id, menuKind: menu?.kind, onAction, onOpenEntity: props.onOpenEntity, reveal };
+  // Now playing has its own place to go back to; anything else is scrolled to by its list.
+  useLayoutEffect(() => {
+    if (!reveal.key) return;
+    if (reveal.target === current?.id) jumpToCurrent();
+    else followCurrent.current = false;
+  }, [reveal.key]);
   const duration = props.upcomingEntries.reduce((total, entry) => total + entry.track.durationSeconds, 0);
 
   return (
     <PerfProfiler id="queue">
-      {menu && <TrackCollectionMenu trackId={menu.entry.track.globalId} onClose={() => setMenu(null)}
-        playlistOptions={props.playlistOptions}
-        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} actions={[
-          ...(!menu.entry.current ? [{ label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) }] : []),
+      {menu && <TrackCollectionMenu key={`${menu.entry.id}:${menu.kind}`} trackId={menu.entry.track.globalId} onClose={() => setMenu(null)}
+        playlistOptions={menu.kind === "collection" ? props.playlistOptions : undefined}
+        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} actions={menu.kind === "playback" ? [
+          { label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) },
           { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", icon: "/delete.svg", onSelect: () => removeEntries([menu.entry]) },
+        ] : [
           ...(props.addToLibrary && menu.entry.track.provider !== "local" && !props.savedTrackIds?.has(menu.entry.track.globalId)
             ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => props.addToLibrary!(menu.entry.track) }] : []),
           { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menu.entry.track) },
@@ -274,23 +295,24 @@ export function Queue(props: QueueProps) {
               aria-controls="queueHistory" onClick={toggleHistory}>
               <DropdownChevron />Played ({history.length})
             </button>
-            {historyShown && !filtering && <button type="button" className="queueTextButton"
+            {historyShown && !narrowed && <button type="button" className="queueTextButton"
               onClick={() => removeEntries(history)}>Clear</button>}
           </div>}
           <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!historyShown}>
-            {historyShown && <QueueRows entries={shownHistory} label="Queue history" {...rowProps} onPointerDown={filtering ? undefined : onPointerDown}
+            {historyShown && <QueueRows entries={shownHistory} label="Queue history" {...rowProps} onPointerDown={narrowed ? undefined : onPointerDown}
               draggedId={draggedTrackId} dropTarget={dropTarget} />}
           </section>
           <div className="queueTail" ref={tailRef}>
             <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!shownCurrent}>
               <h2 className="queueSectionTitle">Now Playing</h2>
               {shownCurrent && <QueueRow entry={shownCurrent} index={0} {...rowProps} selected={selection.selectedIds.has(shownCurrent.id)}
+                revealed={reveal.breathing && reveal.target === shownCurrent.id}
                 menuOpen={menu?.entry.id === shownCurrent.id}
                 dropPosition={dropTarget?.trackId === shownCurrent.id ? dropTarget.position : undefined} />}
             </section>
             <section id="upcomingQueueTracks" className="queueSection" aria-label="Upcoming tracks" hidden={!shownUpcoming.length}>
               <h2 className="queueSectionTitle">Up Next</h2>
-              <QueueRows entries={shownUpcoming} label="Upcoming queue" {...rowProps} onPointerDown={filtering ? undefined : onUpcomingPointerDown}
+              <QueueRows entries={shownUpcoming} label="Upcoming queue" {...rowProps} onPointerDown={narrowed ? undefined : onUpcomingPointerDown}
                 draggedId={draggedTrackId} dropTarget={dropTarget} />
             </section>
             {!history.length && !current && !upcoming.length && <p className="queueEmpty">Queue is empty</p>}
@@ -313,11 +335,14 @@ type RowProps = {
   selecting: boolean;
   selectedIds: ReadonlySet<string>;
   menuEntryId?: string;
+  menuKind?: MenuKind;
+  reveal: PageReveal;
   onAction: EntryAction;
+  onOpenEntity: (entity: BrowseEntity) => void;
   onPointerDown?: (event: React.PointerEvent<HTMLDivElement>, index: number) => void;
 };
 
-function QueueRows({ entries, label, draggedId, dropTarget, ...props }: RowProps & {
+function QueueRows({ entries, label, draggedId, dropTarget, reveal, ...props }: RowProps & {
   entries: DisplayEntry[];
   label: string;
   draggedId?: string | null;
@@ -329,12 +354,17 @@ function QueueRows({ entries, label, draggedId, dropTarget, ...props }: RowProps
     fallback: { rowHeight: 76 }, cacheKey: label, overscanRows: 10,
     pinnedIndex: draggedId ? entries.findIndex(entry => entry.id === draggedId) : null,
   });
+  const revealIndex = reveal.target ? entries.findIndex(entry => entry.id === reveal.target) : -1;
+  useLayoutEffect(() => {
+    if (reveal.key && revealIndex >= 0 && rowsRef.current) revealListItem(rowsRef.current, revealIndex, virtual.start);
+  }, [reveal.key]);
   return (
     <div className="queueEntries" role="list" aria-label={label} ref={rowsRef}>
       {virtual.topSpace > 0 && <VirtualSpacer position="top" height={virtual.topSpace} />}
       {entries.slice(virtual.start, virtual.end).map((entry, offset) => <QueueRow
         key={entry.id} entry={entry} index={virtual.start + offset} {...props}
         selected={props.selectedIds.has(entry.id)} menuOpen={props.menuEntryId === entry.id} dragging={entry.id === draggedId}
+        revealed={reveal.breathing && reveal.target === entry.id}
         dropPosition={dropTarget?.trackId === entry.id ? dropTarget.position : undefined}
       />)}
       {virtual.bottomSpace > 0 && <VirtualSpacer position="bottom" height={virtual.bottomSpace} />}
@@ -351,25 +381,30 @@ function formatDuration(durationSeconds: number) {
 }
 
 // Mirrors TrackList's rows so the queue reads like any other collection.
-const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, menuOpen, onAction, onPointerDown, dragging, dropPosition }: Omit<RowProps, "selectedIds" | "menuEntryId"> & {
+const QueueRow = memo(function QueueRow({ entry, index, selecting: selectionActive, selected, menuOpen, menuKind, onAction, onOpenEntity, onPointerDown, dragging, dropPosition, revealed }: Omit<RowProps, "selectedIds" | "menuEntryId" | "reveal"> & {
   entry: DisplayEntry;
   index: number;
   selected: boolean;
   menuOpen?: boolean;
   dragging?: boolean;
   dropPosition?: DropPosition;
+  /** The filter's only match, breathing until the listener does anything. */
+  revealed?: boolean;
 }) {
+  const selecting = selectionActive && !entry.current;
+  const collectionMenuOpen = menuOpen && menuKind === "collection";
   const artists = trackArtistNames(entry.track);
   return (
     <div className="libraryItem queueItem" role="listitem" data-virtual-item="" data-track-id={entry.id}
+      data-revealed={revealed ? "true" : undefined}
       data-selected={selected ? "true" : undefined} data-selecting={selecting ? "true" : undefined}
       data-menu-open={menuOpen ? "true" : undefined}
       data-current={entry.current ? "true" : undefined} data-reorderable={onPointerDown ? "true" : undefined}
       data-played={entry.played ? "true" : undefined} aria-current={entry.current ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined} data-drop-position={dropPosition} draggable={false}
       onClickCapture={event => { if (selecting) onAction("select", event, entry); }}
-      onClick={event => onAction("menu", event, entry)}
-      onContextMenu={event => onAction("select", event, entry)}
+      onClick={entry.current ? undefined : event => onAction("playback", event, entry)}
+      onContextMenu={entry.current ? undefined : event => onAction("select", event, entry)}
       onPointerDown={event => onPointerDown?.(event, index)} onDragStart={event => event.preventDefault()}>
       <div className="trackLeading">
         <button type="button" className="trackPlayButton" disabled={entry.current}
@@ -381,17 +416,20 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, men
       </div>
       <span className="trackName trackDescriptor">
         <span className="trackTitleText" title={entry.track.name}>{entry.track.name}</span>
-        <small className="queueTrackArtist">{artists}</small>
+        <small className="queueTrackArtist"><ArtistLinks track={entry.track} onOpenEntity={onOpenEntity} /></small>
       </span>
-      <span className="artistName trackDescriptor" title={artists}>{artists}</span>
-      <span className="albumName trackDescriptor" title={entry.track.album}>{entry.track.album}</span>
+      <span className="artistName trackDescriptor" title={artists}><ArtistLinks track={entry.track} onOpenEntity={onOpenEntity} /></span>
+      <span className="albumName trackDescriptor" title={entry.track.album}>
+        <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(entry.track) }); }}>{entry.track.album}</button>
+      </span>
       <TrackExtraCells track={entry.track} />
       <span className="trackDuration trackDescriptor">{formatDuration(entry.track.durationSeconds)}</span>
       <button type="button" className="trackCollectionMenuTrigger"
-        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${entry.track.name}`}
-        aria-expanded={selecting ? undefined : menuOpen}
-        onClick={event => onAction("menu", event, entry)}
-        data-collection-menu-trigger data-collection-menu-open={menuOpen && !selecting ? "true" : undefined}>
+        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Library options for"} ${entry.track.name}`}
+        aria-haspopup={selecting ? undefined : "menu"}
+        aria-expanded={selecting ? undefined : collectionMenuOpen}
+        onClick={event => onAction("collection", event, entry)}
+        data-collection-menu-trigger data-collection-menu-open={collectionMenuOpen && !selecting ? "true" : undefined}>
         <img src={selecting ? selected ? "/select.svg" : "/no-select.svg" : "/menu.svg"}
           alt={selecting ? "Selection status" : "Menu"} className={selecting ? "selectionIndicator" : undefined} />
       </button>

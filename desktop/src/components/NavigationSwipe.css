@@ -1,0 +1,74 @@
+.navigationSwipe {
+    position: fixed;
+    top: 50%;
+    left: 0;
+    z-index: 14;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    box-sizing: border-box;
+    width: 116px;
+    height: 46px;
+    border: 1px solid rgb(255 255 255 / 0.2);
+    border-radius: 999px;
+    background: rgb(30 30 30 / 0.9);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
+    box-shadow: 0 4px 24px #0006;
+    color: #bdbdbd;
+    font: 500 13px/1 "Stack Sans Text", sans-serif;
+    pointer-events: none;
+    transform: translate3d(calc(-116px + var(--swipe-progress) * 136px), -50%, 0);
+    transition: background-color 90ms ease, color 90ms ease;
+    will-change: transform;
+}
+
+.navigationSwipe[data-direction="forward"] {
+    left: auto;
+    right: 0;
+    transform: translate3d(calc(116px - var(--swipe-progress) * 136px), -50%, 0);
+}
+
+.navigationSwipe[data-direction="back"] {
+    flex-direction: row-reverse;
+}
+
+.navigationSwipe svg {
+    flex: none;
+    width: 20px;
+    height: 20px;
+}
+
+.navigationSwipe[data-direction="forward"] svg {
+    rotate: 180deg;
+}
+
+.navigationSwipe[data-ready="true"] {
+    border-color: white;
+    background: white;
+    color: #111;
+}
+
+.navigationSwipe[data-releasing] {
+    --swipe-progress: 0 !important;
+    opacity: 0;
+    transition: transform 160ms cubic-bezier(0.2, 0, 0, 1), opacity 120ms ease;
+}
+
+.navigationSwipe[data-releasing="commit"] {
+    scale: 1.06;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .navigationSwipe {
+        transform: translate3d(16px, -50%, 0);
+        transition: none;
+    }
+    .navigationSwipe[data-direction="forward"] {
+        transform: translate3d(-16px, -50%, 0);
+    }
+    .navigationSwipe[data-releasing] {
+        transition: none;
+    }
+}

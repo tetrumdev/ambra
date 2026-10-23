@@ -3,8 +3,12 @@ import { useRef, useState } from "react";
 import { gsap } from "gsap";
 import { useGSAP } from "@gsap/react";
 import { MorphSVGPlugin } from "gsap/MorphSVGPlugin";
+import { CustomEase } from "gsap/CustomEase";
+import { motion } from "../utils/motion";
 
-gsap.registerPlugin(useGSAP, MorphSVGPlugin);
+gsap.registerPlugin(useGSAP, MorphSVGPlugin, CustomEase);
+
+const skipEase = CustomEase.create("", motion.smooth.easing.slice("cubic-bezier(".length, -1));
 
 // Play is split down the middle into two halves that fold into the pause bars,
 // so every corner has a partner and the icon morphs instead of swapping. The left
@@ -36,8 +40,48 @@ function PlayPauseIcon({ playing }: { playing: boolean }) {
   );
 }
 
+function SkipIcon({ backwards = false, activation }: { backwards?: boolean; activation: number }) {
+  const icon = useRef<SVGSVGElement>(null);
+  const seenActivation = useRef(activation);
+  const animation = useRef<gsap.core.Timeline | null>(null);
+  useGSAP(() => {
+    if (seenActivation.current === activation) return;
+    seenActivation.current = activation;
+    animation.current?.progress(1).kill();
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+
+    const paths = icon.current!.querySelectorAll("path");
+    // Three triangles roll through two visible positions. Resetting at the end
+    // swaps identical shapes, ready for the next activation without a visible jump.
+    const reset = () => {
+      gsap.set(paths, { x: 0, scale: 1, transformOrigin: "50% 50%" });
+      gsap.set(paths[0], { opacity: 0, scale: 0 });
+      gsap.set(paths[2], { opacity: 1 });
+    };
+    reset();
+    animation.current = gsap.timeline({
+      defaults: { duration: motion.smooth.duration / 1000, ease: skipEase },
+      onComplete: reset,
+    })
+      .to(paths, { x: 191.25 }, 0)
+      .to(paths[0], { opacity: 1, scale: 1 }, 0)
+      .to(paths[2], { opacity: 0, scale: 0 }, 0);
+  }, { dependencies: [activation], scope: icon });
+  return (
+    <svg ref={icon} className="skipIcon" viewBox="0 0 430 276" aria-hidden="true">
+      <g transform={backwards ? "translate(430 276) rotate(180)" : undefined} fill="white">
+        <path d="M-191.25 0L47.5 138L-191.25 276Z" opacity="0" />
+        <path d="M0 0L238.75 138L0 276Z" />
+        <path d="M191.25 0L430 138L191.25 276Z" />
+      </g>
+    </svg>
+  );
+}
+
 type PlayerControlsProps = {
   isPlaying: boolean;
+  previousActivation: number;
+  nextActivation: number;
   onPrevious: () => void;
   onTogglePlayback: () => void | Promise<void>;
   onNext: () => void;
@@ -46,6 +90,8 @@ type PlayerControlsProps = {
 
 export function PlayerControls({
   isPlaying,
+  previousActivation,
+  nextActivation,
   onPrevious,
   onTogglePlayback,
   onNext,
@@ -59,8 +105,9 @@ export function PlayerControls({
         onClick={onPrevious}
         disabled={disabled}
         data-tooltip="Previous"
+        aria-label="Previous"
       >
-        <img src="/back.svg" alt="Previous" />
+        <SkipIcon backwards activation={previousActivation} />
       </button>
 
       <button
@@ -75,8 +122,8 @@ export function PlayerControls({
         <PlayPauseIcon playing={isPlaying} />
       </button>
 
-      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled} data-tooltip="Next">
-        <img src="/skip.svg" alt="Next" />
+      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled} data-tooltip="Next" aria-label="Next">
+        <SkipIcon activation={nextActivation} />
       </button>
     </div>
   );

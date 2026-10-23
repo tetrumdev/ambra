@@ -9,6 +9,7 @@ import { ArtistPortrait } from "./ArtistPortrait";
 import { CatalogAlbumGrid } from "./LibraryView";
 import { TrackCollectionView } from "./TrackCollectionView";
 import { TrackList } from "./TrackList";
+import { AboutDialog } from "./AboutDialog";
 import type { EntityViewProps } from "./EntityView";
 import "./ArtistView.css";
 
@@ -33,7 +34,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const releasesLoading = loadingReleases > 0;
   const [profileAttempt, setProfileAttempt] = useState(0);
   const [expandedPopular, setExpandedPopular] = useState(cached?.expandedPopular ?? false);
-  const [expandedBiography, setExpandedBiography] = useState(cached?.expandedBiography ?? false);
+  const [showAbout, setShowAbout] = useState(false);
   useEffect(() => {
     if (artist.provider === "local" || (initialProfile && profileAttempt === 0)) return;
     const controller = new AbortController(); setProfileLoading(true); setProfileError(null);
@@ -82,8 +83,8 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const albums = useMemo(() => mergedArtistReleases(artist, sources, releases), [artist, sources, releases]);
   const moreReleases = sources.filter(source => releases[source.id]?.nextOffset != null);
   useEffect(() => {
-    props.cache.set(key, { profile, sources, releases, expandedPopular, expandedBiography });
-  }, [key, profile, sources, releases, expandedPopular, expandedBiography, props.cache]);
+    props.cache.set(key, { profile, sources, releases, expandedPopular });
+  }, [key, profile, sources, releases, expandedPopular, props.cache]);
   useEffect(() => {
     if (!profile) return;
     props.rememberTracks(profile.popularTracks);
@@ -123,13 +124,23 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
     playTrack={id => props.onAction("play", ranked ? popular : saved, id)} playStandalone={id => props.onAction("standalone", tracks, id)}
     addToQueue={id => props.onAction("queue", tracks.filter(track => track.globalId === id))} playNext={id => props.onAction("next", tracks, id)} />;
   const retryProfile = () => setProfileAttempt(value => value + 1);
-  return <TrackCollectionView className="entityView artistView" title={profile?.artist.name ?? artist.name} tracks={playable} summary={null}
+  return <>
+    {artist.provider !== "local" && <AboutDialog title={profile?.artist.name ?? artist.name} open={showAbout} onClose={() => setShowAbout(false)}>
+      {about === undefined ? <p role="status">Loading artist info…</p>
+        : !biography.length ? <p>No info is available for this artist.</p> : <>
+          {biography.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+          <p className="creditsSource">{[about?.biographySource, about && `From ${musicProviderName(about.provider)}`].filter(Boolean).join(" · ")}</p>
+        </>}
+    </AboutDialog>}
+    <TrackCollectionView className="entityView artistView" title={profile?.artist.name ?? artist.name} tracks={playable} summary={null}
     registerScrollElement={props.registerScrollElement} playTrack={id => props.onAction("play", playable, id)}
     playStandalone={id => props.onAction("standalone", playable, id)} addToQueue={id => props.onAction("queue", playable.filter(track => track.globalId === id))} playNext={id => props.onAction("next", playable, id)}
     shuffleCollection={() => props.onAction("shuffle", playable)}
     headerNavigation={<button type="button" className="browseBack" onClick={props.onBack}>Back</button>}
     headerArtwork={<ArtistPortrait artist={profile?.artist ?? artist} eager expandable />}
-    headerContent={<p className="entityByline">Artist</p>}
+    headerContent={<p className="entityByline">Artist{artist.provider !== "local" &&
+      <button type="button" className="entityBylineAction" aria-haspopup="dialog" onClick={() => setShowAbout(true)}>About</button>}
+    </p>}
     playbackActions={<button type="button" className="libraryShuffleBtn" disabled={!playable.length} onClick={() => props.onAction("queue", playable)}><img src="/add-to-queue.svg" alt="" /><span>ADD TO QUEUE</span></button>}
     content={<>
       {profileLoading && <p className="artistStatus" role="status">Loading artist…</p>}
@@ -145,13 +156,7 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
       {releaseError && <p className="artistStatus" role="alert">{releaseError} <button type="button" className="entityLink" onClick={() => loadReleases([{ source: artist, offset: releases[artist.id]?.nextOffset ?? 0 }], true)}>Retry</button></p>}
       {moreReleases.length > 0 && <button type="button" className="artistTextAction" disabled={releasesLoading} onClick={() => loadReleases(moreReleases.map(source => ({ source, offset: releases[source.id]!.nextOffset! })))}>More releases</button>}
       {!!saved.length && <section><h2 className="entitySectionTitle">Saved songs</h2>{trackList(saved)}</section>}
-      {artist.provider !== "local" && about !== undefined && <section className="artistAbout"><h2 className="entitySectionTitle">About</h2>
-        {!biography.length ? <p>No info is available for this artist.</p> : <>
-          <div className="artistBiography" data-expanded={expandedBiography}>{biography.map((paragraph, index) => <p key={index}>{paragraph}</p>)}</div>
-          <button type="button" className="artistTextAction" onClick={() => setExpandedBiography(value => !value)}>{expandedBiography ? "Show less" : "Read more"}</button>
-          <p className="artistBiographySource">{[about?.biographySource, about && `From ${musicProviderName(about.provider)}`].filter(Boolean).join(" · ")}</p>
-        </>}
-      </section>}
     </>}
-  />;
+    />
+  </>;
 }

@@ -31,8 +31,8 @@ function cellText(key: OptionalColumnKey, track: Track, stats: ReturnType<typeof
 
 /** A song's cells for the optional columns, between its album and its duration. */
 export function TrackExtraCells({ track }: { track: Track }) {
-  const { extra, stats } = useTrackColumns();
-  return orderedOptionalColumns(extra).map(column => {
+  const { extra, stats, excluded = [] } = useTrackColumns();
+  return orderedOptionalColumns(extra).filter(column => !excluded.includes(column.key)).map(column => {
     const text = cellText(column.key, track, stats);
     return <span key={column.key} className={`extraCell ${column.className}Cell trackDescriptor`} title={text ?? undefined}>
       {text ?? <span className="extraCellEmpty" aria-label="None">–</span>}

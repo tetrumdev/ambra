@@ -51,6 +51,24 @@
     border-top: 1px solid #535353;
 }
 
+/* At the far end of the heading's rule. */
+.searchShowAll {
+    order: 1;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: #a3a2a3;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: default;
+}
+
+.searchShowAll:hover,
+.searchShowAll:focus-visible {
+    color: white;
+}
+
 .searchSectionEmpty,
 .searchEntityEmpty,
 .searchEmptyState {

@@ -1,3 +1,72 @@
+#[cfg(target_os = "macos")]
+static TRACKPAD_MONITOR: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+// DOM wheel events do not expose when fingers leave a trackpad. Forward only the
+// native phase boundaries; the WebView still owns scrolling and gesture targeting.
+#[cfg(target_os = "macos")]
+pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use block::ConcreteBlock;
+    use cocoa::{
+        appkit::{NSEventMask, NSEventPhase},
+        base::id,
+    };
+    use objc::{class, msg_send, sel, sel_impl};
+    use tauri::{Emitter, Manager};
+
+    let window = app.get_webview_window("main").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "main window not found")
+    })?;
+    let native_window = window.ns_window()? as usize;
+    let handler = ConcreteBlock::new(move |event: id| -> id {
+        unsafe {
+            let event_window: id = msg_send![event, window];
+            if event_window as usize != native_window {
+                return event;
+            }
+            let phase: NSEventPhase = msg_send![event, phase];
+            let name = if phase.contains(NSEventPhase::NSEventPhaseBegan) {
+                "began"
+            } else if phase.contains(NSEventPhase::NSEventPhaseCancelled) {
+                "cancelled"
+            } else if phase.contains(NSEventPhase::NSEventPhaseEnded) {
+                "ended"
+            } else {
+                return event;
+            };
+            let _ = window.emit("trackpad-phase", name);
+        }
+        event
+    })
+    .copy();
+
+    unsafe {
+        let monitor: id = msg_send![class!(NSEvent),
+            addLocalMonitorForEventsMatchingMask: NSEventMask::NSScrollWheelMask.bits()
+            handler: &*handler];
+        if monitor.is_null() {
+            return Err(std::io::Error::other("Could not observe trackpad gestures").into());
+        }
+        let retained: id = msg_send![monitor, retain];
+        TRACKPAD_MONITOR.store(retained as usize, std::sync::atomic::Ordering::Release);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn cleanup() {
+    use cocoa::base::id;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    // RunEvent::Exit runs on the same main thread that installed the monitor.
+    let monitor = TRACKPAD_MONITOR.swap(0, std::sync::atomic::Ordering::AcqRel) as id;
+    if !monitor.is_null() {
+        unsafe {
+            let _: () = msg_send![class!(NSEvent), removeMonitor: monitor];
+            let _: () = msg_send![monitor, release];
+        }
+    }
+}
+
 #[cfg(target_os = "windows")]
 pub fn setup(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::Manager;

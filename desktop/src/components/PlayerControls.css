@@ -65,6 +65,14 @@
     transition: scale var(--motion-press-up);
 }
 
+#controls .skipIcon {
+    width: 25px;
+    height: auto;
+    overflow: visible;
+    pointer-events: none;
+    transition: scale var(--motion-press-up);
+}
+
 #controls img {
     max-height: 25px;
     max-width: 25px;
