@@ -18,7 +18,7 @@ import {
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
-import { isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
+import { acceptsPlaybackShortcut, isCharacterKey, isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
 
@@ -40,6 +40,9 @@ export type AudioDeckController = {
   onWaiting: (deck: Deck) => void;
   onEnded: (deck: Deck) => void;
 };
+
+/** How far Left and Right seek. */
+const SEEK_STEP_SECONDS = 5;
 
 type AudioPlayer = {
   currentTrack: Track | undefined;
@@ -887,6 +890,32 @@ export function useAudioPlayer(
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [togglePlayback]);
+
+  // Comma and period skip back and ahead; Left and Right seek, repeating while held.
+  const transport = useRef({ previous, next, seek, duration, hasTrack: false });
+  transport.current = { previous, next, seek, duration, hasTrack: currentTrack !== undefined };
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const { previous, next, seek, duration, hasTrack } = transport.current;
+      const step = isUnmodifiedKey(event, "ArrowLeft") ? -SEEK_STEP_SECONDS
+        : isUnmodifiedKey(event, "ArrowRight") ? SEEK_STEP_SECONDS : 0;
+      if (step !== 0) {
+        if (!hasTrack || !acceptsPlaybackShortcut(event, true)) return;
+        event.preventDefault();
+        // Holding Right stops short of the end instead of running on into the next song.
+        const end = duration > 0 ? Math.max(0, duration - 1) : Infinity;
+        seek(Math.min(end, Math.max(0, clock.get() + step)));
+        return;
+      }
+      const skip = isCharacterKey(event, ",") ? previous : isCharacterKey(event, ".") ? next : null;
+      if (!skip || !acceptsPlaybackShortcut(event)) return;
+      event.preventDefault();
+      if (!event.repeat && hasTrack) skip();
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [clock]);
 
   useEffect(() => {
     if (usesNativeAudio || !("mediaSession" in navigator)) return;

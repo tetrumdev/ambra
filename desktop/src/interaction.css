@@ -19,7 +19,7 @@
 }
 
 /* Animate the icon while the button keeps its full clickable area. */
-#volumeBtn > img,
+#volumeBtn > #volumeImg,
 #queueBtn > img,
 .xContainer > img,
 .librarySourcesClose > img,
@@ -30,7 +30,7 @@
     transition: scale var(--motion-press-up);
 }
 
-#volumeBtn:active > img,
+#volumeBtn:active > #volumeImg,
 #queueBtn:active > img,
 .xContainer:active > img,
 .librarySourcesClose:active > img,

@@ -27,8 +27,10 @@ use walkdir::WalkDir;
 
 use bundled_backend::BundledBackend;
 
+mod app_update;
 mod bundled_backend;
 mod cover_thumbnails;
+mod display_wake;
 mod keyboard;
 mod library_index;
 mod media_controls;
@@ -995,6 +997,9 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(app_update::PendingUpdate::default())
+        .manage(display_wake::DisplayWake::default())
         .setup(|app| {
             let server_log = app
                 .path()
@@ -1040,7 +1045,10 @@ pub fn run() {
             native_audio::lyric_offset::detect_lyric_offset,
             media_controls::set_native_media_metadata,
             media_controls::set_native_media_playback,
-            media_controls::set_native_media_commands_enabled
+            media_controls::set_native_media_commands_enabled,
+            app_update::check_for_update,
+            app_update::install_update,
+            display_wake::set_display_wake
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

@@ -60,3 +60,108 @@
     user-select: none !important;
     -webkit-user-select: none !important;
 }
+
+/* Fills the artwork column, so optional columns are placed after the standard ones. */
+.columnLeadingSpacer {
+    grid-column: 1;
+    grid-row: 1;
+}
+
+.columnPicker {
+    grid-column: -2;
+    grid-row: 1;
+    justify-self: center;
+    align-self: center;
+}
+
+.columnPickerButton {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: #8a8a8a;
+    opacity: 0;
+    transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.columnPickerButton svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
+}
+
+.columnInfo:hover .columnPickerButton,
+.columnPickerButton:focus-visible,
+.columnPickerButton[aria-expanded="true"] {
+    opacity: 1;
+}
+
+.columnPickerButton:hover,
+.columnPickerButton:focus-visible,
+.columnPickerButton[aria-expanded="true"] {
+    color: white;
+    background: #2a2a2a;
+}
+
+.columnPickerMenu {
+    position: fixed;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    box-sizing: border-box;
+    width: 190px;
+    padding: 8px 6px;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    background: rgb(18 18 18 / 0.86);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: white;
+    font-family: "Stack Sans Text", Inter, sans-serif;
+}
+
+.columnPickerHeading {
+    padding: 0 8px 4px;
+    color: #a3a2a3;
+    font-size: 0.7rem;
+}
+
+.columnPickerOption {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 0.8rem;
+    text-align: left;
+}
+
+.columnPickerOption:hover,
+.columnPickerOption:focus-visible {
+    background: #303030;
+    outline: none;
+}
+
+.columnPickerCheck {
+    width: 12px;
+    height: 12px;
+}
+
+.columnPickerOption[aria-checked="true"] .columnPickerCheck {
+    background: url("/check.svg") center / contain no-repeat;
+}

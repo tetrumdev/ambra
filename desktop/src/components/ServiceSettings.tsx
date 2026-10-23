@@ -12,9 +12,9 @@ type CallbackProvider = Exclude<StreamingProvider, "spotify">;
 type Props = { active: boolean; onServiceConnected: () => void };
 
 const services: Array<{ id: StreamingProvider; name: string; detail: string }> = [
-  { id: "tidal", name: "Tidal", detail: "Lossless and hi-res streaming" },
-  { id: "qobuz", name: "Qobuz", detail: "Lossless and hi-res streaming" },
-  { id: "spotify", name: "Spotify", detail: "Connect with Spotify in your browser" },
+  { id: "tidal", name: "Tidal", detail: "Lossless and hi-res" },
+  { id: "qobuz", name: "Qobuz", detail: "Lossless and hi-res" },
+  { id: "spotify", name: "Spotify", detail: "Signs in through your browser" },
 ];
 
 const disconnected: ServiceAuthStatus = { tidal: false, qobuz: false, spotify: false };
@@ -82,14 +82,12 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   }
 
   return <>
-    <div className="settingsSectionHeading"><div>
-      <h2>Streaming services</h2>
-      <p>Connect your accounts to search and play music from your services.</p>
-    </div></div>
-    {loading && <p role="status">Checking connections…</p>}
+    <header className="settingsPageHeader"><h1 className="settingsTitle">Services</h1></header>
+    {loading && <p className="settingsMuted" role="status">Checking connections…</p>}
     {services.map(service => <section className="settingsServiceRow" aria-label={service.name} key={service.id}>
+      <img className="settingsServiceIcon" src={`/${service.id}.svg`} alt="" aria-hidden="true" />
       <div><h3>{service.name}</h3><p>{service.detail}</p></div>
-      <button type="button" className="settingsButton"
+      <button type="button" className={`settingsPill${status[service.id] ? " settingsPillDone" : " settingsPillPrimary"}`}
         disabled={loading || status[service.id] || busy !== null}
         aria-label={status[service.id] ? `${service.name} connected` : `Sign in to ${service.name}`}
         onClick={() => void signIn(service.id)}>
@@ -104,10 +102,10 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
       <label htmlFor="settings-callback-url">
         Paste the full {callbackProvider === "tidal" ? "Tidal" : "Qobuz"} callback URL
       </label>
-      <p>The page may fail to load after sign-in. Copy its full address from the browser.</p>
+      <p className="settingsMuted">If the page doesn't load after signing in, copy its address anyway.</p>
       <div><input id="settings-callback-url" spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
         autoFocus value={callbackUrl} onChange={event => setCallbackUrl(event.target.value)} placeholder="http://…" />
-        <button type="submit" className="settingsButton" disabled={!callbackUrl.trim() || loading || busy !== null}>Connect</button>
+        <button type="submit" className="settingsPill settingsPillPrimary" disabled={!callbackUrl.trim() || loading || busy !== null}>Connect</button>
       </div>
     </form>}
     {message && <p className="settingsServiceMessage" role="status">{message}</p>}

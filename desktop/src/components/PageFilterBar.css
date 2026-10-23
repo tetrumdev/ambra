@@ -1,0 +1,90 @@
+/* A find-in-page bar in the global search bar's glass (SearchBar.css), floating above the
+   player in the corner so the two never read as one. */
+.pageFilter {
+    position: fixed;
+    right: 30px;
+    bottom: calc(var(--player-height) + 18px);
+    z-index: 12;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-sizing: border-box;
+    width: min(240px, calc(100vw - 60px));
+    height: 42px;
+    padding: 0 6px 0 16px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.4);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: white;
+    font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
+    transition: filter 0.25s ease, border-color 0.25s ease;
+    animation: pageFilterIn 0.16s ease-out;
+}
+
+.pageFilter:focus-within {
+    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.3));
+    border-color: rgb(100, 100, 100);
+}
+
+.pageFilterInput {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 16px;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.pageFilterInput::placeholder {
+    color: #8a8a8a;
+}
+
+.pageFilterCount {
+    flex: none;
+    color: #9a9a9a;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+/* The global search's clear button: its x, dimmed until pointed at. */
+.pageFilterClose {
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 100px;
+    background: url("/x.svg") center / 12px 12px no-repeat;
+    opacity: 0.45;
+    transition: opacity 0.15s ease;
+}
+
+.pageFilterClose:hover,
+.pageFilterClose:focus-visible {
+    opacity: 0.9;
+    outline: none;
+}
+
+@keyframes pageFilterIn {
+    from {
+        opacity: 0;
+        transform: translateY(6px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pageFilter {
+        animation: none;
+    }
+}

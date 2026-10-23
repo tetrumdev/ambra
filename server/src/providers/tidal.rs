@@ -12,6 +12,7 @@ use std::{
 };
 
 use crate::media_cache::MediaCache;
+use crate::loudness::Loudness;
 use base64::{Engine, engine::general_purpose};
 use quick_xml::{Reader, events::Event};
 use serde::Deserialize;
@@ -51,6 +52,7 @@ pub struct TidalProvider {
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
     playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     maximum_playback_cache: Arc<Mutex<HashMap<String, CachedMaximumPlayback>>>,
+    loudness: Arc<Mutex<HashMap<String, Loudness>>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -94,6 +96,10 @@ struct CachedMaximumPlayback {
 struct RawPlaybackInfo {
     audio_quality: String,
     manifest: String,
+    track_replay_gain: Option<f64>,
+    track_peak_amplitude: Option<f64>,
+    album_replay_gain: Option<f64>,
+    album_peak_amplitude: Option<f64>,
 }
 
 // Search album summaries can omit artwork, including an explicit null cover.
@@ -186,6 +192,7 @@ impl TidalProvider {
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
             playback_fetches: Arc::new(Mutex::new(HashMap::new())),
             maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
+            loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
@@ -810,6 +817,16 @@ impl TidalProvider {
         })
     }
 
+    /// The loudness from the track's playback info, once its stream has been resolved.
+    pub async fn loudness(&self, track_id: &str) -> Loudness {
+        self.loudness
+            .lock()
+            .await
+            .get(track_id)
+            .copied()
+            .unwrap_or_default()
+    }
+
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
         validate_track_id(track_id)?;
 
@@ -953,6 +970,16 @@ impl TidalProvider {
         let response = response.error_for_status()?;
         let raw = response.json::<RawPlaybackInfo>().await?;
         let parsed = parse_maximum_playback_info(raw.clone())?;
+        // Tidal's playback info carries standard ReplayGain values.
+        self.loudness.lock().await.insert(
+            track_id.to_owned(),
+            Loudness {
+                track_gain_db: raw.track_replay_gain,
+                track_peak: raw.track_peak_amplitude.filter(|peak| *peak > 0.0),
+                album_gain_db: raw.album_replay_gain,
+                album_peak: raw.album_peak_amplitude.filter(|peak| *peak > 0.0),
+            },
+        );
         self.maximum_playback_cache.lock().await.insert(
             track_id.to_owned(),
             CachedMaximumPlayback {

@@ -407,6 +407,16 @@ pub struct Track {
     pub composer: Option<Artist>,
     /// Copyright information
     pub copyright: Option<String>,
+    /// ReplayGain loudness, present on `track/get` responses (Ambra patch).
+    #[serde(default)]
+    pub audio_info: Option<TrackAudioInfo>,
+}
+
+/// A track's ReplayGain values as Qobuz reports them (Ambra patch).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+pub struct TrackAudioInfo {
+    pub replaygain_track_gain: Option<f64>,
+    pub replaygain_track_peak: Option<f64>,
 }
 
 /// Album summary (embedded in track responses)

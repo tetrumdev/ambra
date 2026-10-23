@@ -1,4 +1,4 @@
-use super::dsp::DspPreset;
+use super::{dsp::DspPreset, loudness::NormalizationMode};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
 
@@ -27,6 +27,9 @@ pub struct AudioSettings {
     pub selected_output_id: String,
     pub outputs: Vec<OutputSettings>,
     pub presets: Vec<DspPreset>,
+    /// Settings saved before normalization existed leave it off.
+    #[serde(default)]
+    pub normalization: NormalizationMode,
 }
 impl Default for AudioSettings {
     fn default() -> Self {
@@ -43,6 +46,7 @@ impl Default for AudioSettings {
                 volume: default_volume(),
             }],
             presets: Vec::new(),
+            normalization: NormalizationMode::Off,
         }
     }
 }

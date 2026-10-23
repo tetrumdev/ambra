@@ -158,7 +158,6 @@
     align-self: flex-start;
 }
 
-#volumeImg,
 #queueImg {
     display: block;
 
@@ -170,8 +169,30 @@
     width: 20px;
 }
 
+/* The icons share one height and one left edge, so the speaker keeps its size and place
+   while the waves beside it come and go. 22.6px is the high icon's height at 25px wide. */
 #volumeImg {
+    position: relative;
+    display: block;
     width: 25px;
+    height: 22.6px;
+}
+
+/* Pinned to the box: a grid row would grow to the images' own height and enlarge the narrower ones. */
+#volumeImg > img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    object-position: left center;
+    visibility: hidden;
+}
+
+#volumeImg[data-level="muted"] > [data-level="muted"],
+#volumeImg[data-level="mid"] > [data-level="mid"],
+#volumeImg[data-level="high"] > [data-level="high"] {
+    visibility: visible;
 }
 
 .devAudioModeToggle {

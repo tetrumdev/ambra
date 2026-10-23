@@ -1,6 +1,7 @@
 mod credits;
 mod playlists;
 
+use crate::loudness::Loudness;
 use crate::media_cache::MediaCache;
 use std::{
     collections::{HashMap, HashSet},
@@ -1738,7 +1739,14 @@ async fn stream_track(
                 .map_err(ApiError::upstream)?;
             match source {
                 PlaybackSource::Direct { url, mime_type } => {
-                    proxy_direct_stream(&state.http_client, &url, &mime_type, &headers).await
+                    let mut response =
+                        proxy_direct_stream(&state.http_client, &url, &mime_type, &headers)
+                            .await?;
+                    tidal_provider(&state)?
+                        .loudness(&track_id)
+                        .await
+                        .insert_into(response.headers_mut());
+                    Ok(response)
                 }
                 PlaybackSource::Dash { .. } => Err(ApiError::not_found(format!(
                     "Tidal track {track_id} uses its DASH manifest endpoint"
@@ -1746,11 +1754,29 @@ async fn stream_track(
             }
         }
         "qobuz" => {
-            let source = qobuz_provider(&state)?
+            let provider = qobuz_provider(&state)?;
+            let source = provider
                 .playback_source(&track_id)
                 .await
                 .map_err(ApiError::upstream)?;
-            proxy_direct_stream(&state.http_client, &source.url, &source.mime_type, &headers).await
+            // Only the opening request needs the loudness; it is looked up while the audio starts.
+            let opening = headers
+                .get(RANGE)
+                .and_then(|range| range.to_str().ok())
+                .is_none_or(|range| range.starts_with("bytes=0-"));
+            let (response, loudness) = tokio::join!(
+                proxy_direct_stream(&state.http_client, &source.url, &source.mime_type, &headers),
+                async {
+                    if opening {
+                        provider.loudness(&track_id).await
+                    } else {
+                        Loudness::default()
+                    }
+                }
+            );
+            let mut response = response?;
+            loudness.insert_into(response.headers_mut());
+            Ok(response)
         }
         "spotify" => stream_spotify_track(&state, &track_id, &headers).await,
         _ => Err(ApiError::not_found(format!(
@@ -1764,13 +1790,26 @@ async fn stream_spotify_track(
     track_id: &str,
     headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
-    let prepared = spotify_provider(state)
+    let mut prepared = spotify_provider(state)
         .await?
         .prepare_stream(track_id)
         .await
         .map_err(ApiError::upstream)?;
     let total_length = prepared.content_length();
     let (start, end_inclusive, partial) = requested_byte_range(headers.get(RANGE), total_length)?;
+    // The player reads the loudness from its opening request; the header is downloaded first anyway.
+    let loudness = if start == 0 {
+        let (returned, loudness) = tokio::task::spawn_blocking(move || {
+            let loudness = prepared.read_loudness();
+            (prepared, loudness)
+        })
+        .await
+        .map_err(ApiError::internal)?;
+        prepared = returned;
+        loudness
+    } else {
+        Loudness::default()
+    };
     let response_length = end_inclusive.saturating_sub(start).saturating_add(1);
     let mime_type = prepared.mime_type();
     let stream = ReceiverStream::new(prepared.into_byte_stream(start, end_inclusive));
@@ -1794,6 +1833,7 @@ async fn stream_spotify_track(
                 .map_err(ApiError::internal)?,
         );
     }
+    loudness.insert_into(response.headers_mut());
     Ok(response)
 }
 
@@ -1930,12 +1970,17 @@ async fn hls_manifest(
         track_duration_seconds,
     )?;
 
-    Response::builder()
+    let mut response = Response::builder()
         .status(StatusCode::OK)
         .header(CONTENT_TYPE, "application/vnd.apple.mpegurl")
         .header(CACHE_CONTROL, "no-store")
         .body(Body::from(playlist))
-        .map_err(ApiError::internal)
+        .map_err(ApiError::internal)?;
+    tidal_provider(&state)?
+        .loudness(&track_id)
+        .await
+        .insert_into(response.headers_mut());
+    Ok(response)
 }
 
 fn hls_playlist_body(

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Track } from "../src/types/music";
 import { bestPlaylistCopy } from "../src/utils/searchRanking";
+import { packageCopies } from "../src/utils/playlistImprovement";
 
 let next = 0;
 const copy = (album: string, quality: string, releaseDate: string | null, changes: Partial<Track> = {}): Track => {
@@ -17,39 +18,53 @@ const copy = (album: string, quality: string, releaseDate: string | null, change
 const sheerHeartAttack = () => copy("Sheer Heart Attack", "16/44.1", "1974-11-08");
 const japan = () => copy("Greatest Hits In Japan", "24/96", "2020-01-15");
 const pop = () => copy("Pop", "24/96", "2019-01-01");
-const soundtrack = () => copy("Bohemian Rhapsody", "24/96", "2018-10-19");
+const soundtrack_ = () => copy("Bohemian Rhapsody", "24/96", "2018-10-19");
 
 describe("playlist improvement", () => {
-  test("a song stays on its album rather than moving to a compilation for resolution", () => {
+  test("a song never moves to a worse-sounding copy", () => {
+    const remaster = copy("OK Computer OKNOTOK 1997 2017", "24/96", "2017-06-23", { name: "Paranoid Android (Remastered)", isrc: "GBBKS1700185" });
+    const single = copy("Paranoid Android", "16/44.1", "1997-05-26", { name: "Paranoid Android", isrc: "GBAYE9701376" });
+    expect(bestPlaylistCopy(remaster, [single])).toBe(remaster);
+  });
+
+  test("a better copy is an upgrade, preferring a proper album over compilations", () => {
     const original = sheerHeartAttack();
-    expect(bestPlaylistCopy(original, [japan(), pop(), soundtrack(), sheerHeartAttack()])).toBe(original);
+    const greatestHits = copy("Greatest Hits", "24/96", "1981-10-26");
+    const soundtrack = soundtrack_();
+    expect(bestPlaylistCopy(original, [japan(), greatestHits, soundtrack])).toBe(soundtrack);
   });
 
-  test("a song moved to a later release returns to its album", () => {
-    const album = sheerHeartAttack();
-    expect(bestPlaylistCopy(japan(), [pop(), album, soundtrack()])).toBe(album);
+  test("an equally good copy only replaces one on a compilation or regional pressing", () => {
+    const album = copy("Pop", "24/96", "2019-01-01");
+    expect(bestPlaylistCopy(japan(), [album])).toBe(album);
+    const kept = pop();
+    expect(bestPlaylistCopy(kept, [japan(), soundtrack_()])).toBe(kept);
+  });
+});
+
+describe("package improvement", () => {
+  const airbag = (album: string, quality: string, provider: Track["provider"] = "qobuz") => copy(album, quality, null, { name: "Airbag", provider });
+  const android = (album: string, quality: string, provider: Track["provider"] = "qobuz") => copy(album, quality, null, { name: "Paranoid Android", provider });
+
+  test("a package split across formats is reunited on one release in one format", () => {
+    const members = [airbag("OK Computer OKNOTOK 1997 2017", "24/96"), android("Paranoid Android", "16/44.1")];
+    const remaster = android("OK Computer OKNOTOK 1997 2017", "24/96");
+    const moved = packageCopies(members, [[members[0]], [members[1], remaster]]);
+    expect(moved).toEqual([members[0], remaster]);
   });
 
-  test("a better copy of the same album is still an upgrade, editions included", () => {
-    const original = copy("OK Computer", "16/44.1", "1997-05-21", { name: "Airbag" });
-    const remaster = copy("OK Computer OKNOTOK 1997 2017", "24/96", "1997-05-21", { name: "Airbag (Remastered)" });
-    expect(bestPlaylistCopy(original, [remaster])).toBe(remaster);
-    expect(bestPlaylistCopy(remaster, [original])).toBe(remaster);
+  test("a matched package isn't broken up for one member's better copy", () => {
+    const members = [airbag("OK Computer", "16/44.1"), android("OK Computer", "16/44.1")];
+    const hiResSingle = android("Paranoid Android", "24/96");
+    expect(packageCopies(members, [[members[0]], [members[1], hiResSingle]])).toBeNull();
   });
 
-  test("another album is used only to go from lossy to lossless", () => {
-    const original = copy("Sheer Heart Attack", "lossy", "1974-11-08", { provider: "spotify" });
-    const greatestHits = copy("Greatest Hits", "16/44.1", "1981-10-26");
-    expect(bestPlaylistCopy(original, [greatestHits])).toBe(greatestHits);
-    const albumLossless = sheerHeartAttack();
-    expect(bestPlaylistCopy(original, [greatestHits, albumLossless])).toBe(albumLossless);
-  });
-
-  test("without dates the current album is home unless it's a compilation", () => {
-    const original = copy("Sheer Heart Attack", "16/44.1", null);
-    expect(bestPlaylistCopy(original, [copy("Pop", "24/96", null)])).toBe(original);
-    const album = copy("Sheer Heart Attack", "16/44.1", null);
-    expect(bestPlaylistCopy(copy("Greatest Hits In Japan", "24/96", null), [album])).toBe(album);
+  test("a matched package moves together for a better-sounding set", () => {
+    const members = [airbag("OK Computer", "16/44.1"), android("OK Computer", "16/44.1")];
+    const better = [airbag("OK Computer OKNOTOK 1997 2017", "24/96"), android("OK Computer OKNOTOK 1997 2017", "24/96")];
+    expect(packageCopies(members, [[members[0], better[0]], [members[1], better[1]]])).toEqual(better);
+    const otherService = [airbag("OK Computer OKNOTOK 1997 2017", "24/96", "tidal"), android("OK Computer OKNOTOK 1997 2017", "24/96")];
+    expect(packageCopies(members, [[members[0], otherService[0]], [members[1], otherService[1]]])).toBeNull();
   });
 });
 

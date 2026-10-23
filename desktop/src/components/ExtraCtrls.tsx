@@ -1,5 +1,6 @@
 import { isTauri } from "@tauri-apps/api/core";
 import {
+  useEffect,
   useRef,
   useState,
   type CSSProperties,
@@ -8,7 +9,26 @@ import {
 import { AudioControlsMenu } from "./AudioControlsMenu";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { visibleOutputs } from "../utils/audioSettings";
+import { acceptsPlaybackShortcut, isUnmodifiedKey } from "../utils/keyboard";
 import "./ExtraCtrls.css";
+
+/** How far Up and Down change the volume, in percent. */
+const VOLUME_STEP = 5;
+/** Percent per pixel scrolled: one mouse wheel notch is about 100 pixels, so it moves one step. */
+const WHEEL_VOLUME_PER_PIXEL = VOLUME_STEP / 100;
+/** Where unmuting goes for an output that was already silent when muted. */
+const UNMUTE_FALLBACK_VOLUME = 50;
+// Each output's level before M muted it, so M restores it.
+const levelsBeforeMute = new Map<string, number>();
+
+function clampVolume(volume: number) {
+  return Math.min(100, Math.max(0, volume));
+}
+
+const volumeLevels = ["muted", "mid", "high"] as const;
+function volumeLevel(volume: number) {
+  return volume <= 0 ? "muted" : volume < 50 ? "mid" : "high";
+}
 
 type ExtraCtrlsProps = {
   onOpenQueue?: () => void;
@@ -65,8 +85,12 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     }
   };
 
+  // Follows each change at once, so wheel events arriving between renders build on one another.
+  const latestVolume = useRef(volume);
+  latestVolume.current = volume;
   const changeVolume = (nextVolume: number) => {
     if (!audio || audio.loading) return;
+    latestVolume.current = nextVolume;
     const next = { outputId: selectedDeviceId, volume: nextVolume };
     setVolumePreview(next);
     pendingVolumes.current.set(next.outputId, next);
@@ -95,9 +119,58 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     volumeButton.current?.focus();
   };
 
+  const toggleMute = () => {
+    const current = latestVolume.current;
+    if (current > 0) {
+      levelsBeforeMute.set(selectedDeviceId, current);
+      changeVolume(0);
+    } else {
+      changeVolume(levelsBeforeMute.get(selectedDeviceId) ?? UNMUTE_FALLBACK_VOLUME);
+    }
+  };
+
+  // M mutes and unmutes; Up and Down step the volume, repeating while held.
+  const shortcuts = useRef({ toggleMute, changeVolume });
+  shortcuts.current = { toggleMute, changeVolume };
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
+      const step = isUnmodifiedKey(event, "ArrowUp") ? VOLUME_STEP
+        : isUnmodifiedKey(event, "ArrowDown") ? -VOLUME_STEP : 0;
+      if (step !== 0) {
+        if (!acceptsPlaybackShortcut(event, true, true)) return;
+        event.preventDefault();
+        shortcuts.current.changeVolume(clampVolume(latestVolume.current + step));
+      } else if (isUnmodifiedKey(event, "KeyM") && acceptsPlaybackShortcut(event, false, true)) {
+        event.preventDefault();
+        if (!event.repeat) shortcuts.current.toggleMute();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Scrolling over the volume control glides the level; a trackpad moves it in fine steps.
+  const volumeControl = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const control = volumeControl.current;
+    if (!control) return;
+    const handleWheel = (event: WheelEvent) => {
+      // The output list in the open menu scrolls as usual.
+      if (event.target instanceof Element && event.target.closest(".audioDeviceList")) return;
+      const pixels = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * 400 : event.deltaY;
+      if (pixels === 0) return;
+      event.preventDefault();
+      const next = clampVolume(latestVolume.current - pixels * WHEEL_VOLUME_PER_PIXEL);
+      if (next !== latestVolume.current) shortcuts.current.changeVolume(Math.round(next * 10) / 10);
+    };
+    control.addEventListener("wheel", handleWheel, { passive: false });
+    return () => control.removeEventListener("wheel", handleWheel);
+  }, []);
+
   return (
     <div id="extraCtrls">
-      <div className="volumeControlContainer">
+      <div className="volumeControlContainer" ref={volumeControl}>
         {hasNativeAudio && audioMenuOpen && (
           <AudioControlsMenu anchor={volumeButton} onClose={closeAudioMenu}>
             {showAudioModeToggle && (
@@ -189,8 +262,8 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
           ref={volumeButton}
           id="volumeBtn"
           type="button"
-          aria-label="Volume"
-          data-tooltip={hasNativeAudio ? "Volume and output device" : "Volume"}
+          aria-label={volume <= 0 ? "Volume (muted)" : "Volume"}
+          data-tooltip={hasNativeAudio ? "Volume and output device (M mutes)" : "Volume"}
           aria-haspopup={hasNativeAudio ? "dialog" : undefined}
           aria-expanded={hasNativeAudio ? audioMenuOpen : undefined}
           onClick={() => {
@@ -200,7 +273,10 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
             }
           }}
         >
-          <img src="/volume-high.svg" alt="" id="volumeImg" />
+          {/* Every level stays loaded, so changing level never waits on an image and blinks out. */}
+          <span id="volumeImg" data-level={volumeLevel(volume)} aria-hidden="true">
+            {volumeLevels.map(level => <img key={level} src={`/volume-${level}.svg`} alt="" data-level={level} />)}
+          </span>
         </button>
         <span className="volumePercentage" aria-live="polite">
           {Math.round(volume)}%

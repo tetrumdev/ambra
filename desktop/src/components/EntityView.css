@@ -6,7 +6,7 @@
 /* Album rows have no artwork; doubled class outranks .libraryView's 100px default. */
 .libraryView.albumView {
     --library-leading-width: 28px;
-    --library-columns: var(--library-leading-width) minmax(0, 1fr) 64px 40px;
+    --library-columns: var(--library-leading-width) minmax(0, 1fr) var(--library-extra-columns,) 64px 40px;
 }
 .albumView .artistColumn,
 .albumView .albumColumn,
@@ -16,10 +16,10 @@
 }
 .albumView .durationColumn,
 .albumView .trackDuration {
-    grid-column: 3;
+    grid-column: -3;
 }
 .albumView .trackCollectionMenuTrigger {
-    grid-column: 4;
+    grid-column: -2;
 }
 .entityView .libraryHeaderArtwork {
     position: static;

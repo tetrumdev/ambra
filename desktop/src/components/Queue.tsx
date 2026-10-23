@@ -7,11 +7,14 @@ import type { QueueEntryRef } from "../utils/queueNavigation";
 import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
-import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackColumnHeader } from "./TrackColumnHeader";
+import { TrackExtraCells } from "./TrackExtraCells";
+import { usePageFilter, useReportPageMatches } from "../hooks/usePageFilter";
+import { trackMatches } from "../utils/trackFilter";
 import { PerfProfiler } from "./PerfProfiler";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { trackArtistNames } from "../utils/trackArtists";
@@ -28,6 +31,10 @@ export type QueueProps = {
   deleteEntries: (queueIds: QueueId[]) => void;
   deleteHistoryEntries: (historyIds: string[]) => void;
   registerScrollElement: (element: HTMLDivElement | null) => void;
+  /** The same library and playlist actions every other song list offers. */
+  playlistOptions?: PlaylistMenuOptions;
+  savedTrackIds?: ReadonlySet<string>;
+  addToLibrary?: (track: Track) => void;
 };
 
 type DisplayEntry = {
@@ -57,7 +64,14 @@ export function Queue(props: QueueProps) {
   const history = useMemo(() => props.historyEntries.map(entry => ({
     id: `history:${entry.historyId}`, track: entry.track, historyId: entry.historyId, played: true,
   })), [props.historyEntries]);
-  const entries = useMemo(() => [...history, ...(current ? [current] : []), ...upcoming], [current, upcoming, history]);
+  // The page filter narrows every section; reordering waits until it is cleared.
+  const { terms } = usePageFilter();
+  const filtering = terms.length > 0;
+  const shownHistory = useMemo(() => filtering ? history.filter(entry => trackMatches(entry.track, terms)) : history, [history, terms, filtering]);
+  const shownUpcoming = useMemo(() => filtering ? upcoming.filter(entry => trackMatches(entry.track, terms)) : upcoming, [upcoming, terms, filtering]);
+  const shownCurrent = current && (!filtering || trackMatches(current.track, terms)) ? current : undefined;
+  useReportPageMatches(filtering ? shownHistory.length + (shownCurrent ? 1 : 0) + shownUpcoming.length : null);
+  const entries = useMemo(() => [...shownHistory, ...(shownCurrent ? [shownCurrent] : []), ...shownUpcoming], [shownCurrent, shownUpcoming, shownHistory]);
   const ids = useMemo(() => entries.map(entry => entry.id), [entries]);
   const selection = useRangeSelection(ids);
   const [menu, setMenu] = useState<{ entry: DisplayEntry; x: number; y: number; flipY: number } | null>(null);
@@ -71,7 +85,7 @@ export function Queue(props: QueueProps) {
   const [awayFromCurrent, setAwayFromCurrent] = useState(false);
   // History starts folded into a single row above now playing, so the queue opens on what is playing.
   const [historyOpen, setHistoryOpen] = useState(false);
-  const historyShown = historyOpen && history.length > 0;
+  const historyShown = (historyOpen || filtering) && shownHistory.length > 0;
   const setScrollElement = useCallback((element: HTMLDivElement | null) => {
     scrollRef.current = element;
     props.registerScrollElement(element);
@@ -170,10 +184,10 @@ export function Queue(props: QueueProps) {
     props.reorderEntries(others.slice(0, split).map(id => refs.get(id)!), others.slice(split).map(id => refs.get(id)!));
   }, [entries, current, props.reorderEntries]);
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
-    ids, reorder, () => setMenu(null), scrollRef, scrollRef,
+    ids, filtering ? undefined : reorder, () => setMenu(null), scrollRef, scrollRef,
   );
   // Up next rows count from 0, but sit after history and now playing in the shared list.
-  const upcomingOffset = history.length + (current ? 1 : 0);
+  const upcomingOffset = shownHistory.length + (shownCurrent ? 1 : 0);
   const onUpcomingPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, index: number) =>
     onPointerDown(event, upcomingOffset + index), [onPointerDown, upcomingOffset]);
   const signature = ids.join("|");
@@ -225,9 +239,12 @@ export function Queue(props: QueueProps) {
   return (
     <PerfProfiler id="queue">
       {menu && <TrackCollectionMenu trackId={menu.entry.track.globalId} onClose={() => setMenu(null)}
+        playlistOptions={props.playlistOptions}
         xPos={menu.x} yPos={menu.y} flipY={menu.flipY} actions={[
           ...(!menu.entry.current ? [{ label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) }] : []),
           { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", icon: "/delete.svg", onSelect: () => removeEntries([menu.entry]) },
+          ...(props.addToLibrary && menu.entry.track.provider !== "local" && !props.savedTrackIds?.has(menu.entry.track.globalId)
+            ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => props.addToLibrary!(menu.entry.track) }] : []),
           { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menu.entry.track) },
         ]} />}
       {selection.isSelecting && (
@@ -249,7 +266,7 @@ export function Queue(props: QueueProps) {
         </header>
         <div id="queueList" className="libraryView smoothScroll" ref={setScrollElement} onScroll={trackScrollPosition}
           data-selecting={selection.isSelecting ? "true" : undefined}>
-          {entries.length > 0 && <TrackColumnHeader headerRef={columnHeaderRef} />}
+          {(history.length > 0 || current || upcoming.length > 0) && <TrackColumnHeader headerRef={columnHeaderRef} />}
           {history.length > 0 && <div className="queueHistoryBar" ref={historyBarRef}
             data-stuck={historyBarStuck ? "true" : undefined}
             style={{ "--queue-column-header-height": `${columnHeaderHeight}px` } as React.CSSProperties}>
@@ -257,26 +274,26 @@ export function Queue(props: QueueProps) {
               aria-controls="queueHistory" onClick={toggleHistory}>
               <DropdownChevron />Played ({history.length})
             </button>
-            {historyShown && <button type="button" className="queueTextButton"
+            {historyShown && !filtering && <button type="button" className="queueTextButton"
               onClick={() => removeEntries(history)}>Clear</button>}
           </div>}
           <section id="queueHistory" className="queueSection" aria-label="Played tracks" hidden={!historyShown}>
-            {historyShown && <QueueRows entries={history} label="Queue history" {...rowProps} onPointerDown={onPointerDown}
+            {historyShown && <QueueRows entries={shownHistory} label="Queue history" {...rowProps} onPointerDown={filtering ? undefined : onPointerDown}
               draggedId={draggedTrackId} dropTarget={dropTarget} />}
           </section>
           <div className="queueTail" ref={tailRef}>
-            <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!current}>
+            <section id="currentQueueTrack" className="queueSection" aria-label="Now playing" ref={currentRef} hidden={!shownCurrent}>
               <h2 className="queueSectionTitle">Now Playing</h2>
-              {current && <QueueRow entry={current} index={0} {...rowProps} selected={selection.selectedIds.has(current.id)}
-                menuOpen={menu?.entry.id === current.id}
-                dropPosition={dropTarget?.trackId === current.id ? dropTarget.position : undefined} />}
+              {shownCurrent && <QueueRow entry={shownCurrent} index={0} {...rowProps} selected={selection.selectedIds.has(shownCurrent.id)}
+                menuOpen={menu?.entry.id === shownCurrent.id}
+                dropPosition={dropTarget?.trackId === shownCurrent.id ? dropTarget.position : undefined} />}
             </section>
-            <section id="upcomingQueueTracks" className="queueSection" aria-label="Upcoming tracks" hidden={!upcoming.length}>
+            <section id="upcomingQueueTracks" className="queueSection" aria-label="Upcoming tracks" hidden={!shownUpcoming.length}>
               <h2 className="queueSectionTitle">Up Next</h2>
-              <QueueRows entries={upcoming} label="Upcoming queue" {...rowProps} onPointerDown={onUpcomingPointerDown}
+              <QueueRows entries={shownUpcoming} label="Upcoming queue" {...rowProps} onPointerDown={filtering ? undefined : onUpcomingPointerDown}
                 draggedId={draggedTrackId} dropTarget={dropTarget} />
             </section>
-            {!entries.length && <p className="queueEmpty">Queue is empty</p>}
+            {!history.length && !current && !upcoming.length && <p className="queueEmpty">Queue is empty</p>}
           </div>
         </div>
         {current && awayFromCurrent && (
@@ -368,6 +385,7 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting, selected, men
       </span>
       <span className="artistName trackDescriptor" title={artists}>{artists}</span>
       <span className="albumName trackDescriptor" title={entry.track.album}>{entry.track.album}</span>
+      <TrackExtraCells track={entry.track} />
       <span className="trackDuration trackDescriptor">{formatDuration(entry.track.durationSeconds)}</span>
       <button type="button" className="trackCollectionMenuTrigger"
         aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${entry.track.name}`}

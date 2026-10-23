@@ -16,6 +16,7 @@ mod decoder;
 mod dither;
 mod dsp;
 mod gain;
+mod loudness;
 pub mod lyric_offset;
 mod output;
 mod resync;
@@ -25,6 +26,7 @@ use decoder::DecodedSource;
 use dither::Dither;
 use dsp::{DspEngine, DspPreset, DspStatus, ImpulseFile};
 use gain::GainStage;
+use loudness::{LoudnessInfo, NormalizationMode, NormalizationStage};
 use output::{AudioOutput, PlatformOutput};
 use resync::ResyncDelay;
 use settings::AudioSettings;
@@ -94,6 +96,8 @@ pub(super) struct AudioQuality {
     channels: usize,
     bitrate_kbps: Option<f64>,
     bitrate_is_estimate: bool,
+    /// The level change normalization applies to this song; absent while it plays unchanged.
+    normalization_gain_db: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -489,6 +493,8 @@ struct PlaybackEngine<O: AudioOutput> {
     selected_device_id: Option<String>,
     exclusive_mode: bool,
     gain: GainStage,
+    loudness: LoudnessInfo,
+    normalization: NormalizationStage,
     audio_settings: AudioSettings,
     dsp: Option<DspEngine>,
     tail_frames_remaining: usize,
@@ -663,6 +669,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             selected_device_id: None,
             exclusive_mode: false,
             gain: GainStage::default(),
+            loudness: LoudnessInfo::default(),
+            normalization: NormalizationStage::default(),
             audio_settings: AudioSettings::default(),
             dsp: None,
             tail_frames_remaining: 0,
@@ -673,6 +681,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             event_app,
         };
         if let Some(app) = worker.event_app.as_ref() {
+            if let Ok(directory) = crate::persistent_data_directory(app) {
+                loudness::set_cache_directory(&directory);
+            }
             match crate::persistent_data_directory(app).and_then(|path| AudioSettings::load(&path))
             {
                 Ok(mut settings) => {
@@ -689,6 +700,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     worker.exclusive_mode = settings.selected().exclusive_mode;
                     // Loaded settings already validate the volume range.
                     let _ = worker.gain.set_volume(settings.selected().volume, None);
+                    loudness::set_measuring(settings.normalization != NormalizationMode::Off);
                     worker.audio_settings = settings;
                 }
                 Err(error) => eprintln!("{error}"),
@@ -871,7 +883,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let volume_changed = volume != self.gain.volume();
         // An exclusive stream's format depends on whether DSP runs, so switching it reopens the device.
         let processing_changed =
-            preset_alters_signal(&settings) != preset_alters_signal(&self.audio_settings);
+            signal_processed(&settings) != signal_processed(&self.audio_settings);
+        let normalization_changed = settings.normalization != self.audio_settings.normalization;
         let output_changed = self.selected_device_id != device_id
             || self.exclusive_mode != mode
             || (mode && processing_changed);
@@ -959,6 +972,22 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             }
             return Err(error);
         }
+        if normalization_changed {
+            let mode = self.audio_settings.normalization;
+            loudness::set_measuring(mode != NormalizationMode::Off);
+            if self.current_source.is_some() {
+                self.normalization.ramp_to(
+                    self.loudness.amplitude(mode),
+                    self.spec.map(|spec| spec.sample_rate),
+                );
+                let gain_db = self.normalization_gain_db();
+                update_status(&self.status, |status| {
+                    if let Some(quality) = status.audio_quality.as_mut() {
+                        quality.normalization_gain_db = gain_db;
+                    }
+                });
+            }
+        }
         if let Some(mut next) = prepared_dsp {
             if !output_changed {
                 if let Some(previous) = self.dsp.take() {
@@ -1019,7 +1048,12 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     /// 24 bits for the finest dither. A volume change on an open stream keeps its format,
     /// so dragging the slider never interrupts playback.
     fn output_processed(&self) -> bool {
-        preset_alters_signal(&self.audio_settings) || self.gain.amplitude() != 1.0
+        signal_processed(&self.audio_settings) || self.gain.amplitude() != 1.0
+    }
+
+    fn normalization_gain_db(&self) -> Option<f64> {
+        let amplitude = self.normalization.amplitude();
+        (amplitude != 1.0).then(|| 20.0 * amplitude.log10())
     }
 
     fn install_output(&mut self, output: O, spec: StreamSpec) {
@@ -1464,6 +1498,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
         if !self.pcm.is_empty() {
             let using_gain_buffer = self.dsp.as_ref().is_some_and(DspEngine::active)
+                || !self.normalization.is_unity()
                 || (!cfg!(target_os = "macos") && !self.gain.is_unity())
                 || (spec.requantize && output.quantization_bits().is_some())
                 || self.gain_buffer_offset < self.gain_buffer.len();
@@ -1480,6 +1515,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     self.gain_buffer.clear();
                     self.gain_buffer
                         .extend(self.pcm.iter().take(sample_limit).copied());
+                    // Before DSP, so a preset's headroom covers a normalized song like any other.
+                    self.normalization
+                        .process_in_place(&mut self.gain_buffer, spec.channels);
                     if let Some(dsp) = self.dsp.as_mut() {
                         dsp.process(&mut self.gain_buffer)?;
                         if !self.draining_dsp_tail {
@@ -1631,7 +1669,13 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             max_buffer_samples,
         } = prepared;
         let spec = decoder.spec();
-        let audio_quality = decoder.audio_quality();
+        let mut audio_quality = decoder.audio_quality();
+        // Each song starts at its own level. Installing happens only once the previous song's
+        // samples have all left the gain buffer, so the change lands exactly between them.
+        self.loudness = decoder.loudness();
+        self.normalization
+            .set(self.loudness.amplitude(self.audio_settings.normalization));
+        audio_quality.normalization_gain_db = self.normalization_gain_db();
         pcm.reserve(max_buffer_samples.saturating_sub(pcm.len()));
         let stream = (!decoder_ended)
             .then(|| DecoderStream::start(decoder))
@@ -1797,6 +1841,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.gain_buffer.clear();
         self.gain_buffer_offset = 0;
         self.gain.settle();
+        self.normalization.settle();
         self.tail_frames_remaining = 0;
         self.draining_dsp_tail = false;
         if let Some(dsp) = self.dsp.as_mut() {
@@ -1807,6 +1852,11 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
 fn preset_alters_signal(settings: &AudioSettings) -> bool {
     settings.preset().is_some_and(DspPreset::alters_signal)
+}
+
+/// Whether samples may be changed on their way to the device, by DSP or normalization.
+fn signal_processed(settings: &AudioSettings) -> bool {
+    preset_alters_signal(settings) || settings.normalization != NormalizationMode::Off
 }
 
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {

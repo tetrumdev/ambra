@@ -73,7 +73,7 @@ export function usePlaylistImprovement(
     try {
       const found = await findPlaylistUpgrades(tracks, done => {
         if (requested) setProgress({ playlistId, done, total: tracks.length });
-      }, controller.signal);
+      }, controller.signal, playlist.packages);
       const upgrades = [...found].map(([from, to]) => ({ from: tracks.find(track => track.globalId === from)!, to }));
       if (upgrades.length && !latest.current.replaceTracks(playlistId, found)) {
         if (requested) report(playlistId, [], "Could not save the improved playlist. Please try again.");

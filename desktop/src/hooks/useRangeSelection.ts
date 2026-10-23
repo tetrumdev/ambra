@@ -41,15 +41,20 @@ export function useRangeSelection<Id>(ids: readonly Id[]) {
 
   const clear = useCallback(() => setState(null), []);
   const selectedIds = useMemo(() => state?.selectedIds ?? new Set<Id>(), [state]);
+  const selecting = state !== null;
 
   useEffect(() => {
+    if (!selecting) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (isUnmodifiedKey(event, "Escape")) clear();
+      if (!isUnmodifiedKey(event, "Escape")) return;
+      // Escape ends selecting and nothing else, so it doesn't also close the screen (such as the queue).
+      event.preventDefault();
+      clear();
     };
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [clear]);
+  }, [selecting, clear]);
 
   return {
     isSelecting: state !== null,
