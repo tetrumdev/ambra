@@ -285,7 +285,9 @@
     }
 
     .queueView .albumColumn,
-    .queueItem .albumName {
+    .queueItem .albumName,
+    .queueView .extraColumn,
+    .queueItem .extraCell {
         display: none;
     }
 

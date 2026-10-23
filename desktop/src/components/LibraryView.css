@@ -23,6 +23,13 @@
     filter: none;
 }
 
+/* Song lists also hold the optional columns chosen from their header, set on the root. */
+.libraryView {
+    --library-columns: var(--library-leading-width) minmax(140px, 2fr)
+        minmax(100px, 1fr) minmax(120px, 1.5fr) var(--library-extra-columns,)
+        minmax(64px, 0.55fr) 40px;
+}
+
 .libraryView::after,
 .searchView::after {
     display: block;
@@ -43,7 +50,8 @@
 
 .playlistView {
     --library-columns: var(--library-leading-width) minmax(140px, 2fr)
-        minmax(100px, 1fr) minmax(120px, 1.5fr) minmax(64px, 0.55fr) 40px;
+        minmax(100px, 1fr) minmax(120px, 1.5fr) var(--library-extra-columns,)
+        minmax(64px, 0.55fr) 40px;
     --playlist-artwork-scale: 1;
     --playlist-title-progress: 0;
     --playlist-title-scale: 1;
@@ -726,8 +734,9 @@
     grid-column: 4;
 }
 
+/* Counted from the end, so optional columns can come before it. */
 .durationColumn {
-    grid-column: 5;
+    grid-column: -3;
 }
 
 .columnSortButton {
@@ -1044,8 +1053,21 @@
     text-decoration: none;
 }
 
+.extraCell {
+    color: #a3a2a3;
+    font-variant-numeric: tabular-nums;
+}
+
+.extraCell:hover {
+    text-decoration: none;
+}
+
+.extraCellEmpty {
+    color: #5c5c5c;
+}
+
 .trackCollectionMenuTrigger {
-    grid-column: 6;
+    grid-column: -2;
     margin: 0;
     padding: 0;
     align-self: stretch;
