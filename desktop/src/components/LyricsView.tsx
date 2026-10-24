@@ -7,8 +7,10 @@ import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import { recordSyncSample } from "../utils/lyricsAutoTuning";
-import { detectLyricOffset, firstAutoSyncNotice, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
+import { detectLyricOffset, firstAutoSyncNotice, lyricAutoSyncKey, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
+import { subscribeRemoteChanges } from "../utils/serverState";
 import {
+  lyricSyncKey,
   lyricSyncOverride,
   MAX_CORRECTION_MS,
   saveLyricSyncOverride,
@@ -46,6 +48,8 @@ type LyricsViewProps = {
   onSeek?: (seconds: number) => void;
   motion?: LyricMotion;
   autoSync?: boolean;
+  /** Added to every song's timing, for a delay in the output itself (Settings → Lyrics offset). */
+  globalOffsetMs?: number;
   /** False while the view fades out behind the cover; the lyrics hold still meanwhile. */
   shown?: boolean;
   /** Hidden because the song's vocals are over, or returning on its own as the next song starts, so the fade drifts slowly. */
@@ -1078,6 +1082,7 @@ export function LyricsView({
   onSeek,
   motion = "system",
   autoSync = false,
+  globalOffsetMs = 0,
   shown = true,
   resting = false,
   leaving = false,
@@ -1131,10 +1136,16 @@ export function LyricsView({
   ]);
 
   const timed = lyrics?.status === "lyrics" && lyrics.sync !== "none";
-  // LyricsView remounts per track, so the saved choice is read once.
+  // LyricsView remounts per track, so the saved choice is read once, then followed as other
+  // devices change it, so every screen's lyrics move together.
   const [override, setOverride] = useState<LyricSyncOverride | undefined>(
     () => track ? lyricSyncOverride(track.globalId) : undefined,
   );
+  const [remoteAnalyses, setRemoteAnalyses] = useState(0);
+  useEffect(() => subscribeRemoteChanges(keys => {
+    if (track && keys.has(lyricSyncKey)) setOverride(lyricSyncOverride(track.globalId));
+    if (keys.has(lyricAutoSyncKey)) setRemoteAnalyses(count => count + 1);
+  }), [track?.globalId]);
   const updateOverride = (next: LyricSyncOverride) => {
     if (!track) return;
     setOverride(next);
@@ -1194,17 +1205,17 @@ export function LyricsView({
     () => autoSync && !manual && isTauri() && track && lyrics && timed
       ? storedLyricOffset(track, lyrics)
       : undefined,
-    [autoSync, manual, track, lyrics, timed],
+    [autoSync, manual, track, lyrics, timed, remoteAnalyses],
   );
   const correctionMs = manual
     ? override!.correctionMs!
     : autoSync && detected?.lyrics === lyrics ? detected.correctionMs : storedCorrectionMs ?? 0;
   const unsynced = timed && override?.unsynced === true;
   const syncedLyrics = useMemo(
-    () => lyrics && correctionMs
-      ? { ...lyrics, offsetMs: lyrics.offsetMs + correctionMs }
+    () => lyrics && (correctionMs || globalOffsetMs)
+      ? { ...lyrics, offsetMs: lyrics.offsetMs + correctionMs + globalOffsetMs }
       : lyrics,
-    [lyrics, correctionMs],
+    [lyrics, correctionMs, globalOffsetMs],
   );
   // Where the listener leaves each song's timing tunes how readily auto-sync trusts itself.
   const recordSample = (finalMs: number, edited: boolean) => {
