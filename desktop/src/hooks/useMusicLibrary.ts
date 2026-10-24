@@ -2,6 +2,7 @@ import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { setPersistentItem } from "../utils/persistentStorage";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { isTrackAvailable } from "./useServiceAvailability";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { mark } from "../utils/perf";
 import { localCoverSources } from "../utils/localArtwork";
@@ -344,6 +345,7 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
 
   const addTrack = useCallback(
     async (provider: SearchProvider, providerTrackId: string) => {
+      if (!isTrackAvailable(`${provider}:`)) return false;
       try {
         const [track] = await addServerTrack(provider, providerTrackId);
         if (!track) return false;

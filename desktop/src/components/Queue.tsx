@@ -8,6 +8,7 @@ import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { MENU_WIDTH } from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { DropdownChevron } from "./DropdownChevron";
@@ -64,6 +65,7 @@ function queueEntry(entry: QueueEntry, current = false): DisplayEntry {
 }
 
 export function Queue(props: QueueProps) {
+  const connectedServices = useServiceAvailability();
   const current = useMemo(() => props.currentEntry ? queueEntry(props.currentEntry, true) : undefined, [props.currentEntry]);
   const upcoming = useMemo(() => props.upcomingEntries.map(entry => queueEntry(entry)), [props.upcomingEntries]);
   const history = useMemo(() => props.historyEntries.map(entry => ({
@@ -89,7 +91,7 @@ export function Queue(props: QueueProps) {
   const shownCurrent = narrowed ? matchedCurrent : current;
   const entries = useMemo(() => [...shownHistory, ...(shownCurrent ? [shownCurrent] : []), ...shownUpcoming], [shownCurrent, shownUpcoming, shownHistory]);
   const ids = useMemo(() => entries.map(entry => entry.id), [entries]);
-  const selectableIds = useMemo(() => ids.filter(id => id !== current?.id), [ids, current?.id]);
+  const selectableIds = useMemo(() => entries.filter(entry => entry.id !== current?.id && isTrackAvailable(entry.track, connectedServices)).map(entry => entry.id), [entries, current?.id, connectedServices]);
   const selection = useRangeSelection(selectableIds);
   const [menu, setMenu] = useState<{ kind: MenuKind; entry: DisplayEntry; x: number; y: number; flipY: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -228,9 +230,10 @@ export function Queue(props: QueueProps) {
 
   const actions = useRef<EntryAction>(() => {});
   actions.current = (action, event, entry) => {
+    if (!isTrackAvailable(entry.track) && action !== "collection") return;
     if (entry.current && action !== "collection") return;
     if (suppressClick.current && !entry.current && action !== "select") return;
-    if (!entry.current && (action === "select" || selection.isSelecting)) {
+    if (isTrackAvailable(entry.track) && !entry.current && (action === "select" || selection.isSelecting)) {
       event.preventDefault();
       event.stopPropagation();
       setMenu(null);
@@ -264,6 +267,7 @@ export function Queue(props: QueueProps) {
           { label: "Play from here", icon: "/skip.svg", onSelect: () => playEntry(menu.entry) },
           { label: menu.entry.historyId ? "Remove from history" : "Remove from queue", icon: "/delete.svg", onSelect: () => removeEntries([menu.entry]) },
         ] : [
+          ...(!isTrackAvailable(menu.entry.track) ? [{ label: menu.entry.historyId ? "Remove from history" : "Remove from queue", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([menu.entry]) }] : []),
           ...(props.addToLibrary && menu.entry.track.provider !== "local" && !props.savedTrackIds?.has(menu.entry.track.globalId)
             ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => props.addToLibrary!(menu.entry.track) }] : []),
           { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menu.entry.track) },
@@ -391,11 +395,14 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting: selectionActi
   /** The filter's only match, breathing until the listener does anything. */
   revealed?: boolean;
 }) {
-  const selecting = selectionActive && !entry.current;
+  const connected = useServiceAvailability();
+  const available = isTrackAvailable(entry.track, connected);
+  const selecting = selectionActive && !entry.current && available;
   const collectionMenuOpen = menuOpen && menuKind === "collection";
   const artists = trackArtistNames(entry.track);
   return (
     <div className="libraryItem queueItem" role="listitem" data-virtual-item="" data-track-id={entry.id}
+      data-unavailable={!available ? "true" : undefined}
       data-revealed={revealed ? "true" : undefined}
       data-selected={selected ? "true" : undefined} data-selecting={selecting ? "true" : undefined}
       data-menu-open={menuOpen ? "true" : undefined}
@@ -405,21 +412,21 @@ const QueueRow = memo(function QueueRow({ entry, index, selecting: selectionActi
       onClickCapture={event => { if (selecting) onAction("select", event, entry); }}
       onClick={entry.current ? undefined : event => onAction("playback", event, entry)}
       onContextMenu={entry.current ? undefined : event => onAction("select", event, entry)}
-      onPointerDown={event => onPointerDown?.(event, index)} onDragStart={event => event.preventDefault()}>
-      <div className="trackLeading">
-        <button type="button" className="trackPlayButton" disabled={entry.current}
+      onPointerDown={available ? event => onPointerDown?.(event, index) : undefined} onDragStart={event => event.preventDefault()}>
+      <div className="trackLeading" inert={!available}>
+        <button type="button" className="trackPlayButton" disabled={entry.current || !available}
           aria-label={entry.current ? `${entry.track.name} is playing` : `Play ${entry.track.name}`}
           onClick={event => onAction("play", event, entry)}>
           <img src="/play.svg" alt="" aria-hidden="true" />
         </button>
         <div className="coverImgContainer"><TrackArtwork track={entry.track} alt={`${entry.track.album} album cover`} className="coverImg" draggable={false} /></div>
       </div>
-      <span className="trackName trackDescriptor">
+      <span className="trackName trackDescriptor" inert={!available}>
         <span className="trackTitleText" title={entry.track.name}>{entry.track.name}</span>
         <small className="queueTrackArtist"><ArtistLinks track={entry.track} onOpenEntity={onOpenEntity} /></small>
       </span>
-      <span className="artistName trackDescriptor" title={artists}><ArtistLinks track={entry.track} onOpenEntity={onOpenEntity} /></span>
-      <span className="albumName trackDescriptor" title={entry.track.album}>
+      <span className="artistName trackDescriptor" title={artists} inert={!available}><ArtistLinks track={entry.track} onOpenEntity={onOpenEntity} /></span>
+      <span className="albumName trackDescriptor" title={entry.track.album} inert={!available}>
         <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(entry.track) }); }}>{entry.track.album}</button>
       </span>
       <TrackExtraCells track={entry.track} />
