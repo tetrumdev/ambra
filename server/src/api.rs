@@ -2559,6 +2559,7 @@ mod tests {
         for header_count in [101, 300, 1024] {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let url = format!("http://{}/audio", listener.local_addr().unwrap());
+            let (finished, done) = tokio::sync::oneshot::channel::<()>();
             let upstream = tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = Vec::new();
@@ -2584,6 +2585,9 @@ mod tests {
                 }
                 response.push_str("\r\nFLAC");
                 socket.write_all(response.as_bytes()).await.unwrap();
+                // Held open until the client has its response: on Windows, closing first can reach
+                // the client as a reset before it reads the response.
+                let _ = done.await;
             });
 
             let mut headers = HeaderMap::new();
@@ -2611,6 +2615,7 @@ mod tests {
                 to_bytes(response.into_body(), 4).await.unwrap().as_ref(),
                 b"FLAC"
             );
+            let _ = finished.send(());
             upstream.await.unwrap();
         }
     }
