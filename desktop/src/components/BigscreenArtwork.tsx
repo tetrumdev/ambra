@@ -21,6 +21,7 @@ import {
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
+import { SURFACE_BLACK } from "../utils/surfaceBlack";
 
 type ArtworkProps = {
   track: Track | undefined;
@@ -186,7 +187,7 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
 
 export function BackgroundArtwork({ track, active, animate, playing, coverId = "albumCover", coverDim = 1, coverDimMs }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
-    colors: ["#000000", "#000000", "#000000", "#000000"],
+    colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK],
     weights: [1, 0, 0, 0],
   });
   const [edges, setEdges] = useState<number[] | null | undefined>();

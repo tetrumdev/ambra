@@ -39,7 +39,7 @@ export function bandResponseDb(band: EqBand, frequency: number, rate = RESPONSE_
   return 10 * Math.log10(numerator / denominator);
 }
 
-/** The whole EQ's level change at `frequency`, before headroom and output gain. */
+/** The whole EQ's level change at `frequency`, before headroom. */
 export function eqResponseDb(bands: readonly EqBand[], frequency: number) {
   return bands.reduce((total, band) => total + bandResponseDb(band, frequency), 0);
 }
@@ -54,7 +54,7 @@ export function maxBoostDb(bands: readonly EqBand[]) {
   return Math.max(0, ...logFrequencies(480).map(frequency => eqResponseDb(bands, frequency)));
 }
 
-/** Headroom below the boost the EQ and output gain add, in dB; zero means no clipping is possible. */
-export function clippingRiskDb(preset: Pick<DspPreset, "bands" | "headroomDb" | "outputGainDb">) {
-  return Math.max(0, maxBoostDb(preset.bands) + preset.outputGainDb - preset.headroomDb);
+/** Headroom below the boost the EQ adds, in dB; zero means no clipping is possible. */
+export function clippingRiskDb(preset: Pick<DspPreset, "bands" | "headroomDb">) {
+  return Math.max(0, maxBoostDb(preset.bands) - preset.headroomDb);
 }

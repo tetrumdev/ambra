@@ -44,7 +44,7 @@ export type AudioDeckController = {
 /** How far Left and Right seek. */
 const SEEK_STEP_SECONDS = 5;
 
-type AudioPlayer = {
+export type AudioPlayer = {
   currentTrack: Track | undefined;
   audioQuality: AudioQuality | null;
   clock: PlaybackClock;
@@ -61,6 +61,8 @@ type AudioPlayer = {
   audioDecks: AudioDeckController;
   playTrack: (trackId: string, preparedTrack?: Track) => void;
   clear: () => void;
+  /** Puts this player's own song back in the engine, paused where it was, after another device used it. */
+  reclaim: () => void;
 };
 
 type InitialPlayback = {
@@ -131,6 +133,8 @@ export function useAudioPlayer(
   const setCurrentTime = clock.set;
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
   const [previousActivation, setPreviousActivation] = useState(0);
   const [nextActivation, setNextActivation] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -1097,6 +1101,11 @@ export function useAudioPlayer(
   return {
     playTrack,
     clear: stopPlayback,
+    reclaim: () => {
+      const track = tracksRef.current.find(item => item.globalId === currentTrackIdRef.current);
+      setIsPlaying(false);
+      if (track && usesNativeAudio) loadNativeTrack(track, clock.get(), false);
+    },
     currentTrack,
     audioQuality: currentTrack && nativeQuality?.source === nativeAudioSource(currentTrack)
       ? nativeQuality.quality

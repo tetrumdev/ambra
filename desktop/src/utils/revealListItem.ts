@@ -1,5 +1,6 @@
+/** The element itself when it scrolls, as a song list's own view does, or its nearest ancestor that does. */
 function scrollParent(element: HTMLElement): HTMLElement | null {
-  for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+  for (let parent: HTMLElement | null = element; parent; parent = parent.parentElement) {
     const { overflowY } = getComputedStyle(parent);
     if ((overflowY === "auto" || overflowY === "scroll") && parent.scrollHeight > parent.clientHeight) return parent;
   }

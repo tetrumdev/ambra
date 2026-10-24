@@ -3,6 +3,7 @@ import type { Track } from "../types/music";
 import { getPersistentItem, setPersistentItem } from "../utils/persistentStorage";
 import { isSavedTrack } from "../utils/playlistStorage";
 import { parseQueueSnapshot } from "../utils/queueStorage";
+import { subscribeRemoteChanges } from "../utils/serverState";
 
 const storageKey = "ambra.listening-history.v1";
 /** `playCount` started being kept after listening history did; older entries count one play. */
@@ -66,6 +67,17 @@ export function useListeningHistory() {
   useEffect(() => {
     if (getPersistentItem(storageKey) === null && initial.entries.length > 0) save(initial.entries);
   }, [initial.entries, save]);
+
+  // Plays on other devices show up here as they're saved.
+  useEffect(() => subscribeRemoteChanges(keys => {
+    if (!keys.has(storageKey)) return;
+    try {
+      const next = loadHistory();
+      current.current = next;
+      setEntries(next);
+      setError(null);
+    } catch { /* Keep showing what this device has; the stored copy is left alone. */ }
+  }), []);
 
   const recordPlay = useCallback((track: Track) => {
     const previous = current.current.find(entry => entry.track.globalId === track.globalId);

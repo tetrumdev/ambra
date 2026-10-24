@@ -4,6 +4,15 @@
 
 The <i><b>perfect</b></i> music player built with performance in mind.
 
+## Running the server
+
+Open Ambra and choose **Start server on this computer**, or install the standalone command
+once with `bun run server:install` and run `ambra-server start` from any directory.
+The server runs in the background with a native Windows tray icon; closing the app or
+terminal keeps it running. Stop it from the tray, Settings → Server, or `ambra-server stop`.
+Other computers can discover and pair with that server. Opening Ambra never automatically
+starts a new server. See [cross-device playback](docs/cross-device-playback.md).
+
 ## To-Do
 <b>For Initial Release</b>
 - [x] Create Functional UI

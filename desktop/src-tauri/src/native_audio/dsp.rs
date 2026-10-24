@@ -42,7 +42,6 @@ pub struct DspPreset {
     pub name: String,
     pub enabled: bool,
     pub headroom_db: f64,
-    pub output_gain_db: f64,
     pub bands: Vec<EqBand>,
     pub convolution: Vec<ImpulseFile>,
 }
@@ -51,7 +50,7 @@ impl DspPreset {
     /// Whether playing through this preset changes any sample; a bypassed or flat preset does not.
     pub fn alters_signal(&self) -> bool {
         self.enabled
-            && (self.output_gain_db != self.headroom_db
+            && (self.headroom_db != 0.0
                 || self.bands.iter().any(|band| band.enabled && band.gain_db != 0.0)
                 || !self.convolution.is_empty())
     }
@@ -64,12 +63,8 @@ impl DspPreset {
         {
             return Err("DSP presets need an ID and a name of at most 120 characters".into());
         }
-        if !self.headroom_db.is_finite()
-            || !(0.0..=30.0).contains(&self.headroom_db)
-            || !self.output_gain_db.is_finite()
-            || !(-60.0..=12.0).contains(&self.output_gain_db)
-        {
-            return Err("Headroom must be 0–30 dB and output gain must be -60–12 dB".into());
+        if !self.headroom_db.is_finite() || !(0.0..=30.0).contains(&self.headroom_db) {
+            return Err("Headroom must be 0–30 dB".into());
         }
         if self.bands.len() > 32 || self.convolution.len() > 16 {
             return Err("A preset supports at most 32 EQ bands and 16 impulse files".into());
@@ -194,7 +189,7 @@ impl Pipeline {
             return Ok((result, warnings));
         };
         preset.validate()?;
-        result.gain = 10.0_f64.powf((-preset.headroom_db + preset.output_gain_db) / 20.0);
+        result.gain = 10.0_f64.powf(-preset.headroom_db / 20.0);
         for band in preset
             .bands
             .iter()
