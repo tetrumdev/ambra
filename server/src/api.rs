@@ -7,7 +7,7 @@ use std::{
     collections::{HashMap, HashSet},
     env, fs, io,
     path::PathBuf,
-    sync::{Arc, OnceLock, RwLock as SyncRwLock, Weak},
+    sync::{Arc, RwLock as SyncRwLock, Weak},
     time::{Duration, Instant},
 };
 
@@ -68,8 +68,9 @@ type ArtistMetadataCache = HashMap<
 
 #[derive(Clone)]
 struct AppState {
-    tidal: Arc<OnceLock<TidalProvider>>,
-    qobuz: Arc<OnceLock<QobuzProvider>>,
+    tidal: Arc<ProviderSlot<TidalProvider>>,
+    qobuz: Arc<ProviderSlot<QobuzProvider>>,
+    service_login: Arc<[Mutex<()>; 3]>,
     spotify: Arc<SyncRwLock<Option<SpotifyProvider>>>,
     spotify_login: Arc<Mutex<()>>,
     pending_tidal_login: Arc<Mutex<Option<TidalLogin>>>,
@@ -88,6 +89,26 @@ struct AppState {
     artwork: Arc<crate::artwork_cache::ArtworkCache>,
     artist_metadata: Arc<Mutex<ArtistMetadataCache>>,
     playlist_mutations: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+}
+
+/// Requests own a cheap provider clone; signing out can remove the active session.
+#[derive(Default)]
+struct ProviderSlot<T>(SyncRwLock<Option<T>>);
+impl<T: Clone> ProviderSlot<T> {
+    fn new() -> Self { Self(SyncRwLock::new(None)) }
+    fn get(&self) -> Option<T> { self.0.read().unwrap_or_else(|e| e.into_inner()).clone() }
+    fn set(&self, provider: T) { *self.0.write().unwrap_or_else(|e| e.into_inner()) = Some(provider); }
+    fn clear(&self) { *self.0.write().unwrap_or_else(|e| e.into_inner()) = None; }
+}
+
+impl AppState {
+    fn login_lock(&self, provider: &str) -> Result<&Mutex<()>, ApiError> {
+        let index = match provider {
+            "tidal" => 0, "qobuz" => 1, "spotify" => 2,
+            _ => return Err(ApiError::not_found("Unknown music service".into())),
+        };
+        Ok(&self.service_login[index])
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -123,14 +144,15 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .tcp_keepalive(Duration::from_secs(30))
         .build()?;
     let media_cache = Arc::new(RwLock::new(MediaCache::default()));
-    let tidal_cell = Arc::new(OnceLock::new());
-    let qobuz_cell = Arc::new(OnceLock::new());
+    let tidal_cell = Arc::new(ProviderSlot::new());
+    let qobuz_cell = Arc::new(ProviderSlot::new());
     let spotify_cell = Arc::new(SyncRwLock::new(None));
     let state = AppState {
         tidal: tidal_cell,
         qobuz: qobuz_cell,
         spotify: spotify_cell,
         spotify_login: Arc::new(Mutex::new(())),
+        service_login: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
         artwork: Arc::new(crate::artwork_cache::ArtworkCache::with_disk(
@@ -182,6 +204,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/{provider}/start", post(start_auth))
         .route("/api/auth/{provider}/complete", post(complete_auth))
+        .route("/api/auth/{provider}/disconnect", post(disconnect_auth))
         .route("/api/library", get(library))
         .route("/api/providers/{provider}/playlists", get(playlists::list))
         .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change).delete(playlists::delete))
@@ -302,6 +325,11 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
 }
 
 async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
+    let _login = (
+        state.service_login[0].lock().await,
+        state.service_login[1].lock().await,
+        state.service_login[2].lock().await,
+    );
     let started = Instant::now();
     let (tidal, qobuz, spotify) = tokio::join!(
         authenticate_tidal(),
@@ -444,11 +472,21 @@ struct CompleteAuthRequest {
     callback_url: String,
 }
 
-async fn auth_status(State(state): State<AppState>) -> Json<AuthStatusResponse> {
+#[derive(Deserialize)]
+struct AuthStatusQuery {
+    /// Asks Spotify whether the session still works, rather than trusting what's known.
+    #[serde(default)]
+    live: bool,
+}
+
+/// Apps poll this, so only Settings asks for the slower live check.
+async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStatusQuery>) -> Json<AuthStatusResponse> {
     let spotify = match current_spotify(&state) {
-        Some(provider) => tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
+        Some(provider) if query.live => tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
             .await
             .unwrap_or_else(|_| provider.is_connected()),
+        // A dropped session is replaced on the next request, so it's still signed in.
+        Some(provider) => provider.is_connected() || provider.needs_reconnect(),
         None => false,
     };
     Json(AuthStatusResponse {
@@ -462,6 +500,7 @@ async fn start_auth(
     State(state): State<AppState>,
     Path(provider): Path<String>,
 ) -> Result<Json<AuthStartResponse>, ApiError> {
+    let _login = state.login_lock(&provider)?.lock().await;
     match provider.as_str() {
         "tidal" => {
             if state.tidal.get().is_some() {
@@ -501,9 +540,13 @@ async fn start_auth(
                 None => false,
             };
             if !connected {
+                let was_disconnected = crate::service_auth::disconnected("spotify");
                 let provider = SpotifyProvider::authenticate_if_configured(true)
-                    .await
-                    .map_err(ApiError::upstream)?
+                    .await;
+                if provider.is_err() && was_disconnected {
+                    crate::service_auth::set_disconnected("spotify", true).map_err(ApiError::internal)?;
+                }
+                let provider = provider.map_err(ApiError::upstream)?
                     .ok_or_else(|| {
                         ApiError::service_unavailable("Spotify login did not complete")
                     })?;
@@ -540,6 +583,7 @@ async fn complete_auth(
     Path(provider): Path<String>,
     Json(request): Json<CompleteAuthRequest>,
 ) -> Result<Json<AuthStartResponse>, ApiError> {
+    let _login = state.login_lock(&provider)?.lock().await;
     if request.callback_url.trim().is_empty() {
         return Err(ApiError::bad_request("Paste the full callback URL"));
     }
@@ -582,6 +626,49 @@ async fn complete_auth(
     Ok(Json(AuthStartResponse {
         status: "connected",
         login_url: None,
+    }))
+}
+
+async fn disconnect_auth(
+    State(state): State<AppState>, Path(provider): Path<String>,
+) -> Result<Json<AuthStatusResponse>, ApiError> {
+    if !matches!(provider.as_str(), "tidal" | "qobuz" | "spotify") {
+        return Err(ApiError::not_found("Unknown music service".into()));
+    }
+    let _login = state.login_lock(&provider)?.lock().await;
+    let _spotify_login = if provider == "spotify" { Some(state.spotify_login.lock().await) } else { None };
+    if provider == "tidal" { state.pending_tidal_login.lock().await.take(); }
+    if provider == "qobuz" { state.pending_qobuz_login.lock().await.take(); }
+    {
+        let _credentials = crate::service_auth::credentials_guard();
+        // Mark first: in-flight requests must not restore credentials after sign-out.
+        crate::service_auth::set_disconnected(&provider, true).map_err(ApiError::internal)?;
+        match provider.as_str() {
+            "tidal" => {
+                state.tidal.clear();
+                crate::service_auth::remove(crate::storage::config_path("tidal-session.json")).map_err(ApiError::internal)?;
+            }
+            "qobuz" => {
+                state.qobuz.clear();
+                crate::service_auth::remove(crate::storage::config_path("qobuz-session.json")).map_err(ApiError::internal)?;
+            }
+            "spotify" => {
+                if let Some(spotify) = state.spotify.write().unwrap_or_else(|e| e.into_inner()).take() {
+                    spotify.disconnect();
+                }
+                for file in ["spotify/oauth.json", "spotify/credentials.json"] {
+                    crate::service_auth::remove(crate::storage::config_path(file)).map_err(ApiError::internal)?;
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+    state.search_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
+    state.catalog_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
+    *state.media_cache.write().await = MediaCache::default();
+    Ok(Json(AuthStatusResponse {
+        tidal: state.tidal.get().is_some(), qobuz: state.qobuz.get().is_some(),
+        spotify: current_spotify(&state).is_some(),
     }))
 }
 
@@ -794,12 +881,14 @@ async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, 
 
 async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>, ApiError> {
     let entries = state.library_entries.read().await.clone();
+    let disconnected = entries.iter().filter(|entry| !provider_is_configured(&state, entry.provider)).cloned().collect::<Vec<_>>();
     let available_entries = entries
         .into_iter()
         .filter(|entry| provider_is_configured(&state, entry.provider))
         .collect::<Vec<_>>();
-    let (tracks, unavailable) =
+    let (tracks, mut unavailable) =
         load_available_tracks(&state, &available_entries, LIBRARY_LOAD_CONCURRENCY).await;
+    unavailable.extend(disconnected);
 
     Ok(Json(LibraryResponse {
         tracks,
@@ -2144,7 +2233,7 @@ fn ensure_tidal_provider(provider: &str) -> Result<(), ApiError> {
     }
 }
 
-fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
+fn tidal_provider(state: &AppState) -> Result<TidalProvider, ApiError> {
     state.tidal.get().ok_or_else(|| {
         ApiError::service_unavailable(
             "Tidal is not connected. Sign in from Settings → Services.",
@@ -2152,7 +2241,7 @@ fn tidal_provider(state: &AppState) -> Result<&TidalProvider, ApiError> {
     })
 }
 
-fn qobuz_provider(state: &AppState) -> Result<&QobuzProvider, ApiError> {
+fn qobuz_provider(state: &AppState) -> Result<QobuzProvider, ApiError> {
     state.qobuz.get().ok_or_else(|| {
         ApiError::service_unavailable(
             "Qobuz is not connected. Sign in from Settings → Services.",
@@ -2440,6 +2529,18 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_slots_can_disconnect_and_reconnect_without_a_server_restart() {
+        let slot = super::ProviderSlot::new();
+        assert!(slot.get().is_none());
+        slot.set("first session".to_owned());
+        let old_request = slot.get();
+        slot.clear();
+        assert!(slot.get().is_none());
+        slot.set("replacement session".to_owned());
+        assert_eq!(slot.get().as_deref(), Some("replacement session"));
+        assert_eq!(old_request.as_deref(), Some("first session"));
+    }
     use super::{
         LibraryEntry, hls_playlist_body, move_entries_to_end, parse_configured_tidal_track_ids,
         qobuz_album_id, requested_byte_range, spotify_album_id, tidal_album_id,

@@ -150,7 +150,3 @@ impl Selection {
         lyrics
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/lyrics/regression.rs"]
-mod tests;

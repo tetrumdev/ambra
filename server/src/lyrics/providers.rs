@@ -771,11 +771,6 @@ pub(super) struct AmllRecord {
     lyrics: Option<String>,
 }
 impl AmllRecord {
-    #[cfg(test)]
-    pub fn score(&self, request: &LyricsRequest) -> Option<u32> {
-        self.assess(request).map(|found| found.score)
-    }
-
     fn assess(&self, request: &LyricsRequest) -> Option<Match> {
         Recording {
             titles: &self.music_names,

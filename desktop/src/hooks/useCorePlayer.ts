@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { coreCommand, coreView, coreViewAt, followCore, subscribeCore, type CoreView } from "../api/core";
+import { coreCommand, coreView, coreViewAge, followCore, subscribeCore, type CoreView } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 import { createPlaybackClock } from "../utils/playbackClock";
 import { useAudioSettings } from "./AudioSettingsContext";
@@ -14,7 +14,7 @@ const noDeck = () => {};
 /** Where the song is now, carrying `view`'s position forward while it plays. */
 function positionOf(view: CoreView) {
   const running = view.playing && !view.buffering && view.outputOnline;
-  const position = view.positionSeconds + (running ? Math.min(6, (performance.now() - coreViewAt()) / 1000) : 0);
+  const position = view.positionSeconds + (running ? Math.min(6, coreViewAge()) : 0);
   return view.duration > 0 ? Math.min(position, view.duration) : position;
 }
 

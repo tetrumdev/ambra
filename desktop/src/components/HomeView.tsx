@@ -12,6 +12,7 @@ import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
 
@@ -111,15 +112,17 @@ function SongCards({
   tracks: Track[];
   onAction: OnAction;
 }) {
+  const connected = useServiceAvailability();
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
     null,
   );
   return (
     <>
       {tracks.map((track) => (
-        <li className="homeCard" key={track.globalId}>
+        <li className="homeCard" key={track.globalId} data-unavailable={!isTrackAvailable(track, connected) ? "true" : undefined}>
           <button
             className="homeCardButton"
+            disabled={!isTrackAvailable(track, connected)}
             type="button"
             aria-haspopup="menu"
             aria-label={`Options for ${track.name} by ${track.artist}`}

@@ -1,0 +1,16 @@
+.libraryItem[data-unavailable="true"], .searchResult[data-unavailable="true"] {
+  cursor: default;
+}
+.libraryItem[data-unavailable="true"] > :not(.trackCollectionMenuTrigger),
+.searchResult[data-unavailable="true"] > :not(.searchResultMenuButton) {
+  opacity: 0.38;
+  pointer-events: none;
+}
+.libraryItem[data-unavailable="true"] .trackPlayButton {
+  visibility: hidden;
+}
+.libraryItem[data-unavailable="true"] .trackCollectionMenuTrigger:not(:disabled) {
+  opacity: 1;
+}
+.homeCard[data-unavailable="true"] { opacity: 0.38; }
+#songInfo[data-unavailable="true"] { opacity: 0.38; }

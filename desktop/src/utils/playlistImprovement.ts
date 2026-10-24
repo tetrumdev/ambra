@@ -22,7 +22,7 @@ async function copiesOf(track: Track, providers: StreamingProvider[], signal: Ab
   const seen = new Set([track.globalId]);
   const matches = pages.flat().filter(candidate => !seen.has(candidate.globalId) && seen.add(candidate.globalId)
     && candidate.provider !== "local" && candidate.explicit === track.explicit && sameRecording(track, candidate));
-  return Promise.all([track, ...matches].map(copy => withPlayback(copy, signal)));
+  return Promise.all([track, ...matches].map(copy => copy.provider !== "local" && providers.includes(copy.provider) ? withPlayback(copy, signal) : copy));
 }
 
 /**
@@ -31,7 +31,7 @@ async function copiesOf(track: Track, providers: StreamingProvider[], signal: Ab
  * the DAC a sample-rate switch between them. A package already on matching copies moves only
  * for a better-sounding set; one split across formats is reunited on the best matching set.
  */
-export function packageCopies(members: Track[], copies: Track[][]): Track[] | null {
+export function packageCopies(members: Track[], copies: Track[][], restoreAvailability = false): Track[] | null {
   const sets: Track[][] = [];
   for (const lead of copies[0]) {
     const set = [lead];
@@ -57,7 +57,7 @@ export function packageCopies(members: Track[], copies: Track[][]): Track[] | nu
   });
   if (unchanged(best)) return null;
   const matched = members.every(member => sameFormat(member, members[0]) && member.provider === members[0].provider);
-  return !matched || compareSoundQuality(best[0], members[0]) > 0 ? best : null;
+  return restoreAvailability || !matched || compareSoundQuality(best[0], members[0]) > 0 ? best : null;
 }
 
 /** Songs counted as one album: its title without edition notes, by its lead artist. */
@@ -123,6 +123,7 @@ export async function findPlaylistUpgrades(
   packages: GlobalTrackId[][] = [],
 ): Promise<Map<GlobalTrackId, Track>> {
   const providers = await configuredSearchProviders(signal);
+  const available = (track: Track) => track.provider === "local" || providers.includes(track.provider);
   const results: (Track[] | undefined)[] = [];
   let next = 0, done = 0;
   const work = async () => {
@@ -148,14 +149,17 @@ export async function findPlaylistUpgrades(
     for (const member of members) packaged.add(member.globalId);
     // A package with a local file or a missing song can't move as one.
     if (members.length !== pack.length || members.some(member => !found.has(member.globalId))) continue;
-    const moved = packageCopies(members, members.map(member => found.get(member.globalId)!));
+    const restoreAvailability = members.some(member => !available(member));
+    const moved = packageCopies(members, members.map(member => found.get(member.globalId)!.filter(available)), restoreAvailability);
     moved?.forEach((copy, index) => { if (copy.globalId !== members[index].globalId) upgrades.set(members[index].globalId, copy); });
   }
   const chosen = new Map<GlobalTrackId, Track>();
   for (const [id, [current, ...candidates]] of found) {
-    if (!packaged.has(id)) chosen.set(id, bestPlaylistCopy(current, candidates));
+    if (packaged.has(id)) continue;
+    const copy = bestPlaylistCopy(current, candidates.filter(available), !available(current));
+    if (available(copy)) chosen.set(id, copy);
   }
-  unifyAlbumServices(chosen, found);
+  unifyAlbumServices(chosen, new Map([...found].map(([id, copies]) => [id, copies.filter(available)])));
   for (const [id, copy] of chosen) {
     if (copy.globalId !== id) upgrades.set(id, copy);
   }

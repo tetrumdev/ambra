@@ -35,6 +35,7 @@ import {
   rippleSpring,
 } from "../utils/lyricsMotion";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
+import { lyricDisplayLine } from "../utils/lyricTypography";
 import "./LyricsView.css";
 import "./TrackMenus.css";
 
@@ -271,7 +272,8 @@ function LyricGroups({
           </div>
         ) : (
         <div className="lyricGroup" data-block={block.id} key={block.id}>
-          {block.rows.map(({ id, line, kind, language }) => {
+          {block.rows.map(({ id, line: sourceLine, kind, language }) => {
+            const line = lyricDisplayLine(sourceLine);
             const singerIndex = line.singer
               ? singerIds.indexOf(line.singer)
               : 0;

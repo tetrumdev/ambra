@@ -7,6 +7,7 @@ import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionActi
 import type { Track } from "../types/music";
 import "./SongInfo.css";
 import { showTrackCredits } from "../utils/trackCredits";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 
 type SongInfoProps = {
   track: Track | undefined;
@@ -22,6 +23,8 @@ type SongInfoProps = {
 };
 
 export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
+  const connected = useServiceAvailability();
+  const available = !track || isTrackAvailable(track, connected);
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
   // The menu belongs to the song it was opened for.
   useEffect(() => setMenuAnchor(null), [track?.globalId]);
@@ -37,11 +40,11 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
     { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(track) },
   ] : [];
   return (
-    <div id="songInfo">
+    <div id="songInfo" inert={!available} data-unavailable={!available ? "true" : undefined}>
       {/* Only as wide as the title and its menu button, so hovering the title is what shows the button. */}
       <div className="songNameRow">
         <span id="songName" data-tooltip={track?.name} data-tooltip-overflow="">{track?.name ?? "Nothing Playing"}</span>
-        {track && menu && (
+        {available && track && menu && (
           <button
             type="button"
             className="songMenuButton"

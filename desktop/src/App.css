@@ -92,7 +92,6 @@ body,
     right: 0;
     height: 32px;
 }
-.stateStartup button,
 .stateSaveError button {
     color: white;
     background: #333;

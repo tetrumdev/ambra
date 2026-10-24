@@ -8,7 +8,11 @@
 //! Songs arrive as URLs on the server's address as it was saved; they're moved onto this
 //! app's own address and token before playing, and reported back as the core sent them.
 
-use std::{collections::HashMap, sync::Mutex, time::Duration};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
@@ -20,6 +24,8 @@ const REPORT_PLAYING: Duration = Duration::from_millis(500);
 const REPORT_IDLE: Duration = Duration::from_secs(1);
 const DEVICES_EVERY: u32 = 5;
 const COMMANDS_WAIT_SECONDS: u64 = 25;
+/// Report round trips remembered; the quickest is the one least delayed by anything but the network.
+const ROUND_TRIPS_KEPT: usize = 8;
 
 struct Agent {
     app: AppHandle,
@@ -28,6 +34,8 @@ struct Agent {
     token: Option<String>,
     id: String,
     name: String,
+    /// Stable for this agent's lifetime, not across app restarts.
+    instance_id: String,
     /// The URL each source was sent as, by the URL it plays as here.
     sent_as: Mutex<HashMap<String, String>>,
 }
@@ -36,7 +44,10 @@ pub fn start(app: AppHandle, base_url: String, token: Option<String>, id: String
     let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(COMMANDS_WAIT_SECONDS + 10)).build() else {
         return;
     };
-    let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, sent_as: Mutex::new(HashMap::new()) });
+    let mut instance = [0_u8; 16];
+    getrandom::fill(&mut instance).expect("the operating system's random source is available");
+    let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
+    let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, instance_id, sent_as: Mutex::new(HashMap::new()) });
     tauri::async_runtime::spawn(report(agent.clone()));
     tauri::async_runtime::spawn(serve(agent));
 }
@@ -112,18 +123,10 @@ fn urlencoding(value: &str) -> String {
 
 async fn report(agent: std::sync::Arc<Agent>) {
     let mut beat = 0_u32;
+    let mut round_trips = VecDeque::<Duration>::with_capacity(ROUND_TRIPS_KEPT);
     loop {
         let player = agent.app.state::<NativeAudioPlayer>();
-        let mut status = native_audio::native_audio_status(player.clone())
-            .await
-            .ok()
-            .and_then(|status| serde_json::to_value(status).ok())
-            .unwrap_or(Value::Null);
-        if let Some(source) = status["currentSource"].as_str() {
-            status["currentSource"] = Value::String(agent.sent_source(source));
-        }
-        let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
-        let mut body = json!({ "name": agent.name, "status": status });
+        let mut body = json!({ "name": agent.name, "instanceId": agent.instance_id });
         if beat % DEVICES_EVERY == 0 {
             if let Ok(devices) = native_audio::list_native_audio_devices(player.clone()).await {
                 body["devices"] = serde_json::to_value(devices).unwrap_or(json!([]));
@@ -133,7 +136,30 @@ async fn report(agent: std::sync::Arc<Agent>) {
             }
         }
         beat = beat.wrapping_add(1);
+        // Sampled last, so the position is as fresh as it can be when it leaves.
+        let mut status = native_audio::native_audio_status(player.clone())
+            .await
+            .ok()
+            .and_then(|status| serde_json::to_value(status).ok())
+            .unwrap_or(Value::Null);
+        if let Some(source) = status["currentSource"].as_str() {
+            status["currentSource"] = Value::String(agent.sent_source(source));
+        }
+        let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
+        body["status"] = status;
+        // Half the quickest round trip: how long this report takes to arrive, so the core
+        // can tell when the position was true, not just when it heard it.
+        if let Some(quickest) = round_trips.iter().min() {
+            body["latencyMs"] = json!(quickest.as_secs_f64() * 500.0);
+        }
+        let started = Instant::now();
         let sent = agent.request(reqwest::Method::POST, "presence").json(&body).send().await;
+        if sent.as_ref().is_ok_and(|response| response.status().is_success()) {
+            if round_trips.len() == ROUND_TRIPS_KEPT {
+                round_trips.pop_front();
+            }
+            round_trips.push_back(started.elapsed());
+        }
         // Unpaired or revoked: there's nothing to do until the app is paired again.
         let wait = match sent {
             Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => Duration::from_secs(30),

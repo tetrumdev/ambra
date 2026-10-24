@@ -1,4 +1,5 @@
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { nativeAudioSource } from "../utils/nativeAudioSource";
@@ -100,6 +101,7 @@ export function TrackList({
   sort = null,
   onSortChange,
 }: TrackListProps) {
+  const connected = useServiceAvailability();
   const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
   // A filtered list hides songs, so reordering it can't say where they belong.
   const reorderTracks = filtering ? undefined : reorderAllTracks;
@@ -117,7 +119,9 @@ export function TrackList({
     () => tracks.map((track) => track.globalId),
     [tracks],
   );
-  const selection = useRangeSelection(trackIds);
+  const selectableIds = useMemo(() => tracks.filter(track => isTrackAvailable(track, connected)).map(track => track.globalId), [tracks, connected]);
+  const selection = useRangeSelection(selectableIds);
+  useEffect(() => { selection.clear(); setOpenMenu(null); }, [connected]);
   // Only the packaged songs this list shows; a song missing from it can't hold a package open.
   const shownPackages = useMemo(() => {
     const shown = new Set(trackIds);
@@ -130,10 +134,10 @@ export function TrackList({
   } : undefined, [shownPackages]);
   const firstTrack = tracks[0];
   useEffect(() => {
-    if (!isTauri() || !firstTrack) return;
+    if (!isTauri() || !firstTrack || !isTrackAvailable(firstTrack, connected)) return;
     void invoke("warm_native_audio", { source: nativeAudioSource(firstTrack) })
       .catch(() => {});
-  }, [firstTrack]);
+  }, [firstTrack, connected]);
   const warmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(warmTimer.current), []);
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
@@ -178,7 +182,7 @@ export function TrackList({
     event.preventDefault();
     event.stopPropagation();
     setOpenMenu(null);
-    selection.toggle(index, event.shiftKey);
+    selection.toggle(selectableIds.indexOf(tracks[index].globalId), event.shiftKey);
   }
 
   function handleTrackClick(event: React.MouseEvent, index: number) {
@@ -257,6 +261,8 @@ export function TrackList({
   actions.current = (action, event, index) => {
     const track = tracks[index];
     if (!track) return;
+    if (!isTrackAvailable(track, connected) && action !== "collection") return;
+    if (!isTrackAvailable(track, connected) && !removeTracks) return;
     if (
       suppressClick.current &&
       ["select", "playback", "collection", "play"].includes(action)
@@ -309,6 +315,7 @@ export function TrackList({
             ...(removeTracks ? [{
               label: removalLabel,
               icon: "/delete.svg",
+              whenUnavailable: true,
               onSelect: () => removeTracks([openMenu.trackId]),
             }] : []),
             ...(addToLibrary && !savedTrackIds?.has(openMenu.trackId) ? [{
@@ -355,13 +362,14 @@ export function TrackList({
         const pack = packed.get(track.globalId);
         return (
           <TrackRow key={track.globalId} track={track} index={index} position={positions?.get(track.globalId) ?? index}
-            onOpenEntity={onOpenEntity ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
+            available={isTrackAvailable(track, connected)} removable={Boolean(removeTracks)}
+            onOpenEntity={onOpenEntity && isTrackAvailable(track, connected) ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
             selected={selection.selectedIds.has(track.globalId)}
-            selecting={selection.isSelecting}
+            selecting={selection.isSelecting && isTrackAvailable(track, connected)}
             menuOpen={openMenu?.trackId === track.globalId}
             collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
             showProviderIcon={showProviderIcon}
-            reorderable={Boolean(reorderTracks)}
+            reorderable={Boolean(reorderTracks) && isTrackAvailable(track, connected)}
             dragging={draggedTrackId === track.globalId || Boolean(draggedPackage?.includes(track.globalId))}
             packageIndex={pack?.indexOf(track.globalId)}
             packageSize={pack?.length}
@@ -383,8 +391,10 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, position, available, removable, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, onAction, onPointerDown }: {
   track: Track;
+  available: boolean;
+  removable: boolean;
   index: number;
   /** Where the song sits in the whole, unfiltered list. */
   position: number;
@@ -413,6 +423,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, 
   return (
     <div
       className="libraryItem"
+      data-unavailable={!available ? "true" : undefined}
       data-selected={
         selected ? "true" : undefined
       }
@@ -432,11 +443,12 @@ const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, 
       onClickCapture={(event) => onAction("select", event, index)}
       onClick={(event) => onAction("playback", event, index)}
       onContextMenu={(event) => onAction("context", event, index)}
-      onPointerDown={(event) => onPointerDown(event, index)}
+      onPointerDown={available ? (event) => onPointerDown(event, index) : undefined}
       onDragStart={(event) => event.preventDefault()}
     >
-      <div className="trackLeading">
+      <div className="trackLeading" inert={!available}>
         <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
+          disabled={!available}
           onClick={event => { event.stopPropagation(); onAction("play", event, index); }}
           onMouseEnter={event => onAction("warm", event, index)}
           onMouseLeave={event => onAction("cancelWarm", event, index)}>
@@ -467,6 +479,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, onOpenEntity, 
       <button
         type="button"
         className="trackCollectionMenuTrigger"
+        disabled={!available && !removable}
         aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
         aria-expanded={selecting ? undefined : collectionMenuOpen}
         onClick={(event) => onAction("collection", event, index)}

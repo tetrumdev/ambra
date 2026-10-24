@@ -271,19 +271,36 @@ export function ServerSetup({ loading, onReconnect }: { loading: boolean; onReco
       await invoke("restart_app");
     } catch (reason) { setError(String(reason)); setStarting(false); }
   };
-  return <section className="settingsView" style={{ maxWidth: 680, width: "100%", margin: "0 auto", overflowY: "auto", padding: 32 }}>
-    <header className="settingsPageHeader"><h1 className="settingsTitle">Connect to your music server</h1></header>
-    <p className="settingsMuted">{server ? `Waiting for ${server.name} at ${server.address}.` : "Start a server on this computer, or join one already running on your network."}</p>
-    <div className="settingsGroup">
-      <h2>Start a server</h2>
-      <p className="settingsMuted">Run the server on this computer in the background. Its tray icon lets you stop it; the app window and terminal can be closed.</p>
-      {isTauri() && <button type="button" className="settingsPill settingsPillPrimary" disabled={starting} onClick={() => void start()}>{starting ? "Starting…" : "Start server on this computer"}</button>}
-      <p className="settingsMuted">Or start it from any terminal:</p>
-      <code className="serverJoinCommand">ambra-server start</code>
+  return <section className="settingsView serverSetup">
+    <header className="serverSetupHeader">
+      <h1 className="settingsTitle">{server ? `Can't reach ${server.name}` : "Connect to a server"}</h1>
+      <p className="settingsMuted">{server
+        ? "Make sure it's turned on and connected to this network, or set up another server below."
+        : "Your library, playlists and accounts live on an Ambra server. Run one here, or join one already on your network."}</p>
+    </header>
+    {server && <div className="serverSetupCard">
+      <div className="serverSetupCardText">
+        <h2>{server.name}</h2>
+        <p className="settingsMuted">{server.address}</p>
+      </div>
+      <button type="button" className="settingsPill settingsPillPrimary" disabled={loading} onClick={onReconnect}>{loading ? "Connecting…" : "Try again"}</button>
+    </div>}
+    <div className="serverSetupCard">
+      <div className="serverSetupCardText">
+        <h2>Start a server here</h2>
+        <p className="settingsMuted">It runs in the background, so this window can be closed. Stop it from its tray icon.</p>
+      </div>
+      {isTauri() && <button type="button" className="settingsPill settingsPillPrimary" disabled={starting} onClick={() => void start()}>{starting ? "Starting…" : "Start server"}</button>}
+      <p className="serverSetupTerminal settingsMuted">
+        Or run <code className="serverJoinCommand">ambra-server start</code> in a terminal, then
+        <button type="button" className="settingsLink" disabled={loading} onClick={onReconnect}>{loading ? "connecting…" : "connect"}</button>
+      </p>
       {error && <p className="settingsError" role="alert">{error}</p>}
-      <button type="button" className="settingsPill" disabled={loading} onClick={onReconnect}>{loading ? "Connecting…" : "Reconnect"}</button>
     </div>
-    {serverConnection && <div className="settingsGroup"><h2>Servers on your network</h2><FindServers ownId={null} /></div>}
+    {serverConnection && <div className="serverSetupCard serverSetupFind">
+      <div className="serverSetupCardText"><h2>Join a server on your network</h2></div>
+      <FindServers ownId={null} />
+    </div>}
   </section>;
 }
 

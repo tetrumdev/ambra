@@ -4,6 +4,7 @@ import { parseQueueSnapshot, queueSnapshot, resolveQueueSnapshot, type Persisted
 import { localMusicTrack } from "./localMusic";
 import { getPersistentItem } from "../utils/persistentStorage";
 import type { AudioQuality, Track } from "../types/music";
+import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
 
 /**
  * The server's core decides what plays for every device (server/src/session.rs). This is
@@ -19,6 +20,8 @@ export type CoreView = {
   revision: number;
   playing: boolean;
   positionSeconds: number;
+  /** When `positionSeconds` was true, on the server's clock. Missing from older servers. */
+  serverTimeMs?: number;
   duration: number;
   buffering: boolean;
   error: string | null;
@@ -38,7 +41,17 @@ let chain: Promise<unknown> = Promise.resolve();
 let following = false;
 
 export const coreView = () => view;
-export const coreViewAt = () => viewAt;
+/**
+ * Seconds since `view`'s position was true: from when the server took it, where this app
+ * knows the server's clock, so the trip here doesn't leave it behind; else from its arrival.
+ */
+export function coreViewAge() {
+  const now = serverNow();
+  const age = now !== null && view?.serverTimeMs !== undefined ? (now - view.serverTimeMs) / 1000 : null;
+  // A clock estimate from before a sleep or a server restart can be far off; arrival is safe.
+  const arrived = (performance.now() - viewAt) / 1000;
+  return age !== null && age >= 0 && age <= arrived + 1 ? age : arrived;
+}
 export function subscribeCore(listener: () => void) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
@@ -46,6 +59,7 @@ export function subscribeCore(listener: () => void) {
 
 function accept(next: CoreView) {
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return;
+  if (view && next.instanceId !== view.instanceId) resetServerClock();
   next = JSON.parse(fromStorage(JSON.stringify(next))) as CoreView;
   if (next.queue.tracks) next.queue.tracks = next.queue.tracks.map(track => track.provider === "local" ? localMusicTrack(track) : track);
   view = next;
@@ -66,6 +80,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
 export function followCore() {
   if (following) return;
   following = true;
+  syncServerClock();
   void (async () => {
     for (;;) {
       try {

@@ -73,6 +73,8 @@ import {
 
 import { usePlaylists } from "./hooks/usePlaylists";
 import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
+import { isTrackAvailable, useServiceAvailability } from "./hooks/useServiceAvailability";
+import "./components/UnavailableTracks.css";
 import { useCorePlayer } from "./hooks/useCorePlayer";
 import { useCoreQueue } from "./hooks/useCoreQueue";
 import { serverStateStatus } from "./utils/serverState";
@@ -90,6 +92,7 @@ async function setWindowFullscreen(fullscreen: boolean) {
 const DISPLAY_WAKE_RELEASE_DELAY_MS = 5_000;
 
 function App({ localOnly }: { localOnly: boolean }) {
+  const connectedServices = useServiceAvailability();
   const [preferences, setPreferences] = useState(() => {
     const saved = loadPreferences();
     return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
@@ -162,7 +165,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   }, [listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
-    [library.tracks],
+    [library.tracks, connectedServices],
   );
   // With a server, its core plays for every device and this app is one of its remotes;
   // an offline session plays here. Fixed for the life of this App.
@@ -347,12 +350,14 @@ function App({ localOnly }: { localOnly: boolean }) {
 
   const addTrackToPlaylist = useStableCallback(async (playlistId: string, trackId: string) => {
     const track = availableTracks.find(track => track.globalId === trackId);
+    if (!track || !isTrackAvailable(track)) return false;
     if (playlists.find(playlist => playlist.id === playlistId)?.provider)
       return track ? servicePlaylistStore.addTrack(playlistId, track) : false;
     return track ? playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000))) : false;
   });
   const createPlaylistWithTrack = useStableCallback(async (name: string, trackId: string) => {
     const track = availableTracks.find(track => track.globalId === trackId);
+    if (!track || !isTrackAvailable(track)) return false;
     return track ? Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000)))) : false;
   });
   // Stable so playback-clock renders don't invalidate memoized track views.
@@ -817,6 +822,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     setPreferences(current => ({ ...current, ui: { ...current.ui, screen: "library" } }));
   });
   const entityAction = async (action: EntityAction, tracks: Track[], id?: string) => {
+    if (id && !isTrackAvailable(id)) return;
+    tracks = tracks.filter(track => isTrackAvailable(track));
     if (!tracks.length) return;
     const selected = tracks.find(track => track.globalId === id) ?? tracks[0];
     try {
