@@ -135,8 +135,11 @@ impl SpotifyQuality {
 }
 
 impl SpotifyProvider {
+    pub fn disconnect(&self) { self.session.shutdown(); }
     /// Spotify stays optional so an absent login never prevents other providers from starting.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
+        if !interactive && crate::service_auth::disconnected("spotify") { return Ok(None); }
+        if interactive { crate::service_auth::set_disconnected("spotify", false)?; }
         let credentials_path = spotify_credentials_path();
         let audio_cache_path = spotify_audio_cache_path();
         let oauth_refresh_path = spotify_oauth_refresh_path();
@@ -1050,6 +1053,8 @@ fn load_spotify_refresh_token(path: &Path) -> Option<String> {
 }
 
 fn save_spotify_refresh_token(path: &Path, refresh_token: &str) -> ProviderResult<()> {
+    let _credentials = crate::service_auth::credentials_guard();
+    if crate::service_auth::disconnected("spotify") { return Ok(()); }
     if refresh_token.trim().is_empty() {
         return Err(io::Error::other("Spotify did not return an OAuth refresh token").into());
     }

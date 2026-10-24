@@ -44,10 +44,13 @@ struct QueuedCommand {
 
 struct Endpoint {
     name: String,
+    instance_id: Option<String>,
     devices: Value,
     selected_device_id: Value,
     status: Value,
     status_at: Instant,
+    /// When the output sampled `status`: its arrival, less the trip the output measured.
+    status_sampled_at: Instant,
     seen: Instant,
     queue: VecDeque<QueuedCommand>,
     work: Arc<Notify>,
@@ -112,10 +115,14 @@ async fn list(State(endpoints): State<Shared>) -> Json<Vec<EndpointView>> {
 #[serde(rename_all = "camelCase")]
 struct Presence {
     name: String,
+    /// Changes when the output app restarts, even if its persistent device ID is unchanged.
+    instance_id: Option<String>,
     /// Sent when they change or every few seconds; kept from the last report otherwise.
     devices: Option<Value>,
     selected_device_id: Option<Value>,
     status: Option<Value>,
+    /// The output's estimate of how long a report takes to reach the server.
+    latency_ms: Option<f64>,
 }
 
 async fn presence(State(endpoints): State<Shared>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
@@ -125,15 +132,20 @@ async fn presence(State(endpoints): State<Shared>, Path(endpoint_id): Path<Strin
     let mut endpoints = endpoints.endpoints.lock().await;
     let endpoint = endpoints.entry(endpoint_id).or_insert_with(|| Endpoint {
         name: String::new(),
+        instance_id: None,
         devices: json!([]),
         selected_device_id: Value::Null,
         status: Value::Null,
         status_at: Instant::now(),
+        status_sampled_at: Instant::now(),
         seen: Instant::now(),
         queue: VecDeque::new(),
         work: Arc::new(Notify::new()),
     });
     endpoint.name = report.name.trim().to_owned();
+    if let Some(instance) = report.instance_id {
+        endpoint.instance_id = Some(instance);
+    }
     endpoint.seen = Instant::now();
     if let Some(devices) = report.devices.filter(Value::is_array) {
         endpoint.devices = devices;
@@ -142,8 +154,12 @@ async fn presence(State(endpoints): State<Shared>, Path(endpoint_id): Path<Strin
         endpoint.selected_device_id = selected;
     }
     if let Some(status) = report.status {
+        let now = Instant::now();
+        // Beyond a second it's a stalled request, not the network's usual delay.
+        let latency = report.latency_ms.filter(|ms| ms.is_finite()).map_or(0.0, |ms| ms.clamp(0.0, 1000.0));
         endpoint.status = status;
-        endpoint.status_at = Instant::now();
+        endpoint.status_at = now;
+        endpoint.status_sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0)).unwrap_or(now);
     }
     Json(json!({})).into_response()
 }
@@ -251,11 +267,11 @@ impl Endpoints {
         }
     }
 
-    /// The endpoint's latest playback report and when it came, while it's online.
-    pub async fn status(&self, endpoint_id: &str) -> Option<(Value, Instant)> {
+    /// The endpoint's latest playback report, when it came and when it was sampled, while it's online.
+    pub async fn status(&self, endpoint_id: &str) -> Option<(Value, Instant, Instant, Option<String>)> {
         let endpoints = self.endpoints.lock().await;
         let endpoint = endpoints.get(endpoint_id).filter(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER)?;
-        Some((endpoint.status.clone(), endpoint.status_at))
+        Some((endpoint.status.clone(), endpoint.status_at, endpoint.status_sampled_at, endpoint.instance_id.clone()))
     }
 
     pub async fn online(&self, endpoint_id: &str) -> bool {
@@ -297,7 +313,7 @@ mod tests {
     }
 
     fn report(status: Value) -> Json<Presence> {
-        Json(Presence { name: "Desk".into(), devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status) })
+        Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None })
     }
 
     #[tokio::test]
@@ -343,5 +359,21 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "Desk");
         assert_eq!(list[0].devices[0]["name"], "Speakers");
+    }
+
+    #[tokio::test]
+    async fn a_report_is_dated_by_when_it_was_sampled_not_when_it_arrived() {
+        let endpoints = Shared::default();
+        let sampled = |latency_ms| Json(Presence { latency_ms, ..report(json!({ "isPlaying": true })).0 });
+        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(200.0))).await;
+        let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
+        assert_eq!(arrived - sampled_at, Duration::from_millis(200));
+        // A stalled request isn't network delay; nonsense is ignored.
+        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(60_000.0))).await;
+        let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
+        assert_eq!(arrived - sampled_at, Duration::from_secs(1));
+        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(f64::NAN))).await;
+        let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
+        assert_eq!(arrived, sampled_at);
     }
 }

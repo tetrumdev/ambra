@@ -2,11 +2,13 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import {
   completeServiceAuth,
+  disconnectService,
   serviceAuthStatus,
   startServiceAuth,
   type ServiceAuthStatus,
   type StreamingProvider,
 } from "../api/server";
+import { refreshServiceAvailability, updateServiceAvailability, useServiceAvailability } from "../hooks/useServiceAvailability";
 
 type CallbackProvider = Exclude<StreamingProvider, "spotify">;
 type Props = { active: boolean; onServiceConnected: () => void };
@@ -20,6 +22,7 @@ const services: Array<{ id: StreamingProvider; name: string; detail: string }> =
 const disconnected: ServiceAuthStatus = { tidal: false, qobuz: false, spotify: false };
 
 export function ServiceSettings({ active, onServiceConnected }: Props) {
+  const connectedServices = useServiceAvailability();
   const [status, setStatus] = useState<ServiceAuthStatus>(disconnected);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<StreamingProvider | null>(null);
@@ -27,14 +30,16 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   const [callbackUrl, setCallbackUrl] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<StreamingProvider | null>(null);
+  useEffect(() => { if (connectedServices) setStatus(connectedServices); }, [connectedServices]);
 
   useEffect(() => {
     if (!active) return;
     let disposed = false;
     setLoading(true);
     setError(null);
-    void serviceAuthStatus()
-      .then(value => { if (!disposed) setStatus(value); })
+    void serviceAuthStatus(true)
+      .then(value => { if (!disposed) { setStatus(value); updateServiceAvailability(value); } })
       .catch((reason: unknown) => { if (!disposed) setError(String(reason)); })
       .finally(() => { if (!disposed) setLoading(false); });
     return () => { disposed = true; };
@@ -47,6 +52,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
     try {
       const result = await startServiceAuth(provider);
       if (result.status === "connected") {
+        void refreshServiceAvailability();
         setStatus(current => ({ ...current, [provider]: true }));
         setMessage(`${services.find(service => service.id === provider)?.name} connected.`);
         onServiceConnected();
@@ -69,6 +75,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
     setError(null);
     try {
       await completeServiceAuth(provider, callbackUrl.trim());
+      void refreshServiceAvailability();
       setStatus(current => ({ ...current, [provider]: true }));
       setCallbackProvider(null);
       setCallbackUrl("");
@@ -81,6 +88,22 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
     }
   }
 
+  async function disconnect(provider: StreamingProvider) {
+    setBusy(provider);
+    setError(null);
+    setMessage(null);
+    try {
+      const next = await disconnectService(provider);
+      setStatus(next);
+      updateServiceAvailability(next);
+      setDisconnecting(null);
+      if (callbackProvider === provider) { setCallbackProvider(null); setCallbackUrl(""); }
+      setMessage(`${services.find(service => service.id === provider)?.name} disconnected from Ambra. Your Ambra playlists are unchanged.`);
+      onServiceConnected();
+    } catch (reason) { setError(String(reason)); }
+    finally { setBusy(null); }
+  }
+
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Services</h1></header>
     {loading && <p className="settingsMuted" role="status">Checking connections…</p>}
@@ -88,13 +111,20 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
       <img className="settingsServiceIcon" src={`/${service.id}.svg`} alt="" aria-hidden="true" />
       <div><h3>{service.name}</h3><p>{service.detail}</p></div>
       <button type="button" className={`settingsPill${status[service.id] ? " settingsPillDone" : " settingsPillPrimary"}`}
-        disabled={loading || status[service.id] || busy !== null}
-        aria-label={status[service.id] ? `${service.name} connected` : `Sign in to ${service.name}`}
-        onClick={() => void signIn(service.id)}>
-        {status[service.id] ? "Connected" : busy === service.id
+        disabled={loading || busy !== null}
+        aria-label={status[service.id] ? `Disconnect ${service.name}` : `Sign in to ${service.name}`}
+        onClick={() => status[service.id] ? setDisconnecting(service.id) : void signIn(service.id)}>
+        {status[service.id] ? busy === service.id ? "Disconnecting…" : "Disconnect" : busy === service.id
           ? service.id === "spotify" ? "Waiting…" : "Opening…" : "Sign in"}
       </button>
     </section>)}
+    {disconnecting && <section className="settingsCallbackForm" role="group" aria-label="Confirm disconnect">
+      <p>Disconnect {services.find(service => service.id === disconnecting)?.name} from this Ambra server?</p>
+      <p className="settingsMuted">Its service playlists will disappear from Ambra, not from your service account. Ambra playlists stay intact. Its tracks will be unavailable until you reconnect or replace them with Improve Playlist.</p>
+      <p className="settingsMuted">This removes Ambra’s saved sign-in. To revoke access at the provider too, use that service’s account settings.</p>
+      <div><button className="settingsPill" type="button" disabled={busy !== null} onClick={() => setDisconnecting(null)}>Cancel</button>
+        <button className="settingsPill settingsPillPrimary" type="button" disabled={busy !== null} onClick={() => void disconnect(disconnecting)}>Disconnect</button></div>
+    </section>}
     {callbackProvider && <form className="settingsCallbackForm" onSubmit={event => {
       event.preventDefault();
       void finishSignIn();

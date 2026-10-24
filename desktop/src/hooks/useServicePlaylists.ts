@@ -4,6 +4,7 @@ import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, 
 import type { Playlist, Track } from "../types/music";
 import { musicProviderName } from "../utils/musicProviderName";
 import { loadServicePlaylistCache, outdatedContents, saveServicePlaylistCache, TRACK_DETAILS_VERSION, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
+import { isTrackAvailable, useServiceAvailability } from "./useServiceAvailability";
 
 export type PlaylistServiceGroup = {
   provider: StreamingProvider;
@@ -30,6 +31,7 @@ function needsFetch(cached: CachedPlaylistContents | undefined, playlist: Playli
 }
 
 export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
+  const connectedServices = useServiceAvailability();
   const [groups, setGroups] = useState<PlaylistServiceGroup[]>([]);
   const [contents, setContents] = useState<Record<string, CachedPlaylistContents>>({});
   const [loading, setLoading] = useState<ReadonlySet<string>>(new Set());
@@ -47,9 +49,23 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
   const alive = useRef(true);
   const [hydrated, setHydrated] = useState(false);
 
+  useEffect(() => {
+    if (!connectedServices) return;
+    const available = (provider: StreamingProvider) => connectedServices[provider];
+    for (const [id, request] of requests.current) {
+      if (providers.some(provider => !available(provider) && id.startsWith(`service:${provider}:`))) request.controller.abort();
+    }
+    currentGroups.current = currentGroups.current.filter(group => available(group.provider));
+    setGroups(currentGroups.current);
+    currentContents.current = Object.fromEntries(Object.entries(currentContents.current).filter(([id]) =>
+      !providers.some(provider => !available(provider) && id.startsWith(`service:${provider}:`))));
+    setContents(currentContents.current);
+  }, [connectedServices]);
+
   const load = useCallback((playlist: Playlist, mode: LoadMode = "open"): Promise<void> => {
     if (!enabled) return Promise.resolve();
     if (!playlist.provider || !playlist.remoteId) return Promise.resolve();
+    if (!isTrackAvailable(`${playlist.provider}:`)) return Promise.resolve();
     const existing = requests.current.get(playlist.id);
     if (existing && mode !== "force") return existing.promise;
     const cached = currentContents.current[playlist.id];
@@ -60,7 +76,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     if (!cached) setLoading(current => new Set(current).add(playlist.id));
     const promise = servicePlaylistContents(playlist.provider, playlist.remoteId, AbortSignal.any([controller.signal, AbortSignal.timeout(180_000)]))
       .then(result => {
-        if (!alive.current || controller.signal.aborted) return;
+        if (!alive.current || controller.signal.aborted || !isTrackAvailable(`${playlist.provider}:`)) return;
         currentContents.current = { ...currentContents.current, [playlist.id]: { ...result, fetchedAt: Date.now(), detailsVersion: TRACK_DETAILS_VERSION } };
         setContents(currentContents.current);
         setErrors(current => { const next = { ...current }; delete next[playlist.id]; return next; });
@@ -87,7 +103,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       await Promise.all(providers.filter(provider => connected[provider]).map(async provider => {
         try {
           const remote = await servicePlaylists(provider, signal);
-          if (!alive.current || signal?.aborted) return;
+          if (!alive.current || signal?.aborted || !isTrackAvailable(`${provider}:`)) return;
           const playlists: Playlist[] = remote.map(playlist => ({ ...playlist, id: playlistId(provider, playlist.id), remoteId: playlist.id, provider, trackIds: [] }));
           setGroups(current => {
             const next = [...current.filter(group => group.provider !== provider), { provider, playlists, error: null }];
@@ -97,7 +113,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
           const active = playlists.find(playlist => playlist.id === selection.current);
           if (active && !mutations.current.has(active.id)) void load(active);
         } catch (reason) {
-          if (!alive.current || signal?.aborted) return;
+          if (!alive.current || signal?.aborted || !isTrackAvailable(`${provider}:`)) return;
           setGroups(current => {
             const old = current.find(group => group.provider === provider);
             const next = [...current.filter(group => group.provider !== provider), { provider, playlists: old?.playlists ?? [], error: message(reason) }];
@@ -107,7 +123,11 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
         }
       }));
       if (!alive.current || signal?.aborted) return;
-      setGroups(current => current.filter(group => connected[group.provider]));
+      setGroups(current => {
+        const next = current.filter(group => connected[group.provider] && isTrackAvailable(`${group.provider}:`));
+        currentGroups.current = next;
+        return next;
+      });
       setError(null);
     } catch (reason) {
       if (alive.current && !signal?.aborted) setError(`Could not refresh service playlists. ${message(reason)}`);
@@ -122,11 +142,12 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       if (cancelled) return;
       if (cache) {
         const groups = [...currentGroups.current, ...cache.groups
-          .filter(group => !currentGroups.current.some(current => current.provider === group.provider))
+          .filter(group => isTrackAvailable(`${group.provider}:`) && !currentGroups.current.some(current => current.provider === group.provider))
           .map(group => ({ ...group, error: null }))];
         currentGroups.current = groups;
         setGroups(groups);
-        currentContents.current = { ...cache.contents, ...currentContents.current };
+        currentContents.current = { ...Object.fromEntries(Object.entries(cache.contents).filter(([id]) =>
+          !providers.some(provider => !isTrackAvailable(`${provider}:`) && id.startsWith(`service:${provider}:`)))), ...currentContents.current };
         setContents(currentContents.current);
       }
       setHydrated(true);

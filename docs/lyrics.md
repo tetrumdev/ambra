@@ -59,24 +59,14 @@ Contracts verified against official documentation and live responses:
 
 AMLL's database README states that original contributor work is CC0, while imported data follows its original provider's sharing terms. The API implementation's MIT/Apache license does not license all lyric text. Free, keyless access to lrc.red or LRCLIB also does not establish redistribution rights for every lyric. Commercial redistribution rights have not been independently cleared. Ambra identifies the selected source and does not persist a lyric database.
 
-## Verification
-
-Verified on the current host: 47 server regression tests and 17 client tests pass. Browser checks, server build, desktop build, focused formatting, and whitespace checks pass.
-
-Focused checks:
+## Build checks
 
 ```sh
-cargo test --manifest-path server/Cargo.toml lyrics::tests --no-fail-fast
 cargo build --manifest-path server/Cargo.toml
-bun test desktop/tests/lyrics.test.ts
 bun run --cwd desktop build
 rustfmt --edition 2024 --check server/src/lyrics.rs
 git diff --check
 ```
-
-Server regression cases cover detailed/line/plain lyrics, all fallback tiers, instrumental versus missing lyrics, malformed XML/YAML, false synchronization flags, matching accuracy, versions, overlapping vocals, metadata, request limits, cooldowns, no caching, cancellation, and preserving results through later failures. Client cases cover segment progress, overlap, offsets, no-space scripts, clock pause/resume/seek behavior, and wire validation.
-
-The optional browser harness at `desktop/tests/lyrics.html` uses the production component and synthetic lyrics. Start `bun run --cwd desktop dev --host 127.0.0.1`, then run `node desktop/tests/lyrics.browser.mjs` with Playwright available. If using an externally installed Playwright module or browser, set `AMBRA_PLAYWRIGHT_MODULE` to its module path and `AMBRA_BROWSER_EXECUTABLE` to the Chromium executable. `AMBRA_LYRICS_PREVIEW_URL` overrides the default Vite URL, `http://127.0.0.1:1420`.
 
 Browser checks cover progressive fill, backward seeks, overlapping background vocals, pause/resume, syllable spans, line-only lyrics, plain annotations, stale request cancellation, and reduced motion. Live smoke checks returned AMLL detailed segments for Taylor Swift's “ME!”, lrc.red detailed segments for Queen's “Bohemian Rhapsody (Remastered 2011)”, a usable line fallback for “The Sound of Silence”, and a clean unavailable result for a nonexistent recording. All local lyrics responses carried `Cache-Control: no-store`.
 
@@ -90,14 +80,8 @@ Created:
 - `server/src/lyrics/formats.rs`
 - `server/src/lyrics/ttml.rs`
 - `server/src/lyrics/providers.rs`
-- `server/tests/lyrics/regression.rs`
 - `desktop/src/types/lyrics.ts`
 - `desktop/src/utils/lyricsTiming.ts`
-- `desktop/tests/lyricsFixtures.ts`
-- `desktop/tests/lyrics.test.ts`
-- `desktop/tests/lyrics-browser.tsx`
-- `desktop/tests/lyrics.browser.mjs`
-- `desktop/tests/lyrics.html`
 - `docs/lyrics.md`
 
 Modified:
