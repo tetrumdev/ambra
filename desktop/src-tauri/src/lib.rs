@@ -25,17 +25,19 @@ use std::{
 use tauri::{Emitter, Manager};
 use walkdir::WalkDir;
 
-use bundled_backend::BundledBackend;
-
 mod app_update;
-mod bundled_backend;
 mod cover_thumbnails;
 mod display_wake;
 mod keyboard;
 mod library_index;
+mod local_server;
+mod local_import;
 mod media_controls;
 mod native_audio;
 mod persistence;
+mod playlist_export;
+mod remote_endpoint;
+mod server_link;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1001,16 +1003,18 @@ pub fn run() {
         .manage(app_update::PendingUpdate::default())
         .manage(display_wake::DisplayWake::default())
         .setup(|app| {
-            let server_log = app
-                .path()
-                .app_log_dir()
-                .ok()
-                .map(|directory| directory.join("ambra-server.log"));
-            app.manage(BundledBackend::start(server_log));
+            // Connecting never starts a server; the listener can explicitly start one from the UI.
+            let data = persistent_data_directory(app.handle()).map_err(std::io::Error::other)?;
+            let link = server_link::ServerLink::start(data);
+            let connection = link.connection();
+            let client_id = link.client_id();
+            app.manage(link);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
+            // This computer's outputs, for the other devices using the same server.
+            remote_endpoint::start(app.handle().clone(), connection.base_url, connection.token, client_id, connection.client_name);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1042,22 +1046,33 @@ pub fn run() {
             native_audio::set_native_audio_settings,
             native_audio::native_dsp_status,
             native_audio::import_dsp_impulse,
+            native_audio::sync_dsp_impulses,
             native_audio::lyric_offset::detect_lyric_offset,
             media_controls::set_native_media_metadata,
             media_controls::set_native_media_playback,
             media_controls::set_native_media_commands_enabled,
             app_update::check_for_update,
             app_update::install_update,
-            display_wake::set_display_wake
+            display_wake::set_display_wake,
+            playlist_export::export_playlist_csv,
+            server_link::server_connection,
+            server_link::discover_servers,
+            server_link::start_pairing,
+            server_link::poll_pairing,
+            server_link::leave_server,
+            server_link::set_server_link_decided,
+            server_link::clear_local_state,
+            server_link::restart_app,
+            local_import::import_local_music,
+            local_server::start_local_server
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
-    app.run(|app, event| {
+    app.run(|_app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
             #[cfg(target_os = "macos")]
             keyboard::cleanup();
-            app.state::<BundledBackend>().stop();
         }
     });
 }

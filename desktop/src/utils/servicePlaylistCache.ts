@@ -4,6 +4,7 @@ import type { ServicePlaylistContents } from "../api/playlists";
 import type { Playlist } from "../types/music";
 import { normalizeCachedTracks } from "./libraryCache";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
+import { forStorage, fromStorage } from "../api/serverConnection";
 
 const CACHE_KEY = "ambra.service-playlists.v1";
 const SAVE_DELAY_MS = 1000;
@@ -85,7 +86,7 @@ function inDesktop() {
 export async function loadServicePlaylistCache(): Promise<ServicePlaylistCache | null> {
   try {
     return parse(inDesktop()
-      ? await invoke<string | null>("load_service_playlist_cache")
+      ? fromStorage(await invoke<string | null>("load_service_playlist_cache"))
       : getPersistentItem(CACHE_KEY));
   } catch {
     return null;
@@ -108,7 +109,7 @@ function flush() {
     contents: Object.fromEntries(Object.entries(cache.contents).filter(([id]) => listed.has(id))),
   });
   if (inDesktop()) {
-    void invoke("save_service_playlist_cache", { json })
+    void invoke("save_service_playlist_cache", { json: forStorage(json) })
       .catch(error => console.warn("Could not save the playlist cache:", error));
     return;
   }

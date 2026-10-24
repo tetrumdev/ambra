@@ -136,7 +136,6 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
           <li data-off={draft.headroomDb === 0 || undefined}><span>Headroom</span><strong>{signedDb(-draft.headroomDb)}</strong></li>
           <li data-off={!draft.bands.some(b => b.enabled && b.gainDb !== 0) || undefined}><span>Parametric EQ</span><strong>{draft.bands.filter(b => b.enabled).length} bands</strong></li>
           <li data-off={!draft.convolution.length || undefined}><span>Convolution</span><strong>{draft.convolution.length ? `${draft.convolution.length} ${draft.convolution.length === 1 ? "filter" : "filters"}` : "Off"}</strong></li>
-          <li data-off={draft.outputGainDb === 0 || undefined}><span>Output gain</span><strong>{signedDb(draft.outputGainDb)}</strong></li>
           <li data-clipping={playing && playing.clippedSamples > 0 || undefined}><span>Output</span>
             <strong>{playing ? playing.peakDbfs !== null ? `Peak ${playing.peakDbfs.toFixed(1)} dBFS` : "Silent" : "Not playing"}</strong>
             {playing && playing.clippedSamples > 0 && <em>{playing.clippedSamples.toLocaleString()} clipped</em>}</li>
@@ -144,15 +143,14 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
         {playing?.warnings.map(warning => <p key={warning} className="settingsMuted">{warning}</p>)}
 
         {risk > 0.05 && draft.enabled && <div className="dspWarning" role="status">
-          <span>Boosts up to {signedDb(boost + draft.outputGainDb)} can clip with {signedDb(-draft.headroomDb)} of headroom.</span>
+          <span>Boosts up to {signedDb(boost)} can clip with {signedDb(-draft.headroomDb)} of headroom.</span>
           <button type="button" className="settingsPill" onClick={() => edit({ headroomDb: Math.min(30, Math.ceil((draft.headroomDb + risk) * 2) / 2) })}>
             Set headroom to {signedDb(-Math.min(30, Math.ceil((draft.headroomDb + risk) * 2) / 2))}
           </button>
         </div>}
 
         <div className="dspGains">
-          <GainSlider label="Headroom" value={-draft.headroomDb} min={-30} max={0} onChange={value => edit({ headroomDb: -value })} />
-          <GainSlider label="Output gain" value={draft.outputGainDb} min={-60} max={12} onChange={value => edit({ outputGainDb: value })} />
+          <NumberField label="Headroom" unit="dB" ariaLabel="Headroom (dB)" value={draft.headroomDb} min={0} max={30} step={0.1} onChange={headroomDb => edit({ headroomDb })} />
         </div>
 
         <section className="dspSection" aria-label="Parametric EQ">
@@ -217,16 +215,6 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
       <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.saving || importing} onClick={() => void save()}>{audio.saving ? "Saving…" : "Save preset"}</button>
     </div>}
   </>;
-}
-
-function GainSlider({ label, value, min, max, onChange }: { label: string; value: number; min: number; max: number; onChange: (value: number) => void }) {
-  const fill = ((value - min) / (max - min)) * 100;
-  return <label className="dspGain">
-    <span>{label}</span>
-    <input type="range" min={min} max={max} step={0.5} value={value} aria-label={`${label} (dB)`} aria-valuetext={signedDb(value)}
-      style={{ "--fill": `${fill}%` } as React.CSSProperties} onChange={e => onChange(e.currentTarget.valueAsNumber)} />
-    <output>{signedDb(value)}</output>
-  </label>;
 }
 
 function NumberField({ label, unit, ariaLabel, value, min, max, step, onChange }: {

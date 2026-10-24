@@ -1,9 +1,9 @@
-import { useEffect, useState, type RefCallback } from "react";
+import { useEffect, useState, type RefCallback, useSyncExternalStore } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
-import type { NormalizationMode, OutputSettings } from "../utils/audioSettings";
+import { MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
 import type { LyricMotion } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
 import { musicProviderName } from "../utils/musicProviderName";
@@ -13,6 +13,16 @@ import { DspPanel } from "./settings/DspPanel";
 import { LocalSettings } from "./settings/LocalSettings";
 import { Segmented, SettingRow, Toggle } from "./settings/SettingsControls";
 import "./SettingsView.css";
+import { ServerSettings } from "./settings/ServerSettings";
+import { invokeOn, useEndpoints, type RemoteEndpoint } from "../utils/playbackTarget";
+import { coreCommand, coreView, subscribeCore } from "../api/core";
+import { serverConnection } from "../api/serverConnection";
+
+/** Whether the server's core is playing on this output of this computer, or of `endpointId`. */
+function usePlayingOn() {
+  const core = useSyncExternalStore(subscribeCore, coreView);
+  return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
+}
 
 type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
@@ -38,6 +48,20 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
         {audio.settings.normalization !== "off" && <SettingRow label="Normalize by" hint="Album keeps quiet tracks quiet">
           <Segmented label="Normalize by" value={audio.settings.normalization} disabled={audio.saving} onChange={setNormalization}
             options={[{ value: "album", label: "Album" }, { value: "track", label: "Song" }]} />
+        </SettingRow>}
+        {audio.settings.normalization !== "off" && <SettingRow label="Target loudness" hint="Higher is louder; quiet songs only rise as far as their peaks allow">
+          <span className="settingsFieldRow settingsUnitInput">
+            <input type="number" aria-label="Target loudness (LUFS)" min={MIN_TARGET_LUFS} max={MAX_TARGET_LUFS} step={0.1} required
+              key={audio.settings.normalizationTargetLufs} defaultValue={audio.settings.normalizationTargetLufs} disabled={audio.saving}
+              onBlur={async e => {
+                const input = e.currentTarget;
+                const target = input.valueAsNumber;
+                const saved = audio.settings.normalizationTargetLufs;
+                if (!input.checkValidity()) { input.reportValidity(); input.value = String(saved); return; }
+                if (target !== saved && !await audio.update(current => ({ ...current, normalizationTargetLufs: target }))) input.value = String(saved);
+              }} />
+            <small>LUFS</small>
+          </span>
         </SettingRow>}
       </div>
       <div className="settingsGroup">
@@ -76,6 +100,7 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
         {audio.settings.outputs.filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <OutputCard key={output.id} output={output}
           onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
       </div>}
+      <RemoteOutputs active={tab === "outputs"} />
     </section>
 
     <section id="settings-panel-dsp" role="region" aria-labelledby="settings-tab-dsp" hidden={tab !== "dsp"}>
@@ -86,6 +111,10 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
       <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected} />
     </section>
 
+    <section id="settings-panel-server" role="region" aria-labelledby="settings-tab-server" hidden={tab !== "server"}>
+      <ServerSettings active={tab === "server"} />
+    </section>
+
     <section id="settings-panel-local" role="region" aria-labelledby="settings-tab-local" hidden={tab !== "local"}>
       <LocalSettings onRescanLocalMusic={onRescanLocalMusic} />
     </section>
@@ -94,7 +123,8 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
 
 function OutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPreset: (presetId: string) => void }) {
   const audio = useAudioSettings()!;
-  const selected = audio.settings.selectedOutputId === output.id;
+  const { core, playingOn } = usePlayingOn();
+  const selected = core && serverConnection ? playingOn(serverConnection.clientId, output.id) : audio.settings.selectedOutputId === output.id;
   const update = (change: Partial<OutputSettings>) =>
     audio.update(current => ({ ...current, outputs: current.outputs.map(item => item.id === output.id ? { ...item, ...change } : item) }));
   return <article className="settingsOutput" data-selected={selected || undefined}>
@@ -106,7 +136,11 @@ function OutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPr
       {output.id === "" && <span className="settingsChip">Follows system</span>}
       <span className="settingsOutputSpacer" />
       {!selected && <button type="button" className="settingsPill" disabled={!audio.native || audio.saving || !output.enabled}
-        onClick={() => void audio.update(current => ({ ...current, selectedOutputId: output.id }))}>Play here</button>}
+        onClick={() => {
+          if (core && serverConnection) {
+            void coreCommand("output", { output: { endpointId: serverConnection.clientId, deviceId: output.id, endpointName: serverConnection.clientName, deviceName: output.name } });
+          } else void audio.update(current => ({ ...current, selectedOutputId: output.id }));
+        }}>Play here</button>}
       <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
       <Toggle label={`Show ${output.name} in player`} checked={output.enabled} disabled={audio.saving} onChange={enabled => void update({ enabled })} />
     </div>
@@ -170,5 +204,64 @@ function UpdateSettings() {
       <Toggle label="Check for updates automatically" checked={automatic} disabled={!updatesSupported}
         onChange={next => { setAutomatic(next); setAutomaticUpdateChecks(next); }} />
     </SettingRow>
+  </div>;
+}
+
+/** Outputs on the other devices using this server, set up from here as on that device. */
+function RemoteOutputs({ active }: { active: boolean }) {
+  const endpoints = useEndpoints(active, true);
+  if (!endpoints.length) return null;
+  return <>{endpoints.map(endpoint => <RemoteEndpointOutputs key={endpoint.id} endpoint={endpoint} />)}</>;
+}
+
+function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
+  const audio = useAudioSettings()!;
+  const { playingOn } = usePlayingOn();
+  const [outputs, setOutputs] = useState<OutputSettings[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const on = { endpointId: endpoint.id, endpointName: endpoint.name };
+  const connected = new Set(["", ...endpoint.devices.map(device => device.id)]);
+  const load = async () => {
+    try { setOutputs((await invokeOn<AudioSettings>(on, "native_audio_settings")).outputs); setError(null); }
+    catch (reason) { setError(String(reason)); }
+  };
+  useEffect(() => { void load(); }, [endpoint.id]);
+  const change = async (output: OutputSettings, settings: Partial<OutputSettings>) => {
+    setOutputs(current => current?.map(item => item.id === output.id ? { ...item, ...settings } : item) ?? null);
+    try { await invokeOn(on, "set_output_settings", { outputId: output.id, change: settings }); }
+    catch (reason) { setError(String(reason)); }
+    void load();
+  };
+  return <div className="settingsGroup settingsRemoteOutputs">
+    <h2>On {endpoint.name}</h2>
+    {error && <p className="settingsError" role="alert">{error}</p>}
+    {outputs === null && !error && <p className="settingsMuted" role="status">Loading outputs…</p>}
+    {outputs?.filter(output => connected.has(output.id)).map(output => {
+      const playing = playingOn(endpoint.id, output.id);
+      return <article key={output.id} className="settingsOutput" data-selected={playing || undefined}>
+        <div className="settingsOutputHeader">
+          <strong className="settingsRemoteOutputName">{output.name}</strong>
+          {playing && <span className="settingsChip settingsChipActive">Playing here</span>}
+          <span className="settingsOutputSpacer" />
+          {!playing && <button type="button" className="settingsPill" disabled={!output.enabled} onClick={() => {
+            setError(null);
+            void coreCommand("output", { output: { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: output.id, deviceName: output.name } })
+              .catch(reason => setError(String(reason)));
+          }}>Play here</button>}
+          <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
+          <Toggle label={`Show ${output.name} on ${endpoint.name} in player`} checked={output.enabled} onChange={enabled => void change(output, { enabled })} />
+        </div>
+        <SettingRow label="DSP preset" hint="Presets are shared by every device">
+          <select aria-label={`DSP preset for ${output.name} on ${endpoint.name}`} value={output.presetId ?? ""}
+            onChange={event => void change(output, { presetId: event.currentTarget.value || null })}>
+            <option value="">None</option>
+            {audio.settings.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+          </select>
+        </SettingRow>
+        <SettingRow label="Exclusive mode" hint="Bit-perfect, with no other sounds">
+          <Toggle label={`Exclusive mode for ${output.name} on ${endpoint.name}`} checked={output.exclusiveMode} onChange={exclusiveMode => void change(output, { exclusiveMode })} />
+        </SettingRow>
+      </article>;
+    })}
   </div>;
 }

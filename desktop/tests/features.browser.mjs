@@ -32,8 +32,9 @@ try {
   await page.keyboard.press("Backspace");
   await page.keyboard.press("Backspace");
   await page.locator(".pageFilterCount", { hasText: "1 song" }).waitFor();
-  assert.equal(await rows().count(), 1);
-  assert.match(await rows().first().innerText(), /Halo/);
+  // The page's only match stays among its neighbours, pointed out rather than narrowed to.
+  assert.equal(await rows().count(), 3);
+  assert.match(await page.locator('.playlistView .libraryItem[data-revealed="true"]').innerText(), /Halo/);
   await filter().fill("nothing like this");
   await page.locator(".pageFilterCount", { hasText: "No matches" }).waitFor();
   await page.keyboard.press("Escape");

@@ -10,10 +10,9 @@ import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
+import { serverBaseUrl, serverUrl } from "./serverConnection";
 
-export const serverBaseUrl = (
-  import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147"
-).replace(/\/$/, "");
+export { serverBaseUrl } from "./serverConnection";
 
 type RemoteAlbum = {
   providerId: string;
@@ -215,7 +214,7 @@ function artworkQuery(track: Track) {
 
 export function thumbnailArtwork(track: Track) {
   const query = artworkQuery(track);
-  return query ? `${serverBaseUrl}/api/artwork/thumbnail?${query}` : track.cover;
+  return query ? serverUrl(`/api/artwork/thumbnail?${query}`) : track.cover;
 }
 
 // Cards and portraits must use the same persistent thumbnail cache as tracks.
@@ -226,7 +225,7 @@ export function thumbnailSource(source: string): string {
   const provider = url.hostname === "resources.tidal.com" ? "tidal"
     : url.hostname === "static.qobuz.com" ? "qobuz"
     : url.hostname === "i.scdn.co" ? "spotify" : null;
-  return provider ? `${serverBaseUrl}/api/artwork/thumbnail?${new URLSearchParams({ provider, url: source })}` : source;
+  return provider ? serverUrl(`/api/artwork/thumbnail?${new URLSearchParams({ provider, url: source })}`) : source;
 }
 
 export type ArtworkPalette = { colors: string[]; weights: number[] };
@@ -346,7 +345,7 @@ export function playableTrack(track: RemoteTrack): Track {
     provider: track.provider,
     providerTrackId: track.providerTrackId,
     playbackKind: track.playback.kind,
-    audio: `${serverBaseUrl}${track.playback.url}`,
+    audio: serverUrl(track.playback.url),
     cover: track.album?.coverUrl ?? whiteArtwork,
     nativeCover: track.album?.coverUrl ?? null,
     name: displayTitle,
@@ -497,7 +496,7 @@ export async function resolveTrackPlayback(
   const details = (await response.json()) as TrackPlayback;
   return {
     ...track,
-    audio: `${serverBaseUrl}${details.playback.url}`,
+    audio: serverUrl(details.playback.url),
     playbackKind: details.playback.kind,
     quality: details.quality,
     bitrateKbps: details.bitrateKbps ?? null,

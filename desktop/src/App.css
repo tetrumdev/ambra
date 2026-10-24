@@ -9,6 +9,11 @@
 }
 
 :root {
+    /* The app's darkest surface: just off black, because a panel switches pixels to and from
+       pure black slowly, which dims thin lines while they scroll. Keep it in step with
+       SURFACE_BLACK (utils/surfaceBlack.ts) and the window's backgroundColor (tauri.conf.json). */
+    --surface-black: #0a0a0a;
+    --surface-black-rgb: 10 10 10;
     /* Sans everywhere; the serif is kept for page titles, which set it themselves (.libraryTitle). */
     font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
     font-size: 16px;
@@ -18,7 +23,7 @@
     height: 100vh;
 
     color: white;
-    background: rgba(0, 0, 0, 1);
+    background: var(--surface-black);
 
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -221,7 +226,7 @@ button img {
     left: 0;
     top: 0;
     box-sizing: border-box;
-    background: black;
+    background: var(--surface-black);
     text-align: left;
     grid-template-columns: 230px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
@@ -289,7 +294,7 @@ button img {
 
 .settingsToggle:checked::before {
     transform: translateX(20px);
-    background: black;
+    background: var(--surface-black);
 }
 
 .libraryView,
