@@ -133,8 +133,9 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   }
 }
 
-export async function serviceAuthStatus(): Promise<ServiceAuthStatus> {
-  const response = await fetch(`${serverBaseUrl}/api/auth/status`);
+/** `live` asks Spotify whether its session still works: slower, so only for Settings. */
+export async function serviceAuthStatus(live = false): Promise<ServiceAuthStatus> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/status${live ? "?live=true" : ""}`, { signal: AbortSignal.timeout(10_000) });
   if (!response.ok) throw new Error(await responseError(response));
   return response.json() as Promise<ServiceAuthStatus>;
 }
@@ -159,6 +160,12 @@ export async function completeServiceAuth(
     body: JSON.stringify({ callbackUrl }),
   });
   if (!response.ok) throw new Error(await responseError(response));
+}
+
+export async function disconnectService(provider: StreamingProvider): Promise<ServiceAuthStatus> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/disconnect`, { method: "POST" });
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json() as Promise<ServiceAuthStatus>;
 }
 
 export type CatalogArtist = {

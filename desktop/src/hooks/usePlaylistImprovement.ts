@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { GlobalTrackId, Playlist, Track } from "../types/music";
 import { findPlaylistUpgrades } from "../utils/playlistImprovement";
 import { playlistTracks } from "../utils/playlists";
+import { useServiceAvailability } from "./useServiceAvailability";
 
 export type PlaylistUpgrade = { from: Track; to: Track };
 
@@ -53,6 +54,7 @@ export function usePlaylistImprovement(
   replaceTracks: (id: string, replacements: Map<GlobalTrackId, Track>) => boolean,
   enabled: boolean,
 ) {
+  const connectedServices = useServiceAvailability();
   const [progress, setProgress] = useState<PlaylistImprovementProgress | null>(null);
   const [reports, setReports] = useState<Record<string, PlaylistImprovementReport>>({});
   const running = useRef<{ controller: AbortController; requested: boolean } | null>(null);
@@ -108,7 +110,7 @@ export function usePlaylistImprovement(
       window.clearInterval(interval);
       running.current?.controller.abort();
     };
-  }, [enabled, scan]);
+  }, [enabled, scan, connectedServices]);
 
   /** A requested scan replaces a background one, which is picked up again on a later check. */
   const improve = useCallback((playlistId: string) => {
