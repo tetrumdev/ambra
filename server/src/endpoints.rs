@@ -61,6 +61,8 @@ pub struct Endpoints {
     endpoints: Mutex<HashMap<String, Endpoint>>,
     waiting: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
     next_id: AtomicU64,
+    /// Signalled by every playback report, so the core acts on it at once.
+    reported: Notify,
 }
 
 type Shared = Arc<Endpoints>;
@@ -125,11 +127,11 @@ struct Presence {
     latency_ms: Option<f64>,
 }
 
-async fn presence(State(endpoints): State<Shared>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
+async fn presence(State(shared): State<Shared>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
     if !valid_id(&endpoint_id) || report.name.trim().is_empty() || report.name.chars().count() > 64 {
         return error(StatusCode::BAD_REQUEST, "An endpoint needs an ID and a name");
     }
-    let mut endpoints = endpoints.endpoints.lock().await;
+    let mut endpoints = shared.endpoints.lock().await;
     let endpoint = endpoints.entry(endpoint_id).or_insert_with(|| Endpoint {
         name: String::new(),
         instance_id: None,
@@ -160,6 +162,8 @@ async fn presence(State(endpoints): State<Shared>, Path(endpoint_id): Path<Strin
         endpoint.status = status;
         endpoint.status_at = now;
         endpoint.status_sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0)).unwrap_or(now);
+        drop(endpoints);
+        shared.reported.notify_one();
     }
     Json(json!({})).into_response()
 }
@@ -249,6 +253,11 @@ async fn command(State(endpoints): State<Shared>, Path(endpoint_id): Path<String
 }
 
 impl Endpoints {
+    /// Resolves at the next playback report (or at once, if one came since the last wait).
+    pub async fn reported(&self) {
+        self.reported.notified().await;
+    }
+
     /// Runs a command on an endpoint for the server itself, and waits for its answer.
     pub async fn call(&self, endpoint_id: &str, command: &str, args: Value) -> Result<Value, String> {
         let (reply, answer) = oneshot::channel();
