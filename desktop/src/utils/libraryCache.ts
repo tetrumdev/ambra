@@ -5,6 +5,7 @@ import {
   removePersistentItem,
   setPersistentItem,
 } from "./persistentStorage";
+import { forStorage, fromStorage } from "../api/serverConnection";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
 const STREAMING_CACHE_SAVE_DELAY_MS = 1000;
@@ -111,7 +112,7 @@ async function desktopInvoke<T>(command: string, args?: Record<string, unknown>)
  */
 export async function loadStreamingCache(): Promise<Track[]> {
   if (!inDesktop()) return [];
-  let encoded = await desktopInvoke<string | null>("load_streaming_cache");
+  let encoded = fromStorage(await desktopInvoke<string | null>("load_streaming_cache"));
   const legacy = getPersistentItem(STREAMING_LIBRARY_CACHE_KEY);
   if (encoded === null && legacy !== null) {
     encoded = legacy;
@@ -129,7 +130,7 @@ function flushStreamingCache() {
   const tracks = pendingStreamingTracks;
   pendingStreamingTracks = null;
   if (tracks === null) return;
-  const json = JSON.stringify(tracks.filter((track) => track.provider !== "local"));
+  const json = forStorage(JSON.stringify(tracks.filter((track) => track.provider !== "local")));
   void desktopInvoke("save_streaming_cache", { json })
     .then(() => {
       if (getPersistentItem(STREAMING_LIBRARY_CACHE_KEY) !== null) {

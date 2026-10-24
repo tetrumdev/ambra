@@ -42,8 +42,10 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "getrandom 0.3.4",
  "httpdate",
  "image",
+ "libc",
  "librespot-audio",
  "librespot-core",
  "librespot-metadata",
@@ -58,12 +60,15 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "sha2 0.10.9",
  "tidlers",
  "tokio",
  "tokio-stream",
+ "tokio-util",
  "tower-http 0.7.1",
  "urlencoding",
  "vergen",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

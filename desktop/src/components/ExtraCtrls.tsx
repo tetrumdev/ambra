@@ -1,8 +1,10 @@
 import { isTauri } from "@tauri-apps/api/core";
 import {
+  Fragment,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type KeyboardEvent,
 } from "react";
@@ -11,6 +13,9 @@ import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { visibleOutputs } from "../utils/audioSettings";
 import { acceptsPlaybackShortcut, isUnmodifiedKey } from "../utils/keyboard";
 import "./ExtraCtrls.css";
+import { invokeOn, useEndpoints } from "../utils/playbackTarget";
+import { coreCommand, coreView, subscribeCore, type CoreOutput } from "../api/core";
+import { serverConnection } from "../api/serverConnection";
 
 /** How far Up and Down change the volume, in percent. */
 const VOLUME_STEP = 5;
@@ -48,16 +53,50 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     : [];
   const showAudioModeToggle = hasNativeAudio;
   const [volumePreview, setVolumePreview] = useState<{ outputId: string; volume: number } | null>(null);
-  const volume = volumePreview?.outputId === selectedDeviceId
-    ? volumePreview.volume
-    : selectedOutput?.volume ?? 100;
+  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  // With a server, its core picks the output from every computer's; the volume lives on the
+  // computer that output belongs to.
+  const core = useSyncExternalStore(subscribeCore, coreView);
+  const coreOutput = core?.output ?? null;
+  const target = coreOutput && coreOutput.endpointId !== serverConnection?.clientId ? coreOutput : null;
+  const endpoints = useEndpoints(audioMenuOpen && core !== null, true);
+  const isPlayingHere = (deviceId: string) => core ? coreOutput?.endpointId === serverConnection?.clientId && coreOutput?.deviceId === deviceId : selectedDeviceId === deviceId;
+  const pickHere = (deviceId: string, deviceName: string) => {
+    if (core && serverConnection) chooseOutput({ endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName });
+    else void selectAudioDevice(deviceId);
+  };
+  const [remoteVolume, setRemoteVolume] = useState<number | null>(null);
+  const [targetError, setTargetError] = useState<string | null>(null);
+  const targetKey = target ? `${target.endpointId}:${target.deviceId}` : null;
+  useEffect(() => {
+    setRemoteVolume(null);
+    if (!target) return;
+    let disposed = false;
+    void invokeOn<number>(target, "native_audio_volume").then(value => { if (!disposed) setRemoteVolume(value); }).catch(() => {});
+    return () => { disposed = true; };
+  }, [targetKey]);
+  // The server switched this computer's output; its settings say which one now.
+  const ownDeviceId = coreOutput && !target ? coreOutput.deviceId : null;
+  useEffect(() => {
+    if (ownDeviceId !== null && ownDeviceId !== audio?.settings.selectedOutputId) void audio?.refresh();
+  }, [ownDeviceId]);
+  const volume = target ? remoteVolume ?? 100
+    : volumePreview?.outputId === selectedDeviceId
+      ? volumePreview.volume
+      : selectedOutput?.volume ?? 100;
   const pendingVolumes = useRef(new Map<string, { outputId: string; volume: number }>());
   const isSendingVolume = useRef(false);
-  const [audioMenuOpen, setAudioMenuOpen] = useState(false);
+  const remoteVolumeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const volumeButton = useRef<HTMLButtonElement>(null);
+
+  const chooseOutput = (output: CoreOutput) => {
+    setTargetError(null);
+    void coreCommand("output", { output }).catch(error => setTargetError(String(error)));
+  };
 
   const selectAudioDevice = async (deviceId: string) => {
     if (!audio || audio.saving) return;
+    setTargetError(null);
     await audio.update((current) => ({
       ...current,
       selectedOutputId: deviceId,
@@ -89,6 +128,16 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const latestVolume = useRef(volume);
   latestVolume.current = volume;
   const changeVolume = (nextVolume: number) => {
+    if (target) {
+      latestVolume.current = nextVolume;
+      setRemoteVolume(nextVolume);
+      // A drag sends its latest level, not every step, over the network.
+      clearTimeout(remoteVolumeTimer.current);
+      remoteVolumeTimer.current = setTimeout(() => {
+        void coreCommand("volume", { volume: nextVolume }).catch(error => setTargetError(String(error)));
+      }, 80);
+      return;
+    }
     if (!audio || audio.loading) return;
     latestVolume.current = nextVolume;
     const next = { outputId: selectedDeviceId, volume: nextVolume };
@@ -182,7 +231,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                   onKeyDown={moveDeviceFocus}
                 >
                   <span className="audioDeviceHeading" aria-hidden="true">
-                    Output
+                    {core && endpoints.length ? "This computer" : "Output"}
                   </span>
                   {isLoadingDevices ? (
                     <button
@@ -202,9 +251,9 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                         className="audioDeviceOption"
                         type="button"
                         role="radio"
-                        aria-checked={selectedDeviceId === device.id}
+                        aria-checked={isPlayingHere(device.id)}
                         disabled={isChangingDevice}
-                        onClick={() => void selectAudioDevice(device.id)}
+                        onClick={() => pickHere(device.id, device.name)}
                       >
                         <span className="audioDeviceCheck" aria-hidden="true" />
                         <span
@@ -222,8 +271,33 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                       </button>
                     ))
                   )}
+                  {endpoints.map(endpoint => <Fragment key={endpoint.id}>
+                    <span className="audioDeviceHeading" aria-hidden="true">{endpoint.name}</span>
+                    {endpoint.devices.map(device => <button
+                      key={`${endpoint.id}:${device.id}`}
+                      className="audioDeviceOption"
+                      type="button"
+                      role="radio"
+                      aria-checked={target?.endpointId === endpoint.id && target.deviceId === device.id}
+                      aria-label={`${device.name} on ${endpoint.name}`}
+                      onClick={() => chooseOutput({ endpointId: endpoint.id, endpointName: endpoint.name, deviceId: device.id, deviceName: device.name })}
+                    >
+                      <span className="audioDeviceCheck" aria-hidden="true" />
+                      <span className="audioDeviceName" data-tooltip={device.name} data-tooltip-overflow="">{device.name}</span>
+                    </button>)}
+                  </Fragment>)}
+                  {target && !endpoints.some(endpoint => endpoint.id === target.endpointId) && <>
+                    <span className="audioDeviceHeading" aria-hidden="true">{target.endpointName}</span>
+                    <button className="audioDeviceOption" type="button" role="radio" aria-checked disabled>
+                      <span className="audioDeviceCheck" aria-hidden="true" />
+                      <span className="audioDeviceName">{target.deviceName} (offline)</span>
+                    </button>
+                  </>}
                 </div>
               </>
+            )}
+            {targetError && (
+              <p className="audioControlsError" role="alert">{targetError}</p>
             )}
             {audio?.error && (
               <p className="audioControlsError" role="alert">
@@ -233,7 +307,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
             {audioDevices.length === 0 && !isLoadingDevices && (
               <p className="audioControlsNote">Enable outputs in Settings.</p>
             )}
-            {selectedOutput?.presetId && (
+            {!target && selectedOutput?.presetId && (
               <span className="audioControlsNote">
                 DSP:{" "}
                 {

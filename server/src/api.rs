@@ -18,8 +18,8 @@ use axum::{
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_RANGES, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE, ETAG,
-            LAST_MODIFIED, RANGE,
+            ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
+            CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
         },
     },
     middleware::{self, Next},
@@ -47,7 +47,6 @@ use crate::{
     providers::tidal::{PlaybackSource, TidalLogin, TidalProvider},
 };
 
-const DEFAULT_ADDRESS: &str = "127.0.0.1:38147";
 const DEFAULT_SEARCH_PAGE_SIZE: u32 = 10;
 const MAX_SEARCH_PAGE_SIZE: u32 = 50;
 const SEARCH_CACHE_LIMIT: usize = 100;
@@ -112,7 +111,8 @@ struct LibraryEntry {
     provider_track_id: String,
 }
 
-pub async fn serve() -> ServerResult<()> {
+/// `bind` (from the command line) overrides the saved setting; `AMBRA_SERVER_ADDRESS` overrides both.
+pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     let (providers_ready_tx, providers_ready) = watch::channel(false);
 
     let http_client = crate::http_client::builder()
@@ -151,19 +151,32 @@ pub async fn serve() -> ServerResult<()> {
         playlist_mutations: Arc::new(Mutex::new(HashMap::new())),
     };
 
-    let address = env::var("AMBRA_SERVER_ADDRESS").unwrap_or_else(|_| DEFAULT_ADDRESS.to_owned());
-    let access = crate::access::AccessPolicy::from_env(&address);
+    let config = crate::server_config::ServerConfig::load();
+    let address = match env::var("AMBRA_SERVER_ADDRESS").ok().or(bind) {
+        Some(address) => crate::server_config::parse_bind(&address)?,
+        None => config.address(),
+    };
+    let network = crate::network::Network::new(config);
+    let access = crate::access::AccessPolicy::from_env(network.clone());
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(access.origin_values()))
         .allow_methods([Method::GET, Method::HEAD, Method::POST])
-        .allow_headers([RANGE, CONTENT_TYPE])
+        .allow_headers([RANGE, CONTENT_TYPE, AUTHORIZATION])
         .expose_headers([CONTENT_LENGTH, CONTENT_RANGE, ACCEPT_RANGES, CONTENT_TYPE])
         .allow_private_network(true);
 
+    // One store of shared state and one set of devices, for the routes and the core alike.
+    let user_state = Arc::new(crate::user_state::UserState::new());
+    let endpoints = Arc::new(crate::endpoints::Endpoints::default());
+    let core = crate::session::Core::new(user_state.clone(), endpoints.clone());
     let app = Router::new()
-        .merge(crate::user_state::router(Arc::new(
-            crate::user_state::UserState::new(),
-        )))
+        .merge(crate::network::public_router(network.clone()))
+        .merge(crate::network::local_router(network.clone()))
+        .merge(crate::endpoints::router(endpoints.clone()))
+        .merge(crate::session::router(core.clone()))
+        .merge(crate::impulses::router())
+        .merge(crate::local_music::router(user_state.clone()))
+        .merge(crate::user_state::router(user_state.clone()))
         .route("/api/health", get(health))
         .route("/api/lyrics", get(lyrics))
         .route("/api/auth/status", get(auth_status))
@@ -249,13 +262,43 @@ pub async fn serve() -> ServerResult<()> {
     // Open the port first; provider sessions restore concurrently behind it.
     tokio::spawn(restore_providers(state, providers_ready_tx));
 
-    let listener = tokio::net::TcpListener::bind(&address)
+    let listener = tokio::net::TcpListener::bind(address)
         .await
         .map_err(|error| format!("Could not listen on {address}: {error}"))?;
-    println!("Ambra server listening on http://{address}");
+    let address = listener.local_addr()?;
+    crate::server_process::record(address).map_err(std::io::Error::other)?;
+    if let Ok(mut listening) = network.listening.write() {
+        *listening = Some(address);
+    }
+    if address.ip().is_loopback() {
+        println!("Ambra server listening on http://{address} (this machine only)");
+    } else {
+        println!("Ambra server listening on http://{address} (shared with the local network)");
+        tokio::spawn(crate::discovery::run(network.clone()));
+    }
 
-    axum::serve(listener, app).await?;
-    Ok(())
+    // Bound to one LAN address, the server also answers on loopback, so this machine's app and
+    // the CLI keep their trusted local access.
+    let loopback = (!address.ip().is_loopback() && !address.ip().is_unspecified())
+        .then(|| std::net::SocketAddr::from(([127, 0, 0, 1], address.port())));
+    let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let serving = async { match loopback {
+        Some(loopback) => {
+            let local = tokio::net::TcpListener::bind(loopback)
+                .await
+                .map_err(|error| format!("Could not listen on {loopback}: {error}"))?;
+            tokio::try_join!(
+                axum::serve(listener, service.clone()).into_future(),
+                axum::serve(local, service).into_future(),
+            )?;
+        }
+        None => axum::serve(listener, service).await?,
+    }
+    Ok(()) };
+    tokio::select! {
+        result = serving => result,
+        _ = crate::server_process::stopped() => { core.save_transport(); Ok(()) }
+    }
 }
 
 async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
@@ -295,6 +338,14 @@ fn path_needs_providers(path: &str) -> bool {
         && path != "/api/state"
         && path != "/api/lyrics"
         && !path.starts_with("/api/artwork/")
+        // Pairing, settings and other devices' playback never involve a music service.
+        && !path.starts_with("/api/server/")
+        && !path.starts_with("/api/pair/")
+        && !path.starts_with(crate::access::LOCAL_ONLY_PREFIX)
+        && !path.starts_with("/api/endpoints")
+        && !path.starts_with("/api/impulses/")
+        && !path.starts_with("/api/session")
+        && !path.starts_with("/api/music/local/")
 }
 
 async fn lyrics(
@@ -2648,6 +2699,8 @@ mod startup_gate_tests {
         assert!(!path_needs_providers("/api/health"));
         assert!(!path_needs_providers("/api/artwork/thumbnail"));
         assert!(!path_needs_providers("/api/artwork/palette"));
+        assert!(!path_needs_providers("/api/music/local/tracks"));
+        assert!(!path_needs_providers("/api/music/local/files/track.flac"));
         assert!(path_needs_providers("/api/library"));
         assert!(path_needs_providers("/api/search/providers"));
         assert!(path_needs_providers("/api/auth/status"));

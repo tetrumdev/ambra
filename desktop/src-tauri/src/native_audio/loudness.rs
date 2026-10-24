@@ -15,6 +15,8 @@ use symphonia::core::meta::{StandardTag, Tag};
 
 /// ReplayGain 2.0's reference, which every gain here is relative to.
 pub const REFERENCE_LUFS: f64 = -18.0;
+/// The quietest and loudest targets a listener may pick; boosts stay limited by each song's peak.
+pub const TARGET_LUFS_RANGE: std::ops::RangeInclusive<f64> = -30.0..=-6.0;
 /// The server reports each stream's loudness in this response header.
 pub const LOUDNESS_HEADER: &str = "x-ambra-loudness";
 const MAX_BOOST_DB: f64 = 12.0;
@@ -51,8 +53,8 @@ impl LoudnessInfo {
         }
     }
 
-    /// The linear gain for this mode. Unknown loudness plays unchanged.
-    pub fn amplitude(&self, mode: NormalizationMode) -> f64 {
+    /// The linear gain bringing this mode's loudness to `target_lufs`. Unknown loudness plays unchanged.
+    pub fn amplitude(&self, mode: NormalizationMode, target_lufs: f64) -> f64 {
         let track = self.track_gain_db.map(|gain| (gain, self.track_peak));
         let album = self.album_gain_db.map(|gain| (gain, self.album_peak));
         let chosen = match mode {
@@ -63,6 +65,7 @@ impl LoudnessInfo {
         let Some((gain_db, peak)) = chosen.filter(|(gain, _)| gain.is_finite()) else {
             return 1.0;
         };
+        let gain_db = gain_db + target_lufs - REFERENCE_LUFS;
         let amplitude = 10_f64.powf(gain_db.min(MAX_BOOST_DB) / 20.0);
         if amplitude <= 1.0 {
             return amplitude;
@@ -373,22 +376,32 @@ mod tests {
 
     #[test]
     fn off_and_unknown_loudness_leave_the_signal_untouched() {
-        assert_eq!(info(-9.0, Some(1.0)).amplitude(NormalizationMode::Off), 1.0);
-        assert_eq!(LoudnessInfo::default().amplitude(NormalizationMode::Track), 1.0);
+        assert_eq!(info(-9.0, Some(1.0)).amplitude(NormalizationMode::Off, REFERENCE_LUFS), 1.0);
+        assert_eq!(LoudnessInfo::default().amplitude(NormalizationMode::Track, REFERENCE_LUFS), 1.0);
     }
 
     #[test]
     fn loud_songs_are_turned_down_by_their_gain() {
-        let amplitude = info(-6.0, Some(1.0)).amplitude(NormalizationMode::Track);
+        let amplitude = info(-6.0, Some(1.0)).amplitude(NormalizationMode::Track, REFERENCE_LUFS);
         assert!((amplitude - 10_f64.powf(-6.0 / 20.0)).abs() < 1e-12);
     }
 
     #[test]
     fn a_boost_never_lifts_the_peak_past_full_scale() {
-        let amplitude = info(10.0, Some(0.5)).amplitude(NormalizationMode::Track);
+        let amplitude = info(10.0, Some(0.5)).amplitude(NormalizationMode::Track, REFERENCE_LUFS);
         assert!((amplitude - 2.0).abs() < 1e-12);
-        assert_eq!(info(4.0, None).amplitude(NormalizationMode::Track), 1.0);
-        assert_eq!(info(4.0, Some(1.2)).amplitude(NormalizationMode::Track), 1.0);
+        assert_eq!(info(4.0, None).amplitude(NormalizationMode::Track, REFERENCE_LUFS), 1.0);
+        assert_eq!(info(4.0, Some(1.2)).amplitude(NormalizationMode::Track, REFERENCE_LUFS), 1.0);
+    }
+
+    #[test]
+    fn the_target_shifts_every_gain_and_boosts_still_respect_the_peak() {
+        let quieter = info(-6.0, Some(1.0)).amplitude(NormalizationMode::Track, -23.0);
+        assert!((quieter - 10_f64.powf(-11.0 / 20.0)).abs() < 1e-12);
+        let louder = info(-6.0, Some(0.5)).amplitude(NormalizationMode::Track, -10.0);
+        assert!((louder - 10_f64.powf(2.0 / 20.0)).abs() < 1e-12);
+        let capped = info(-2.0, Some(0.5)).amplitude(NormalizationMode::Track, -8.0);
+        assert!((capped - 2.0).abs() < 1e-12, "a +8 dB boost stops at the 6 dB the peak leaves");
     }
 
     #[test]
@@ -398,9 +411,9 @@ mod tests {
             album_peak: Some(1.0),
             ..info(-9.0, Some(1.0))
         };
-        let album = both.amplitude(NormalizationMode::Album);
+        let album = both.amplitude(NormalizationMode::Album, REFERENCE_LUFS);
         assert!((album - 10_f64.powf(-3.0 / 20.0)).abs() < 1e-12);
-        let track_only = info(-9.0, Some(1.0)).amplitude(NormalizationMode::Album);
+        let track_only = info(-9.0, Some(1.0)).amplitude(NormalizationMode::Album, REFERENCE_LUFS);
         assert!((track_only - 10_f64.powf(-9.0 / 20.0)).abs() < 1e-12);
     }
 
@@ -477,7 +490,7 @@ mod tests {
         let gain = measured.track_gain_db.unwrap();
         assert!((gain - 2.0).abs() < 0.1, "measured gain {gain}");
         assert!((measured.track_peak.unwrap() - 0.1).abs() < 0.005);
-        let amplitude = measured.amplitude(NormalizationMode::Track);
+        let amplitude = measured.amplitude(NormalizationMode::Track, REFERENCE_LUFS);
         assert!((amplitude - 10_f64.powf(gain / 20.0)).abs() < 1e-9);
         set_measuring(false);
         let _ = std::fs::remove_dir_all(directory);
@@ -552,7 +565,7 @@ mod tests {
         assert_eq!(unchanged.len(), original.len());
         assert!(unchanged.iter().zip(&original).all(|(out, source)| out.to_bits() == source.to_bits()));
 
-        let amplitude = measured_info(&cache_key(&source).unwrap()).amplitude(NormalizationMode::Track);
+        let amplitude = measured_info(&cache_key(&source).unwrap()).amplitude(NormalizationMode::Track, REFERENCE_LUFS);
         assert!(amplitude > 1.2 && amplitude < 1.3, "a +2 dB boost, within the tone's headroom: {amplitude}");
         let normalized = play_through_engine(&source, NormalizationMode::Track);
         assert_eq!(normalized.len(), original.len());

@@ -25,9 +25,17 @@ export function filterTerms(query: string) {
   return fold(query).split(/\s+/).filter(Boolean);
 }
 
-/** Every term must appear somewhere in the song's details, in any order. */
+/** Whether `term` starts a word of `text`, so "h" finds "Hole" but not every word with an h in it. */
+function startsWord(text: string, term: string) {
+  for (let index = text.indexOf(term); index >= 0; index = text.indexOf(term, index + 1)) {
+    if (index === 0 || !/[\p{L}\p{N}]/u.test(text[index - 1])) return true;
+  }
+  return false;
+}
+
+/** Every term must start a word somewhere in the song's details, in any order. */
 export function trackMatches(track: Track, terms: readonly string[]) {
   if (!terms.length) return true;
   const text = trackText(track);
-  return terms.every(term => text.includes(term));
+  return terms.every(term => startsWord(text, term));
 }

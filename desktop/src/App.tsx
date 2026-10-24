@@ -33,7 +33,7 @@ import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
@@ -73,6 +73,11 @@ import {
 
 import { usePlaylists } from "./hooks/usePlaylists";
 import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
+import { useCorePlayer } from "./hooks/useCorePlayer";
+import { useCoreQueue } from "./hooks/useCoreQueue";
+import { coreView, subscribeCore } from "./api/core";
+import { serverConnection } from "./api/serverConnection";
+import { serverStateStatus } from "./utils/serverState";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
@@ -161,7 +166,11 @@ function App({ localOnly }: { localOnly: boolean }) {
     () => libraryQueueContext(library.tracks),
     [library.tracks],
   );
-  const queue = useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
+  // With a server, its core plays for every device and this app is one of its remotes;
+  // an offline session plays here. Fixed for the life of this App.
+  const [usingCore] = useState(() => !localOnly && serverStateStatus().ready);
+  /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
+  const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
   const playbackTracks = useMemo(() => {
     const tracksById = new Map(
       availableTracks.map((track) => [track.globalId, track]),
@@ -175,13 +184,19 @@ function App({ localOnly }: { localOnly: boolean }) {
   const skipDirectionRef = useRef({ direction: 1, at: 0 });
   const skipDirection = useCallback(() =>
     performance.now() - skipDirectionRef.current.at < 3000 ? skipDirectionRef.current.direction : 1, []);
-  const player = useAudioPlayer(playbackTracks, preferences.playback, {
+  const player = usingCore ? useCorePlayer(queue) : useAudioPlayer(playbackTracks, preferences.playback, {
     next: () => { skipDirectionRef.current = { direction: 1, at: performance.now() }; return queue.next()?.track; },
     completeCurrent: () => { skipDirectionRef.current = { direction: 1, at: performance.now() }; return queue.completeCurrent()?.track; },
     previous: () => { skipDirectionRef.current = { direction: -1, at: performance.now() }; return queue.previous()?.track; },
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
   }, listeningHistory.recordPlay);
+  /* eslint-enable react-hooks/rules-of-hooks */
+  // Shown when songs play on another computer's output.
+  const coreSession = useSyncExternalStore(subscribeCore, coreView);
+  const playingOn = usingCore && coreSession?.output && coreSession.output.endpointId !== serverConnection?.clientId
+    ? `${coreSession.output.deviceName} (${coreSession.output.endpointName})`
+    : null;
   // Read by timers that outlive a render, such as the player controls fading out.
   const playerDurationRef = useRef(player.duration);
   playerDurationRef.current = player.duration;
@@ -325,8 +340,8 @@ function App({ localOnly }: { localOnly: boolean }) {
       },
     },
   }), [preferences, localOnly, browseEntity, selectedPlaylistId, librarySection, settingsTab]);
-  const latestSessionRef = useRef({ preferences: sessionPreferences, player });
-  latestSessionRef.current = { preferences: sessionPreferences, player };
+  const latestSessionRef = useRef({ preferences: sessionPreferences, player, usingCore });
+  latestSessionRef.current = { preferences: sessionPreferences, player, usingCore };
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
@@ -750,7 +765,7 @@ function App({ localOnly }: { localOnly: boolean }) {
 
   // Saved straight from the clock, so playing never rerenders the app: every 5 s while playing, exactly while paused.
   useEffect(() => {
-    if (!player.isSessionRestored) return;
+    if (!player.isSessionRestored || usingCore) return;
     const track = player.currentTrack;
     let saved: string | undefined;
     const save = () => {
@@ -765,7 +780,7 @@ function App({ localOnly }: { localOnly: boolean }) {
     };
     save();
     return player.clock.subscribe(save);
-  }, [player.clock, player.currentTrack, player.isPlaying, player.isSessionRestored]);
+  }, [player.clock, player.currentTrack, player.isPlaying, player.isSessionRestored, usingCore]);
 
   useEffect(() => {
     const saveLatestSession = () => {
@@ -773,6 +788,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       if (!latest.player.isSessionRestored) return;
 
       savePreferences(latest.preferences);
+      if (latest.usingCore) return;
       savePlayback(latest.player.currentTrack
         ? {
             trackId: latest.player.currentTrack.globalId,
@@ -1371,6 +1387,7 @@ function App({ localOnly }: { localOnly: boolean }) {
         previousActivation={player.previousActivation}
         nextActivation={player.nextActivation}
         playbackError={player.playbackError}
+        playingOn={playingOn}
         audioDecks={player.audioDecks}
         onPrevious={player.previous}
         onTogglePlayback={player.togglePlayback}

@@ -1,5 +1,6 @@
 import { getServerItem, serverStateKeys, setServerItem } from "./serverState";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { forStorage, fromStorage } from "../api/serverConnection";
 
 const restoreKeys = new Set([
   "ambra.preferences",
@@ -178,12 +179,13 @@ function markChanged(key: string) {
   scheduleFlush();
 }
 
+// Saved server URLs are moved onto this run's server as they're read (api/serverConnection.ts).
 export function getPersistentItem(key: string) {
-  if (serverStateKeys.has(key)) return getServerItem(key);
-  return localStorage.getItem(key);
+  return fromStorage(serverStateKeys.has(key) ? getServerItem(key) : localStorage.getItem(key));
 }
 
-export function setPersistentItem(key: string, value: string) {
+export function setPersistentItem(key: string, savedValue: string) {
+  const value = forStorage(savedValue);
   if (serverStateKeys.has(key)) return setServerItem(key, value);
   const canTrack = persistentKeys.has(key) && storageAvailable();
   // Rewriting an identical value would bump the revision and trigger a backend
