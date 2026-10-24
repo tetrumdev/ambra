@@ -61,7 +61,8 @@ function decide(evidence: OffsetEvidence): DetectedOffset {
 
 // Evidence is kept across sessions so each song is analyzed once; whether it is trusted
 // is decided on read, so it follows the tuning as the listener's corrections refine it.
-const storageKey = "ambra.lyrics-autosync.v2";
+export const lyricAutoSyncKey = "ambra.lyrics-autosync.v2";
+const storageKey = lyricAutoSyncKey;
 const MAX_TRACKS = 2000;
 /** Raised when vocal endings are measured differently, so songs where none was found are heard again. */
 const ENDING_VERSION = 3;

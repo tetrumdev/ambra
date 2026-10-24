@@ -4,7 +4,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
 import { MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
-import type { LyricMotion } from "../utils/preferences";
+import { MAX_LYRICS_OFFSET_MS, type LyricMotion } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
 import { musicProviderName } from "../utils/musicProviderName";
 import type { SettingsTab } from "./SettingsSidebar";
@@ -24,11 +24,11 @@ function usePlayingOn() {
   return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
 }
 
-type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
 const DESKTOP_ONLY = "Desktop app only";
 
-export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
+export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
@@ -78,6 +78,19 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
         </SettingRow>
         <SettingRow label="Auto-sync lyrics" hint={audio.native ? "Lines lyrics up with the vocals" : DESKTOP_ONLY}>
           <Toggle label="Auto-sync lyrics" checked={autoSyncLyrics} disabled={!audio.native} onChange={onAutoSyncLyrics} />
+        </SettingRow>
+        <SettingRow label="Lyrics offset" hint="For a delay in your speakers or headphones, like Bluetooth. Positive shows lyrics earlier on every song">
+          <span className="settingsFieldRow settingsUnitInput">
+            <input type="number" aria-label="Lyrics offset (milliseconds)" min={-MAX_LYRICS_OFFSET_MS} max={MAX_LYRICS_OFFSET_MS} step={10} required
+              key={lyricsOffsetMs} defaultValue={lyricsOffsetMs}
+              onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+              onBlur={e => {
+                const input = e.currentTarget;
+                if (!input.checkValidity()) { input.reportValidity(); input.value = String(lyricsOffsetMs); return; }
+                if (input.valueAsNumber !== lyricsOffsetMs) onLyricsOffsetChange(input.valueAsNumber);
+              }} />
+            <small>ms</small>
+          </span>
         </SettingRow>
       </div>
       <div className="settingsGroup">
