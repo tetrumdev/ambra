@@ -8,7 +8,8 @@ export type LyricSyncOverride = {
   unsynced?: boolean;
 };
 
-const storageKey = "ambra.lyrics-sync.v1";
+export const lyricSyncKey = "ambra.lyrics-sync.v1";
+const storageKey = lyricSyncKey;
 const MAX_TRACKS = 2000;
 export const MAX_CORRECTION_MS = 60_000;
 

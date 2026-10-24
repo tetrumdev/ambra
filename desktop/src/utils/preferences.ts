@@ -28,6 +28,8 @@ export type AppPreferences = {
     lyricMotion: LyricMotion;
     /** Detect and correct a constant lyric timing offset from the recording. */
     autoSyncLyrics: boolean;
+    /** Shown this much earlier (positive) or later on every song, for a delay in the output itself. */
+    lyricsOffsetMs: number;
     /** The player view to reopen: whichever of album art or lyrics was shown last. */
     playerView: PlayerView;
     /** The page behind the player and queue, restored with the last open screen. */
@@ -49,8 +51,11 @@ export type AppPreferences = {
   };
 };
 
-const preferencesKey = "ambra.ui-preferences.v1";
+export const preferencesKey = "ambra.ui-preferences.v1";
+export const MAX_LYRICS_OFFSET_MS = 5_000;
 const playbackKey = "ambra.playback.v1";
+/** Never sent to the server (see `withDeviceView`). */
+const deviceViewKey = "ambra.device-view.v1";
 const legacyScreenKey = "ambra.current-screen";
 
 export const defaultPreferences: AppPreferences = {
@@ -61,6 +66,7 @@ export const defaultPreferences: AppPreferences = {
     animateSwirl: true,
     lyricMotion: "system",
     autoSyncLyrics: false,
+    lyricsOffsetMs: 0,
     playerView: "bigscreen",
     playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
     servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
@@ -153,6 +159,9 @@ function migratePreferences(value: unknown): AppPreferences {
   const autoSyncLyrics = typeof ui.autoSyncLyrics === "boolean"
     ? ui.autoSyncLyrics
     : defaultPreferences.ui.autoSyncLyrics;
+  const lyricsOffsetMs = typeof ui.lyricsOffsetMs === "number" && Number.isFinite(ui.lyricsOffsetMs)
+    ? Math.round(Math.max(-MAX_LYRICS_OFFSET_MS, Math.min(MAX_LYRICS_OFFSET_MS, ui.lyricsOffsetMs)))
+    : 0;
   const playerView: PlayerView = ui.playerView === "lyrics" ? "lyrics" : "bigscreen";
   const navigation = readNavigation(ui.navigation);
   const playlistGroups = { ...defaultPreferences.ui.playlistGroups };
@@ -182,7 +191,7 @@ function migratePreferences(value: unknown): AppPreferences {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -201,7 +210,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -229,6 +238,7 @@ function migratePreferences(value: unknown): AppPreferences {
           animateSwirl,
           lyricMotion,
           autoSyncLyrics,
+          lyricsOffsetMs,
           playerView,
           navigation,
           playlistGroups,
@@ -266,6 +276,7 @@ function migratePreferences(value: unknown): AppPreferences {
           animateSwirl,
           lyricMotion,
           autoSyncLyrics,
+          lyricsOffsetMs,
           playerView,
           navigation,
           playlistGroups,
@@ -306,8 +317,30 @@ function loadLocalPreferences(): AppPreferences {
   return defaultPreferences;
 }
 
+/**
+ * Where this device left off, kept on it alone: another device opening the same server starts
+ * where it left off, not here. Settings stay in `preferencesKey`, on the server, for every device.
+ */
+function withDeviceView(preferences: AppPreferences): AppPreferences {
+  try {
+    const saved = localStorage.getItem(deviceViewKey);
+    if (saved === null) return preferences;
+    const view = migratePreferences(JSON.parse(saved));
+    const { screen, playerView, navigation, playlistGroups } = view.ui;
+    return { ...preferences, ui: { ...preferences.ui, screen, playerView, navigation, playlistGroups }, search: view.search };
+  } catch {
+    return preferences;
+  }
+}
+
+/** Settings another device just changed, under this device's own view of the app. */
+export function withSyncedSettings(current: AppPreferences): AppPreferences {
+  const { screen, playerView, navigation, playlistGroups } = current.ui;
+  return { ...current, ui: { ...loadLocalPreferences().ui, screen, playerView, navigation, playlistGroups } };
+}
+
 export function loadPreferences(): AppPreferences {
-  const preferences = loadLocalPreferences();
+  const preferences = withDeviceView(loadLocalPreferences());
   const playback = JSON.parse(getPersistentItem(playbackKey) ?? "null") as AppPreferences["playback"] | null;
   return { ...preferences, playback: playback ?? { ...defaultPreferences.playback } };
 }
@@ -315,8 +348,10 @@ export function loadPreferences(): AppPreferences {
 /** Saves everything but playback, which follows the clock through savePlayback instead. */
 export function savePreferences(preferences: AppPreferences) {
   try {
-    const { playback, ...localPreferences } = preferences;
-    setPersistentItem(preferencesKey, JSON.stringify(localPreferences));
+    const { version, search } = preferences;
+    const { screen, playerView, navigation, playlistGroups, ...settings } = preferences.ui;
+    setPersistentItem(preferencesKey, JSON.stringify({ version, ui: settings }));
+    localStorage.setItem(deviceViewKey, JSON.stringify({ version, ui: { screen, playerView, navigation, playlistGroups }, search }));
   } catch (error) {
     console.warn("Could not save preferences:", error);
   }

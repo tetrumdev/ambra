@@ -40,6 +40,10 @@ const latestWins = new Set([
   "ambra.dsp-presets.v1",
   ...formerlyLocalKeys,
 ]);
+// Seen on the other screens as they're made: lyric timing, so every device's lyrics move
+// together, and settings, which other devices apply as they arrive.
+const promptKeys = new Set(["ambra.lyrics-sync.v1", "ambra.ui-preferences.v1"]);
+const PROMPT_SAVE_MS = 100;
 const keyNames: Record<string, string> = {
   "ambra.playlists.v1": "Playlists",
   "ambra.listening-history.v1": "Listening history",
@@ -63,6 +67,7 @@ const listeners = new Set<() => void>();
 let revision = 0;
 let status: Status = { ready: false, pending: false, error: null, conflict: false };
 let timer: ReturnType<typeof setTimeout> | undefined;
+let timerDue = 0;
 let saving: Promise<void> | null = null;
 let hydration: Promise<void> | null = null;
 let attempt: Patch | null = null;
@@ -223,7 +228,13 @@ export function reloadServerState() {
 }
 
 function scheduleSave(delay = 750) {
-  if (timer !== undefined || status.conflict) return;
+  if (status.conflict) return;
+  // A sooner save replaces a later one; the later one would only send the same keys.
+  if (timer !== undefined) {
+    if (performance.now() + delay >= timerDue) return;
+    clearTimeout(timer);
+  }
+  timerDue = performance.now() + delay;
   timer = setTimeout(() => {
     timer = undefined;
     void flushServerState().catch(() => { /* Status exposes failures to the UI. */ });
@@ -244,7 +255,7 @@ export function setServerItem(key: string, value: string | null) {
   if (!pendingBase.has(key)) pendingBase.set(key, revision);
   pending.set(key, value);
   publish({});
-  scheduleSave();
+  scheduleSave(promptKeys.has(key) ? PROMPT_SAVE_MS : undefined);
 }
 
 /**

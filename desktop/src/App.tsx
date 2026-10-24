@@ -39,8 +39,10 @@ import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
 import {
   loadPreferences,
+  preferencesKey,
   savePlayback,
   savePreferences,
+  withSyncedSettings,
   type AppScreen,
 } from "./utils/preferences";
 import type { GlobalTrackId, Playlist, Track } from "./types/music";
@@ -77,7 +79,7 @@ import { isTrackAvailable, useServiceAvailability } from "./hooks/useServiceAvai
 import "./components/UnavailableTracks.css";
 import { useCorePlayer } from "./hooks/useCorePlayer";
 import { useCoreQueue } from "./hooks/useCoreQueue";
-import { serverStateStatus } from "./utils/serverState";
+import { serverStateStatus, subscribeRemoteChanges } from "./utils/serverState";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
@@ -760,6 +762,10 @@ function App({ localOnly }: { localOnly: boolean }) {
   useEffect(() => {
     savePreferences(sessionPreferences);
   }, [sessionPreferences]);
+  // Settings changed on another device apply here at once; where this device is stays its own.
+  useEffect(() => subscribeRemoteChanges(keys => {
+    if (keys.has(preferencesKey)) setPreferences(withSyncedSettings);
+  }), []);
 
   // Saved straight from the clock, so playing never rerenders the app: every 5 s while playing, exactly while paused.
   useEffect(() => {
@@ -1168,7 +1174,7 @@ function App({ localOnly }: { localOnly: boolean }) {
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
           ].map(({ track, leaving }) => <LyricsView key={track.globalId}
             track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
-            motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics}
+            motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} globalOffsetMs={preferences.ui.lyricsOffsetMs}
             shown={!leaving && lyricsShown} resting={!leaving && lyricsDrift} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
         </div>
       )}
@@ -1265,6 +1271,8 @@ function App({ localOnly }: { localOnly: boolean }) {
             animateSwirl={preferences.ui.animateSwirl}
             lyricMotion={preferences.ui.lyricMotion}
             autoSyncLyrics={preferences.ui.autoSyncLyrics}
+            lyricsOffsetMs={preferences.ui.lyricsOffsetMs}
+            onLyricsOffsetChange={lyricsOffsetMs => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricsOffsetMs } }))}
             servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
             onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
