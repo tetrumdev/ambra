@@ -20,7 +20,7 @@ mod loudness;
 pub mod lyric_offset;
 mod output;
 mod resync;
-mod settings;
+pub mod settings;
 
 use decoder::DecodedSource;
 use dither::Dither;
@@ -411,6 +411,10 @@ pub async fn import_dsp_impulse(
             crate::TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         crate::write_file_atomic(&dsp::impulse_path(&directory, &id)?, &bytes)?;
+        // Other devices fetch it from the server once the preset using it syncs.
+        if let Err(error) = upload_impulse(&app, &id, &bytes) {
+            eprintln!("Could not share impulse {id} with the server: {error}");
+        }
         Ok(ImpulseFile {
             id,
             name: name.chars().take(200).collect(),
@@ -421,6 +425,50 @@ pub async fn import_dsp_impulse(
     })
     .await
     .map_err(|e| format!("Impulse import failed: {e}"))?
+}
+
+fn upload_impulse(app: &AppHandle, id: &str, bytes: &[u8]) -> Result<(), String> {
+    let response = crate::server_link::server_request(app, reqwest::Method::POST, &format!("/api/impulses/{id}"))?
+        .header("Content-Type", "audio/wav")
+        .body(bytes.to_vec())
+        .send()
+        .map_err(|error| error.to_string())?;
+    if response.status().is_success() { Ok(()) } else { Err(format!("the server answered {}", response.status())) }
+}
+
+/// Makes this computer and the server hold the same impulse files: it uploads those the
+/// server lacks and downloads those it lacks. Returns the IDs neither has.
+#[tauri::command]
+pub async fn sync_dsp_impulses(app: AppHandle, ids: Vec<String>) -> Result<Vec<String>, String> {
+    let directory = crate::persistent_data_directory(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut missing = Vec::new();
+        for id in ids.iter().take(256) {
+            let path = dsp::impulse_path(&directory, id)?;
+            match std::fs::read(&path) {
+                Ok(bytes) => {
+                    if let Err(error) = upload_impulse(&app, id, &bytes) {
+                        eprintln!("Could not share impulse {id} with the server: {error}");
+                    }
+                }
+                Err(_) => {
+                    let downloaded = crate::server_link::server_request(&app, reqwest::Method::GET, &format!("/api/impulses/{id}"))?
+                        .send()
+                        .ok()
+                        .filter(|response| response.status().is_success())
+                        .and_then(|response| response.bytes().ok());
+                    match downloaded {
+                        // The same checks as importing it here.
+                        Some(bytes) if dsp::read_impulse(&bytes).is_ok() => crate::write_file_atomic(&path, &bytes)?,
+                        _ => missing.push(id.clone()),
+                    }
+                }
+            }
+        }
+        Ok(missing)
+    })
+    .await
+    .map_err(|e| format!("Impulse sync failed: {e}"))?
 }
 
 impl Drop for NativeAudioPlayer {
@@ -884,7 +932,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         // An exclusive stream's format depends on whether DSP runs, so switching it reopens the device.
         let processing_changed =
             signal_processed(&settings) != signal_processed(&self.audio_settings);
-        let normalization_changed = settings.normalization != self.audio_settings.normalization;
+        let normalization_changed = settings.normalization != self.audio_settings.normalization
+            || settings.normalization_target_lufs != self.audio_settings.normalization_target_lufs;
         let output_changed = self.selected_device_id != device_id
             || self.exclusive_mode != mode
             || (mode && processing_changed);
@@ -977,7 +1026,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             loudness::set_measuring(mode != NormalizationMode::Off);
             if self.current_source.is_some() {
                 self.normalization.ramp_to(
-                    self.loudness.amplitude(mode),
+                    self.loudness
+                        .amplitude(mode, self.audio_settings.normalization_target_lufs),
                     self.spec.map(|spec| spec.sample_rate),
                 );
                 let gain_db = self.normalization_gain_db();
@@ -1673,8 +1723,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         // Each song starts at its own level. Installing happens only once the previous song's
         // samples have all left the gain buffer, so the change lands exactly between them.
         self.loudness = decoder.loudness();
-        self.normalization
-            .set(self.loudness.amplitude(self.audio_settings.normalization));
+        self.normalization.set(self.loudness.amplitude(
+            self.audio_settings.normalization,
+            self.audio_settings.normalization_target_lufs,
+        ));
         audio_quality.normalization_gain_db = self.normalization_gain_db();
         pcm.reserve(max_buffer_samples.saturating_sub(pcm.len()));
         let stream = (!decoder_ended)

@@ -47,12 +47,12 @@ export function LocalSettings({ onRescanLocalMusic }: Props) {
       <header className="settingsPageHeader"><h1 className="settingsTitle">Local</h1></header>
       <div className="settingsGroup">
         <h2>Local music</h2>
-        <SettingRow label="Music folder" hint="Files in Music/Ambra are added to your library.">
+        <SettingRow label="Music folder" hint="Files in Music/Ambra are copied into your server's library when imported.">
           <button type="button" className="settingsPill" onClick={() => void openImportFolder()} disabled={busy === "local"}>
             Open folder
           </button>
         </SettingRow>
-        <SettingRow label="Scan library" hint="Look for new or changed audio files.">
+        <SettingRow label="Import music" hint="Copy new or changed files to the server. Imported music stays there when this computer disconnects.">
           <button type="button" className="settingsPill" onClick={() => void rescan()} disabled={busy === "local"}>
             {busy === "local" ? "Working…" : "Scan now"}
           </button>

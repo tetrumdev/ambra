@@ -1,9 +1,8 @@
 //! Finds a newer signed release on GitHub and installs it. The updater plugin checks signatures;
-//! these commands exist so the bundled server stops before Windows' installer replaces its files.
-use crate::bundled_backend::BundledBackend;
+//! The separately installed server is independent of app updates.
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 const PROGRESS_EVENT: &str = "app-update-progress";
@@ -35,9 +34,8 @@ pub async fn check_for_update(
     let handle = app.clone();
     let update = app
         .updater_builder()
-        // Windows installs by exiting into the installer, which can't replace a running server.
+        // Release the app's resources before Windows exits into the installer.
         .on_before_exit(move || {
-            handle.state::<BundledBackend>().stop();
             handle.cleanup_before_exit();
         })
         .build()
