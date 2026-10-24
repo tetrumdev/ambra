@@ -3,6 +3,7 @@
     "tauri": "bun run --cwd desktop tauri",
     "dev": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri dev",
     "build": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri build",
+    "server:install": "cargo install --path server --locked",
     "release": "./scripts/release.sh"
   },
   "dependencies": {

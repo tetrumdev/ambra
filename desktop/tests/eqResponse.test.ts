@@ -25,7 +25,7 @@ describe("EQ response", () => {
     const bands = [band({ gainDb: 6 }), band({ frequency: 1100, gainDb: 3 })];
     const boost = maxBoostDb(bands);
     expect(boost).toBeGreaterThan(8);
-    expect(clippingRiskDb({ bands, headroomDb: 0, outputGainDb: 0 })).toBeCloseTo(boost, 6);
-    expect(clippingRiskDb({ bands, headroomDb: Math.ceil(boost), outputGainDb: 0 })).toBe(0);
+    expect(clippingRiskDb({ bands, headroomDb: 0 })).toBeCloseTo(boost, 6);
+    expect(clippingRiskDb({ bands, headroomDb: Math.ceil(boost) })).toBe(0);
   });
 });

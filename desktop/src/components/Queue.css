@@ -20,7 +20,7 @@
     position: relative;
     z-index: 9;
     padding-top: calc(var(--content-top-spacer) + 8px);
-    background: #000;
+    background: var(--surface-black);
 }
 
 .queueHeader .libraryTitle {
@@ -82,7 +82,7 @@
     right: 0;
     height: 3px;
     content: "";
-    background: #000;
+    background: var(--surface-black);
     pointer-events: none;
 }
 
@@ -116,7 +116,7 @@
     top: var(--queue-column-header-height, 0px);
     /* Over the column header's fade (z-index 8), which it takes over once stuck. */
     z-index: 9;
-    background: #000;
+    background: var(--surface-black);
 }
 
 .queueHistoryBar[data-stuck="true"]::after {
@@ -128,11 +128,11 @@
     content: "";
     background: linear-gradient(
         to bottom,
-        rgb(0 0 0 / 1) 0%,
-        rgb(0 0 0 / 0.92) 20%,
-        rgb(0 0 0 / 0.75) 40%,
-        rgb(0 0 0 / 0.5) 60%,
-        rgb(0 0 0 / 0.22) 80%,
+        rgb(var(--surface-black-rgb) / 1) 0%,
+        rgb(var(--surface-black-rgb) / 0.92) 20%,
+        rgb(var(--surface-black-rgb) / 0.75) 40%,
+        rgb(var(--surface-black-rgb) / 0.5) 60%,
+        rgb(var(--surface-black-rgb) / 0.22) 80%,
         transparent 100%
     );
     pointer-events: none;

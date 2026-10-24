@@ -1,6 +1,14 @@
 import { textRelevance } from "./catalogRanking";
 import type { Track } from "../types/music";
 
+/**
+ * Plain code-point order. `localeCompare` follows the platform's collation, which differs between
+ * the macOS and Windows webviews, so the same results could be ordered differently on each.
+ */
+export function byCodePoint(a: string, b: string) {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function normalized(value: string) {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase()
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
@@ -112,10 +120,10 @@ function compareEdition(left: Track, right: Track, query: string) {
     // spells out its guests, which variant releases tend to.
     || Number(plainEdition(left)) - Number(plainEdition(right))
     || right.name.trim().length - left.name.trim().length
-    || (right.releaseDate ?? "9999").localeCompare(left.releaseDate ?? "9999")
+    || byCodePoint(right.releaseDate ?? "9999", left.releaseDate ?? "9999")
     // Nothing tells the copies apart; settle it the same way every time.
-    || (right.albumId ?? "").localeCompare(left.albumId ?? "")
-    || right.globalId.localeCompare(left.globalId);
+    || byCodePoint(right.albumId ?? "", left.albumId ?? "")
+    || byCodePoint(right.globalId, left.globalId);
 }
 
 function soundQuality(track: Track) {
@@ -170,11 +178,13 @@ export function compareSoundQuality(left: Track, right: Track) {
  * The copy a playlist should keep. Never a worse-sounding one: a song only moves for a better
  * copy, or for an equally good one when it sits on a compilation or regional pressing and the
  * other doesn't. Among equally good new copies, a proper album beats a compilation or regional
- * pressing, then one on the song's current album, then the earliest release.
+ * pressing, then one on the song's current album, then the earliest release. Copies alike in all
+ * of that are settled by ID, so the answer doesn't depend on which service replied first.
  */
 export function bestPlaylistCopy(original: Track, candidates: Track[]) {
   const release = (track: Track) => [Number(!compilation(track) && !regional(track)), Number(sameAlbumFamily(track, original)),
     -Number((released(track) ?? "9999").slice(0, 4))];
+  const settle = (a: Track, b: Track) => byCodePoint(released(a) ?? "9999", released(b) ?? "9999") || byCodePoint(a.globalId, b.globalId);
   let best = original;
   for (const candidate of candidates) {
     if (candidate.provider === "local" || candidate.explicit !== original.explicit || !sameRecording(original, candidate)) continue;
@@ -182,9 +192,10 @@ export function bestPlaylistCopy(original: Track, candidates: Track[]) {
     if (quality > 0) best = candidate;
     else if (quality === 0) {
       // The current copy only gives way to a proper album; any other tie keeps it.
+      const order = compareScores(release(candidate), release(best));
       const wins = best === original
         ? release(candidate)[0] > release(original)[0]
-        : compareScores(release(candidate), release(best)) > 0;
+        : order > 0 || (order === 0 && settle(candidate, best) < 0);
       if (wins) best = candidate;
     }
   }
@@ -254,7 +265,7 @@ export function rankSearchGroups(tracks: Track[], query: string) {
     .filter(group => group.relevance > 0)
     // Among equally relevant results, a copy found only on compilations follows the album's own.
     .sort((a, b) => b.relevance - a.relevance || Number(compilation(a.track)) - Number(compilation(b.track))
-      || b.fusionScore - a.fusionScore || a.track.globalId.localeCompare(b.track.globalId));
+      || b.fusionScore - a.fusionScore || byCodePoint(a.track.globalId, b.track.globalId));
 }
 
 export function rankSearchResults(tracks: Track[], query: string) {

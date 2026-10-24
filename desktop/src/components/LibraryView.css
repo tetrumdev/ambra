@@ -123,7 +123,7 @@
     position: absolute;
     inset: -16px 0 0;
     content: "";
-    background: #000;
+    background: var(--surface-black);
     transform: scaleY(var(--playlist-background-scale));
     transform-origin: top;
     /* The painted strip above the sticky box must also block covered tracks. */
@@ -139,7 +139,7 @@
     min-width: 0;
     overflow: hidden;
     border-radius: 8px;
-    background: #000;
+    background: var(--surface-black);
 }
 
 .playlistView .libraryHeaderArtwork {
@@ -244,7 +244,7 @@
     right: 0;
     height: 3px;
     content: "";
-    background: #000;
+    background: var(--surface-black);
     pointer-events: none;
 }
 
@@ -569,11 +569,11 @@
     top: 0;
     background: linear-gradient(
         to bottom,
-        rgb(0 0 0 / 1) 70%,
-        rgb(0 0 0 / 0.92) 76%,
-        rgb(0 0 0 / 0.75) 82%,
-        rgb(0 0 0 / 0.5) 88%,
-        rgb(0 0 0 / 0.22) 94%,
+        rgb(var(--surface-black-rgb) / 1) 70%,
+        rgb(var(--surface-black-rgb) / 0.92) 76%,
+        rgb(var(--surface-black-rgb) / 0.75) 82%,
+        rgb(var(--surface-black-rgb) / 0.5) 88%,
+        rgb(var(--surface-black-rgb) / 0.22) 94%,
         transparent 100%
     );
     color: #b6b6b6;
@@ -644,7 +644,7 @@
 
 .libraryItem {
     margin: 0;
-    background-color: black;
+    background-color: var(--surface-black);
     cursor: default;
     padding-left: 15px;
     height: 76px;
@@ -945,13 +945,30 @@
 }
 
 .libraryItem:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover {
-    background-color: black;
+    background-color: var(--surface-black);
     border-left: 1px solid #535353;
 }
 
 .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
-    background-color: black;
+    background-color: var(--surface-black);
     border-left: 1px solid #535353;
+}
+
+/* A package hides the dividers between its rows, which elsewhere close the menu's black box
+   off; the box draws those edges itself, only where its row lacks one. */
+.libraryItem[data-package="first"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
+.libraryItem[data-package="first"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
+    box-shadow: inset 0 -1px #535353;
+}
+
+.libraryItem[data-package="middle"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
+.libraryItem[data-package="middle"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
+    box-shadow: inset 0 1px #535353, inset 0 -1px #535353;
+}
+
+.libraryItem[data-package="last"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
+.libraryItem[data-package="last"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
+    box-shadow: inset 0 1px #535353;
 }
 
 .trackCollectionMenuTrigger img {
@@ -973,15 +990,15 @@
 /* The filter's only match, shown in place among its neighbours: it breathes until the
    listener clicks, scrolls or types (hooks/usePageFilter.tsx). */
 .libraryItem[data-revealed="true"] {
-    animation: revealBreathe 2.4s ease-in-out infinite alternate;
+    animation: revealBreathe 1.2s ease-in-out infinite alternate;
 }
 
 @keyframes revealBreathe {
     from {
-        background-color: #000;
+        background-color: var(--surface-black);
     }
     to {
-        background-color: #2c2c2c;
+        background-color: #222;
     }
 }
 

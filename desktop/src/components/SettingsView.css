@@ -649,51 +649,6 @@
     margin-bottom: 28px;
 }
 
-.dspGain {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) 70px;
-    align-items: center;
-    gap: 14px;
-}
-
-.dspGain > span {
-    color: #b3b3b3;
-    font-size: 0.85rem;
-}
-
-.dspGain output {
-    color: white;
-    font-size: 0.85rem;
-    font-variant-numeric: tabular-nums;
-    text-align: right;
-}
-
-/* The volume slider's look (ExtraCtrls.css), filled up to the value. */
-.dspGain input[type="range"] {
-    width: 100%;
-    height: 24px;
-    margin: 0;
-    appearance: none;
-    -webkit-appearance: none;
-    background: transparent;
-}
-
-.dspGain input[type="range"]::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 4px;
-    background: linear-gradient(to right, white var(--fill), #3a3a3a var(--fill));
-}
-
-.dspGain input[type="range"]::-webkit-slider-thumb {
-    width: 14px;
-    height: 14px;
-    margin-top: -5px;
-    border-radius: 50%;
-    background: white;
-    appearance: none;
-    -webkit-appearance: none;
-}
-
 .dspSection {
     margin-bottom: 32px;
 }
@@ -1045,4 +1000,86 @@
         display: flex;
         flex-wrap: wrap;
     }
+}
+
+/* ---------- Server ---------- */
+
+.serverJoin {
+    display: grid;
+    gap: 10px;
+    max-width: 560px;
+    padding: 16px 0;
+    font-size: 0.9rem;
+}
+
+.serverJoin p {
+    margin: 0;
+}
+
+.serverJoinActions {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.serverJoinCode {
+    font-size: 2rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.08em;
+}
+
+.serverJoinCommand {
+    justify-self: start;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: #1d1d1d;
+    color: #e6e6e6;
+    font-size: 0.85rem;
+    user-select: text;
+}
+
+.serverNotice {
+    max-width: 640px;
+    margin: 0 0 20px;
+    padding: 10px 14px;
+    border: 1px solid #cf9d62;
+    border-radius: 8px;
+    background: #382818;
+    font-size: 0.85rem;
+}
+
+.settingsView input.serverNameInput,
+.settingsView input.serverAddressInput {
+    width: 220px;
+}
+
+.settingsChip[data-state="away"] {
+    border-color: #cf9d62;
+    color: #f1d6a2;
+}
+
+/* The first-run offer floats over the app until it's answered. */
+.serverOffer {
+    position: fixed;
+    right: 24px;
+    bottom: calc(var(--player-height, 100px) + 16px);
+    z-index: 10001;
+    width: min(420px, calc(100vw - 48px));
+    box-sizing: border-box;
+    padding: 16px 18px;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    background: rgba(29, 29, 29, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    font-size: 0.9rem;
+}
+
+.serverOffer > p {
+    margin: 0 0 12px;
+}
+
+.serverOffer .serverJoin {
+    padding: 0;
 }

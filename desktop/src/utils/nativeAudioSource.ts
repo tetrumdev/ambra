@@ -1,7 +1,7 @@
 import type { Track } from "../types/music";
 
 export function nativeAudioSource(track: Track) {
-  if (track.provider === "local") return track.providerTrackId;
+  if (track.provider === "local" && !/^https?:\/\//.test(track.audio)) return track.providerTrackId;
   if (track.playbackKind === "dash") {
     return track.audio.replace(/\/manifest\.mpd(?=\?|$)/, "/playlist.m3u8");
   }

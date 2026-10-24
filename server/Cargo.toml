@@ -8,6 +8,7 @@ axum = "0.8.9"
 base64 = "0.22.1"
 bytes = "1"
 futures-util = "0.3.33"
+getrandom = "0.3"
 httpdate = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 librespot-audio = "0.8.0"
@@ -26,11 +27,19 @@ reqwest = { version = "0.13.4", features = ["json", "query", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+sha2 = "0.10"
 tidlers = "0.5.0"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["io"] }
 tower-http = { version = "0.7.0", features = ["cors"] }
 urlencoding = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [build-dependencies]
 # librespot 0.8's build helper is not compatible with vergen 9.1.

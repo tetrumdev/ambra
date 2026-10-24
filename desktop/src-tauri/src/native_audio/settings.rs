@@ -1,4 +1,7 @@
-use super::{dsp::DspPreset, loudness::NormalizationMode};
+use super::{
+    dsp::DspPreset,
+    loudness::{NormalizationMode, REFERENCE_LUFS, TARGET_LUFS_RANGE},
+};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, path::Path};
 
@@ -30,6 +33,13 @@ pub struct AudioSettings {
     /// Settings saved before normalization existed leave it off.
     #[serde(default)]
     pub normalization: NormalizationMode,
+    /// The integrated loudness songs are brought to; ReplayGain's own reference by default.
+    #[serde(default = "default_target_lufs")]
+    pub normalization_target_lufs: f64,
+}
+
+fn default_target_lufs() -> f64 {
+    REFERENCE_LUFS
 }
 impl Default for AudioSettings {
     fn default() -> Self {
@@ -47,6 +57,7 @@ impl Default for AudioSettings {
             }],
             presets: Vec::new(),
             normalization: NormalizationMode::Off,
+            normalization_target_lufs: default_target_lufs(),
         }
     }
 }
@@ -54,6 +65,15 @@ impl AudioSettings {
     pub fn validate(&self) -> Result<(), String> {
         if self.version != 1 || self.outputs.len() > 256 || self.presets.len() > 64 {
             return Err("Unsupported or oversized audio settings".into());
+        }
+        if !self.normalization_target_lufs.is_finite()
+            || !TARGET_LUFS_RANGE.contains(&self.normalization_target_lufs)
+        {
+            return Err(format!(
+                "Normalization target must be between {} and {} LUFS",
+                TARGET_LUFS_RANGE.start(),
+                TARGET_LUFS_RANGE.end()
+            ));
         }
         let mut ids = HashSet::new();
         for preset in &self.presets {
@@ -111,8 +131,11 @@ impl AudioSettings {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
             Err(e) => return Err(format!("Could not read audio settings: {e}")),
         };
-        let settings: Self =
+        let mut value: serde_json::Value =
             serde_json::from_slice(&bytes).map_err(|e| format!("Invalid audio settings: {e}"))?;
+        fold_output_gain(&mut value);
+        let settings: Self =
+            serde_json::from_value(value).map_err(|e| format!("Invalid audio settings: {e}"))?;
         settings.validate()?;
         Ok(settings)
     }
@@ -134,6 +157,24 @@ impl AudioSettings {
                     volume: default_volume(),
                 });
             }
+        }
+    }
+}
+
+/// Presets once had an output gain after the EQ, which only ever undid headroom; it becomes less headroom.
+fn fold_output_gain(value: &mut serde_json::Value) {
+    let Some(presets) = value.get_mut("presets").and_then(|p| p.as_array_mut()) else {
+        return;
+    };
+    for preset in presets.iter_mut().filter_map(|p| p.as_object_mut()) {
+        let Some(gain) = preset.remove("outputGainDb").and_then(|g| g.as_f64()) else {
+            continue;
+        };
+        if let Some(headroom) = preset.get("headroomDb").and_then(|h| h.as_f64()) {
+            preset.insert(
+                "headroomDb".into(),
+                (headroom - gain).clamp(0.0, 30.0).into(),
+            );
         }
     }
 }

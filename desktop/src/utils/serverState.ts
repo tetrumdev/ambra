@@ -1,7 +1,13 @@
 import { serverBaseUrl } from "../api/server";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { serverConnection } from "../api/serverConnection";
 
+/**
+ * State the server keeps for every device that uses it. Writes are per key: another
+ * device's change to a different key never blocks this one, and this client follows
+ * other devices' changes as they happen (`followServerState`).
+ */
 export const serverStateKeys = new Set([
   "ambra.playlists.v1",
   "ambra.queue.v1",
@@ -9,17 +15,50 @@ export const serverStateKeys = new Set([
   "ambra.listening-history.v1",
   "ambra.library-order.v1",
   "ambra.removed-library-tracks.v1",
+  "ambra.ui-preferences.v1",
+  "ambra.album-versions.v1",
+  "ambra.lyrics-sync.v1",
+  "ambra.lyrics-autosync.v2",
+  "ambra.lyrics-autosync-samples.v1",
+  "ambra.lyrics-autosync-noticed.v1",
+  "ambra.dsp-presets.v1",
 ]);
+// Kept locally before they moved to the server; each is uploaded once if the server lacks it.
+const formerlyLocalKeys = [
+  "ambra.ui-preferences.v1",
+  "ambra.album-versions.v1",
+  "ambra.lyrics-sync.v1",
+  "ambra.lyrics-autosync.v2",
+  "ambra.lyrics-autosync-samples.v1",
+  "ambra.lyrics-autosync-noticed.v1",
+];
+// Settings and the playing position follow whoever changed them last. For a library or
+// playlist, a change made elsewhere meanwhile is kept, and this device's is set aside.
+const latestWins = new Set([
+  "ambra.queue.v1",
+  "ambra.playback.v1",
+  "ambra.dsp-presets.v1",
+  ...formerlyLocalKeys,
+]);
+const keyNames: Record<string, string> = {
+  "ambra.playlists.v1": "Playlists",
+  "ambra.listening-history.v1": "Listening history",
+  "ambra.library-order.v1": "Library order",
+  "ambra.removed-library-tracks.v1": "The library",
+};
 
 type Snapshot = { revision: number; values: Record<string, string> };
-type Patch = { revision: number; writeId: string; changes: Record<string, string | null> };
+type Changes = Record<string, string | null>;
+type Patch = { revision: number; writeId: string; changes: Changes; bases: Record<string, number> };
 type Status = { ready: boolean; pending: boolean; error: string | null; conflict: boolean };
-const endpoint = `${serverBaseUrl}/api/state`;
 const values = new Map<string, string>();
 // Before server hydration, local playback uses a temporary session. Never send
 // these values to the server or mix them into a later server snapshot.
 const localValues = new Map<string, string>();
 const pending = new Map<string, string | null>();
+// The revision each pending key's edit started from. Other devices' changes heard meanwhile
+// advance `revision`, but not what this device had seen of that key.
+const pendingBase = new Map<string, number>();
 const listeners = new Set<() => void>();
 let revision = 0;
 let status: Status = { ready: false, pending: false, error: null, conflict: false };
@@ -28,6 +67,9 @@ let saving: Promise<void> | null = null;
 let hydration: Promise<void> | null = null;
 let attempt: Patch | null = null;
 let discarding = false;
+// Says which of this device's changes gave way to another device's; shown for a while.
+let setAsideNotice: string | null = null;
+let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 
 function publish(change: Partial<Status>) {
   status = { ...status, ...change, pending: pending.size > 0 };
@@ -35,36 +77,67 @@ function publish(change: Partial<Status>) {
 }
 
 export const serverStateStatus = () => status;
+
+const remoteListeners = new Set<(keys: Set<string>) => void>();
+/** Hears which keys another device changed; this device's own writes aren't reported. */
+export function subscribeRemoteChanges(listener: (keys: Set<string>) => void) {
+  remoteListeners.add(listener);
+  return () => { remoteListeners.delete(listener); };
+}
 export function subscribeServerState(listener: () => void) {
   listeners.add(listener);
   return () => { listeners.delete(listener); };
 }
 
 class StateRequestError extends Error {
-  constructor(message: string, readonly conflict = false) { super(message); }
+  constructor(message: string, readonly conflict = false, readonly body: Record<string, unknown> | null = null) { super(message); }
 }
 
-async function request(init?: RequestInit) {
-  const response = await fetch(endpoint, {
-    ...init,
+async function request(init?: RequestInit & { query?: string; timeoutMs?: number }) {
+  const { query, timeoutMs, ...rest } = init ?? {};
+  const response = await fetch(`${serverBaseUrl}/api/state${query ?? ""}`, {
+    ...rest,
     cache: "no-store",
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(timeoutMs ?? 10_000),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string } | null;
-    throw new StateRequestError(body?.error ?? `Could not access server state (HTTP ${response.status}).`, response.status === 409);
+    throw new StateRequestError(body?.error ?? `Could not access server state (HTTP ${response.status}).`, response.status === 409, body);
   }
   return response;
 }
 
+function validRevision(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 async function load(): Promise<Snapshot> {
   const saved = await (await request()).json() as Snapshot;
-  if (!Number.isSafeInteger(saved.revision) || saved.revision < 0
-    || !saved.values || typeof saved.values !== "object" || Array.isArray(saved.values)
-    || Object.entries(saved.values).some(([key, value]) => !serverStateKeys.has(key) || typeof value !== "string")) {
+  if (!validRevision(saved.revision) || !saved.values || typeof saved.values !== "object" || Array.isArray(saved.values)
+    || Object.values(saved.values).some(value => typeof value !== "string")) {
     throw new Error("Server returned invalid listening state.");
   }
-  return saved;
+  // A newer server may keep keys this version doesn't know; leave them to it.
+  return { revision: saved.revision, values: Object.fromEntries(Object.entries(saved.values).filter(([key]) => serverStateKeys.has(key))) };
+}
+
+/** Takes other devices' changes, except to keys this device is about to overwrite anyway. */
+function applyChanges(changes: unknown, atRevision: unknown) {
+  if (!changes || typeof changes !== "object" || !validRevision(atRevision)) return;
+  const changed = new Set<string>();
+  for (const [key, value] of Object.entries(changes as Changes)) {
+    if (!serverStateKeys.has(key) || pending.has(key) || (attempt && key in attempt.changes)) continue;
+    if (value !== null && typeof value !== "string") continue;
+    if ((values.get(key) ?? null) === value) continue;
+    if (value === null) values.delete(key);
+    else values.set(key, value);
+    changed.add(key);
+  }
+  revision = Math.max(revision, atRevision);
+  if (changed.size) {
+    publish({});
+    for (const listener of remoteListeners) listener(changed);
+  }
 }
 
 // Local keys remain untouched as frozen rollback copies. Only an uninitialized
@@ -72,7 +145,8 @@ async function load(): Promise<Snapshot> {
 export function hydrateServerState(): Promise<void> {
   hydration ??= (async () => {
     let saved = await load();
-    if (saved.revision === 0) {
+    const importLegacy = !serverConnection || serverConnection.mode === "host" || serverConnection.fallback;
+    if (saved.revision === 0 && importLegacy) {
       const changes: Record<string, string> = {};
       for (const key of serverStateKeys) {
         const legacy = localStorage.getItem(key);
@@ -94,13 +168,49 @@ export function hydrateServerState(): Promise<void> {
     for (const [key, value] of Object.entries(saved.values)) values.set(key, value);
     localValues.clear();
     revision = saved.revision;
+    // Settings that used to stay on this device move to the server the first time.
+    for (const key of importLegacy ? formerlyLocalKeys : []) {
+      const local = localStorage.getItem(key);
+      if (!values.has(key) && local !== null) {
+        values.set(key, local);
+        pending.set(key, local);
+        pendingBase.set(key, revision);
+      }
+    }
     publish({ ready: true, error: null, conflict: false });
+    if (pending.size > 0) scheduleSave(0);
+    followServerState();
   })().catch(error => {
     hydration = null;
     publish({ error: `Could not load listening state. ${String(error)}` });
     throw error;
   });
   return hydration;
+}
+
+let following = false;
+/** Hears other devices' changes as they're saved, for as long as the app is open. */
+function followServerState() {
+  if (following) return;
+  following = true;
+  void (async () => {
+    while (!discarding && !status.conflict) {
+      try {
+        const response = await request({ query: `?since=${revision}&wait=25`, timeoutMs: 35_000 });
+        const news = await response.json() as { revision?: unknown; changes?: unknown };
+        // An older server answers with the whole state at once and can't be followed.
+        if (news.changes === undefined) break;
+        applyChanges(news.changes, news.revision);
+      } catch (error) {
+        if (error instanceof StateRequestError && error.conflict) {
+          publish({ error: "The server's listening state was replaced. Reload to continue.", conflict: true });
+          break;
+        }
+        await new Promise(resolve => setTimeout(resolve, 3000));
+      }
+    }
+    following = false;
+  })();
 }
 
 export function getServerItem(key: string) {
@@ -131,9 +241,38 @@ export function setServerItem(key: string, value: string | null) {
   if ((values.get(key) ?? null) === value) return;
   if (value === null) values.delete(key);
   else values.set(key, value);
+  if (!pendingBase.has(key)) pendingBase.set(key, revision);
   pending.set(key, value);
   publish({});
   scheduleSave();
+}
+
+/**
+ * Another device changed some of the keys this one was saving. The latest change wins for
+ * settings and playback; for a library or playlist, the other device's version is kept.
+ */
+function resolveConflict(patch: Patch, body: Record<string, unknown> | null) {
+  const keys = Array.isArray(body?.keys) ? body.keys.filter((key): key is string => typeof key === "string") : [];
+  if (!keys.length || !validRevision(body?.revision)) return false;
+  attempt = null;
+  const setAside: string[] = [];
+  for (const key of keys) {
+    // This device has now seen the other change and overwrites it on purpose.
+    if (latestWins.has(key)) { pendingBase.set(key, body!.revision as number); continue; }
+    if (pending.get(key) === patch.changes[key]) { pending.delete(key); pendingBase.delete(key); }
+    setAside.push(keyNames[key] ?? key);
+  }
+  applyChanges(body.changes, body.revision);
+  if (setAside.length) {
+    setAsideNotice = `${setAside.join(" and ")} changed on another device at the same time, so your latest change there wasn't saved.`;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(() => {
+      if (status.error === setAsideNotice) publish({ error: null });
+      setAsideNotice = null;
+    }, 10_000);
+  }
+  publish({ error: setAsideNotice });
+  return true;
 }
 
 /** Serialize writes; keep changed keys pending until the server acknowledges them. */
@@ -143,35 +282,44 @@ export function flushServerState(keepalive = false): Promise<void> {
   if (saving) return saving.then(() => flushServerState(keepalive));
   if (status.conflict) return Promise.reject(new Error(status.error ?? "Server state conflict."));
   if (!status.ready || pending.size === 0) return Promise.resolve();
-  attempt ??= { revision, writeId: crypto.randomUUID(), changes: Object.fromEntries(pending) };
+  attempt ??= {
+    revision, writeId: crypto.randomUUID(), changes: Object.fromEntries(pending),
+    bases: Object.fromEntries([...pending.keys()].map(key => [key, pendingBase.get(key) ?? revision])),
+  };
   const patch = attempt;
   saving = (async () => {
     const response = await request({
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch), keepalive,
     });
-    const result = await response.json() as { revision: number };
-    if (!Number.isSafeInteger(result.revision) || result.revision < revision) throw new Error("Server returned an invalid revision.");
-    revision = result.revision;
+    const result = await response.json() as { revision: number; changes?: unknown };
+    if (!validRevision(result.revision) || result.revision < patch.revision) throw new Error("Server returned an invalid revision.");
     attempt = null;
     for (const [key, value] of Object.entries(patch.changes)) {
-      if (pending.get(key) === value) pending.delete(key);
+      if (pending.get(key) === value) { pending.delete(key); pendingBase.delete(key); }
+      // Edited again while saving: what's left builds on this write.
+      else if (pending.has(key)) pendingBase.set(key, result.revision);
     }
-    publish({ error: null });
+    applyChanges(result.changes ?? {}, result.revision);
+    publish({ error: setAsideNotice });
   })().catch(error => {
-    const conflict = error instanceof StateRequestError && error.conflict;
+    if (error instanceof StateRequestError && error.conflict && resolveConflict(patch, error.body)) {
+      // Retry at once with what's left, now on top of the other device's changes.
+      return;
+    }
+    const replaced = error instanceof StateRequestError && error.conflict;
     const disconnected = error instanceof TypeError
       || (error instanceof DOMException && error.name === "TimeoutError");
     publish({
-      error: disconnected ? null : conflict ? error.message
+      error: disconnected ? null : replaced ? error.message
         : "Listening state has not saved. Keep Ambra open; reconnect to the server to retry.",
-      conflict,
+      conflict: replaced,
     });
-    if (!conflict) scheduleSave(5000);
+    if (!replaced) scheduleSave(5000);
     throw error;
   }).finally(() => {
     saving = null;
-    if (pending.size > 0 && !status.error) scheduleSave();
+    if (pending.size > 0 && !status.conflict) scheduleSave();
   });
   return saving.then(() => {
     if (pending.size > 0) return flushServerState(keepalive);

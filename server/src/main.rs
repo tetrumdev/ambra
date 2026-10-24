@@ -1,46 +1,68 @@
-#![cfg_attr(
-    all(not(debug_assertions), target_os = "windows"),
-    windows_subsystem = "windows"
-)]
-
 mod access;
 mod api;
 mod artwork_cache;
 mod artwork_quality;
+mod cli;
 mod credits;
+mod discovery;
+mod endpoints;
 mod http_client;
+mod impulses;
 mod loudness;
+mod local_music;
 mod lyrics;
 mod media_cache;
 mod models;
+mod network;
 mod playlists;
 mod providers;
+mod server_process;
+mod server_config;
+mod session;
 mod storage;
+mod tray;
 mod user_state;
 mod write_behind;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    exit_with_parent();
-    storage::migrate_legacy();
-    api::serve().await
-}
-
-/// When the desktop app launches the server it keeps our stdin open. The OS
-/// closes it if the app exits or crashes, so the server never outlives it and
-/// keeps the port.
-fn exit_with_parent() {
-    if std::env::var_os("AMBRA_EXIT_WITH_PARENT").is_none() {
-        return;
-    }
-    std::thread::spawn(|| {
-        let mut buffer = [0_u8; 64];
-        let mut stdin = std::io::stdin();
-        while let Ok(read) = std::io::Read::read(&mut stdin, &mut buffer) {
-            if read == 0 {
-                break;
+    match cli::parse(std::env::args().skip(1).collect()) {
+        Ok(cli::Command::Start { bind }) => {
+            match server_process::start(bind).await {
+                Ok(message) => { println!("{message}"); Ok(()) }
+                Err(message) => { eprintln!("{message}"); std::process::exit(1); }
             }
         }
-        std::process::exit(0);
-    });
+        Ok(cli::Command::Serve { bind, tray }) => {
+            let _lock = server_process::lock()?;
+            storage::migrate_legacy();
+            if tray && cfg!(target_os = "windows") {
+                tokio::spawn(async move {
+                    if let Err(error) = api::serve(bind).await {
+                        eprintln!("{error}");
+                    }
+                    tray::quit();
+                });
+                tray::run().map_err(Into::into)
+            } else {
+                api::serve(bind).await
+            }
+        }
+        Ok(cli::Command::Run(arguments)) => {
+            match cli::run(arguments).await {
+                Ok(output) => {
+                    println!("{output}");
+                    Ok(())
+                }
+                Err(message) => {
+                    eprintln!("{message}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    }
 }

@@ -11,6 +11,8 @@ import { isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 import { useStartupWindow } from "./hooks/useStartupWindow";
 import { flushServerState, hydrateServerState, installServerStateLifecycle, reloadServerState, serverStateStatus, subscribeServerState } from "./utils/serverState";
+import { connectToServer } from "./api/serverConnection";
+import { ServerOffer, ServerSetup } from "./components/settings/ServerSettings";
 
 mark("js-start");
 startPerfTracing();
@@ -27,7 +29,7 @@ document.documentElement.dataset.platform = navigator.userAgent.includes(
   ? "windows"
   : "other";
 
-// Restore shared state when possible; otherwise open an isolated local session.
+// Connect to the selected server; discovery and pairing work before it is connected.
 function Root() {
   // Only the fields shown here, so routine saves don't rerender the whole app.
   const state = {
@@ -42,14 +44,20 @@ function Root() {
   async function restore() {
     setLoading(true);
     try {
+      await connectToServer();
       await hydratePersistentStorage();
       await hydrateServerState();
       mark("state-hydrated");
-    } catch { /* Local tracks remain available when saved state cannot load. */ }
+    } catch { /* Keep the connection screen available while the selected server is away. */ }
     finally { setLoading(false); setStarted(true); }
   }
 
   useEffect(() => { void restore(); }, []);
+  useEffect(() => {
+    if (state.ready || loading || !started) return;
+    const retry = setTimeout(() => void restore(), 5000);
+    return () => clearTimeout(retry);
+  }, [state.ready, loading, started]);
   useEffect(installServerStateLifecycle, []);
   useEffect(() => {
     mark("first-commit");
@@ -60,18 +68,19 @@ function Root() {
     <h1>Loading your listening state…</h1>
   </main>;
 
-  const statusMessage = !state.ready
-    ? "Showing local tracks. This session is temporary; reconnecting restores saved server state."
-    : `${state.error ?? ""}${state.conflict ? " Reloading discards unsaved changes in this window." : ""}`;
+  if (!state.ready) return <main className="stateStartup">
+    <div data-tauri-drag-region className="stateTitlebar" />
+    <ServerSetup loading={loading} onReconnect={() => void restore()} />
+  </main>;
+
+  const statusMessage = `${state.error ?? ""}${state.conflict ? " Reloading discards unsaved changes in this window." : ""}`;
 
   return <>
     <div className="appViewport">
-      <AudioSettingsProvider><App key={state.ready ? "server" : "local"} localOnly={!state.ready} /></AudioSettingsProvider>
+      <AudioSettingsProvider><App localOnly={false} /></AudioSettingsProvider>
     </div>
-    {!state.ready ? <div className="stateSaveError" role="status">
-      <span title={statusMessage}>{statusMessage}</span>
-      <button disabled={loading} onClick={() => void restore()}>{loading ? "Connecting…" : "Reconnect"}</button>
-    </div> : state.error && <div className="stateSaveError" role="alert">
+    <ServerOffer />
+    {state.error && <div className="stateSaveError" role="alert">
       <span title={statusMessage}>{statusMessage}</span>
       {state.conflict
         ? <button onClick={reloadServerState}>Reload server state</button>
@@ -95,4 +104,3 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
     <Root />
   </React.StrictMode>,
 );
-

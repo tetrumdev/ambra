@@ -1,7 +1,7 @@
 #sidebarMain {
     box-sizing: border-box;
     padding-bottom: var(--player-height);
-    background-color: black;
+    background-color: var(--surface-black);
     border-right: 1px solid #535353;
     width: 100%;
     height: 100%;

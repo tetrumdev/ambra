@@ -1,11 +1,12 @@
 import "./SettingsView.css";
-export type SettingsTab = "general" | "outputs" | "dsp" | "services" | "local";
+export type SettingsTab = "general" | "outputs" | "dsp" | "services" | "server" | "local";
 
 const tabs: Array<{ id: SettingsTab; name: string }> = [
   { id: "general", name: "General" },
   { id: "outputs", name: "Outputs" },
   { id: "dsp", name: "DSP" },
   { id: "services", name: "Services" },
+  { id: "server", name: "Server" },
   { id: "local", name: "Local" },
 ];
 

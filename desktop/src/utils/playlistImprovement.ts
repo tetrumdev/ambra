@@ -1,7 +1,7 @@
 import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, type StreamingProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { searchTrackTitle } from "./catalogRanking";
-import { albumTitleFamily, bestPlaylistCopy, compareSoundQuality, sameAlbumFamily, sameFormat, sameRecording } from "./searchRanking";
+import { albumTitleFamily, bestPlaylistCopy, byCodePoint, compareSoundQuality, sameAlbumFamily, sameFormat, sameRecording } from "./searchRanking";
 
 const CONCURRENCY = 3;
 
@@ -38,16 +38,22 @@ export function packageCopies(members: Track[], copies: Track[][]): Track[] | nu
     for (const [index, options] of copies.slice(1).entries()) {
       const fits = options.filter(copy => copy.provider === lead.provider && sameAlbumFamily(copy, lead) && sameFormat(copy, lead));
       if (!fits.length) break;
-      set.push(fits.find(copy => copy.globalId === members[index + 1].globalId) ?? fits[0]);
+      // The member's own copy if it fits, then one on the lead's very release, then the lowest ID.
+      const own = fits.find(copy => copy.globalId === members[index + 1].globalId);
+      set.push(own ?? fits.sort((a, b) => Number(b.albumId === lead.albumId) - Number(a.albumId === lead.albumId)
+        || byCodePoint(a.globalId, b.globalId))[0]);
     }
     if (set.length === members.length) sets.push(set);
   }
   if (!sets.length) return null;
   const unchanged = (set: Track[]) => set.every((copy, index) => copy.globalId === members[index].globalId);
-  // The best-sounding set; among equals the current one stays, then the earliest found.
+  // The best-sounding set; among equals the current one stays, then the lead with the lowest ID,
+  // so the order the services answered in doesn't matter.
   const best = sets.reduce((top, set) => {
     const quality = compareSoundQuality(set[0], top[0]);
-    return quality > 0 || (quality === 0 && unchanged(set) && !unchanged(top)) ? set : top;
+    if (quality !== 0) return quality > 0 ? set : top;
+    if (unchanged(set) !== unchanged(top)) return unchanged(set) ? set : top;
+    return byCodePoint(set[0].globalId, top[0].globalId) < 0 ? set : top;
   });
   if (unchanged(best)) return null;
   const matched = members.every(member => sameFormat(member, members[0]) && member.provider === members[0].provider);
@@ -64,7 +70,8 @@ function albumKey(track: Track) {
 /**
  * Moves songs that share an album onto one service, so it plays from one place in one
  * format. A song only moves to a copy that sounds at least as good as the one it would have
- * kept; the service chosen is the one the most songs can be on, then the one most are already on.
+ * kept; the service chosen is the one the most songs can be on, then the one most are already on,
+ * then by name, so the order songs were found in never decides it.
  * `chosen` is each song's copy so far and is updated in place; `copies` are every copy found.
  */
 export function unifyAlbumServices(chosen: Map<GlobalTrackId, Track>, copies: Map<GlobalTrackId, Track[]>) {
@@ -86,7 +93,7 @@ export function unifyAlbumServices(chosen: Map<GlobalTrackId, Track>, copies: Ma
         .filter(copy => copy.provider === provider && copy.explicit === current.explicit && sameRecording(current, copy)
           && sameAlbumFamily(copy, current) && compareSoundQuality(copy, current) >= 0)
         .sort((a, b) => compareSoundQuality(b, a) || Number(releases.has(b.albumId)) - Number(releases.has(a.albumId))
-          || a.name.length - b.name.length)[0];
+          || a.name.length - b.name.length || byCodePoint(a.globalId, b.globalId))[0];
     };
     const score = (provider: Track["provider"]) => [
       ids.filter(id => copyOn(id, provider)).length,
@@ -94,7 +101,8 @@ export function unifyAlbumServices(chosen: Map<GlobalTrackId, Track>, copies: Ma
     ];
     const target = [...providers].reduce((best, provider) => {
       const [a, b] = [score(provider), score(best)];
-      return (a[0] - b[0] || a[1] - b[1]) > 0 ? provider : best;
+      const order = a[0] - b[0] || a[1] - b[1] || byCodePoint(best, provider);
+      return order > 0 ? provider : best;
     });
     for (const id of ids) {
       const copy = copyOn(id, target);
@@ -115,18 +123,22 @@ export async function findPlaylistUpgrades(
   packages: GlobalTrackId[][] = [],
 ): Promise<Map<GlobalTrackId, Track>> {
   const providers = await configuredSearchProviders(signal);
-  const found = new Map<GlobalTrackId, Track[]>();
+  const results: (Track[] | undefined)[] = [];
   let next = 0, done = 0;
   const work = async () => {
     while (next < tracks.length && !signal.aborted) {
-      const track = tracks[next++];
+      const index = next++;
+      const track = tracks[index];
       // Local files are the user's own copies and stay as they are.
-      if (track.provider !== "local") found.set(track.globalId, await copiesOf(track, providers, signal).catch(() => [track]));
+      if (track.provider !== "local") results[index] = await copiesOf(track, providers, signal).catch(() => [track]);
       onProgress(++done);
     }
   };
   await Promise.all(Array.from({ length: CONCURRENCY }, work));
   signal.throwIfAborted();
+  // Kept in playlist order, not the order searches finished in, which varies run to run.
+  const found = new Map<GlobalTrackId, Track[]>();
+  results.forEach((copies, index) => { if (copies) found.set(tracks[index].globalId, copies); });
 
   const upgrades = new Map<GlobalTrackId, Track>();
   const byId = new Map(tracks.map(track => [track.globalId, track]));

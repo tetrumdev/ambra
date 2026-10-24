@@ -73,6 +73,8 @@ type NowPlayingBarProps = {
   previousActivation: number;
   nextActivation: number;
   playbackError?: string | null;
+  /** The output on another computer the song plays on. */
+  playingOn?: string | null;
   audioDecks: AudioDeckController;
   onPrevious: () => void;
   onTogglePlayback: () => void | Promise<void>;
@@ -98,6 +100,7 @@ export function NowPlayingBar({
   previousActivation,
   nextActivation,
   playbackError,
+  playingOn,
   audioDecks,
   onPrevious,
   onTogglePlayback,
@@ -157,7 +160,7 @@ export function NowPlayingBar({
           <img src="/ambra.png" alt="" />
         )}
       </button>
-      <SongInfo track={track} onOpenEntity={onOpenEntity} menu={songMenu} />
+      <SongInfo track={track} onOpenEntity={onOpenEntity} menu={songMenu} playingOn={playingOn} />
       <div id="playbackCluster">
         <PlayerControls
           isPlaying={isPlaying}
