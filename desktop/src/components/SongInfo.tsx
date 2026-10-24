@@ -10,8 +10,6 @@ import { showTrackCredits } from "../utils/trackCredits";
 
 type SongInfoProps = {
   track: Track | undefined;
-  /** The output on another computer the song plays on. */
-  playingOn?: string | null;
   onOpenEntity: (entity: BrowseEntity) => void;
   /** The playing song's library menu; without it the title shows no menu button. */
   menu?: {
@@ -23,7 +21,7 @@ type SongInfoProps = {
   };
 };
 
-export function SongInfo({ track, onOpenEntity, menu, playingOn }: SongInfoProps) {
+export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
   const [menuAnchor, setMenuAnchor] = useState<DOMRect | null>(null);
   // The menu belongs to the song it was opened for.
   useEffect(() => setMenuAnchor(null), [track?.globalId]);
@@ -78,10 +76,6 @@ export function SongInfo({ track, onOpenEntity, menu, playingOn }: SongInfoProps
             <span className="label">Performed by </span>
             <ArtistLinks track={track} onOpenEntity={onOpenEntity} className="entityLink value" />
           </span>
-          {playingOn && <span id="playingOn">
-            <span className="label">Playing on </span>
-            <span className="value">{playingOn}</span>
-          </span>}
         </>
       )}
     </div>

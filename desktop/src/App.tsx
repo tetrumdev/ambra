@@ -33,7 +33,7 @@ import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
@@ -75,8 +75,6 @@ import { usePlaylists } from "./hooks/usePlaylists";
 import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
 import { useCorePlayer } from "./hooks/useCorePlayer";
 import { useCoreQueue } from "./hooks/useCoreQueue";
-import { coreView, subscribeCore } from "./api/core";
-import { serverConnection } from "./api/serverConnection";
 import { serverStateStatus } from "./utils/serverState";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
@@ -192,11 +190,6 @@ function App({ localOnly }: { localOnly: boolean }) {
     nextTrack: queue.upcomingEntries[0]?.track,
   }, listeningHistory.recordPlay);
   /* eslint-enable react-hooks/rules-of-hooks */
-  // Shown when songs play on another computer's output.
-  const coreSession = useSyncExternalStore(subscribeCore, coreView);
-  const playingOn = usingCore && coreSession?.output && coreSession.output.endpointId !== serverConnection?.clientId
-    ? `${coreSession.output.deviceName} (${coreSession.output.endpointName})`
-    : null;
   // Read by timers that outlive a render, such as the player controls fading out.
   const playerDurationRef = useRef(player.duration);
   playerDurationRef.current = player.duration;
@@ -1387,7 +1380,6 @@ function App({ localOnly }: { localOnly: boolean }) {
         previousActivation={player.previousActivation}
         nextActivation={player.nextActivation}
         playbackError={player.playbackError}
-        playingOn={playingOn}
         audioDecks={player.audioDecks}
         onPrevious={player.previous}
         onTogglePlayback={player.togglePlayback}
