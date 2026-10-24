@@ -1130,13 +1130,17 @@ mod tests {
 
     impl TestProvider {
         fn new(expired: bool) -> Self {
+            // The clock can read the same for tests started together (coarsely on Windows), so a
+            // counter keeps each test's directory its own.
+            static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
             let directory = env::temp_dir().join(format!(
-                "ambra-spotify-test-{}-{}",
+                "ambra-spotify-test-{}-{}-{}",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(SystemTime::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             fs::create_dir(&directory).unwrap();
             let path = directory.join("oauth.json");

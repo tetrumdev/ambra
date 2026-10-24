@@ -24,6 +24,8 @@ const REPORT_PLAYING: Duration = Duration::from_millis(500);
 const REPORT_IDLE: Duration = Duration::from_secs(1);
 const DEVICES_EVERY: u32 = 5;
 const COMMANDS_WAIT_SECONDS: u64 = 25;
+/// How often the engine is looked at between reports, for a change the core must hear of at once.
+const WATCH_EVERY: Duration = Duration::from_millis(20);
 /// Report round trips remembered; the quickest is the one least delayed by anything but the network.
 const ROUND_TRIPS_KEPT: usize = 8;
 
@@ -146,6 +148,7 @@ async fn report(agent: std::sync::Arc<Agent>) {
             status["currentSource"] = Value::String(agent.sent_source(source));
         }
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
+        let reported = transitions(&status);
         body["status"] = status;
         // Half the quickest round trip: how long this report takes to arrive, so the core
         // can tell when the position was true, not just when it heard it.
@@ -162,12 +165,33 @@ async fn report(agent: std::sync::Arc<Agent>) {
         }
         // Unpaired or revoked: there's nothing to do until the app is paired again.
         let wait = match sent {
-            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => Duration::from_secs(30),
+            Ok(response) if response.status() == reqwest::StatusCode::UNAUTHORIZED => {
+                tokio::time::sleep(Duration::from_secs(30)).await;
+                continue;
+            }
             _ if playing => REPORT_PLAYING,
             _ => REPORT_IDLE,
         };
-        tokio::time::sleep(wait).await;
+        // A gapless move to the next song, a pause or an error is reported as it happens, so
+        // every screen changes with the sound rather than up to a beat later.
+        let next_beat = Instant::now() + wait;
+        while Instant::now() < next_beat {
+            tokio::time::sleep(WATCH_EVERY.min(next_beat.saturating_duration_since(Instant::now()))).await;
+            let changed = native_audio::native_audio_status(player.clone())
+                .await
+                .ok()
+                .and_then(|status| serde_json::to_value(status).ok())
+                .is_some_and(|status| transitions(&status) != reported);
+            if changed {
+                break;
+            }
+        }
     }
+}
+
+/// What the core acts on at once when it changes, as opposed to the advancing position.
+fn transitions(status: &Value) -> [Value; 5] {
+    ["currentSource", "isPlaying", "buffering", "ended", "error"].map(|key| status[key].clone())
 }
 
 async fn serve(agent: std::sync::Arc<Agent>) {

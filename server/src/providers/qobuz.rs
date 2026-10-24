@@ -1239,6 +1239,7 @@ mod transport_tests {
     async fn qobuz_client_negotiates_and_decodes_gzip() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let (finished, done) = tokio::sync::oneshot::channel::<()>();
         let server = tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
@@ -1264,6 +1265,9 @@ mod transport_tests {
             );
             socket.write_all(headers.as_bytes()).await.unwrap();
             socket.write_all(body).await.unwrap();
+            // Held open until the client has its response: on Windows, closing first can reach the
+            // client as a reset before it reads the response.
+            let _ = done.await;
         });
         let client = QobuzClient::new().unwrap();
         let response: serde_json::Value = client
@@ -1277,6 +1281,7 @@ mod transport_tests {
             .await
             .unwrap();
         assert_eq!(response["ok"], true);
+        let _ = finished.send(());
         server.await.unwrap();
     }
 }

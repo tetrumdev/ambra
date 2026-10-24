@@ -645,6 +645,7 @@ async fn drive(core: Shared) {
     loop {
         tokio::select! {
             _ = core.wake.notified() => {}
+            _ = core.endpoints.reported() => {}
             changed = state_changes.changed() => {
                 if changed.is_err() { return; }
                 core.forget_queue();
@@ -931,6 +932,8 @@ mod driver_tests {
         /// Every command the simulated output app received, in order.
         received: Arc<SyncMutex<Vec<(String, Value)>>>,
         status: Arc<SyncMutex<Value>>,
+        /// One report at a time, as the real output app sends them, so none arrives out of order.
+        sending: Arc<Mutex<()>>,
     }
 
     impl Harness {
@@ -945,13 +948,14 @@ mod driver_tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default() };
+            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default(), sending: Arc::default() };
             harness.report(json!({})).await;
             harness.serve_commands();
             harness
         }
 
         async fn report(&self, status: Value) {
+            let _sending = self.sending.lock().await;
             *self.status.lock().unwrap() = status.clone();
             let instance = self.instance.lock().unwrap().clone();
             self.http.post(format!("{}/api/endpoints/desk/presence", self.base))
@@ -961,11 +965,12 @@ mod driver_tests {
 
         /// The output app: answers every command at once, like an idle engine would.
         fn serve_commands(&self) {
-            let (base, http, status, instance) = (self.base.clone(), self.http.clone(), self.status.clone(), self.instance.clone());
+            let (base, http, status, instance, sending) = (self.base.clone(), self.http.clone(), self.status.clone(), self.instance.clone(), self.sending.clone());
             // A real output reports continuously, including after a command acknowledgement.
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
+                    let _sending = sending.lock().await;
                     let status = status.lock().unwrap().clone();
                     let instance = instance.lock().unwrap().clone();
                     let _ = http.post(format!("{base}/api/endpoints/desk/presence"))
@@ -1058,6 +1063,9 @@ mod driver_tests {
         if paused {
             h.post("/api/session/command", json!({ "action": "pause" })).await;
             h.wait_for_command("pause_native_audio").await;
+            // As a real engine does: it reports where it paused, which the core then holds.
+            h.report(json!({ "currentSource": source("a"), "currentTime": 64.5, "duration": 200.0, "isPlaying": false, "buffering": false, "ended": false })).await;
+            eventually!("the paused position", h.core.transport().position == 64.5);
         }
         let queue = h.queue().await;
         let history = h.history().await;
