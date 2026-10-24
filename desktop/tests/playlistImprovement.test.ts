@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Track } from "../src/types/music";
 import { bestPlaylistCopy } from "../src/utils/searchRanking";
-import { packageCopies } from "../src/utils/playlistImprovement";
+import { packageCopies, unifyAlbumServices } from "../src/utils/playlistImprovement";
 
 let next = 0;
 const copy = (album: string, quality: string, releaseDate: string | null, changes: Partial<Track> = {}): Track => {
@@ -65,6 +65,42 @@ describe("package improvement", () => {
     expect(packageCopies(members, [[members[0], better[0]], [members[1], better[1]]])).toEqual(better);
     const otherService = [airbag("OK Computer OKNOTOK 1997 2017", "24/96", "tidal"), android("OK Computer OKNOTOK 1997 2017", "24/96")];
     expect(packageCopies(members, [[members[0], otherService[0]], [members[1], otherService[1]]])).toBeNull();
+  });
+});
+
+// Machines finish searches at different times and services answer in different orders;
+// the improvement must not depend on either.
+describe("improvement doesn't depend on arrival order", () => {
+  test("equally good copies settle the same way in any order", () => {
+    const original = sheerHeartAttack();
+    const a = copy("Sheer Heart Attack", "24/96", "1974-11-08");
+    const b = copy("Sheer Heart Attack", "24/96", "1974-11-08");
+    expect(bestPlaylistCopy(original, [a, b])).toBe(bestPlaylistCopy(original, [b, a]));
+  });
+
+  test("an album gathers on the same service whichever song was found first", () => {
+    const song = (name: string, provider: Track["provider"]) => copy("Sheer Heart Attack", "16/44.1", "1974-11-08", { name, provider, isrc: undefined, albumArtists: [] });
+    const onQobuz = [song("Brighton Rock", "qobuz"), song("Killer Queen", "qobuz")];
+    const onTidal = [song("Brighton Rock", "tidal"), song("Killer Queen", "tidal")];
+    const copies = new Map([[onQobuz[0].globalId, [onQobuz[0], onTidal[0]]], [onTidal[1].globalId, [onTidal[1], onQobuz[1]]]]);
+    const run = (order: Track[]) => {
+      const chosen = new Map(order.map(track => [track.globalId, track]));
+      unifyAlbumServices(chosen, copies);
+      return [...chosen.values()].map(track => track.provider).sort();
+    };
+    const forwards = run([onQobuz[0], onTidal[1]]);
+    expect(new Set(forwards).size).toBe(1);
+    expect(run([onTidal[1], onQobuz[0]])).toEqual(forwards);
+  });
+
+  test("a package picks the same equally good set in any order", () => {
+    const pair = () => [copy("OK Computer", "24/96", null, { name: "Airbag" }), copy("OK Computer", "24/96", null, { name: "Paranoid Android" })];
+    const members = [copy("Paranoid Android", "16/44.1", null, { name: "Airbag" }), copy("Paranoid Android", "16/44.1", null, { name: "Paranoid Android" })];
+    const [x, y] = [pair(), pair()];
+    const forwards = packageCopies(members, [[members[0], x[0], y[0]], [members[1], x[1], y[1]]]);
+    const backwards = packageCopies(members, [[members[0], y[0], x[0]], [members[1], y[1], x[1]]]);
+    expect(forwards).not.toBeNull();
+    expect(backwards).toEqual(forwards);
   });
 });
 

@@ -121,8 +121,14 @@
 }
 
 #albumName,
-#artistName {
+#artistName,
+#playingOn {
     font-size: 0.8rem;
+}
+
+#playingOn {
+    display: block;
+    color: #f1d6a2;
 }
 
 #bottomInfoBar[data-variant="compact"] #albumName {

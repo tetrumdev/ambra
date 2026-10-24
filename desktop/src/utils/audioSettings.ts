@@ -2,15 +2,20 @@ import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 
 export type EqBand = { enabled: boolean; kind: "peak" | "lowShelf" | "highShelf"; frequency: number; gainDb: number; q: number };
 export type ImpulseFile = { id: string; name: string; sampleRate: number; channels: number; frames: number };
-export type DspPreset = { id: string; name: string; enabled: boolean; headroomDb: number; outputGainDb: number; bands: EqBand[]; convolution: ImpulseFile[] };
+export type DspPreset = { id: string; name: string; enabled: boolean; headroomDb: number; bands: EqBand[]; convolution: ImpulseFile[] };
 export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; presetId: string | null; volume: number };
 /** One constant gain per song or album; never compression or limiting. */
 export type NormalizationMode = "off" | "track" | "album";
-export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[]; normalization: NormalizationMode };
+export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[]; normalization: NormalizationMode; normalizationTargetLufs: number };
 export type NativeAudioDevice = { id: string; name: string; isDefault: boolean };
 export type DspStatus = { presetName: string | null; active: boolean; sampleRate: number | null; peakDbfs: number | null; clippedSamples: number; warnings: string[] };
 
-export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], normalization: "off", outputs: [
+/** ReplayGain's reference loudness, and the range a listener may move the target within (matches the engine). */
+export const REFERENCE_LUFS = -18;
+export const MIN_TARGET_LUFS = -30;
+export const MAX_TARGET_LUFS = -6;
+
+export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], normalization: "off", normalizationTargetLufs: REFERENCE_LUFS, outputs: [
   { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, presetId: null, volume: 100 },
 ] });
 const storageKey = "ambra.audio-settings.v1";
@@ -22,6 +27,7 @@ export function loadAudioSettings(): AudioSettings {
       && Array.isArray(value.presets) && value.presets.length <= 64) {
       const presets = new Set<string>();
       for (const preset of value.presets) {
+        foldOutputGain(preset);
         validatePreset(preset);
         if (typeof preset.id !== "string" || !preset.id || presets.has(preset.id)
           || typeof preset.enabled !== "boolean" || !Array.isArray(preset.convolution)
@@ -44,10 +50,18 @@ export function loadAudioSettings(): AudioSettings {
       }
       // Settings saved before normalization existed leave it off.
       if (!["off", "track", "album"].includes(value.normalization)) value.normalization = "off";
+      if (!Number.isFinite(value.normalizationTargetLufs) || value.normalizationTargetLufs < MIN_TARGET_LUFS
+        || value.normalizationTargetLufs > MAX_TARGET_LUFS) value.normalizationTargetLufs = REFERENCE_LUFS;
       if (outputs.has("") && outputs.has(value.selectedOutputId)) return value;
     }
   } catch { /* A corrupt working copy must not prevent startup. */ }
   return defaultAudioSettings();
+}
+/** Presets once had an output gain after the EQ, which only ever undid headroom; it becomes less headroom. */
+function foldOutputGain(preset: DspPreset & { outputGainDb?: number }) {
+  if (preset.outputGainDb === undefined) return;
+  if (Number.isFinite(preset.outputGainDb)) preset.headroomDb = Math.min(30, Math.max(0, preset.headroomDb - preset.outputGainDb));
+  delete preset.outputGainDb;
 }
 export function saveAudioSettings(settings: AudioSettings) { setPersistentItem(storageKey, JSON.stringify(settings)); }
 export function visibleOutputs(settings: AudioSettings, devices: NativeAudioDevice[]) {
@@ -55,14 +69,12 @@ export function visibleOutputs(settings: AudioSettings, devices: NativeAudioDevi
   return settings.outputs.filter(output => output.enabled && available.has(output.id));
 }
 export function newPreset(name = "New preset"): DspPreset {
-  return { id: crypto.randomUUID(), name, enabled: true, headroomDb: 0, outputGainDb: 0, bands: [], convolution: [] };
+  return { id: crypto.randomUUID(), name, enabled: true, headroomDb: 0, bands: [], convolution: [] };
 }
 export function validatePreset(preset: DspPreset) {
   if (typeof preset.name !== "string" || !preset.name.trim() || preset.name.length > 120) throw new Error("Give this preset a name of at most 120 characters.");
   if (!Number.isFinite(preset.headroomDb) || preset.headroomDb < 0 || preset.headroomDb > 30)
     throw new Error("Headroom must be between 0 and 30 dB.");
-  if (!Number.isFinite(preset.outputGainDb) || preset.outputGainDb < -60 || preset.outputGainDb > 12)
-    throw new Error("Output gain must be between -60 and 12 dB.");
   if (!Array.isArray(preset.bands) || preset.bands.length > 32) throw new Error("Use at most 32 EQ bands.");
   for (const band of preset.bands) {
     if (!band || typeof band.enabled !== "boolean" || !["peak", "lowShelf", "highShelf"].includes(band.kind)
@@ -74,7 +86,7 @@ export function validatePreset(preset: DspPreset) {
 }
 
 // AutoEq / Equalizer APO parametric text, including disabled bands and Q shelves.
-export function parseAutoEq(text: string): Pick<DspPreset, "headroomDb" | "outputGainDb" | "bands"> {
+export function parseAutoEq(text: string): Pick<DspPreset, "headroomDb" | "bands"> {
   const bands: EqBand[] = [];
   let preamp = 0;
   const number = "([-+]?\\d+(?:\\.\\d+)?)";
@@ -91,7 +103,8 @@ export function parseAutoEq(text: string): Pick<DspPreset, "headroomDb" | "outpu
     }
   }
   if (!bands.length) throw new Error("No parametric EQ filters found in this file.");
-  const result = { headroomDb: Math.max(0, -preamp), outputGainDb: Math.max(0, preamp), bands };
+  // A positive preamp would only push the EQ toward clipping, so it plays at unity instead.
+  const result = { headroomDb: Math.min(30, Math.max(0, -preamp)), bands };
   validatePreset({ ...newPreset("Imported headphone EQ"), ...result });
   return result;
 }

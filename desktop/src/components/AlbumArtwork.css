@@ -57,7 +57,7 @@
 }
 
 .albumArtworkDialog[data-expanded="true"] {
-    background: black;
+    background: var(--surface-black);
 }
 
 .albumArtworkDialog[data-expanded="true"] .albumArtworkZoom {

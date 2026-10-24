@@ -4,12 +4,10 @@
     right: 0;
     bottom: var(--player-height);
     width: var(--scrollbar-column-width);
-    background: black;
+    background: var(--surface-black);
     z-index: 9;
     touch-action: none;
     border-left: 1px solid #535353;
-    padding-bottom: 3px;
-    padding-top: 3px;
 }
 
 /* With nothing to scroll there is no rail at all: its column collapses, so the screen and the
@@ -27,7 +25,6 @@
     top: 0;
     left: 0;
     width: 100%; /* Full 14px hitbox */
-    min-height: 36px;
     cursor: default;
     touch-action: none;
     will-change: transform;
@@ -36,14 +33,29 @@
 .appScrollbarThumb::before {
     content: "";
     position: absolute;
-    inset: 4px auto 4px 5px;
+    inset: 3px auto 3px 5px;
     width: 4px; /* Visible thumb remains narrow */
     border-radius: 999px;
-    background: rgb(255 255 255 / 30%);
-    transition: background-color 80ms;
+    background: rgb(255 255 255 / 25%);
+    transition: background-color 140ms ease;
 }
 
+.appScrollbar[data-active] .appScrollbarThumb::before {
+    background: rgb(255 255 255 / 45%);
+}
+
+.appScrollbar:hover .appScrollbarThumb::before,
 .appScrollbarThumb:hover::before,
 .appScrollbarThumb[data-dragging="true"]::before {
-    background: rgb(255 255 255 / 55%);
+    background: rgb(255 255 255 / 65%);
+}
+
+.appScrollbarThumb[data-dragging="true"]::before {
+    background: rgb(255 255 255 / 85%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .appScrollbarThumb::before {
+        transition: none;
+    }
 }

@@ -4,6 +4,7 @@ import {
   type CoverSeparation,
 } from "../utils/backgroundPalette";
 import { SWIRL_SHARPNESS, swirlBiases } from "../utils/swirlProportions";
+import { SURFACE_BLACK } from "../utils/surfaceBlack";
 
 type FluidGradientBackgroundProps = {
   colors: string[];
@@ -222,7 +223,7 @@ function paletteComponents(
   separation: CoverSeparation,
 ) {
   const palette = colors.slice(0, 4);
-  while (palette.length < 4) palette.push(palette[0] ?? "#000000");
+  while (palette.length < 4) palette.push(palette[0] ?? SURFACE_BLACK);
   // Transition colors, proportions and cover separation without changing the field's shape.
   return [
     ...palette.flatMap(colorComponents),
@@ -553,7 +554,7 @@ export function FluidGradientBackground({
     <canvas
       id="backgroundFXCanvas"
       ref={canvasRef}
-      style={{ backgroundColor: "#000000" }}
+      style={{ backgroundColor: SURFACE_BLACK }}
     />
   );
 }
