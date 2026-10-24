@@ -10,6 +10,7 @@ import { prefetchArtistPage } from "../utils/artistPage";
 import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { MENU_WIDTH } from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
@@ -158,16 +159,19 @@ function SearchResult({
   openActions,
   openCollectionMenu,
 }: SearchResultProps) {
+  const connected = useServiceAvailability();
+  const available = isTrackAvailable(track, connected);
   return (
     <div
       className="searchResult"
+      data-unavailable={!available ? "true" : undefined}
       data-variant={variant}
       data-track-id={track.globalId}
       data-glide={`track:${track.globalId}`}
-      onClick={(event) => openActions(event, track.globalId)}
-      onContextMenu={(event) => openActions(event, track.globalId)}
+      onClick={available ? (event) => openActions(event, track.globalId) : undefined}
+      onContextMenu={available ? (event) => openActions(event, track.globalId) : undefined}
     >
-      <div className="trackLeading searchResultLeading">
+      <div className="trackLeading searchResultLeading" inert={!available}>
         <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
           onClick={event => { event.stopPropagation(); playTrack(track.globalId); }}>
           <img src="/play.svg" alt="" aria-hidden="true" />
@@ -186,7 +190,7 @@ function SearchResult({
         </div>
       </div>
 
-      <div className="searchResultInfo">
+      <div className="searchResultInfo" inert={!available}>
         <div className="searchResultName">{track.name}</div>
         <div className="searchResultArtist">By <ArtistLinks track={track} onOpenEntity={onOpenEntity} /></div>
         <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button></div>
@@ -203,6 +207,7 @@ function SearchResult({
 
       <button
         className="searchResultMenuButton"
+        disabled={!available}
         type="button"
         aria-label={`More options for ${track.name}`}
         onClick={(event) => openCollectionMenu(event, track.globalId)}

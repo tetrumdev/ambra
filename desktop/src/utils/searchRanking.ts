@@ -180,14 +180,17 @@ export function compareSoundQuality(left: Track, right: Track) {
  * other doesn't. Among equally good new copies, a proper album beats a compilation or regional
  * pressing, then one on the song's current album, then the earliest release. Copies alike in all
  * of that are settled by ID, so the answer doesn't depend on which service replied first.
+ * With `replace`, the original can't stay (its service is signed out): it's only the yardstick,
+ * and the best candidate is chosen even if it sounds worse.
  */
-export function bestPlaylistCopy(original: Track, candidates: Track[]) {
+export function bestPlaylistCopy(original: Track, candidates: Track[], replace = false) {
   const release = (track: Track) => [Number(!compilation(track) && !regional(track)), Number(sameAlbumFamily(track, original)),
     -Number((released(track) ?? "9999").slice(0, 4))];
   const settle = (a: Track, b: Track) => byCodePoint(released(a) ?? "9999", released(b) ?? "9999") || byCodePoint(a.globalId, b.globalId);
-  let best = original;
+  let best: Track | undefined = replace ? undefined : original;
   for (const candidate of candidates) {
     if (candidate.provider === "local" || candidate.explicit !== original.explicit || !sameRecording(original, candidate)) continue;
+    if (!best) { best = candidate; continue; }
     const quality = compareSoundQuality(candidate, best);
     if (quality > 0) best = candidate;
     else if (quality === 0) {
@@ -199,7 +202,7 @@ export function bestPlaylistCopy(original: Track, candidates: Track[]) {
       if (wins) best = candidate;
     }
   }
-  return best;
+  return best ?? original;
 }
 
 function relevance(track: Track, query: string) {

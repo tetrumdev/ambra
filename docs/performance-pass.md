@@ -66,7 +66,7 @@ Local macOS (Apple Silicon), release build, synthetic PCM WAV libraries, `cargo 
 
 Cold first-ever scans are *not* much faster at 100k files (parallel 7.1 s vs serial 7.8 s): workers run at low priority on purpose so audio and UI are not disturbed, and these files are tag-light. The win is that the cold path now happens once, not per launch. Real libraries with large embedded art and FLAC seektable work cost more per file and so benefit more from being skipped. Not measured: real-world libraries, non-SSD storage, Windows.
 
-Persistence IPC: a playback-position update previously serialized the complete state (size dominated by the streaming-library cache, often megabytes); it now sends the one changed key. This is by construction (covered by `persistentStorage.test.ts`), not a timed benchmark.
+Persistence IPC: a playback-position update previously serialized the complete state (size dominated by the streaming-library cache, often megabytes); it now sends the one changed key. This is by construction, not a timed benchmark.
 
 ## Tracing
 
@@ -76,7 +76,6 @@ Development builds (or `localStorage["ambra.perf"]="1"`) record `js-start`, `fir
 
 - Rust desktop: `persistence` (current-client no-payload, per-key patches, deletes, key allow-list/path traversal, legacy migration), `library_index` (reuse, change detection, removals, ordering, parallel exactly-once), scan integration over real WAV files, content-addressed cover storage.
 - Server: startup gate (immediate when ready, resumes waiters, times out, dropped sender, route allow-list).
-- Frontend: `persistentStorage.test.ts` (non-blocking hydration, stale-WebView safety, patch coalescing, no-op writes, resync) and `trackReconcile.test.ts`.
 
 ## Not done (and why)
 

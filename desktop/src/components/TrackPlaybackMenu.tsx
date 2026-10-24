@@ -1,4 +1,5 @@
 import "./TrackMenus.css";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { useRef } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
@@ -25,8 +26,10 @@ export function TrackPlaybackMenu({
   addToQueue,
   playNext,
 }: TrackPlaybackMenuProps) {
+  const connected = useServiceAvailability();
   const menu = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(menu);
+  if (trackId && !isTrackAvailable(trackId, connected)) return null;
   return (
     <div id="trackMenuBackdrop" onClick={onClose}>
       <div

@@ -11,7 +11,7 @@
 //! any app's window being open.
 
 use std::{
-    sync::{Arc, Mutex as SyncMutex},
+    sync::{Arc, Mutex as SyncMutex, OnceLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -51,6 +51,7 @@ pub struct Output {
 #[derive(Clone, Debug, PartialEq)]
 struct Loaded {
     endpoint_id: String,
+    endpoint_instance: Option<String>,
     device_id: String,
     source: String,
     generation: u64,
@@ -149,7 +150,9 @@ fn source_of(track: &Value) -> Option<String> {
 fn current_and_next(queue: &Value) -> (Option<(Value, String)>, Option<String>) {
     let resolve = |item: &Value| track_of(queue, item).and_then(|track| source_of(track).map(|source| (track.clone(), source)));
     let current = (!queue["current"].is_null()).then(|| resolve(&queue["current"])).flatten();
-    let next = queue["upcoming"].as_array().and_then(|upcoming| upcoming.first()).and_then(resolve).map(|(_, source)| source);
+    let next = queue["upcoming"].as_array().and_then(|upcoming| upcoming.first()).and_then(resolve)
+        .filter(|(track, _)| !crate::service_auth::disconnected(track["provider"].as_str().unwrap_or("")))
+        .map(|(_, source)| source);
     (current, next)
 }
 
@@ -378,6 +381,9 @@ struct SessionView {
     revision: u64,
     playing: bool,
     position_seconds: f64,
+    /// When `position_seconds` was true, on the clock `/api/session/clock` reads, so an app
+    /// can carry it forward from then rather than from when the view reached it.
+    server_time_ms: f64,
     duration: f64,
     buffering: bool,
     error: Option<String>,
@@ -403,6 +409,7 @@ async fn view(core: &Core) -> SessionView {
         revision: *core.revision.borrow(),
         playing: transport.playing,
         position_seconds: transport.position_now(),
+        server_time_ms: server_time_ms(),
         duration: transport.duration,
         buffering: transport.buffering,
         error: transport.error.clone(),
@@ -414,9 +421,21 @@ async fn view(core: &Core) -> SessionView {
     }
 }
 
+/// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
+fn server_time_ms() -> f64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+}
+
+/// Answered at once, so an app can time the round trip and line its clock up with this one.
+async fn clock() -> Json<Value> {
+    Json(json!({ "serverTimeMs": server_time_ms() }))
+}
+
 pub fn router<S: Clone + Send + Sync + 'static>(core: Shared) -> Router<S> {
     Router::new()
         .route("/api/session", get(read))
+        .route("/api/session/clock", get(clock))
         .route("/api/session/queue", post(set_queue))
         .route("/api/session/command", post(command))
         .with_state(core)
@@ -671,22 +690,51 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         return Ok(());
     };
+    if crate::service_auth::disconnected(track["provider"].as_str().unwrap_or("")) {
+        let was_loaded = {
+            let mut transport = core.transport();
+            let loaded = transport.loaded.take().is_some();
+            transport.playing = false;
+            transport.buffering = false;
+            transport.queued_next = None;
+            loaded
+        };
+        if was_loaded {
+            let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            core.changed();
+        }
+        return Err("This song's service is disconnected. Reconnect it or replace the song with Improve Playlist.".into());
+    }
     // Identical consecutive sources cannot be distinguished by a source-only engine report.
     // Let the first finish, then explicitly load the next occurrence.
     if next.as_deref() == Some(source.as_str()) { next = None; }
-    if !core.endpoints.online(&endpoint).await {
-        return Err(format!("{} is offline", output.endpoint_name));
-    }
+    let Some((status, reported_at, _, endpoint_instance)) = core.endpoints.status(&endpoint).await else {
+        // Keep the last confirmed position and play intent, not a clock that keeps
+        // advancing while the output app is gone. The server itself is still online.
+        core.transport().buffering = true;
+        return Err(format!("Audio output {} is offline", output.endpoint_name));
+    };
 
-    let (wanted, needs_device, position, autoplay) = {
+    let (wanted, needs_device, position, autoplay, needs_load) = {
         let transport = core.transport();
-        let wanted = Loaded { endpoint_id: endpoint.clone(), device_id: output.device_id.clone(), source: source.clone(), generation: transport.generation };
-        let needs_device = transport.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_id != endpoint || loaded.device_id != output.device_id);
+        // Older apps do not send instanceId. A fresh, idle, empty engine also proves
+        // the cached load is gone; never mistake an old report or a load error for this.
+        let empty_engine = endpoint_instance.is_none()
+            && transport.loaded.is_some()
+            && transport.report_after.is_none_or(|after| reported_at >= after)
+            && status.get("currentSource").is_some_and(Value::is_null)
+            && status["buffering"] == false
+            && status["ended"] != true
+            && status["error"].is_null();
+        let wanted = Loaded { endpoint_id: endpoint.clone(), endpoint_instance: endpoint_instance.clone(), device_id: output.device_id.clone(), source: source.clone(), generation: transport.generation };
+        let needs_device = empty_engine || transport.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_id != endpoint || loaded.endpoint_instance != endpoint_instance || loaded.device_id != output.device_id);
         // A different song always starts at zero; a changed output resumes the same song.
         let changed_song = transport.loaded.as_ref().is_some_and(|loaded| loaded.source != source);
-        (wanted, needs_device, if changed_song { 0.0 } else { transport.position_now() }, transport.playing)
+        let restarted = transport.loaded.as_ref().is_some_and(|loaded| loaded.endpoint_instance != endpoint_instance);
+        let needs_load = empty_engine || transport.loaded.as_ref() != Some(&wanted);
+        (wanted, needs_device, if changed_song { 0.0 } else if restarted || empty_engine { transport.position } else { transport.position_now() }, transport.playing, needs_load)
     };
-    if core.transport().loaded.as_ref() != Some(&wanted) {
+    if needs_load {
         if needs_device {
             core.endpoints.call(&endpoint, "select_native_audio_device", json!({ "deviceId": output.device_id })).await?;
         }
@@ -731,9 +779,13 @@ async fn step(core: &Core) -> Result<(), String> {
         core.transport().queued_next = Some(next.clone());
     }
 
-    let Some((status, reported_at)) = core.endpoints.status(&endpoint).await else {
+    let Some((status, reported_at, sampled_at, reported_instance)) = core.endpoints.status(&endpoint).await else {
         return Ok(());
     };
+    // A restart during an awaited command needs a new load, not the old engine's reports.
+    if reported_instance != endpoint_instance {
+        return Ok(());
+    }
     if core.transport().report_after.is_some_and(|after| reported_at < after) {
         return Ok(());
     }
@@ -762,7 +814,7 @@ async fn step(core: &Core) -> Result<(), String> {
         let mut transport = core.transport();
         let before = (transport.buffering, transport.error.clone(), transport.duration, transport.audio_quality.clone());
         transport.position = status["currentTime"].as_f64().unwrap_or(transport.position);
-        transport.position_at = Some(reported_at);
+        transport.position_at = Some(sampled_at);
         if let Some(duration) = status["duration"].as_f64().filter(|duration| *duration > 0.0) {
             transport.duration = duration;
         }
@@ -874,6 +926,8 @@ mod driver_tests {
         base: String,
         http: reqwest::Client,
         state: Arc<UserState>,
+        core: Shared,
+        instance: Arc<SyncMutex<Option<String>>>,
         /// Every command the simulated output app received, in order.
         received: Arc<SyncMutex<Vec<(String, Value)>>>,
         status: Arc<SyncMutex<Value>>,
@@ -884,13 +938,14 @@ mod driver_tests {
             let directory = std::env::temp_dir().join(format!("ambra-core-{}-{}", std::process::id(), crate::server_config::random_hex(4)));
             let state = Arc::new(UserState::at(directory.join("user-state.v1.json")));
             let endpoints = Arc::new(Endpoints::default());
+            let core = Core::new(state.clone(), endpoints.clone());
             let app: Router = Router::new()
                 .merge(crate::endpoints::router(endpoints.clone()))
-                .merge(router(Core::new(state.clone(), endpoints)));
+                .merge(router(core.clone()));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let harness = Self { base, http: reqwest::Client::new(), state, received: Arc::default(), status: Arc::default() };
+            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default() };
             harness.report(json!({})).await;
             harness.serve_commands();
             harness
@@ -898,29 +953,38 @@ mod driver_tests {
 
         async fn report(&self, status: Value) {
             *self.status.lock().unwrap() = status.clone();
+            let instance = self.instance.lock().unwrap().clone();
             self.http.post(format!("{}/api/endpoints/desk/presence", self.base))
-                .json(&json!({ "name": "Desk", "devices": [{ "id": "spk", "name": "Speakers" }], "status": status }))
+                .json(&json!({ "name": "Desk", "instanceId": instance, "devices": [{ "id": "spk", "name": "Speakers" }], "status": status }))
                 .send().await.unwrap();
         }
 
         /// The output app: answers every command at once, like an idle engine would.
         fn serve_commands(&self) {
-            let (base, http, status) = (self.base.clone(), self.http.clone(), self.status.clone());
+            let (base, http, status, instance) = (self.base.clone(), self.http.clone(), self.status.clone(), self.instance.clone());
             // A real output reports continuously, including after a command acknowledgement.
             tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let status = status.lock().unwrap().clone();
+                    let instance = instance.lock().unwrap().clone();
                     let _ = http.post(format!("{base}/api/endpoints/desk/presence"))
-                        .json(&json!({ "name": "Desk", "status": status })).send().await;
+                        .json(&json!({ "name": "Desk", "instanceId": instance, "status": status })).send().await;
                 }
             });
-            let (base, http, received) = (self.base.clone(), self.http.clone(), self.received.clone());
+            let (base, http, received, status) = (self.base.clone(), self.http.clone(), self.received.clone(), self.status.clone());
             tokio::spawn(async move {
                 loop {
                     let Ok(response) = http.get(format!("{base}/api/endpoints/desk/commands?wait=5")).send().await else { continue };
                     for command in response.json::<Vec<Value>>().await.unwrap_or_default() {
                         received.lock().unwrap().push((command["command"].as_str().unwrap().to_owned(), command["args"].clone()));
+                        if command["command"] == "load_native_audio" {
+                            *status.lock().unwrap() = json!({
+                                "currentSource": command["args"]["source"],
+                                "currentTime": command["args"]["positionSeconds"],
+                                "buffering": true, "ended": false, "error": null
+                            });
+                        }
                         http.post(format!("{base}/api/endpoints/desk/results"))
                             .json(&json!({ "id": command["id"], "ok": true, "value": null }))
                             .send().await.unwrap();
@@ -976,6 +1040,69 @@ mod driver_tests {
 
     fn source(id: &str) -> String {
         format!("http://127.0.0.1:38147/api/providers/qobuz/tracks/{id}/stream")
+    }
+
+    async fn check_reopened_output(with_instance: bool, paused: bool) {
+        let h = Harness::start().await;
+        if with_instance {
+            *h.instance.lock().unwrap() = Some("first-process".into());
+            h.report(json!({})).await;
+        }
+        h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        let queued = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [track("a"), track("b")] });
+        h.post("/api/session/queue", json!({ "base": 0, "queue": queued, "playTrackId": "a" })).await;
+        h.wait_for_command("load_native_audio").await;
+        h.report(json!({ "currentSource": source("a"), "currentTime": 64.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        eventually!("mid-song report", h.core.transport().position == 64.0);
+        eventually!("the play to count", h.history().await.is_some());
+        if paused {
+            h.post("/api/session/command", json!({ "action": "pause" })).await;
+            h.wait_for_command("pause_native_audio").await;
+        }
+        let queue = h.queue().await;
+        let history = h.history().await;
+        let generation = h.core.transport().generation;
+        let resume_position = {
+            let _operation = h.core.operation.lock().await;
+            let mut transport = h.core.transport();
+            // The state left while the app was absent; reopening must recover without
+            // a playTrack command, queue mutation, or another listening-history entry.
+            transport.error = Some("Desk is offline".into());
+            transport.buffering = true;
+            if with_instance {
+                *h.instance.lock().unwrap() = Some("reopened-process".into());
+            }
+            *h.status.lock().unwrap() = json!({ "currentSource": null, "currentTime": 0.0, "isPlaying": false, "buffering": false, "ended": false, "error": null });
+            h.received.lock().unwrap().clear();
+            transport.position
+        };
+        h.wait_for_command("load_native_audio").await;
+        eventually!("offline error to clear", h.core.transport().error.is_none());
+        {
+            let received = h.received.lock().unwrap();
+            let loads: Vec<_> = received.iter().filter(|(command, _)| command == "load_native_audio").collect();
+            assert_eq!(loads.len(), 1);
+            let args = &loads[0].1;
+            assert_eq!(args["source"], source("a"));
+            assert_eq!(args["nextSource"], source("b"));
+            assert_eq!(args["positionSeconds"], resume_position);
+            assert_eq!(args["autoplay"], !paused);
+        }
+        h.report(json!({ "currentSource": source("a"), "currentTime": 65.0, "duration": 200.0, "isPlaying": !paused, "buffering": false, "ended": false })).await;
+        eventually!("resumed report", h.core.transport().position == 65.0);
+        assert_eq!(h.core.transport().generation, generation);
+        assert_eq!(h.queue().await, queue);
+        assert_eq!(h.history().await, history);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopening_the_output_resumes_the_current_song_and_clears_offline_error() {
+        check_reopened_output(true, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopening_a_legacy_output_keeps_a_paused_song_paused() {
+        check_reopened_output(false, true).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

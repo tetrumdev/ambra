@@ -1083,3 +1083,82 @@
 .serverOffer .serverJoin {
     padding: 0;
 }
+
+/* Before any server answers: the settings page's type and controls, on cards. */
+.serverSetup {
+    display: grid;
+    gap: 14px;
+    width: 100%;
+    max-width: 600px;
+    max-height: 100%;
+    overflow-y: auto;
+    padding: 48px 4px;
+    box-sizing: border-box;
+    text-align: left;
+}
+
+.serverSetupHeader {
+    margin-bottom: 18px;
+}
+
+.serverSetup .settingsTitle {
+    font-size: 2.6rem;
+}
+
+.serverSetupHeader p.settingsMuted {
+    max-width: 520px;
+    margin-top: 12px;
+    font-size: 0.95rem;
+}
+
+.serverSetupCard {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 14px 24px;
+    padding: 20px 22px;
+    border: 1px solid #262626;
+    border-radius: 12px;
+    background: #151515;
+}
+
+/* Everything but the heading and its button takes the card's full width. */
+.serverSetupCard > :not(.serverSetupCardText, .settingsPill) {
+    grid-column: 1 / -1;
+}
+
+.serverSetupCardText h2 {
+    margin: 0 0 4px;
+    color: white;
+    font-size: 1.05rem;
+    font-weight: 600;
+}
+
+.serverSetupTerminal {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding-top: 14px;
+    border-top: 1px solid #222;
+}
+
+.serverSetupTerminal .settingsLink {
+    padding: 0;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+.serverSetupFind .serverJoin {
+    padding: 0;
+}
+
+/* "Search again" sits beside the card's heading; the rows above it need no closing line. */
+.serverSetupFind > .serverJoinActions {
+    grid-row: 1;
+    grid-column: 2;
+}
+
+.serverSetupFind .settingRow:has(+ .serverJoinActions) {
+    border-bottom: 0;
+}

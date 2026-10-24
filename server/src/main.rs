@@ -19,6 +19,7 @@ mod providers;
 mod server_process;
 mod server_config;
 mod session;
+mod service_auth;
 mod storage;
 mod tray;
 mod user_state;

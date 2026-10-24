@@ -155,6 +155,7 @@ struct MaximumPlaybackInfo {
 
 impl TidalProvider {
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
+        if !interactive && crate::service_auth::disconnected("tidal") { return Ok(None); }
         let Some(client) = authenticated_client(interactive).await? else {
             return Ok(None);
         };
@@ -172,6 +173,7 @@ impl TidalProvider {
     pub async fn complete_login(mut login: TidalLogin, callback_url: &str) -> ProviderResult<Self> {
         login.client.finish_pkce_login(callback_url.trim()).await?;
         login.client.refresh_user_info().await?;
+        crate::service_auth::set_disconnected("tidal", false)?;
         save_session(&login.client)?;
         Ok(Self::from_client(login.client)?)
     }
@@ -1551,6 +1553,8 @@ async fn restore_session() -> ProviderResult<Option<TidalClient>> {
 }
 
 fn save_session(client: &TidalClient) -> ProviderResult<()> {
+    let _credentials = crate::service_auth::credentials_guard();
+    if crate::service_auth::disconnected("tidal") { return Ok(()); }
     let path = session_path();
     let mut options = fs::OpenOptions::new();
     options.create(true).truncate(true).write(true);

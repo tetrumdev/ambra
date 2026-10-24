@@ -5,11 +5,12 @@ import type {
   QueueItem,
   Track,
 } from "../types/music";
+import { isTrackAvailable } from "../hooks/useServiceAvailability";
 
 export function libraryQueueContext(tracks: LibraryTrack[]): QueueContext {
   return {
     source: { kind: "library", id: "library" },
-    entries: tracks.map((track) => ({
+    entries: tracks.filter(track => isTrackAvailable(track)).map((track) => ({
       track,
       source: {
         kind: "library",
@@ -41,7 +42,7 @@ export function collectionQueueContext(
   const packageOf = new Map(packages.flatMap((pack) => pack.map((id) => [id, `${source.id}:${pack[0]}`] as const)));
   return {
     source,
-    entries: tracks.map((track, index) => ({
+    entries: tracks.filter(track => isTrackAvailable(track)).map((track, index) => ({
       track,
       source: {
         ...source,

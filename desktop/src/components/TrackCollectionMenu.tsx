@@ -6,6 +6,7 @@ import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
 import { MENU_WIDTH } from "../utils/trackMenu";
+import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -17,6 +18,8 @@ export type TrackCollectionAction = {
   label: string;
   icon: string;
   disabled?: boolean;
+  /** Still offered when the song's service is signed out, e.g. removing it. */
+  whenUnavailable?: boolean;
   onSelect: () => void;
 };
 
@@ -34,6 +37,9 @@ type TrackCollectionMenuProps = {
 };
 
 export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY }: TrackCollectionMenuProps) {
+  const connected = useServiceAvailability();
+  const available = isTrackAvailable(trackId, connected);
+  if (!available) { actions = actions.filter(action => action.whenUnavailable); playlistOptions = undefined; }
   const [choosingPlaylist, setChoosingPlaylist] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
