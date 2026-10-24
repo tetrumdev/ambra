@@ -60,10 +60,35 @@ Binding changes take effect after stopping and starting the server. Opening, clo
 updating the desktop app does not start or stop the server. An app acting as an audio
 output must keep running to play sound.
 
+If the selected output app exits, the server keeps the queue and last reported playback
+position. Reopening that app reloads the current song at that position and clears the
+output-offline warning automatically. A paused song stays paused; reconnecting does not
+advance the queue or count another play. Output availability is separate from server availability.
+
 The background process runs a versioned copy of the server executable from the server's
 data directory. Updating the app or installed CLI therefore does not need to overwrite a
 running executable. Starting twice reuses the existing server; a file lock prevents two
 server processes from opening the same library concurrently.
+
+## Disconnecting a music service
+
+Settings → Services → Disconnect signs the service out of this Ambra server for every
+connected device. It deletes Ambra's saved credentials and pending login, drops the active
+session, and prevents automatic reauthorization after restart (including environment tokens).
+It does not delete playlists in the service account or change native Ambra playlists.
+
+Service-owned playlists and their cached contents disappear from Ambra. Saved tracks remain
+in native playlists and the library as unavailable, grayed-out entries; their three-dot menu
+only allows removal, not playback or adding to a collection. Reconnect restores availability.
+The server can't fetch a signed-out service's song details, so it only reports their IDs: an
+app shows these songs from its own cache, and a device that never loaded them won't list them
+until the service is reconnected.
+Improve Playlist can replace signed-out tracks with matching copies from connected services,
+even when the available replacement is lower quality. Connected tracks retain the normal
+quality-upgrade rules, and bound packages still move together to one compatible release.
+
+Signing out of Ambra is separate from revoking the authorization grant at the provider:
+where the service does not expose an app-side revocation API, use its account settings too.
 
 ## Local music
 
@@ -84,15 +109,15 @@ server's permanent track IDs. Unchanged local files reuse cached hashes on later
 `server/src/session.rs` owns transport and queue changes. Its session responses include the
 queue, so clients display a consistent song and position; conflicting queue edits retry
 against the server's returned snapshot. Output transport commands cannot bypass the core.
+
+Every screen shows the position the output is actually playing, not one a network trip old.
+The output app sends half its quickest recent report round trip as `latencyMs`, and the core
+dates each report by when it was sampled. Session views carry `serverTimeMs`, which marks when
+their position was true. Apps line up with that clock through `/api/session/clock`, using the
+quickest of recent round trips, NTP-style, and carry the position forward from then. Delay
+inside the output device itself, such as Bluetooth buffering, is not measured.
 `server/src/local_music.rs` owns permanent files and the local catalog. `/api/music/local/`
 uses normal paired-device access; `/api/local/` is reserved for host-only administration.
 
-Automated checks cover queue playback and progression using a simulated output, pause,
-stale queue edits, frontend command ordering, imported file persistence across restart,
-authenticated downloads, byte ranges, duplicate imports, upload integrity and Windows-path
-migration. Browser checks cover existing library, queue and settings interactions.
-
 Physical audio playback, output handoff and OS media controls still need a two-computer
-hardware check. Existing lyrics, playback-clock and search-grouping regressions are outside
-this change. The HTTP proxy test for large upstream header counts also failed on later runs;
-see the test output for the current failures.
+hardware check.
