@@ -36,7 +36,7 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
   const raw = useSyncExternalStore(subscribeCore, coreView);
   const tracksRef = useRef(availableTracks);
   tracksRef.current = availableTracks;
-  const confirmed = useMemo(() => coreQueue(availableTracks), [raw, availableTracks]);
+  const confirmed = useMemo(() => coreQueue(availableTracks), [raw?.queue, availableTracks]);
   // A change shown before the server confirms it; dropped once the server's queue moves past it.
   const [optimistic, setOptimistic] = useState<{ state: QueueState; after: number } | null>(null);
   const state = optimistic && confirmed.revision <= optimistic.after ? optimistic.state : confirmed;

@@ -106,9 +106,11 @@ server's permanent track IDs. Unchanged local files reuse cached hashes on later
 
 ## Implementation and verification
 
-`server/src/session.rs` owns transport and queue changes. Its session responses include the
-queue, so clients display a consistent song and position; conflicting queue edits retry
-against the server's returned snapshot. Output transport commands cannot bypass the core.
+`server/src/session.rs` owns transport and queue changes. Session responses include the
+queue when the client's queue revision differs; otherwise clients retain their existing
+snapshot. Conflicting queue edits retry against the server's returned snapshot. Track-list
+preloading goes to the selected output computer, so browsing on a remote prepares audio
+where it will play. Output transport commands cannot bypass the core.
 
 Every screen shows the position the output is actually playing, not one a network trip old.
 The output app sends half its quickest recent report round trip as `latencyMs`, and the core
