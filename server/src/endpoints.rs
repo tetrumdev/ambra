@@ -32,6 +32,9 @@ pub const COMMANDS: &[&str] = &[
     "native_audio_settings",
     "set_output_settings",
     "native_audio_volume",
+    // Only prepares a song another device is about to ask for, so it starts as fast there as
+    // it would if that device were the output.
+    "warm_native_audio",
 ];
 
 #[derive(Clone, Serialize)]
@@ -343,6 +346,25 @@ mod tests {
         result(State(endpoints.clone()), Json(CommandResult { id, ok: true, value: json!(null), error: None })).await;
         let (status, _) = tokio::time::timeout(Duration::from_secs(2), sender).await.unwrap().unwrap();
         assert_eq!(status, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_remote_can_prepare_audio_without_directing_playback() {
+        let endpoints = Shared::default();
+        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({}))).await;
+        let args = json!({ "source": "http://remote:38147/api/providers/qobuz/tracks/1/stream" });
+        let sender = tokio::spawn({
+            let endpoints = endpoints.clone();
+            let args = args.clone();
+            async move {
+                body(command(State(endpoints), Path("pc-1".into()), Json(CommandRequest { command: "warm_native_audio".into(), args })).await).await
+            }
+        });
+        let (_, work) = body(collect(State(endpoints.clone()), Path("pc-1".into()), Query(CollectQuery { wait: Some(2) })).await).await;
+        assert_eq!(work[0]["command"], "warm_native_audio");
+        assert_eq!(work[0]["args"], args);
+        result(State(endpoints), Json(CommandResult { id: work[0]["id"].as_u64().unwrap(), ok: true, value: Value::Null, error: None })).await;
+        assert_eq!(sender.await.unwrap().0, StatusCode::OK);
     }
 
     #[tokio::test]

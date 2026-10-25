@@ -392,10 +392,14 @@ struct SessionView {
     output_online: bool,
     /// The queue revision this view goes with.
     queue_revision: u64,
-    queue: Value,
+    /// Left out when the app already has this revision: a long queue is large, and play,
+    /// pause and buffering change the view far more often than the queue changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue: Option<Value>,
 }
 
-async fn view(core: &Core) -> SessionView {
+/// `known_queue`: the queue revision the app already has, if any.
+async fn view(core: &Core, known_queue: Option<u64>) -> SessionView {
     let queue = core.queue().await;
     let queue_revision = queue_revision(&queue);
     let output_endpoint = core.transport().output.as_ref().map(|output| output.endpoint_id.clone());
@@ -416,8 +420,8 @@ async fn view(core: &Core) -> SessionView {
         audio_quality: transport.audio_quality.clone(),
         output: transport.output.clone(),
         output_online,
+        queue: (known_queue != Some(queue_revision)).then_some(queue),
         queue_revision,
-        queue,
     }
 }
 
@@ -445,6 +449,8 @@ pub fn router<S: Clone + Send + Sync + 'static>(core: Shared) -> Router<S> {
 struct ReadQuery {
     since: Option<u64>,
     wait: Option<u64>,
+    /// The queue revision the app has; the queue is sent only when it's different.
+    queue: Option<u64>,
 }
 
 async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Json<SessionView> {
@@ -452,7 +458,7 @@ async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Jso
         let mut revision = core.revision.subscribe();
         let _ = tokio::time::timeout(Duration::from_secs(wait.min(MAX_WAIT_SECONDS)), revision.wait_for(|current| *current != since)).await;
     }
-    Json(view(&core).await)
+    Json(view(&core, query.queue).await)
 }
 
 #[derive(Deserialize)]
@@ -486,14 +492,14 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
     match applied {
         Ok(Ok(())) => {}
         Ok(Err(current)) => {
-            return (StatusCode::CONFLICT, Json(json!({ "error": "The queue changed meanwhile", "queueRevision": current, "session": view(&core).await }))).into_response();
+            return (StatusCode::CONFLICT, Json(json!({ "error": "The queue changed meanwhile", "queueRevision": current, "session": view(&core, None).await }))).into_response();
         }
         Err(message) => return error(StatusCode::BAD_REQUEST, message),
     }
     if let Some(track_id) = change.play_track_id {
         play_track(&core, &track_id).await;
     }
-    Json(view(&core).await).into_response()
+    Json(view(&core, None).await).into_response()
 }
 
 async fn play_track(core: &Core, track_id: &str) {
@@ -525,7 +531,7 @@ enum Command {
     Volume { volume: f64 },
 }
 
-async fn command(State(core): State<Shared>, Json(command): Json<Command>) -> Response {
+async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
     let _operation = core.operation.lock().await;
     let result: Result<(), String> = match command {
         Command::PlayTrack { track_id } => {
@@ -616,7 +622,7 @@ async fn command(State(core): State<Shared>, Json(command): Json<Command>) -> Re
         }
     };
     match result {
-        Ok(()) => Json(view(&core).await).into_response(),
+        Ok(()) => Json(view(&core, query.queue).await).into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
@@ -1170,5 +1176,35 @@ mod driver_tests {
         let response = h.http.post(format!("{}/api/session/queue", h.base)).json(&json!({ "base": 0, "queue": queued })).send().await.unwrap();
         assert_eq!(response.status(), StatusCode::CONFLICT);
         assert_eq!(response.json::<Value>().await.unwrap()["queueRevision"], 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn session_omits_only_the_queue_the_client_already_has() {
+        let h = Harness::start().await;
+        let queued = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [track("a")] });
+        let initial = h.post("/api/session/queue", json!({ "base": 0, "queue": queued.clone() })).await;
+        assert_eq!(initial["queueRevision"], 1);
+        assert_eq!(initial["queue"]["current"], item("a"));
+
+        let known: Value = h.http.get(format!("{}/api/session?queue=1", h.base)).send().await.unwrap().json().await.unwrap();
+        assert!(known.get("queue").is_none());
+        assert_eq!(known["queueRevision"], 1);
+        let command = h.post("/api/session/command?queue=1", json!({ "action": "pause" })).await;
+        assert!(command.get("queue").is_none());
+        assert_eq!(command["playing"], false);
+
+        let full: Value = h.http.get(format!("{}/api/session", h.base)).send().await.unwrap().json().await.unwrap();
+        assert_eq!(full["queue"], initial["queue"], "a full recovery read always includes the queue");
+
+        h.post("/api/session/queue", json!({ "base": 1, "queue": queued })).await;
+        let stale: Value = h.http.get(format!("{}/api/session?queue=1", h.base)).send().await.unwrap().json().await.unwrap();
+        assert_eq!(stale["queueRevision"], 2);
+        assert_eq!(stale["queue"]["revision"], 2);
+
+        let conflict = h.http.post(format!("{}/api/session/queue", h.base))
+            .json(&json!({ "base": 1, "queue": initial["queue"] })).send().await.unwrap();
+        assert_eq!(conflict.status(), StatusCode::CONFLICT);
+        let conflict: Value = conflict.json().await.unwrap();
+        assert_eq!(conflict["session"]["queue"], stale["queue"]);
     }
 }
