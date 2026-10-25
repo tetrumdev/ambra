@@ -2,9 +2,12 @@
 name: Deploy static content to Pages
 
 on:
-  # Runs on pushes targeting the default branch
+  # Rebuild when the website or its deployment workflow changes.
   push:
     branches: ['main']
+    paths:
+      - 'website/**'
+      - '.github/workflows/deploy.yml'
 
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
@@ -41,13 +44,23 @@ jobs:
         run: bun run build
       - name: Create SPA fallback
         run: cp dist/index.html dist/404.html
+      - name: Check whether Pages is enabled
+        id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          enabled=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.has_pages')
+          echo "enabled=$enabled" >> "$GITHUB_OUTPUT"
       - name: Setup Pages
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/configure-pages@v5
       - name: Upload artifact
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/upload-pages-artifact@v4
         with:
           # Upload dist folder
           path: './website/dist'
       - name: Deploy to GitHub Pages
+        if: steps.pages.outputs.enabled == 'true'
         id: deployment
         uses: actions/deploy-pages@v4
