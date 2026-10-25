@@ -69,4 +69,4 @@ We at Quantium Labs really care about quality in our products over everything el
 
 ### Contact Us
 
-[This is where we'll have our contact email when we have a domain]
+contact@tetrum.dev
