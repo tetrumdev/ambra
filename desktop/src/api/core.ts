@@ -5,6 +5,8 @@ import { localMusicTrack } from "./localMusic";
 import { getPersistentItem } from "../utils/persistentStorage";
 import type { AudioQuality, Track } from "../types/music";
 import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
+import { invokeOn } from "../utils/playbackTarget";
+import { nativeAudioSource } from "../utils/nativeAudioSource";
 
 /**
  * The server's core decides what plays for every device (server/src/session.rs). This is
@@ -31,6 +33,8 @@ export type CoreView = {
   queueRevision: number;
   queue: PersistedQueue & { revision?: number };
 };
+/** A view as it arrives: the queue is left out when this app already has that revision. */
+type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"] };
 
 const QUEUE_KEY = "ambra.queue.v1";
 let view: CoreView | null = null;
@@ -41,6 +45,13 @@ let chain: Promise<unknown> = Promise.resolve();
 let following = false;
 
 export const coreView = () => view;
+
+/** Prepare where the song will play, including when this app is only a remote. */
+export async function warmCoreTrack(track: Track) {
+  const output = view?.output;
+  if (output) await invokeOn(output, "warm_native_audio", { source: nativeAudioSource(track) });
+}
+
 /**
  * Seconds since `view`'s position was true: from when the server took it, where this app
  * knows the server's clock, so the trip here doesn't leave it behind; else from its arrival.
@@ -57,15 +68,29 @@ export function subscribeCore(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
-function accept(next: CoreView) {
+function accept(next: ArrivingView) {
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return;
   if (view && next.instanceId !== view.instanceId) resetServerClock();
-  next = JSON.parse(fromStorage(JSON.stringify(next))) as CoreView;
-  if (next.queue.tracks) next.queue.tracks = next.queue.tracks.map(track => track.provider === "local" ? localMusicTrack(track) : track);
-  view = next;
+  const { queue: arrived, ...rest } = next;
+  let queue: CoreView["queue"];
+  if (arrived === undefined) {
+    // Left out as already known; a restarted or different server's queue can't be assumed to match.
+    if (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision) {
+      void request<ArrivingView>("/api/session").then(accept).catch(() => {});
+      return;
+    }
+    queue = view.queue;
+  } else {
+    queue = JSON.parse(fromStorage(JSON.stringify(arrived))) as CoreView["queue"];
+    if (queue.tracks) queue.tracks = queue.tracks.map(track => track.provider === "local" ? localMusicTrack(track) : track);
+  }
+  view = { ...JSON.parse(fromStorage(JSON.stringify(rest))) as Omit<CoreView, "queue">, queue };
   viewAt = performance.now();
   for (const listener of listeners) listener();
 }
+
+/** Tells the server which queue this app has, so an unchanged one isn't sent again. */
+const knownQueue = () => view ? `queue=${view.queueRevision}` : "";
 
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { signal: AbortSignal.timeout(35_000) } : {
@@ -84,8 +109,8 @@ export function followCore() {
   void (async () => {
     for (;;) {
       try {
-        const since = view ? `?since=${view.revision}&wait=5` : "";
-        accept(await request<CoreView>(`/api/session${since}`));
+        const since = view ? `?since=${view.revision}&wait=5&${knownQueue()}` : "";
+        accept(await request<ArrivingView>(`/api/session${since}`));
       } catch {
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
@@ -109,7 +134,7 @@ export function coreCommand(action: string, details: Record<string, unknown> = {
     unsentQueueChange.playTrackId = details.trackId;
     return unsentQueueChange.done;
   }
-  return inOrder(async () => accept(await request<CoreView>("/api/session/command", { action, ...details })));
+  return inOrder(async () => accept(await request<ArrivingView>(`/api/session/command?${knownQueue()}`, { action, ...details })));
 }
 
 /** The queue as the server has it, with this app's copies of its songs where it knows them. */
