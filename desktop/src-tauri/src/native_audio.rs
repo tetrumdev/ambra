@@ -181,6 +181,21 @@ enum WorkerCommand {
     Shutdown,
 }
 
+impl WorkerCommand {
+    /// Asks without changing playback or the output, so it doesn't put off letting an idle device go.
+    fn only_reads(&self) -> bool {
+        matches!(
+            self,
+            Self::Warm { .. }
+                | Self::ListDevices { .. }
+                | Self::GetExclusiveMode { .. }
+                | Self::GetVolume { .. }
+                | Self::GetAudioSettings { .. }
+                | Self::GetDspStatus { .. }
+        )
+    }
+}
+
 pub fn setup(app: &mut App) {
     let (command_tx, command_rx) = unbounded();
     let status = Arc::new(Mutex::new(PlaybackStatus::default()));
@@ -758,13 +773,28 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn run(mut self) {
+        // When an idle output is let go: counted from when it went idle, not from the last
+        // command, since apps ask for the device list and settings every few seconds and that
+        // alone would keep an exclusive device held forever.
+        let mut release_at: Option<Instant> = None;
         loop {
             let command = if self.desired_playing && self.current_source.is_some() {
+                release_at = None;
                 self.command_rx.try_recv().ok()
             } else if self.output.is_some() {
-                match self.command_rx.recv_timeout(PAUSED_DEVICE_RELEASE_TIMEOUT) {
+                let due = *release_at.get_or_insert_with(|| Instant::now() + PAUSED_DEVICE_RELEASE_TIMEOUT);
+                // A steady stream of queued reads must not win over an expired deadline.
+                if Instant::now() >= due {
+                    release_at = None;
+                    if let Err(error) = self.release_paused_output() {
+                        self.fail(error);
+                    }
+                    continue;
+                }
+                match self.command_rx.recv_timeout(due.saturating_duration_since(Instant::now())) {
                     Ok(command) => Some(command),
                     Err(RecvTimeoutError::Timeout) => {
+                        release_at = None;
                         if let Err(error) = self.release_paused_output() {
                             self.fail(error);
                         }
@@ -773,12 +803,16 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     Err(RecvTimeoutError::Disconnected) => break,
                 }
             } else {
+                release_at = None;
                 match self.command_rx.recv() {
                     Ok(command) => Some(command),
                     Err(_) => break,
                 }
             };
             if let Some(command) = command {
+                if !command.only_reads() {
+                    release_at = None;
+                }
                 if self.handle_command(command) {
                     break;
                 }
