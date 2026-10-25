@@ -1,8 +1,7 @@
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
-import { nativeAudioSource } from "../utils/nativeAudioSource";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { coreView, subscribeCore, warmCoreTrack } from "../api/core";
 import { ProviderIcon } from "./ProviderIcon";
 import type { GlobalTrackId, Track } from "../types/music";
 import { useRangeSelection } from "../hooks/useRangeSelection";
@@ -133,11 +132,11 @@ export function TrackList({
     move: (ids, sourceId, target) => movePackaged(ids, shownPackages, sourceId, target),
   } : undefined, [shownPackages]);
   const firstTrack = tracks[0];
+  const outputId = useSyncExternalStore(subscribeCore, () => coreView()?.output?.endpointId);
   useEffect(() => {
-    if (!isTauri() || !firstTrack || !isTrackAvailable(firstTrack, connected)) return;
-    void invoke("warm_native_audio", { source: nativeAudioSource(firstTrack) })
-      .catch(() => {});
-  }, [firstTrack, connected]);
+    if (!firstTrack || !isTrackAvailable(firstTrack, connected)) return;
+    void warmCoreTrack(firstTrack).catch(() => {});
+  }, [firstTrack, connected, outputId]);
   const warmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(warmTimer.current), []);
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
@@ -278,8 +277,8 @@ export function TrackList({
       case "cancelWarm": clearTimeout(warmTimer.current); break;
       case "warm":
         clearTimeout(warmTimer.current);
-        if (isTauri()) warmTimer.current = setTimeout(() => {
-          void invoke("warm_native_audio", { source: nativeAudioSource(track) }).catch(() => {});
+        warmTimer.current = setTimeout(() => {
+          void warmCoreTrack(track).catch(() => {});
         }, 100);
         break;
     }
