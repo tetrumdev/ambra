@@ -100,6 +100,13 @@ export async function connectToServer() {
   sendTokenWithFetch();
 }
 
+/** Outside the desktop app (the phone remote): talk to `baseUrl` as a paired device. */
+export function connectFromBrowser(baseUrl: string, accessToken: string | null) {
+  serverBaseUrl = baseUrl.replace(/\/$/, "");
+  token = accessToken;
+  sendTokenWithFetch();
+}
+
 /** For tests: pretend to be joined to `baseUrl` with `accessToken`. */
 export function setServerForTesting(baseUrl: string, accessToken: string | null) {
   serverBaseUrl = baseUrl;
