@@ -1,16 +1,17 @@
-import { createAudioPlayer, setAudioModeAsync, type AudioPlayer } from "expo-audio";
+import { createAudioPlayer, type AudioPlayer } from "expo-audio";
 import { Directory, File } from "expo-file-system";
 import { widgetsDirectory } from "expo-widgets";
 import { AppState } from "react-native";
 import { ActivitySession, activitySnapshot } from "./activitySession";
 import { currentTrack, sessionView, sessionViewAge, subscribe } from "./client";
 import NowPlayingActivity from "./NowPlayingActivity.ios";
+import { configureAudioSession, phoneAudioActive } from "./audioSession";
 
 /** A silent, mixing background lease. It never owns Now Playing or forwards audio/headset events. */
 function backgroundLease() {
   let player: AudioPlayer | null = null;
   return async (active: boolean) => {
-    if (!active) {
+    if (!active || phoneAudioActive()) {
       player?.remove();
       player = null;
       return;
@@ -21,7 +22,8 @@ function backgroundLease() {
       if (AppState.currentState === "active" && !player.playing) player.play();
       return;
     }
-    await setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: "mixWithOthers", allowsRecording: false });
+    await configureAudioSession();
+    if (phoneAudioActive()) return;
     player = createAudioPlayer(require("../assets/silence.wav"), { updateInterval: 1000, allowsExternalPlayback: false });
     player.loop = true;
     player.volume = 0;
