@@ -45,14 +45,16 @@ export function Swirl({ track, playing, cover, darkened = false }: {
   const [palette, setPalette] = useState(black);
   const provider = track?.provider;
   const nativeCover = track?.nativeCover;
+  const artwork = track?.cover;
+  const trackId = track?.globalId;
   useEffect(() => {
     if (!provider) return;
     let cancelled = false;
-    void coverPalette(provider, nativeCover ?? null).then(next => {
-      if (!cancelled && next?.colors.length === 4) setPalette({ colors: separateCollapsedPalette(next.colors), weights: next.weights });
+    void coverPalette(provider, nativeCover ?? null, artwork).then(next => {
+      if (!cancelled) setPalette(next ? { colors: separateCollapsedPalette(next.colors), weights: next.weights } : black);
     });
     return () => { cancelled = true; };
-  }, [provider, nativeCover]);
+  }, [provider, nativeCover, artwork, trackId]);
 
   const colors = provider ? palette : black;
   const alphas = useMemo(() => darkened ? backdropAlphas(colors.colors, colors.weights) : [0, 0, 0, 0], [colors, darkened]);
@@ -130,7 +132,8 @@ export function Swirl({ track, playing, cover, darkened = false }: {
 
     const draw = () => {
       frame.current = 0;
-      if (disposed) return;
+      // iOS forbids submitting GPU work while the app is inactive or locked.
+      if (disposed || AppState.currentState !== "active") return;
       const now = performance.now();
       const swirlTarget = motion.current.playing ? 1 : 0;
       const moving = travel.speed > 0 || swirlTarget > 0;
@@ -199,7 +202,10 @@ export function Swirl({ track, playing, cover, darkened = false }: {
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(reduced => { motion.current.reduced = reduced; });
     const reduceMotion = AccessibilityInfo.addEventListener("reduceMotionChanged", reduced => { motion.current.reduced = reduced; });
-    const appState = AppState.addEventListener("change", state => { if (state === "active") motion.current.wake(); });
+    const appState = AppState.addEventListener("change", state => {
+      if (state === "active") motion.current.wake();
+      else { cancelAnimationFrame(frame.current); frame.current = 0; }
+    });
     return () => {
       reduceMotion.remove();
       appState.remove();
@@ -207,7 +213,7 @@ export function Swirl({ track, playing, cover, darkened = false }: {
   }, []);
 
   return (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.black }]} pointerEvents="none">
+    <View collapsable={false} style={[StyleSheet.absoluteFill, { backgroundColor: theme.black }]} pointerEvents="none">
       <GLView
         key={`${width}x${height}`}
         msaaSamples={0}

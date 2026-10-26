@@ -1,7 +1,7 @@
 import { useCallback, useEffect, type ReactNode } from "react";
 import { BackHandler, Pressable, StyleSheet, View, useWindowDimensions } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
-import Animated, { Easing, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
+import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { colors, haptic } from "./theme";
@@ -33,7 +33,10 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
   const closing = useSharedValue(false);
   const passed = useSharedValue(false);
 
-  useEffect(() => { shown.set(withSpring(1, rise)); }, [shown]);
+  useEffect(() => {
+    shown.set(withSpring(1, rise));
+    return () => { cancelAnimation(shown); cancelAnimation(drag); };
+  }, [shown, drag]);
   const close = useCallback(() => {
     if (closing.get()) return;
     closing.set(true);
@@ -45,21 +48,20 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
   }, [close]);
 
   const pan = usePanGesture({
+    runOnJS: true,
     activeOffsetY: [-8, 8],
     failOffsetX: [-24, 24],
     onUpdate: event => {
-      "worklet";
       // Resists being pulled up past its height; follows the finger down.
       const y = event.translationY;
       drag.set(y >= 0 ? y : -Math.sqrt(-y) * 2);
       const past = y > Math.min(120, height.get() * 0.3);
       if (past !== passed.get()) {
         passed.set(past);
-        if (past) scheduleOnRN(haptic.select);
+        if (past) haptic.select();
       }
     },
     onDeactivate: event => {
-      "worklet";
       passed.set(false);
       if (!event.canceled && !closing.get() && (event.translationY > Math.min(120, height.get() * 0.3) || (event.translationY > 20 && event.velocityY > 700))) {
         closing.set(true);
@@ -67,7 +69,6 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
       } else drag.set(withSpring(0, settle));
     },
     onFinalize: event => {
-      "worklet";
       if (event.canceled) drag.set(withSpring(0, settle));
     },
   });
@@ -94,9 +95,9 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
         style={[styles.sheet, tall ? { height: screenHeight - insets.top - 16 } : { maxHeight: screenHeight - insets.top - 16 }, { paddingBottom: insets.bottom + 12 }, sheetStyle]}
       >
         {dragAnywhere
-          ? <GestureDetector gesture={pan}><View><View style={styles.handle} />{grip}{content}</View></GestureDetector>
+          ? <GestureDetector gesture={pan}><View collapsable={false}><View style={styles.handle} />{grip}{content}</View></GestureDetector>
           : <>
-            <GestureDetector gesture={pan}><View><View style={styles.handle} />{grip}</View></GestureDetector>
+            <GestureDetector gesture={pan}><View collapsable={false}><View style={styles.handle} />{grip}</View></GestureDetector>
             {content}
           </>}
       </Animated.View>

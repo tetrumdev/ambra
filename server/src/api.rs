@@ -13,7 +13,7 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::Body,
     extract::{Path, Query, Request, State},
     http::{
@@ -2118,6 +2118,7 @@ async fn dash_manifest(
 async fn hls_manifest(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
+    access: Option<Extension<crate::access::MediaAccessToken>>,
 ) -> Result<Response, ApiError> {
     ensure_tidal_provider(&provider)?;
 
@@ -2147,6 +2148,7 @@ async fn hls_manifest(
         start_number,
         segment_count,
         track_duration_seconds,
+        access.as_ref().map(|Extension(token)| token.0.as_str()),
     )?;
 
     let mut response = Response::builder()
@@ -2168,6 +2170,7 @@ fn hls_playlist_body(
     start_number: u32,
     segment_count: u32,
     track_duration_seconds: f64,
+    access_token: Option<&str>,
 ) -> Result<String, ApiError> {
     if timescale == 0 || segment_duration == 0 || segment_count == 0 {
         return Err(ApiError::internal("Invalid segmented audio timing"));
@@ -2176,14 +2179,17 @@ fn hls_playlist_body(
     let nominal_duration = f64::from(segment_duration) / f64::from(timescale);
     let target_duration = nominal_duration.ceil().max(1.0) as u64;
     let mut remaining = track_duration_seconds;
+    let authentication = access_token.map_or_else(String::new, |token| {
+        format!("?{}={}", crate::access::TOKEN_PARAMETER, urlencoding::encode(token))
+    });
     let mut playlist = format!(
-        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{target_duration}\n#EXT-X-MEDIA-SEQUENCE:{start_number}\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"dash/init\"\n"
+        "#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-TARGETDURATION:{target_duration}\n#EXT-X-MEDIA-SEQUENCE:{start_number}\n#EXT-X-PLAYLIST-TYPE:VOD\n#EXT-X-INDEPENDENT-SEGMENTS\n#EXT-X-MAP:URI=\"dash/init{authentication}\"\n"
     );
 
     for offset in 0..segment_count {
         let duration = remaining.min(nominal_duration).max(0.001);
         let segment_number = start_number.saturating_add(offset);
-        playlist.push_str(&format!("#EXTINF:{duration:.6},\ndash/{segment_number}\n"));
+        playlist.push_str(&format!("#EXTINF:{duration:.6},\ndash/{segment_number}{authentication}\n"));
         remaining = (remaining - nominal_duration).max(0.0);
     }
     playlist.push_str("#EXT-X-ENDLIST\n");
@@ -2776,7 +2782,7 @@ mod tests {
 
     #[test]
     fn creates_native_hls_playlist_from_dash_timing() {
-        let playlist = hls_playlist_body(44_100, 176_128, 1, 2, 8.0).unwrap();
+        let playlist = hls_playlist_body(44_100, 176_128, 1, 2, 8.0, None).unwrap();
 
         assert!(playlist.contains("#EXT-X-MAP:URI=\"dash/init\""));
         assert!(playlist.contains("#EXTINF:3.993832,\ndash/1"));
@@ -2786,12 +2792,20 @@ mod tests {
 
     #[test]
     fn ends_playlist_at_short_final_audio_fragment() {
-        let playlist = hls_playlist_body(44_100, 176_128, 1, 59, 10_329_396.0 / 44_100.0).unwrap();
+        let playlist = hls_playlist_body(44_100, 176_128, 1, 59, 10_329_396.0 / 44_100.0, None).unwrap();
         let final_duration = (10_329_396.0 - 58.0 * 176_128.0) / 44_100.0;
         assert!(playlist.ends_with(&format!(
             "#EXTINF:{final_duration:.6},\ndash/59\n#EXT-X-ENDLIST\n"
         )));
         assert!(!playlist.contains("dash/60"));
+    }
+
+    #[test]
+    fn native_hls_authenticates_initialization_and_every_segment() {
+        let playlist = hls_playlist_body(44_100, 176_128, 1, 2, 8.0, Some("phone+token&value")).unwrap();
+        assert!(playlist.contains("#EXT-X-MAP:URI=\"dash/init?access_token=phone%2Btoken%26value\""));
+        assert!(playlist.contains("\ndash/1?access_token=phone%2Btoken%26value\n"));
+        assert!(playlist.contains("\ndash/2?access_token=phone%2Btoken%26value\n"));
     }
 }
 

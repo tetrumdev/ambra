@@ -1,0 +1,18 @@
+build:
+  name: Unsigned Ambra IPA for SideStore
+  steps:
+    - eas/checkout
+    - eas/install_node_modules
+    - eas/prebuild
+    - run:
+        name: Install iOS dependencies
+        working_directory: ios
+        command: pod install
+    - run:
+        name: Archive and package unsigned iPhone app
+        command: bash scripts/build-sidestore.sh
+    - eas/upload_artifact:
+        name: SideStore IPA
+        inputs:
+          type: application-archive
+          path: mobile/.expo/sidestore/Ambra.ipa

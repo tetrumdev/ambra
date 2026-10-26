@@ -8,7 +8,6 @@ import { Unpaired, follow, restore } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
 import { colors } from "./src/theme";
-import { useLiveActivity } from "./src/useLiveActivity";
 import { usePhoneOutput } from "./src/usePhoneOutput";
 
 type Saved = { address: string | null; paired: boolean };
@@ -20,7 +19,6 @@ export default function App() {
   ]);
   const [saved, setSaved] = useState<Saved | null>(null);
   usePhoneOutput(saved?.paired ?? false);
-  useLiveActivity(saved?.paired ?? false);
   useEffect(() => { void restore().then(setSaved); }, []);
 
   useEffect(() => {

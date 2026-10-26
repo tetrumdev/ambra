@@ -5,7 +5,7 @@ import { ActivityIndicator, FlatList, Platform, RefreshControl, StyleSheet, Text
 import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Artwork } from "./Artwork";
-import { changeQueue, command, currentTrack, megaPlaylist, serverAddress, subscribe, type PlaylistContents, type QueueItem, type SessionView, type Track } from "./client";
+import { changeQueue, command, currentTrack, megaPlaylist, serverAddress, subscribe, thumbnailArtwork, type PlaylistContents, type QueueItem, type SessionView, type Track } from "./client";
 import { Icon } from "./Icons";
 import { Menu, type MenuAction } from "./Menu";
 import { editUpcoming, enqueueEntries, playEntries, playlistEntries, shuffledEntries } from "./queueModel";
@@ -93,7 +93,7 @@ const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, 
 });
 
 /** MEGA, as desktop's playlist page: tap a song to play from it, hold it for its options. */
-export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset }: { view: SessionView | null; bottomInset: number }) {
+export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset, onMenuVisibilityChange }: { view: SessionView | null; bottomInset: number; onMenuVisibilityChange?: (visible: boolean) => void }) {
   const insets = useSafeAreaInsets();
   const [contents, setContents] = useState<PlaylistContents | null>(null);
   const [loading, setLoading] = useState(true);
@@ -168,7 +168,7 @@ export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset
     <View style={{ paddingTop: insets.top + 24 }}>
       <View style={styles.hero}>
         <View style={styles.mosaic}>
-          {Array.from({ length: 4 }, (_, index) => <Image key={index} source={tracks[index]?.cover || placeholder} contentFit={tracks[index]?.cover ? "cover" : "contain"} transition={150} style={styles.tile} />)}
+          {Array.from({ length: 4 }, (_, index) => <Image key={index} source={thumbnailArtwork(tracks[index]) || placeholder} contentFit={tracks[index]?.cover ? "cover" : "contain"} enforceEarlyResizing cachePolicy="disk" transition={0} style={styles.tile} />)}
         </View>
         <View style={styles.heroText}>
           <Text style={styles.title} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.6}>{contents?.playlist.name ?? "MEGA"}</Text>
@@ -207,8 +207,8 @@ export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset
         scrollIndicatorInsets={{ bottom: bottomInset }}
         extraData={`${now?.globalId}:${playing}`}
         initialNumToRender={12}
-        maxToRenderPerBatch={12}
-        windowSize={9}
+        maxToRenderPerBatch={8}
+        windowSize={5}
         removeClippedSubviews={Platform.OS === "android"}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { haptic.tap(); setRefreshing(true); setReload(value => value + 1); }} tintColor="white" colors={["black"]} progressBackgroundColor="white" progressViewOffset={insets.top} />}
         ListHeaderComponent={header}
@@ -217,13 +217,13 @@ export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset
       />
       <View pointerEvents="none" style={[styles.statusShade, { height: insets.top }]} />
       <ToastView toast={toast} bottom={bottomInset + 8} />
-      {menu !== null && tracks[menu] && <Menu track={tracks[menu]} actions={menuActions(menu)} onClose={closeMenu} />}
+      {menu !== null && tracks[menu] && <Menu track={tracks[menu]} actions={menuActions(menu)} onClose={closeMenu} onVisibilityChange={onMenuVisibilityChange} />}
     </View>
   );
 });
 
 /** The shared queue, laid out like desktop's: what's playing, then what's next. */
-export function QueueSheet({ view, onClose }: { view: SessionView | null; onClose: () => void }) {
+export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: SessionView | null; onClose: () => void; onMenuVisibilityChange?: (visible: boolean) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [menu, setMenu] = useState<number | null>(null);
   const now = currentTrack(view);
@@ -274,6 +274,9 @@ export function QueueSheet({ view, onClose }: { view: SessionView | null; onClos
         <FlatList
           style={styles.queueList}
           data={upcoming}
+          initialNumToRender={12}
+          maxToRenderPerBatch={8}
+          windowSize={5}
           keyExtractor={(item, index) => `${item.globalTrackId}:${index}`}
           extraData={byId}
           ListHeaderComponent={<View>
@@ -293,7 +296,7 @@ export function QueueSheet({ view, onClose }: { view: SessionView | null; onClos
         />
       </>}
     </Sheet>
-    {menu !== null && menuTrack && <Menu track={menuTrack} onClose={() => setMenu(null)} actions={[
+    {menu !== null && menuTrack && <Menu track={menuTrack} onClose={() => setMenu(null)} onVisibilityChange={onMenuVisibilityChange} actions={[
       { label: "Play from Here", icon: "skip", run: () => edit(menu, "play") },
       { label: "Remove from Queue", icon: "remove", run: () => edit(menu, "remove") },
     ]} />}
