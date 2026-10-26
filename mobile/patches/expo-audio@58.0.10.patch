@@ -1,0 +1,108 @@
+diff --git a/android/src/main/java/expo/modules/audio/AudioPlayer.kt b/android/src/main/java/expo/modules/audio/AudioPlayer.kt
+index fb2d0b57fb8718df04e5c073b70837b2658f2c16..9cefe31cf59e7157a53a9d7a483195973eb9cb18 100644
+--- a/android/src/main/java/expo/modules/audio/AudioPlayer.kt
++++ b/android/src/main/java/expo/modules/audio/AudioPlayer.kt
+@@ -68,6 +68,17 @@ class AudioPlayer(
+   override var lockScreenOptions: AudioLockScreenOptions? = null
+   override var mediaSession: MediaSession = buildBasicMediaSession(context, ref) { requestPlay() }
+   override val serviceConnection = AudioPlaybackServiceConnection(WeakReference(this), appContext)
++  // Ambra keeps queue decisions in its server rather than a native playlist.
++  override val supportsNextTrack = true
++  override val supportsPreviousTrack = true
++
++  override fun nextTrack() {
++    emit("remoteCommand", mapOf("action" to "next"))
++  }
++
++  override fun previousTrack() {
++    emit("remoteCommand", mapOf("action" to "previous"))
++  }
+ 
+   override val isLive: Boolean
+     get() = ref.isCurrentMediaItemLive
+diff --git a/android/src/main/java/expo/modules/audio/service/AudioControlsService.kt b/android/src/main/java/expo/modules/audio/service/AudioControlsService.kt
+index 53c36f7e3c0a0bcb8b4de1f5e6d2d3e214d3fbf2..266ae0ca8d50b4e3b8b099399f120f3e973b6fec 100644
+--- a/android/src/main/java/expo/modules/audio/service/AudioControlsService.kt
++++ b/android/src/main/java/expo/modules/audio/service/AudioControlsService.kt
+@@ -407,6 +407,17 @@ class AudioControlsService : MediaSessionService() {
+     val backwardMs = seekIntervalMs(options?.seekBackwardIntervalSeconds)
+ 
+     return object : ForwardingPlayer(player) {
++      // Ambra's single source has no native next item; media buttons use its shared queue.
++      override fun seekToNextMediaItem() = playable.nextTrack()
++
++      override fun seekToNext() = playable.nextTrack()
++
++      override fun seekToPreviousMediaItem() = playable.previousTrack()
++
++      override fun seekToPrevious() = playable.previousTrack()
++
++      override fun isCommandAvailable(command: Int): Boolean = availableCommands.contains(command)
++
+       override fun getSeekForwardIncrement(): Long = forwardMs
+ 
+       override fun getSeekBackIncrement(): Long = backwardMs
+@@ -421,6 +432,14 @@ class AudioControlsService : MediaSessionService() {
+ 
+       override fun getAvailableCommands(): Player.Commands {
+         val commands = super.getAvailableCommands().buildUpon()
++        if (options?.showNextTrack == true && playable.supportsNextTrack) {
++          commands.add(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM)
++          commands.add(Player.COMMAND_SEEK_TO_NEXT)
++        }
++        if (options?.showPreviousTrack == true && playable.supportsPreviousTrack) {
++          commands.add(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM)
++          commands.add(Player.COMMAND_SEEK_TO_PREVIOUS)
++        }
+         if (isLive) {
+           commands.remove(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+         }
+diff --git a/build/AudioModule.types.d.ts b/build/AudioModule.types.d.ts
+index 0d63c9b949cfae7a101902fc3bb70fcf46094f68..9a618100fc918297581be300a2003dfb810b47ec 100644
+--- a/build/AudioModule.types.d.ts
++++ b/build/AudioModule.types.d.ts
+@@ -218,6 +218,8 @@ export type AudioSampleChannel = {
+  * Use `player.addListener()` to subscribe to these events.
+  */
+ export type AudioEvents = {
++    /** Ambra: delegate headset and system track skips to the shared queue. */
++    remoteCommand(event: { action: 'next' | 'previous' }): void;
+     /** Fired when the player's status changes (play/pause/seek/load and so on.). */
+     playbackStatusUpdate(status: AudioStatus): void;
+     /** Fired when audio sampling is enabled and new sample data is available. */
+diff --git a/ios/AudioPlayer.swift b/ios/AudioPlayer.swift
+index 0f68a52003416eb0e7be03d44dba1be76cd38116..7018388e9ee42f5accf75b8c1b61ed9df4821e0c 100644
+--- a/ios/AudioPlayer.swift
++++ b/ios/AudioPlayer.swift
+@@ -13,6 +13,18 @@ public class AudioPlayer: SharedRef<AVPlayer>, Playable, LockScreenPlayable {
+   var isActiveForLockScreen = false
+   var metadata: Metadata?
+   var lockScreenOptions: LockScreenOptions?
++  // Ambra keeps queue decisions in its server rather than a native playlist.
++  var supportsNextTrack: Bool { true }
++  var supportsPreviousTrack: Bool { true }
++
++  func nextTrack() {
++    emit(event: "remoteCommand", payload: ["action": "next"])
++  }
++
++  func previousTrack() {
++    emit(event: "remoteCommand", payload: ["action": "previous"])
++  }
++
+   var currentRate: Float = 1.0 {
+     didSet {
+       currentRate = max(0, currentRate)
+diff --git a/src/AudioModule.types.ts b/src/AudioModule.types.ts
+index 3194a8ebd1b91793d03a1692c563b5d2e83c2738..1416c3fd7aa1437f10af091987435d4053edac27 100644
+--- a/src/AudioModule.types.ts
++++ b/src/AudioModule.types.ts
+@@ -277,6 +277,8 @@ export type AudioSampleChannel = {
+  * Use `player.addListener()` to subscribe to these events.
+  */
+ export type AudioEvents = {
++  /** Ambra: delegate headset and system track skips to the shared queue. */
++  remoteCommand(event: { action: 'next' | 'previous' }): void;
+   /** Fired when the player's status changes (play/pause/seek/load and so on.). */
+   playbackStatusUpdate(status: AudioStatus): void;
+   /** Fired when audio sampling is enabled and new sample data is available. */

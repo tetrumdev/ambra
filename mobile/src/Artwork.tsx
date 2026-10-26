@@ -1,5 +1,5 @@
 import { Image } from "expo-image";
-import type { Track } from "./client";
+import { thumbnailArtwork, type Track } from "./client";
 
 const placeholder = require("../assets/ambra.png");
 
@@ -10,12 +10,15 @@ export function Artwork({
   track: Track | null | undefined;
   size?: number;
 }) {
+  const source = thumbnailArtwork(track);
   return (
     <Image
-      source={track?.cover || placeholder}
+      source={source || placeholder}
       recyclingKey={track?.globalId ?? "empty"}
-      contentFit={track?.cover ? "cover" : "contain"}
-      transition={120}
+      contentFit={source ? "cover" : "contain"}
+      enforceEarlyResizing
+      cachePolicy="disk"
+      transition={0}
       style={{
         width: size,
         height: size,

@@ -1,8 +1,8 @@
-import type { AudioMetadata, AudioPlayer, AudioStatus } from "expo-audio";
+import type { AudioEvents, AudioMetadata, AudioPlayer, AudioStatus } from "expo-audio";
 
 export const PHONE_DEVICE_ID = "system";
 export type PhonePlayer = Pick<AudioPlayer, "playing" | "isLoaded" | "volume" | "currentTime" | "duration" | "play" | "pause" | "seekTo" | "remove" | "setActiveForLockScreen" | "updateLockScreenMetadata"> & {
-  addListener(event: "playbackStatusUpdate", callback: (status: AudioStatus) => void): { remove(): void };
+  addListener<Event extends "playbackStatusUpdate" | "remoteCommand">(event: Event, callback: AudioEvents[Event]): { remove(): void };
 };
 type Host = {
   create(source: string): PhonePlayer;
@@ -18,6 +18,7 @@ type Host = {
 export class PhonePlayback {
   private player: PhonePlayer | null = null;
   private subscription: { remove(): void } | null = null;
+  private remoteSubscription: { remove(): void } | null = null;
   private loading: AbortController | null = null;
   private native: AudioStatus | null = null;
   private source: string | null = null;
@@ -27,6 +28,7 @@ export class PhonePlayback {
   private intendedPlaying = false;
   private previous: { position: number; at: number; playing: boolean } | null = null;
   private volume = 100;
+  private metadataSignature = "";
 
   constructor(private host: Host) {}
 
@@ -87,10 +89,17 @@ export class PhonePlayback {
       this.player = player;
       player.volume = this.volume / 100;
       this.subscription = player.addListener("playbackStatusUpdate", status => this.observe(player, status));
+      this.remoteSubscription = player.addListener("remoteCommand", event => {
+        if (this.player === player && this.host.ownsOutput() && (event.action === "next" || event.action === "previous")) {
+          this.host.transport(event.action);
+        }
+      });
       await this.ready(player, controller.signal);
       await player.seekTo(Math.max(0, position));
       if (controller.signal.aborted || !this.host.ownsOutput()) throw new Error("Playback was stopped.");
-      player.setActiveForLockScreen(true, this.host.metadata(), { showSeekForward: false, showSeekBackward: false, showNextTrack: false, showPreviousTrack: false });
+      const metadata = this.host.metadata();
+      player.setActiveForLockScreen(true, metadata, { showSeekForward: false, showSeekBackward: false, showNextTrack: true, showPreviousTrack: true });
+      this.metadataSignature = JSON.stringify(metadata);
       if (autoplay) player.play();
     } catch (reason) {
       if (!controller.signal.aborted) {
@@ -143,13 +152,25 @@ export class PhonePlayback {
     }
   }
 
-  updateMetadata() { this.player?.updateLockScreenMetadata(this.host.metadata()); }
+  updateMetadata() {
+    if (!this.player || this.loading) return;
+    const metadata = this.host.metadata();
+    const signature = JSON.stringify(metadata);
+    // Updating iOS metadata re-registers remote commands; position reports need no refresh.
+    if (signature !== this.metadataSignature) {
+      this.player.updateLockScreenMetadata(metadata);
+      this.metadataSignature = signature;
+    }
+  }
 
   release() {
     this.loading?.abort();
     this.loading = null;
     this.subscription?.remove();
     this.subscription = null;
+    this.remoteSubscription?.remove();
+    this.remoteSubscription = null;
+    this.metadataSignature = "";
     const player = this.player;
     this.player = null;
     this.source = null;

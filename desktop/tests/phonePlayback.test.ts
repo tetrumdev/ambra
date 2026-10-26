@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { AudioStatus } from "../../mobile/node_modules/expo-audio";
+import type { AudioEvents, AudioLockScreenOptions, AudioMetadata, AudioStatus } from "../../mobile/node_modules/expo-audio";
 import { PHONE_DEVICE_ID, PhonePlayback, type PhonePlayer } from "../../mobile/src/phonePlayback";
 
 function harness() {
@@ -8,6 +8,7 @@ function harness() {
   let owned = true;
   let activate = async () => {};
   let failLoad = false;
+  let metadata = { title: "Song" };
   class FakePlayer implements PhonePlayer {
     playing = false;
     isLoaded = !failLoad;
@@ -16,33 +17,71 @@ function harness() {
     duration = 200;
     removed = false;
     lockScreen = false;
+    lockScreenOptions: AudioLockScreenOptions | undefined;
+    metadataUpdates = 0;
     listener: ((status: AudioStatus) => void) | null = null;
+    remoteListener: AudioEvents["remoteCommand"] | null = null;
     nativeError: string | null = failLoad ? "The stream couldn't be loaded." : null;
     constructor(readonly source: string) { created.push(this); }
     emit(extra: Partial<AudioStatus> = {}) {
       this.listener?.({ id: "player", currentTime: this.currentTime, playbackState: "readyToPlay", timeControlStatus: this.playing ? "playing" : "paused", reasonForWaitingToPlay: "", mute: false, duration: this.duration, playing: this.playing, loop: false, didJustFinish: false, isBuffering: false, isLoaded: this.isLoaded, playbackRate: 1, shouldCorrectPitch: false, isLive: false, currentOffsetFromLive: null, error: this.nativeError, ...extra });
     }
-    addListener(_event: "playbackStatusUpdate", callback: (status: AudioStatus) => void) { this.listener = callback; this.emit(); return { remove: () => { this.listener = null; } }; }
+    addListener<Event extends "playbackStatusUpdate" | "remoteCommand">(event: Event, callback: AudioEvents[Event]) {
+      if (event === "remoteCommand") {
+        this.remoteListener = callback as AudioEvents["remoteCommand"];
+        return { remove: () => { this.remoteListener = null; } };
+      }
+      this.listener = callback as AudioEvents["playbackStatusUpdate"];
+      this.emit();
+      return { remove: () => { this.listener = null; } };
+    }
     play() { this.playing = true; this.emit(); }
     pause() { this.playing = false; this.emit(); }
     async seekTo(seconds: number) { this.currentTime = seconds; this.emit(); }
     remove() { this.removed = true; }
-    setActiveForLockScreen(active: boolean) { this.lockScreen = active; }
-    updateLockScreenMetadata() {}
+    setActiveForLockScreen(active: boolean, _metadata?: AudioMetadata, options?: AudioLockScreenOptions) { this.lockScreen = active; this.lockScreenOptions = options; }
+    updateLockScreenMetadata() { this.metadataUpdates++; }
   }
   const engine = new PhonePlayback({
     create: source => new FakePlayer(source),
     activate: () => activate(),
     mediaUrl: source => `authenticated:${source}`,
-    metadata: () => ({ title: "Song" }),
+    metadata: () => metadata,
     ownsOutput: () => owned,
     transport: (action, details) => { transport.push({ action, details }); },
     changed: () => {},
   });
-  return { engine, created, transport, loseOwnership: () => { owned = false; engine.release(); }, setActivate: (value: () => Promise<void>) => { activate = value; }, setFailure: (value: boolean) => { failLoad = value; } };
+  return { engine, created, transport, loseOwnership: () => { owned = false; engine.release(); }, setActivate: (value: () => Promise<void>) => { activate = value; }, setFailure: (value: boolean) => { failLoad = value; }, setMetadata: (title: string) => { metadata = { title }; } };
 }
 
 describe("phone output playback", () => {
+  test("headset skips use the shared queue and detached players cannot send commands", async () => {
+    const h = harness();
+    await h.engine.execute("load_native_audio", { source: "song", autoplay: true });
+    const player = h.created[0];
+    expect(player.lockScreenOptions).toMatchObject({ showNextTrack: true, showPreviousTrack: true });
+    const late = player.remoteListener!;
+    player.remoteListener!({ action: "next" });
+    player.remoteListener!({ action: "previous" });
+    expect(h.transport.map(item => item.action)).toEqual(["next", "previous"]);
+    h.loseOwnership();
+    expect(player.remoteListener).toBeNull();
+    late({ action: "next" });
+    expect(h.transport).toHaveLength(2);
+  });
+
+  test("position reports do not repeatedly reset system controls", async () => {
+    const h = harness();
+    await h.engine.execute("load_native_audio", { source: "song", autoplay: true });
+    h.engine.updateMetadata();
+    h.engine.updateMetadata();
+    expect(h.created[0].metadataUpdates).toBe(0);
+    h.setMetadata("Updated song");
+    h.engine.updateMetadata();
+    h.engine.updateMetadata();
+    expect(h.created[0].metadataUpdates).toBe(1);
+    h.engine.release();
+  });
   test("resumes the core's position, authenticates the media URL, and reports the original source", async () => {
     const h = harness();
     await h.engine.execute("select_native_audio_device", { deviceId: PHONE_DEVICE_ID });

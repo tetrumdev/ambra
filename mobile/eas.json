@@ -1,0 +1,20 @@
+{
+  "cli": {
+    "appVersionSource": "local"
+  },
+  "build": {
+    "sidestore": {
+      "distribution": "internal",
+      "environment": "preview",
+      "ios": {
+        "config": "sidestore.yml",
+        "withoutCredentials": true,
+        "image": "latest"
+      }
+    },
+    "preview": {
+      "distribution": "internal"
+    },
+    "production": {}
+  }
+}

@@ -1,6 +1,7 @@
 import type { LyricLine, LyricSegment } from "../types/lyrics";
 
 export function lyricActive(timing: Pick<LyricSegment, "startMs" | "endMs">, timeMs: number): boolean {
+  "worklet";
   return timing.startMs !== null && timeMs >= timing.startMs && (timing.endMs === null || timeMs < timing.endMs);
 }
 
@@ -49,6 +50,7 @@ export function sweepSegments(line: LyricLine): LyricSegment[] {
 }
 
 export function focusLyric(lines: LyricLine[], timeMs: number): number {
+  "worklet";
   // Prefer lead vocals; background-only activity still keeps its group in view.
   const lead = lines.findIndex(line => line.text.trim() && lyricActive(line, timeMs));
   return lead >= 0 ? lead : lines.findIndex(line => line.backgroundVocals.some(background => lyricActive(background, timeMs)));
