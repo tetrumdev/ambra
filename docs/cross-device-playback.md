@@ -6,6 +6,11 @@ to the server and execute its audio commands. Choosing another output moves the 
 and position there. This currently supports one selected output, rather than synchronized
 playback across several outputs at once.
 
+Spotify keeps librespot as its default backend. The optional, experimental Soloist backend
+runs on the server and can provide isolated Linux PCM capture to an updated desktop output.
+Audio forwarding is disabled in distributable builds. See [Soloist setup and verification](spotify-soloist.md)
+for the development gate, platform limits, pairing, and manual Linux test procedure.
+
 Opening the app never automatically starts a server. It connects to a previously selected server or, before one
 has been selected, tries an already running local server at `127.0.0.1:38147`. If that is
 unavailable it shows a connection screen with LAN discovery and manual address entry.
