@@ -57,8 +57,9 @@ const WAVE_WIDTH = 1.15;
 const WAVE_WAKE = 0.45;
 const WAVE_RELEASE_MS = 450;
 
-const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
+const clamp01 = (value: number) => { "worklet"; return Math.min(1, Math.max(0, value)); };
 const smoothstep = (value: number) => {
+  "worklet";
   const t = clamp01(value);
   return t * t * (3 - 2 * t);
 };
@@ -69,6 +70,7 @@ const smoothstep = (value: number) => {
  * with the note and out after it. Returns 0..1 for this letter.
  */
 function heldWave({ segment, index, count }: LetterMotion, timeMs: number): { swell: number; lift: number } {
+  "worklet";
   const start = segment.startMs!;
   const duration = Math.max(1, (segment.endMs ?? start) - start);
   const sweep = ((timeMs - start) / duration) * count;
@@ -117,6 +119,7 @@ export function letterMotion(segment: LyricSegment, index: number, count: number
 
 /** Sweep position in letter widths from this letter's leading edge. */
 export function letterHead({ segment, index, count }: LetterMotion, timeMs: number): number {
+  "worklet";
   if (segment.startMs === null) return -1;
   if (segment.endMs === null || segment.endMs <= segment.startMs) return timeMs >= segment.startMs ? 2 : -1;
   return ((timeMs - segment.startMs) / (segment.endMs - segment.startMs)) * count - index;
@@ -124,10 +127,12 @@ export function letterHead({ segment, index, count }: LetterMotion, timeMs: numb
 
 /** Whether a held note is still breathing out after its line has ended. */
 export function releasing({ segment, emphasis }: LetterMotion, timeMs: number): boolean {
+  "worklet";
   return emphasis && segment.endMs !== null && timeMs < segment.endMs + WAVE_RELEASE_MS;
 }
 
 function targets(letter: LetterMotion, timeMs: number, lineActive: boolean) {
+  "worklet";
   const { segment, index, count } = letter;
   if (segment.startMs === null) return { lift: 0, swell: 0, glow: 0 };
   if (!lineActive) {
@@ -148,7 +153,22 @@ function targets(letter: LetterMotion, timeMs: number, lineActive: boolean) {
   return { lift: reached ? 1 : 0, swell: crossing ? 1 : 0, glow: 0 };
 }
 
+/** Portable targets for native renderers; desktop keeps integrating the same goals below. */
+export function letterVisuals(letter: LetterMotion, timeMs: number, lineActive: boolean) {
+  "worklet";
+  const goal = targets(letter, timeMs, lineActive);
+  return {
+    head: letterHead(letter, timeMs),
+    lift: goal.lift * LIFT_EM + goal.swell * (letter.emphasis ? EMPHASIS_LIFT_EM : 0),
+    scale: 1 + goal.swell * (letter.emphasis ? EMPHASIS_SWELL : SWELL),
+    glow: goal.glow,
+  };
+}
+
+export const letterSprings = { lift: liftSpring, swell: swellSpring, wave: waveSpring, glow: glowSpring };
+
 export function advanceSpring(spring: Spring, target: number, config: SpringConfig, seconds: number): boolean {
+  "worklet";
   // Fixed substeps keep the spring stable through dropped frames.
   const steps = Math.max(1, Math.ceil(seconds * 240));
   const dt = seconds / steps;

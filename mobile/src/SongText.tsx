@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef } from "react";
 import type { StyleProp, TextStyle } from "react-native";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
+import Animated, { useAnimatedStyle, useSharedValue, withTiming, type AnimatedStyle } from "react-native-reanimated";
 import { playerTiming, SONG_TRAVEL, type SkipDirection } from "./playerMotion";
 
 /** Like the bigscreen song details, only a changed field arrives from the skip direction. */
-export function SongText({ children, style, direction }: { children: string; style: StyleProp<TextStyle>; direction: SkipDirection }) {
+export function SongText({ children, style, direction }: { children: string; style: StyleProp<AnimatedStyle<TextStyle>>; direction: SkipDirection }) {
   const shown = useRef(children);
   const progress = useSharedValue(1);
   const step = useSharedValue(1);

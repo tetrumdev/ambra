@@ -32,6 +32,7 @@ fn routes<S: Clone + Send + Sync + 'static>(library: Arc<Library>) -> Router<S> 
     Router::new()
         .route("/api/music/local/tracks", get(list).post(add))
         .route("/api/music/local/files/{id}", get(download).post(upload))
+        .route("/api/music/local/files/{id}/palette", get(artwork_palette))
         .layer(DefaultBodyLimit::disable())
         .with_state(library)
 }
@@ -44,6 +45,29 @@ fn valid_id(id: &str) -> bool {
 
 fn error(status: StatusCode, message: impl ToString) -> Response {
     (status, Json(json!({ "error": message.to_string() }))).into_response()
+}
+
+async fn artwork_palette(State(library): State<Arc<Library>>, Path(id): Path<String>) -> Response {
+    if !valid_id(&id) {
+        return error(StatusCode::BAD_REQUEST, "Invalid artwork file ID");
+    }
+    let file = match tokio::fs::File::open(library.root.join(id)).await {
+        Ok(file) => file,
+        Err(_) => return error(StatusCode::NOT_FOUND, "Artwork not found"),
+    };
+    // Bound image work independently of the much larger audio upload limit.
+    const MAX_ARTWORK_BYTES: u64 = 16 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    if file.take(MAX_ARTWORK_BYTES + 1).read_to_end(&mut bytes).await.is_err() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "Could not read artwork");
+    }
+    if bytes.len() as u64 > MAX_ARTWORK_BYTES {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "Artwork is too large");
+    }
+    match tokio::task::spawn_blocking(move || crate::artwork_quality::dominant_palette(&bytes)).await {
+        Ok(Some(palette)) => ([(header::CACHE_CONTROL, "private, max-age=604800")], Json(palette)).into_response(),
+        _ => error(StatusCode::BAD_REQUEST, "Could not measure artwork colors"),
+    }
 }
 
 async fn read_index(library: &Library) -> Result<BTreeMap<String, Value>, String> {
@@ -282,6 +306,31 @@ mod tests {
         assert_eq!(unpaired.get(format!("{url}?access_token=test-token")).send().await.unwrap().status(), StatusCode::OK);
         server.abort();
         // Keep test artifacts in the OS temporary directory; no user library is touched.
+    }
+
+    #[tokio::test]
+    async fn artwork_palettes_follow_the_imported_cover_and_require_pairing() {
+        let (base, server) = harness(directory()).await;
+        let client = paired_client();
+        let mut images = Vec::new();
+        for color in [[220, 30, 20], [20, 30, 220]] {
+            let image = image::RgbImage::from_pixel(8, 8, image::Rgb(color));
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image.write_to(&mut encoded, image::ImageFormat::Png).unwrap();
+            let bytes = encoded.into_inner();
+            let id = format!("{:x}.png", Sha256::digest(&bytes));
+            let url = format!("{base}/api/music/local/files/{id}");
+            assert_eq!(client.post(&url).body(bytes).send().await.unwrap().status(), StatusCode::OK);
+            let palette: crate::artwork_quality::ArtworkPalette = client.get(format!("{url}/palette")).send().await.unwrap().json().await.unwrap();
+            assert_eq!(palette.colors.len(), 4);
+            assert_eq!(palette.weights.len(), 4);
+            images.push(palette);
+            assert_eq!(reqwest::get(format!("{url}/palette")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        }
+        assert_ne!(images[0].colors, images[1].colors);
+        let missing = format!("{base}/api/music/local/files/{}.png/palette", "0".repeat(64));
+        assert_eq!(client.get(missing).send().await.unwrap().status(), StatusCode::NOT_FOUND);
+        server.abort();
     }
 
     #[tokio::test]

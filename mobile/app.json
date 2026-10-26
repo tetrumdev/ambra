@@ -10,6 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.quantium.ambra.remote",
+      "buildNumber": "3",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio"
@@ -18,6 +19,21 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true,
           "NSExceptionDomains": {
+            "100.64.0.0/10": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "fd7a:115c:a1e0::/48": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "10.0.0.0/8": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "172.16.0.0/12": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
+            "192.168.0.0/16": {
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            },
             "ts.net": {
               "NSIncludesSubdomains": true,
               "NSExceptionAllowsInsecureHTTPLoads": true
@@ -33,7 +49,12 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -42,13 +63,6 @@
       "expo-image",
       "expo-secure-store",
       "expo-font",
-      [
-        "expo-widgets",
-        {
-          "bundleIdentifier": "com.quantium.ambra.remote.activity",
-          "groupIdentifier": "group.com.quantium.ambra.remote"
-        }
-      ],
       [
         "expo-audio",
         {
@@ -65,8 +79,15 @@
             "usesCleartextTraffic": true
           }
         }
-      ]
+      ],
+      "expo-asset"
     ],
-    "backgroundColor": "#000000"
+    "backgroundColor": "#000000",
+    "extra": {
+      "eas": {
+        "projectId": "b610dcfd-7dd8-4d65-b5f5-ab08aceff237"
+      }
+    },
+    "owner": "eggwithpants"
   }
 }

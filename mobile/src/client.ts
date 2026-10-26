@@ -2,6 +2,8 @@ import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { AppState } from "react-native";
 import { normalizePackages } from "./queueModel";
+import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
+import { SessionClock } from "./sessionClock";
 
 /**
  * The remote's line to the Ambra server: pairing, following the core's session
@@ -26,6 +28,9 @@ export type Track = {
   fullCover?: string;
   nativeCover: string | null;
   durationSeconds: number;
+  providerTrackId?: string;
+  isrc?: string | null;
+  version?: string | null;
 };
 
 export type QueueItem = {
@@ -47,6 +52,7 @@ export type SessionView = {
   revision: number;
   playing: boolean;
   positionSeconds: number;
+  serverTimeMs?: number;
   duration: number;
   buffering: boolean;
   error: string | null;
@@ -90,7 +96,11 @@ export async function restore() {
   token = saved;
   identity = parsed<Identity>(who);
   addresses = [...new Set([...(address ? [address] : []), ...(parsed<string[]>(known) ?? [])])];
-  return { address, paired: !!(address && saved) };
+  if (address && saved && !identity) await identifyLegacyPairing(saved);
+  // Metro may now be reachable over Tailscale while the saved server address is still
+  // on home Wi-Fi. Resolve the paired server before opening long polls or sending presence.
+  if (address && saved && identity) await reconnect();
+  return { address: baseUrl || null, paired: !!(address && saved) };
 }
 
 async function forget() {
@@ -113,6 +123,13 @@ export function serverUrl(path: string) {
   return `${baseUrl}${path}${token ? `${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(token)}` : ""}`;
 }
 
+/** Lists use the server's bounded thumbnail instead of decoding original album artwork. */
+export function thumbnailArtwork(track: Track | null | undefined) {
+  if (!track || track.provider === "local" || !track.nativeCover?.startsWith("https://")) return track?.cover || null;
+  const query = new URLSearchParams({ provider: track.provider, url: track.nativeCover });
+  return serverUrl(`/api/artwork/thumbnail?${query}`);
+}
+
 // Saved queues hold server URLs as the saving computer knew them (desktop/src/api/serverConnection.ts).
 const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+(\/api\/[^"\\\s]*)/g;
 const TOKEN_IN_QUERY = /([?&])access_token=[^&#"\\]*&?/;
@@ -125,6 +142,15 @@ function rebased(text: string) {
 /** The current server address, which changes when the phone moves between networks. */
 export const serverAddress = () => baseUrl;
 
+/** Uses the same provider lookup and wire validation as desktop, through the paired server. */
+export async function trackLyrics(track: Track, signal: AbortSignal): Promise<TrackLyrics> {
+  const query = new URLSearchParams({ trackName: track.name, artistName: track.artist, albumName: track.album, durationSeconds: String(track.durationSeconds) });
+  if (track.isrc) query.set("isrc", track.isrc);
+  if (track.version) query.set("version", track.version);
+  if (track.provider === "spotify" && track.providerTrackId) query.set("spotifyId", track.providerTrackId);
+  return parseTrackLyrics(await request<unknown>(`/api/lyrics?${query}`, { signal, timeoutMs: 30_000 }));
+}
+
 async function identify(address: string): Promise<Identity | null> {
   const timeout = AbortSignal.timeout(3000);
   try {
@@ -135,13 +161,36 @@ async function identify(address: string): Promise<Identity | null> {
   }
 }
 
+/** Older pairings saved only an address and token, so ID-based recovery cannot run yet. */
+async function identifyLegacyPairing(savedToken: string) {
+  const development = suggestedAddress();
+  // Metro supplies the running app's code and is already trusted with its credentials.
+  // Only the saved host and that development host may receive a legacy pairing's token.
+  const known = [...new Set([baseUrl, ...(development ? [normalizeAddress(development)] : [])])];
+  const found = await Promise.any(known.map(async address => {
+    const info = await identify(address);
+    if (!info) throw new Error("Not an Ambra server");
+    const response = await fetch(`${address}/api/endpoints`, {
+      headers: { Authorization: `Bearer ${savedToken}` }, signal: AbortSignal.timeout(3000),
+    });
+    if (!response.ok || !Array.isArray(await response.json())) throw new Error("Not this phone's paired server");
+    return { address, info };
+  })).catch(() => null);
+  if (!found) return;
+  identity = found.info;
+  await SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(identity));
+  await switchAddress(found.address);
+}
+
 /**
- * Where else the server might answer: addresses it has answered at before, and its Tailscale
- * MagicDNS name (the machine name, lowercased), so pairing at home keeps working away from it.
+ * Where else the server might answer: saved addresses, the development host the phone
+ * already reaches, and the machine's MagicDNS name. Each must prove the same server ID.
  */
 function candidates() {
   const machine = identity?.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  return [...new Set([baseUrl, ...addresses, ...(machine ? [`http://${machine}:${identity!.port}`] : [])])].filter(Boolean);
+  const development = suggestedAddress();
+  const developmentAddress = development ? normalizeAddress(development).replace(/:\d+$/, `:${identity?.port ?? SERVER_PORT}`) : "";
+  return [...new Set([baseUrl, ...addresses, developmentAddress, ...(machine ? [`http://${machine}:${identity!.port}`] : [])])].filter(Boolean);
 }
 
 async function switchAddress(address: string) {
@@ -167,7 +216,9 @@ function reconnect() {
       if ((await identify(address))?.id !== id) throw new Error("Not this server");
       return address;
     })).catch(() => null);
-    probedAt = Date.now();
+    // Throttle failed discovery, but let a newly failed route recover immediately even
+    // when it was healthy during startup (or the previous request).
+    probedAt = found ? 0 : Date.now();
     if (found && found !== baseUrl) await switchAddress(found);
   })().finally(() => { reconnecting = null; });
   return reconnecting;
@@ -181,6 +232,7 @@ async function request<T>(path: string, init: RequestInit & { timeoutMs?: number
     // Only an unreachable server moves addresses; anything it answered stands.
     if (init.signal?.aborted || error instanceof Unpaired || (error as { status?: number }).status !== undefined) throw error;
     await reconnect();
+    if (init.signal?.aborted) throw error;
     // A read is safe to repeat; a command might have reached the server, so it's left to the person.
     if (baseUrl !== address && (init.method ?? "GET") === "GET") return send<T>(path, init);
     throw error;
@@ -254,11 +306,12 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
 
 let view: SessionView | null = null;
 let viewAt = Date.now();
+const playbackClock = new SessionClock();
 const listeners = new Set<() => void>();
 
 export const sessionView = () => view;
 /** Seconds since the view's position was true. */
-export const sessionViewAge = () => (Date.now() - viewAt) / 1000;
+export const sessionViewAge = () => playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
 
 export function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -271,6 +324,7 @@ function accept(next: ArrivingView) {
   // Left out as unchanged; a different server or revision has to be asked for in full.
   if (arrived === undefined && (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision)) return false;
   const queue = arrived === undefined ? view!.queue : JSON.parse(rebased(JSON.stringify(arrived))) as SessionView["queue"];
+  if (view?.instanceId !== next.instanceId) playbackClock.reset();
   view = { ...rest, queue };
   viewAt = Date.now();
   for (const listener of listeners) listener();
@@ -298,7 +352,7 @@ export async function follow(signal: AbortSignal) {
           void identify(baseUrl).then(found => {
             identifying = false;
             if (!found || identity) return;
-          identity = found;
+            identity = found;
             void SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(found));
           });
         }
@@ -340,7 +394,19 @@ export function endpointRequest<T>(id: string, path: string, init: RequestInit =
   return request<T>(`/api/endpoints/${encodeURIComponent(id)}/${path}`, { ...init, timeoutMs: path.startsWith("commands") ? 30_000 : 8000 });
 }
 
-export async function refreshSession(signal: AbortSignal) {
+/** Re-anchor lyrics to a fresh session and compensate for delivery delay, as desktop does. */
+export async function refreshSession(signal: AbortSignal, options: { clock?: "recent" | "force" } = {}) {
+  if (options.clock && !view) accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+  const instance = view?.instanceId;
+  if (options.clock && (options.clock === "force" || !playbackClock.recent(Date.now()))) {
+    await Promise.all(Array.from({ length: 3 }, async () => {
+      const sent = Date.now();
+      try {
+        const report = await request<{ serverTimeMs: number }>("/api/session/clock", { signal, timeoutMs: 3000 });
+        if (!signal.aborted && instance === view?.instanceId) playbackClock.sample(report.serverTimeMs, sent, Date.now());
+      } catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
+    }));
+  }
   accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
 }
 
@@ -413,8 +479,33 @@ export function currentTrack(current: SessionView | null): Track | null {
 export type Palette = { colors: string[]; weights: number[] };
 
 /** The cover's colors as the server measures them, for the swirl. */
-export async function coverPalette(provider: string, url: string | null): Promise<Palette | null> {
-  if (provider === "local" || !url?.startsWith("https://")) return null;
-  const query = new URLSearchParams({ provider, url, weighted: "true" });
-  return request<Palette>(`/api/artwork/palette?${query}`).catch(() => null);
+export async function coverPalette(provider: string, url: string | null, cover?: string): Promise<Palette | null> {
+  let path: string;
+  if (provider === "local") {
+    // Only content-addressed artwork in the paired server's library can be sampled.
+    const file = [url, cover].map(source => {
+      try { return new URL(source ?? "", baseUrl).pathname.match(/^\/api\/music\/local\/files\/([a-f0-9]{64}\.[a-z0-9]{1,8})$/)?.[1]; } catch { return null; }
+    }).find(Boolean);
+    if (!file) return null;
+    path = `/api/music/local/files/${file}/palette`;
+  } else {
+    // Older saved tracks can have only a display URL, including a server artwork proxy.
+    if (!url?.startsWith("https://")) {
+      try {
+        const displayed = new URL(cover ?? "", baseUrl);
+        url = displayed.searchParams.get("url") ?? (displayed.protocol === "https:" ? displayed.href : null);
+      } catch { return null; }
+    }
+    if (!url?.startsWith("https://")) return null;
+    path = `/api/artwork/palette?${new URLSearchParams({ provider, url, weighted: "true" })}`;
+  }
+  try {
+    const result = await request<Palette | string[]>(path);
+    const palette = Array.isArray(result) ? { colors: result, weights: result.map(() => 1 / result.length) } : result;
+    if (!palette || palette.colors?.length !== 4 || palette.weights?.length !== 4
+      || !palette.colors.every(color => /^#[0-9a-f]{6}$/i.test(color))
+      || !palette.weights.every(weight => Number.isFinite(weight) && weight >= 0)
+      || !palette.weights.some(weight => weight > 0)) return null;
+    return palette;
+  } catch { return null; }
 }
