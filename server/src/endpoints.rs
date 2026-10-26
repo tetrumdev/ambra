@@ -263,6 +263,7 @@ impl Endpoints {
 
     /// Runs a command on an endpoint for the server itself, and waits for its answer.
     pub async fn call(&self, endpoint_id: &str, command: &str, args: Value) -> Result<Value, String> {
+        let timeout = if command == "load_native_audio" && args["source"].as_str().is_some_and(|source| source.starts_with("/api/playback/live/")) { Duration::from_secs(45) } else { COMMAND_TIMEOUT };
         let (reply, answer) = oneshot::channel();
         let id = next_id(self);
         self.waiting.lock().await.insert(id, reply);
@@ -270,7 +271,7 @@ impl Endpoints {
             self.waiting.lock().await.remove(&id);
             return Err(format!("{} is offline", self.name(endpoint_id).await.unwrap_or_else(|| "That device".into())));
         }
-        match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
+        match tokio::time::timeout(timeout, answer).await {
             Ok(Ok(result)) => result,
             _ => {
                 self.waiting.lock().await.remove(&id);
