@@ -24,11 +24,11 @@ function usePlayingOn() {
   return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
 }
 
-type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
 const DESKTOP_ONLY = "Desktop app only";
 
-export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
+export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, reduceMotion, onReduceMotion, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
@@ -69,12 +69,15 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
         <SettingRow label="Song specs" hint="Format and bitrate under the progress bar">
           <Toggle label="Show song specs" checked={showAudioQuality} onChange={onShowAudioQuality} />
         </SettingRow>
-        <SettingRow label="Animate swirl" hint="Independent from system UI animations">
+        <SettingRow label="Reduce motion" hint="Makes transitions instant throughout the app. Independent from system animations">
+          <Toggle label="Reduce motion" checked={reduceMotion} onChange={onReduceMotion} />
+        </SettingRow>
+        <SettingRow label="Animate swirl" hint="Independent from Reduce motion">
           <Toggle label="Animate swirl" checked={animateSwirl} onChange={onAnimateSwirl} />
         </SettingRow>
-        <SettingRow label="Lyric motion" hint="Full animates even with system animations off">
+        <SettingRow label="Lyric motion" hint="Default follows Reduce motion; Full animates even with it on">
           <Segmented label="Lyric motion" value={lyricMotion} onChange={onLyricMotionChange}
-            options={[{ value: "system", label: "System" }, { value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]} />
+            options={[{ value: "system", label: "Default" }, { value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]} />
         </SettingRow>
         <SettingRow label="Auto-sync lyrics" hint={audio.native ? "Lines lyrics up with the vocals" : DESKTOP_ONLY}>
           <Toggle label="Auto-sync lyrics" checked={autoSyncLyrics} disabled={!audio.native} onChange={onAutoSyncLyrics} />

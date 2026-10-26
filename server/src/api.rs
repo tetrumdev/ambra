@@ -197,6 +197,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .merge(crate::endpoints::router(endpoints.clone()))
         .merge(crate::session::router(core.clone()))
         .merge(crate::impulses::router())
+        .merge(crate::remote::router())
         .merge(crate::local_music::router(user_state.clone()))
         .merge(crate::user_state::router(user_state.clone()))
         .route("/api/health", get(health))
@@ -374,6 +375,7 @@ fn path_needs_providers(path: &str) -> bool {
         && !path.starts_with("/api/impulses/")
         && !path.starts_with("/api/session")
         && !path.starts_with("/api/music/local/")
+        && !path.starts_with(crate::remote::PATH)
 }
 
 async fn lyrics(

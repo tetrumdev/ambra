@@ -131,15 +131,13 @@ dialog[data-closing]::backdrop {
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    #trackPlaybackMenu,
-    #trackCollectionMenu,
-    .devAudioControls {
-        animation: none;
-    }
+:root[data-reduce-motion] #trackPlaybackMenu,
+:root[data-reduce-motion] #trackCollectionMenu,
+:root[data-reduce-motion] .devAudioControls {
+    animation: none;
+}
 
-    dialog[open],
-    dialog[open]::backdrop {
-        transition: none;
-    }
+:root[data-reduce-motion] dialog[open],
+:root[data-reduce-motion] dialog[open]::backdrop {
+    transition: none;
 }

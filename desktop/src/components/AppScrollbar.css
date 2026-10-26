@@ -54,8 +54,6 @@
     background: rgb(255 255 255 / 85%);
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .appScrollbarThumb::before {
-        transition: none;
-    }
+:root[data-reduce-motion] .appScrollbarThumb::before {
+    transition: none;
 }

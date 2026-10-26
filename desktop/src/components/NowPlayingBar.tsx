@@ -12,6 +12,7 @@ import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
 import { TrackArtwork } from "./TrackArtwork";
 import { motion } from "../utils/motion";
+import { reducedMotion } from "../utils/reducedMotion";
 
 type PlayerBarVariant = "expanded" | "compact";
 
@@ -119,7 +120,7 @@ export function NowPlayingBar({
     const previous = shownSong.current;
     if (previous?.globalId === track?.globalId) return;
     shownSong.current = track;
-    if (!bar.current || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (!bar.current || reducedMotion()) return;
     const step = direction?.() ?? 1;
     const arrive = [{ opacity: 0, transform: `translateX(${step * 14}px)` }, { opacity: 1, transform: "none" }];
     const artists = (song: Track | undefined) => song?.artists.map((artist) => artist.name).join(", ") ?? song?.artist;

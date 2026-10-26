@@ -1,0 +1,10 @@
+{
+  "name": "Ambra",
+  "short_name": "Ambra",
+  "start_url": "/remote/",
+  "scope": "/remote/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [{ "src": "/remote/ambra.png", "sizes": "2000x2000", "type": "image/png" }]
+}

@@ -12,9 +12,9 @@ import {
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
 import {
-  coverEdgeLuminances,
   coverSeparation,
   neutralCoverSeparation,
+  sampleCoverEdges,
   separateCollapsedPalette,
   type CoverSeparation,
 } from "../utils/backgroundPalette";
@@ -22,6 +22,7 @@ import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
+import { reducedMotion } from "../utils/reducedMotion";
 
 type ArtworkProps = {
   track: Track | undefined;
@@ -37,27 +38,6 @@ type BackgroundArtworkProps = ArtworkProps & {
   /** How long a change in coverDim eases, in step with the lyrics backdrop fading. */
   coverDimMs?: number;
 };
-
-const EDGE_SAMPLE_SIZE = 16;
-
-// Reads how bright each side of the cover is. Covers the webview may not read
-// back (no CORS) resolve to null and fall back to the palette.
-function sampleCoverEdges(source: string): Promise<number[] | null> {
-  const image = new Image();
-  image.crossOrigin = "anonymous";
-  image.decoding = "async";
-  image.src = source;
-  return image.decode().then(() => {
-    const canvas = document.createElement("canvas");
-    canvas.width = EDGE_SAMPLE_SIZE;
-    canvas.height = EDGE_SAMPLE_SIZE;
-    const context = canvas.getContext("2d", { willReadFrequently: true });
-    if (!context) return null;
-    context.drawImage(image, 0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
-    const { data } = context.getImageData(0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
-    return coverEdgeLuminances(data, EDGE_SAMPLE_SIZE);
-  }).catch(() => null);
-}
 
 type CoverLayer = {
   id: number;
@@ -119,7 +99,7 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
     if (!element || !from) return;
     glide.current?.cancel();
     glide.current = null;
-    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (reducedMotion()) return;
     const to = element.getBoundingClientRect();
     if (!to.width || !from.width) return;
     // Only the transform moves, so the glide runs on the compositor instead of laying the

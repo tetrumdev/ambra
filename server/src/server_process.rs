@@ -46,15 +46,19 @@ pub async fn start(bind: Option<String>) -> Result<String, String> {
     let local = SocketAddr::from(([127, 0, 0, 1], address.port()));
     let log_path = crate::storage::data_path("server.log");
     let log = OpenOptions::new().create(true).append(true).open(&log_path).map_err(|e| e.to_string())?;
-    // Run a versioned copy so app updates and CLI reinstalls can replace their executable
-    // while the server keeps running (Windows locks executables that are in use).
+    // Run a copy so app updates and CLI reinstalls can replace their executable while the
+    // server keeps running (Windows locks executables that are in use). The copy always has
+    // the same path, so the firewall's permission for it carries over to every build; it is
+    // free to replace here, since no server is running.
     let source = std::env::current_exe().map_err(|e| e.to_string())?;
-    let stamp = source.metadata().map_err(|e| e.to_string())?;
-    let modified = stamp.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |time| time.as_nanos());
-    let directory = crate::storage::data_path("server-bin").join(format!("{}-{modified}", stamp.len()));
+    let directory = crate::storage::data_path("server-bin");
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     let executable = directory.join(format!("ambra-server{}", std::env::consts::EXE_SUFFIX));
-    if !executable.is_file() { std::fs::copy(&source, &executable).map_err(|e| e.to_string())?; }
+    if !same_build(&source, &executable) { std::fs::copy(&source, &executable).map_err(|e| e.to_string())?; }
+    // Versioned copies from before, each of which the firewall had to be asked about.
+    if let Ok(entries) = std::fs::read_dir(&directory) {
+        for entry in entries.flatten().filter(|entry| entry.path().is_dir()) { let _ = std::fs::remove_dir_all(entry.path()); }
+    }
     let mut command = Command::new(executable);
     command.args(["serve", "--tray"]);
     if let Some(bind) = bind { command.args(["--bind", &bind]); }
@@ -78,6 +82,12 @@ pub async fn start(bind: Option<String>) -> Result<String, String> {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Err(format!("The server has not answered yet; see {}", log_path.display()))
+}
+
+/// Whether `copy` is already `source`: the same size, and not older.
+fn same_build(source: &std::path::Path, copy: &std::path::Path) -> bool {
+    let (Ok(source), Ok(copy)) = (source.metadata(), copy.metadata()) else { return false };
+    source.len() == copy.len() && matches!((source.modified(), copy.modified()), (Ok(built), Ok(copied)) if copied >= built)
 }
 
 async fn is_running(client: &reqwest::Client, address: SocketAddr) -> bool {

@@ -1,6 +1,5 @@
 import { motion } from "./motion";
-
-const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+import { reducedMotion } from "./reducedMotion";
 
 /** A screen arriving rises a few pixels into place as it fades in; the one it replaced is already gone. */
 export function enterView(element: Element | null | undefined) {

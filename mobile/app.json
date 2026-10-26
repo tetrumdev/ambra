@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "Ambra",
+    "slug": "ambra",
+    "scheme": "ambra",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.quantium.ambra.remote",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"],
+        "NSLocalNetworkUsageDescription": "Ambra connects to your Ambra server on this network.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-image",
+      "expo-secure-store",
+      "expo-font",
+      ["expo-widgets", {
+        "bundleIdentifier": "com.quantium.ambra.remote.activity",
+        "groupIdentifier": "group.com.quantium.ambra.remote"
+      }],
+      ["expo-audio", {
+        "microphonePermission": false,
+        "recordAudioAndroid": false,
+        "enableBackgroundRecording": false,
+        "enableBackgroundPlayback": false
+      }]
+    ],
+    "backgroundColor": "#0a0a0a"
+  }
+}

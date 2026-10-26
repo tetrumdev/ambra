@@ -1358,6 +1358,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         if let Some(output) = self.output.as_mut() {
             output.pause()?;
         }
+        self.resync.pause();
         self.rendering = false;
         update_status(&self.status, |status| {
             status.is_playing = false;

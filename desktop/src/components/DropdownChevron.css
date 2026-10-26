@@ -27,8 +27,6 @@
     transform: rotate(-90deg);
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .dropdownChevron {
-        transition: none;
-    }
+:root[data-reduce-motion] .dropdownChevron {
+    transition: none;
 }

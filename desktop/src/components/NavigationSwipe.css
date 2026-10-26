@@ -60,15 +60,13 @@
     scale: 1.06;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .navigationSwipe {
-        transform: translate3d(16px, -50%, 0);
-        transition: none;
-    }
-    .navigationSwipe[data-direction="forward"] {
-        transform: translate3d(-16px, -50%, 0);
-    }
-    .navigationSwipe[data-releasing] {
-        transition: none;
-    }
+:root[data-reduce-motion] .navigationSwipe {
+    transform: translate3d(16px, -50%, 0);
+    transition: none;
+}
+:root[data-reduce-motion] .navigationSwipe[data-direction="forward"] {
+    transform: translate3d(-16px, -50%, 0);
+}
+:root[data-reduce-motion] .navigationSwipe[data-releasing] {
+    transition: none;
 }

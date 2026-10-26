@@ -15,6 +15,7 @@ import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
+import { reducedMotion } from "../utils/reducedMotion";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
 const rowLimit = 12;
@@ -67,11 +68,7 @@ function HomeRow({
                 onClick={() =>
                   row.current?.scrollBy({
                     left: direction * row.current.clientWidth * 0.8,
-                    behavior: window.matchMedia(
-                      "(prefers-reduced-motion: reduce)",
-                    ).matches
-                      ? "instant"
-                      : "smooth",
+                    behavior: reducedMotion() ? "instant" : "smooth",
                   })
                 }
               >

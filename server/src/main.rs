@@ -16,6 +16,7 @@ mod models;
 mod network;
 mod playlists;
 mod providers;
+mod remote;
 mod server_process;
 mod server_config;
 mod session;

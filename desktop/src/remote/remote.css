@@ -1,0 +1,223 @@
+@font-face {
+    font-family: "Stack Sans Text";
+    src: url(../assets/fonts/StackSansText-VariableFont_wght.ttf);
+    font-style: normal;
+    font-display: block;
+}
+
+:root {
+    color: white;
+    background: #0a0a0a;
+    font-family: "Stack Sans Text", -apple-system, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-text-size-adjust: 100%;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+html,
+body,
+#root {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+}
+
+.remoteSwirl {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+}
+
+.remoteSwirl canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.remotePlayer,
+.remotePairing {
+    position: relative;
+    box-sizing: border-box;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    padding:
+        calc(env(safe-area-inset-top) + max(24px, 8vh))
+        calc(env(safe-area-inset-right) + 34px)
+        calc(env(safe-area-inset-bottom) + 24px)
+        calc(env(safe-area-inset-left) + 34px);
+}
+
+/* Short screens (landscape) shrink the cover so the controls stay on screen. */
+.remoteCover {
+    position: relative;
+    width: min(100%, 100vh - 400px);
+    aspect-ratio: 1;
+    align-self: center;
+    flex: none;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.remoteCover img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    animation: remoteCoverIn 400ms ease both;
+}
+
+.remoteCover[data-empty="true"] {
+    box-shadow: 0 0 40px 3px rgba(255, 255, 255, 0.18);
+}
+
+@keyframes remoteCoverIn {
+    from { opacity: 0; }
+}
+
+.remoteInfo {
+    margin-top: 36px;
+    min-width: 0;
+}
+
+.remoteInfo h1,
+.remoteInfo p {
+    margin: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.remoteInfo h1 {
+    font-size: 24px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+.remoteInfo p {
+    margin-top: 10px;
+    font-size: 17px;
+    font-weight: 400;
+    opacity: 0.92;
+}
+
+.remoteProgress {
+    margin-top: 36px;
+}
+
+/* Taller than it looks, so a thumb can catch it. */
+.remoteProgressHit {
+    padding: 12px 0;
+    margin: -12px 0;
+    touch-action: none;
+}
+
+.remoteProgressTrack {
+    height: 7px;
+    border-radius: 4px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.45);
+    transition: transform var(--motion-snappy);
+}
+
+.remoteProgress[data-dragging="true"] .remoteProgressTrack {
+    transform: scaleY(1.6);
+}
+
+.remoteProgressFill {
+    height: 100%;
+    background: white;
+    transform-origin: left;
+}
+
+.remoteTimes {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-size: 15px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* The desktop controls, at thumb size. */
+.remotePlayer #controls {
+    align-self: center;
+    justify-content: center;
+    gap: 34px;
+    margin-top: 40px;
+}
+
+.remotePlayer #controls button {
+    width: 72px;
+    height: 72px;
+}
+
+.remotePlayer #playBtn svg {
+    width: 50px;
+    height: 50px;
+}
+
+.remotePlayer #controls .skipIcon {
+    width: 54px;
+}
+
+.remotePairing {
+    justify-content: center;
+    text-align: center;
+    gap: 16px;
+}
+
+.remotePairing h1 {
+    margin: 0;
+    font-size: 26px;
+}
+
+.remotePairing p {
+    margin: 0;
+    font-size: 16px;
+    opacity: 0.8;
+}
+
+.remoteCode {
+    font-size: 52px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    font-variant-numeric: tabular-nums;
+}
+
+.remotePairing code {
+    font-size: 14px;
+    opacity: 0.7;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.remotePairing button {
+    align-self: center;
+    padding: 12px 24px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+    color: white;
+    font: inherit;
+    font-size: 16px;
+}
+
+#remoteError {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: 10;
+    max-height: 60%;
+    overflow: auto;
+    margin: 0;
+    padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
+    background: rgba(120, 0, 0, 0.92);
+    color: white;
+    font: 12px/1.4 ui-monospace, Menlo, monospace;
+    white-space: pre-wrap;
+    user-select: text;
+    -webkit-user-select: text;
+}

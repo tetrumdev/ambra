@@ -138,16 +138,14 @@
     opacity: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .albumCoverImg {
-        animation-duration: 1ms !important;
-    }
-    #albumCover,
-    .albumCoverImg,
-    .albumCoverPlaceholder,
-    #backgroundFX {
-        transition: none;
-    }
+:root[data-reduce-motion] .albumCoverImg {
+    animation-duration: 1ms !important;
+}
+:root[data-reduce-motion] #albumCover,
+:root[data-reduce-motion] .albumCoverImg,
+:root[data-reduce-motion] .albumCoverPlaceholder,
+:root[data-reduce-motion] #backgroundFX {
+    transition: none;
 }
 
 #backgroundFXCanvas {
