@@ -1,14 +1,18 @@
 import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { AppState } from "react-native";
+import { normalizePackages } from "./queueModel";
 
 /**
  * The remote's line to the Ambra server: pairing, following the core's session
- * (server/src/session.rs) and sending it commands. The phone plays nothing itself.
+ * (server/src/session.rs), sending it commands, and registering this phone as an output.
  */
 
 export const SERVER_PORT = 38147;
 const ADDRESS_KEY = "ambra.server";
+/** Every address this server has answered at, the one in use first. */
+const ADDRESSES_KEY = "ambra.addresses";
+const IDENTITY_KEY = "ambra.serverIdentity";
 const TOKEN_KEY = "ambra.token";
 const CLIENT_KEY = "ambra.client";
 
@@ -24,7 +28,20 @@ export type Track = {
   durationSeconds: number;
 };
 
-type QueueItem = { globalTrackId: string };
+export type QueueItem = {
+  globalTrackId: string;
+  source?: { kind: "library" | "playlist" | "search"; id: string; entryId: number };
+  shufflePackageId?: string | null;
+};
+export type QueueSnapshot = {
+  version?: 1;
+  history?: (QueueItem & { historyId: string; playedAt: string })[];
+  current: QueueItem | null;
+  upcoming: QueueItem[];
+  tracks?: Track[];
+};
+export type Output = { endpointId: string; deviceId: string; endpointName: string; deviceName: string };
+export type Endpoint = { id: string; name: string; devices: { id: string; name: string; isDefault: boolean }[]; selectedDeviceId: string | null };
 export type SessionView = {
   instanceId: string;
   revision: number;
@@ -33,10 +50,10 @@ export type SessionView = {
   duration: number;
   buffering: boolean;
   error: string | null;
-  output: { endpointName: string; deviceName: string } | null;
+  output: Output | null;
   outputOnline: boolean;
   queueRevision: number;
-  queue: { current: QueueItem | null; upcoming: QueueItem[]; tracks?: Track[] };
+  queue: QueueSnapshot;
 };
 /** The queue is left out when the remote already has that revision. */
 type ArrivingView = Omit<SessionView, "queue"> & { queue?: SessionView["queue"] };
@@ -45,6 +62,14 @@ export class Unpaired extends Error {}
 
 let baseUrl = "";
 let token: string | null = null;
+let addresses: string[] = [];
+/** Who the paired server is, so another address is only trusted if the same server answers there. */
+type Identity = { id: string; name: string; port: number };
+let identity: Identity | null = null;
+
+const parsed = <T>(text: string | null): T | null => {
+  try { return text ? JSON.parse(text) as T : null; } catch { return null; }
+};
 
 /** In development the server usually runs on the computer serving the app, so start there. */
 export function suggestedAddress() {
@@ -60,9 +85,11 @@ export function normalizeAddress(address: string) {
 
 /** The server and token saved by an earlier pairing, if any. */
 export async function restore() {
-  const [address, saved] = await Promise.all([SecureStore.getItemAsync(ADDRESS_KEY), SecureStore.getItemAsync(TOKEN_KEY)]);
+  const [address, saved, known, who] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, ADDRESSES_KEY, IDENTITY_KEY].map(key => SecureStore.getItemAsync(key)));
   if (address) baseUrl = address;
   token = saved;
+  identity = parsed<Identity>(who);
+  addresses = [...new Set([...(address ? [address] : []), ...(parsed<string[]>(known) ?? [])])];
   return { address, paired: !!(address && saved) };
 }
 
@@ -71,7 +98,7 @@ async function forget() {
   await SecureStore.deleteItemAsync(TOKEN_KEY);
 }
 
-async function clientId() {
+export async function clientId() {
   let id = await SecureStore.getItemAsync(CLIENT_KEY);
   if (!id) {
     // Only tells this phone's requests apart; the server issues the secret token.
@@ -95,11 +122,77 @@ function rebased(text: string) {
     .replace(/"(\/api\/music\/local\/files\/[^"\\\s]+)/g, (_, path: string) => `"${serverUrl(path)}`);
 }
 
+/** The current server address, which changes when the phone moves between networks. */
+export const serverAddress = () => baseUrl;
+
+async function identify(address: string): Promise<Identity | null> {
+  const timeout = AbortSignal.timeout(3000);
+  try {
+    const info = await (await fetch(`${address}/api/server/info`, { signal: timeout })).json() as { service?: string; id?: string; name?: string; port?: number };
+    return info.service === "ambra" && info.id ? { id: info.id, name: info.name ?? "", port: info.port ?? SERVER_PORT } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Where else the server might answer: addresses it has answered at before, and its Tailscale
+ * MagicDNS name (the machine name, lowercased), so pairing at home keeps working away from it.
+ */
+function candidates() {
+  const machine = identity?.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+  return [...new Set([baseUrl, ...addresses, ...(machine ? [`http://${machine}:${identity!.port}`] : [])])].filter(Boolean);
+}
+
+async function switchAddress(address: string) {
+  baseUrl = address;
+  addresses = [address, ...addresses.filter(known => known !== address)].slice(0, 6);
+  // Artwork and media URLs were written against the old address.
+  if (view) {
+    view = JSON.parse(rebased(JSON.stringify(view))) as SessionView;
+    for (const listener of listeners) listener();
+  }
+  await Promise.all([SecureStore.setItemAsync(ADDRESS_KEY, address), SecureStore.setItemAsync(ADDRESSES_KEY, JSON.stringify(addresses))]);
+}
+
+let identifying = false;
+let reconnecting: Promise<void> | null = null;
+let probedAt = 0;
+/** After the server stops answering, switch to whichever known address the same server answers at first. */
+function reconnect() {
+  const id = identity?.id;
+  if (!id || Date.now() - probedAt < 3000) return reconnecting ?? Promise.resolve();
+  reconnecting ??= (async () => {
+    const found = await Promise.any(candidates().map(async address => {
+      if ((await identify(address))?.id !== id) throw new Error("Not this server");
+      return address;
+    })).catch(() => null);
+    probedAt = Date.now();
+    if (found && found !== baseUrl) await switchAddress(found);
+  })().finally(() => { reconnecting = null; });
+  return reconnecting;
+}
+
 async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
+  const address = baseUrl;
+  try {
+    return await send<T>(path, init);
+  } catch (error) {
+    // Only an unreachable server moves addresses; anything it answered stands.
+    if (init.signal?.aborted || error instanceof Unpaired || (error as { status?: number }).status !== undefined) throw error;
+    await reconnect();
+    // A read is safe to repeat; a command might have reached the server, so it's left to the person.
+    if (baseUrl !== address && (init.method ?? "GET") === "GET") return send<T>(path, init);
+    throw error;
+  }
+}
+
+async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), init.timeoutMs ?? 20_000);
   const abort = () => timeout.abort();
   init.signal?.addEventListener("abort", abort);
+  if (init.signal?.aborted) timeout.abort();
   try {
     const response = await fetch(`${baseUrl}${path}`, {
       ...init,
@@ -111,8 +204,12 @@ async function request<T>(path: string, init: RequestInit & { timeoutMs?: number
       throw new Unpaired("This phone isn't paired with the server");
     }
     const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
-    if (!response.ok) throw new Error(body?.error ?? `The server answered ${response.status}`);
+    if (!response.ok) throw Object.assign(new Error(body?.error ?? `The server answered ${response.status}`), { status: response.status, body });
     return body as T;
+  } catch (error) {
+    // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
+    if (timeout.signal.aborted && !init.signal?.aborted) throw new Error("The server took too long to answer. Check your connection and try again.");
+    throw error;
   } finally {
     clearTimeout(timer);
     init.signal?.removeEventListener("abort", abort);
@@ -121,15 +218,23 @@ async function request<T>(path: string, init: RequestInit & { timeoutMs?: number
 
 export type PairingStarted = { requestId: string; code: string };
 
-export async function requestPairing(address: string) {
+/** `name` is how the server lists this phone, e.g. in its outputs. */
+export async function requestPairing(address: string, name: string) {
   baseUrl = normalizeAddress(address);
   token = null;
+  // A new pairing may be a different server; nothing earlier stands in for it.
+  identity = null;
+  addresses = [];
   const started = await request<PairingStarted>("/api/pair/request", {
     method: "POST",
-    body: JSON.stringify({ clientId: await clientId(), clientName: "iPhone" }),
+    body: JSON.stringify({ clientId: await clientId(), clientName: name.slice(0, 64) }),
     timeoutMs: 8000,
   });
-  await SecureStore.setItemAsync(ADDRESS_KEY, baseUrl);
+  identity = await identify(baseUrl);
+  await Promise.all([
+    SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(identity)),
+    switchAddress(baseUrl),
+  ]);
   return started;
 }
 
@@ -187,6 +292,16 @@ export async function follow(signal: AbortSignal) {
       try {
         const next = await request<ArrivingView>(`/api/session${since}`, { signal: stop.signal, timeoutMs: 35_000 });
         if (!accept(next)) accept(await request<ArrivingView>("/api/session", { signal }));
+        // Phones paired before servers were identified learn it once, while the address still works.
+        if (!identity && !identifying) {
+          identifying = true;
+          void identify(baseUrl).then(found => {
+            identifying = false;
+            if (!found || identity) return;
+          identity = found;
+            void SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(found));
+          });
+        }
       } catch (error) {
         if (error instanceof Unpaired) throw error;
         if (!wake.signal.aborted && !signal.aborted) await new Promise(resolve => setTimeout(resolve, 2000));
@@ -200,11 +315,94 @@ export async function follow(signal: AbortSignal) {
   }
 }
 
-export async function command(action: string, details: Record<string, unknown> = {}) {
-  accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}` : ""}`, {
-    method: "POST",
-    body: JSON.stringify({ action, ...details }),
-  }));
+let commandChain: Promise<unknown> = Promise.resolve();
+function inOrder<T>(work: () => Promise<T>): Promise<T> {
+  const result = commandChain.then(work, work);
+  commandChain = result.catch(() => {});
+  return result;
+}
+
+export function command(action: string, details: Record<string, unknown> = {}) {
+  return inOrder(async () => {
+    accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify({ action, ...details }),
+    }));
+  });
+}
+
+export function endpoints(signal: AbortSignal) {
+  return request<Endpoint[]>("/api/endpoints", { signal, timeoutMs: 10_000 });
+}
+
+export function endpointRequest<T>(id: string, path: string, init: RequestInit = {}) {
+  // Reports may take as long as the server waits before calling an output offline (OFFLINE_AFTER).
+  return request<T>(`/api/endpoints/${encodeURIComponent(id)}/${path}`, { ...init, timeoutMs: path.startsWith("commands") ? 30_000 : 8000 });
+}
+
+export async function refreshSession(signal: AbortSignal) {
+  accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+}
+
+/** Keep the core's source unchanged in reports; authenticate/rebase only the native media URL. */
+export function phoneMediaUrl(source: string) {
+  if (source.startsWith("/api/") || /^https?:\/\/[^/]+\/api\//.test(source)) {
+    const path = source.slice(source.indexOf("/api/"));
+    const [pathname, query = ""] = path.split("?");
+    const parameters = new URLSearchParams(query);
+    parameters.delete("access_token");
+    const remaining = parameters.toString();
+    return serverUrl(`${pathname}${remaining ? `?${remaining}` : ""}`);
+  }
+  if (/^https?:\/\//.test(source)) return source;
+  throw new Error("This file is only on the computer. Import it into the server library to play it on your phone.");
+}
+
+/** Apply against the latest queue; rebase on conflicts without losing another device's edits. */
+export function changeQueue(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play = false) {
+  return inOrder(async () => {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!view) accept(await request<ArrivingView>("/api/session"));
+      const current = view!;
+      const queue = change(current.queue, current.queueRevision);
+      try {
+        accept(await request<ArrivingView>("/api/session/queue", {
+          method: "POST",
+          // Media URLs carry this phone's token in memory, never in shared saved state.
+          body: JSON.stringify({ base: current.queueRevision, queue, ...(play ? { playTrackId: queue.current?.globalTrackId } : {}) })
+            .replace(SAVED_SERVER_URL, url => url.replace(TOKEN_IN_QUERY, "$1").replace(/[?&]$/, "")),
+        }));
+        return;
+      } catch (error) {
+        const conflict = error as { status?: number; body?: { session?: ArrivingView } };
+        if (conflict.status !== 409) throw error;
+        accept(conflict.body?.session ?? await request<ArrivingView>("/api/session"));
+      }
+    }
+    throw new Error("The queue keeps changing on another device. Please try again.");
+  });
+}
+
+export type MobilePlaylist = { id: string; name: string; trackIds: string[]; packages?: string[][] };
+export type PlaylistContents = { playlist: MobilePlaylist; tracks: Track[]; unavailableCount: number };
+
+/** This first library view deliberately opens MEGA, using the desktop's saved order and tracks. */
+export async function megaPlaylist(signal: AbortSignal): Promise<PlaylistContents> {
+  // All shared state comes at once; even compressed it's the largest request, so it may take a while over a relay.
+  const state = await request<{ values: Record<string, string> }>("/api/state", { signal, timeoutMs: 60_000 });
+  const encoded = state.values["ambra.playlists.v1"];
+  const saved = encoded ? JSON.parse(rebased(encoded)) as { playlists: MobilePlaylist[]; tracks: Track[] } : null;
+  const found = saved?.playlists.find(item => item.id === "1255df67-7977-4f0e-8e69-23420d41c563")
+    ?? saved?.playlists.find(item => item.name.trim().toLowerCase() === "mega");
+  if (!found) throw new Error("MEGA isn't on this server yet. Open it on desktop and sync your playlists, then retry.");
+  // Tidied exactly as desktop loads it (utils/playlistStorage.ts), so bound songs sit together
+  // in the list and every package shuffles as one, even if the saved one is out of date.
+  const stored = Array.isArray(found.packages) ? found.packages.filter(pack => Array.isArray(pack) && pack.every(id => typeof id === "string")) : [];
+  const { trackIds, packages } = normalizePackages([...new Set(found.trackIds)], stored);
+  const playlist: MobilePlaylist = { ...found, trackIds, packages };
+  const byId = new Map(saved!.tracks.map(track => [track.globalId, track]));
+  const tracks = playlist.trackIds.flatMap(id => byId.get(id) ?? []);
+  return { playlist, tracks, unavailableCount: playlist.trackIds.length - tracks.length };
 }
 
 export function currentTrack(current: SessionView | null): Track | null {

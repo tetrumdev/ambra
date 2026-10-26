@@ -11,10 +11,18 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.quantium.ambra.remote",
       "infoPlist": {
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "NSLocalNetworkUsageDescription": "Ambra connects to your Ambra server on this network.",
         "NSAppTransportSecurity": {
-          "NSAllowsLocalNetworking": true
+          "NSAllowsLocalNetworking": true,
+          "NSExceptionDomains": {
+            "ts.net": {
+              "NSIncludesSubdomains": true,
+              "NSExceptionAllowsInsecureHTTPLoads": true
+            }
+          }
         }
       }
     },
@@ -34,17 +42,31 @@
       "expo-image",
       "expo-secure-store",
       "expo-font",
-      ["expo-widgets", {
-        "bundleIdentifier": "com.quantium.ambra.remote.activity",
-        "groupIdentifier": "group.com.quantium.ambra.remote"
-      }],
-      ["expo-audio", {
-        "microphonePermission": false,
-        "recordAudioAndroid": false,
-        "enableBackgroundRecording": false,
-        "enableBackgroundPlayback": false
-      }]
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.quantium.ambra.remote.activity",
+          "groupIdentifier": "group.com.quantium.ambra.remote"
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "enableBackgroundRecording": false,
+          "enableBackgroundPlayback": true
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
     ],
-    "backgroundColor": "#0a0a0a"
+    "backgroundColor": "#000000"
   }
 }

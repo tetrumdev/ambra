@@ -1,8 +1,10 @@
-import * as Haptics from "expo-haptics";
 import { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import Constants from "expo-constants";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native";
 import { awaitPairing, requestPairing, suggestedAddress, type PairingStarted } from "./client";
 import { Swirl } from "./Swirl";
+import { colors, fonts, haptic } from "./theme";
+import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
 export function Pairing({ savedAddress, onPaired }: { savedAddress: string | null; onPaired: () => void }) {
@@ -21,19 +23,19 @@ export function Pairing({ savedAddress, onPaired }: { savedAddress: string | nul
     setError(null);
     setPairing(null);
     try {
-      const started = await requestPairing(address);
+      const started = await requestPairing(address, Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone"));
       setPairing(started);
       setBusy(false);
       await awaitPairing(started.requestId, controller.signal);
       if (controller.signal.aborted) return;
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      haptic.success();
       onPaired();
     } catch (reason) {
       if (controller.signal.aborted) return;
       setBusy(false);
       setPairing(null);
       setError(reason instanceof Error && reason.name !== "AbortError" ? reason.message : "Couldn't reach the server at that address.");
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      haptic.error();
     }
   };
 
@@ -46,11 +48,11 @@ export function Pairing({ savedAddress, onPaired }: { savedAddress: string | nul
           <Text style={styles.body}>Approve this code on the computer running the server.</Text>
           <Text style={styles.code} accessibilityLabel={`Code ${pairing.code.split("").join(" ")}`}>{pairing.code}</Text>
           <Text style={styles.hint} selectable>ambra-server pair approve {pairing.code}</Text>
-          <Pressable onPress={() => { abort.current?.abort(); setPairing(null); }} style={styles.secondary}>
+          <Touchable accessibilityRole="button" onPress={() => { abort.current?.abort(); setPairing(null); }} style={styles.secondary}>
             <Text style={styles.secondaryText}>Cancel</Text>
-          </Pressable>
+          </Touchable>
         </> : <>
-          <Text style={styles.body}>The address of the Ambra server on your network.</Text>
+          <Text style={styles.body}>The address of the Ambra server on your network, or its Tailscale name or IP to reach it from anywhere.</Text>
           <TextInput
             value={address}
             onChangeText={setAddress}
@@ -65,9 +67,9 @@ export function Pairing({ savedAddress, onPaired }: { savedAddress: string | nul
             style={styles.input}
           />
           {error && <Text style={styles.error}>{error}</Text>}
-          <Pressable onPress={() => void start()} disabled={busy || !address.trim()} style={({ pressed }) => [styles.primary, pressed && styles.pressed]}>
+          <Touchable accessibilityRole="button" haptic="firm" hapticOnPressIn onPress={() => void start()} disabled={busy || !address.trim()} style={styles.primary}>
             {busy ? <ActivityIndicator color="black" /> : <Text style={styles.primaryText}>Connect</Text>}
-          </Pressable>
+          </Touchable>
         </>}
       </KeyboardAvoidingView>
     </View>
@@ -75,24 +77,26 @@ export function Pairing({ savedAddress, onPaired }: { savedAddress: string | nul
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1 },
+  screen: { flex: 1, backgroundColor: colors.black },
   content: { flex: 1, justifyContent: "center", paddingHorizontal: 32, gap: 16 },
-  title: { color: "white", fontSize: 28, fontWeight: "700", textAlign: "center" },
-  body: { color: "rgba(255, 255, 255, 0.75)", fontSize: 16, textAlign: "center" },
-  code: { color: "white", fontSize: 52, fontWeight: "700", letterSpacing: 6, textAlign: "center", fontVariant: ["tabular-nums"] },
-  hint: { color: "rgba(255, 255, 255, 0.55)", fontSize: 13, textAlign: "center", fontFamily: "Menlo" },
+  title: { color: "white", fontFamily: fonts.serif, fontSize: 40, fontWeight: "500", textAlign: "center" },
+  body: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 15, lineHeight: 22, textAlign: "center" },
+  code: { color: "white", fontFamily: fonts.sans, fontSize: 52, fontWeight: "700", letterSpacing: 6, textAlign: "center", fontVariant: ["tabular-nums"] },
+  hint: { color: colors.muted, fontSize: 13, textAlign: "center", fontFamily: "Menlo" },
   input: {
     color: "white",
+    fontFamily: fonts.sans,
     fontSize: 17,
-    paddingHorizontal: 16,
+    paddingHorizontal: 20,
     paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "rgba(255, 255, 255, 0.1)",
+    borderRadius: 100,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#2f2f2f",
+    backgroundColor: colors.raised,
   },
-  error: { color: "#ff8a80", fontSize: 14, textAlign: "center" },
-  primary: { alignItems: "center", justifyContent: "center", height: 50, borderRadius: 25, backgroundColor: "white" },
-  primaryText: { color: "black", fontSize: 17, fontWeight: "600" },
-  pressed: { opacity: 0.7 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 14, textAlign: "center" },
+  primary: { alignItems: "center", justifyContent: "center", height: 50, borderRadius: 100, backgroundColor: "white" },
+  primaryText: { color: "black", fontFamily: fonts.sans, fontSize: 16, fontWeight: "600" },
   secondary: { alignSelf: "center", padding: 12 },
-  secondaryText: { color: "rgba(255, 255, 255, 0.75)", fontSize: 16 },
+  secondaryText: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 15, fontWeight: "600" },
 });

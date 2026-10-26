@@ -2,7 +2,7 @@ import { GLView, type ExpoWebGLRenderingContext } from "expo-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, PixelRatio, StyleSheet, View, useWindowDimensions } from "react-native";
 import { coverSeparation, separateCollapsedPalette } from "../../desktop/src/utils/backgroundPalette";
-import { SURFACE_BLACK } from "../../desktop/src/utils/surfaceBlack";
+import { colors as theme } from "./theme";
 import {
   COLOR_TRANSITION_MS,
   EDGE_COMPONENTS,
@@ -28,7 +28,7 @@ export type CoverFrame = { x: number; y: number; size: number };
 const RENDER_HEIGHT = 720;
 /** Where the cover usually sits, as a share of the screen's height, until it has been measured. */
 const TYPICAL_COVER_CENTER = 0.3;
-const black = { colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK], weights: [1, 0, 0, 0] };
+const black = { colors: [theme.black, theme.black, theme.black, theme.black], weights: [1, 0, 0, 0] };
 const mobileFragmentShader = fragmentShaderSource.replace("void main()", "void swirlMain()") + backdropShader;
 
 /** The desktop bigscreen's swirl (desktop/src/utils/swirlShader.ts), colored from the cover. */
@@ -207,7 +207,7 @@ export function Swirl({ track, playing, cover, darkened = false }: {
   }, []);
 
   return (
-    <View style={[StyleSheet.absoluteFill, { backgroundColor: SURFACE_BLACK }]} pointerEvents="none">
+    <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.black }]} pointerEvents="none">
       <GLView
         key={`${width}x${height}`}
         msaaSamples={0}

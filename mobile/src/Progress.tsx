@@ -163,6 +163,7 @@ const styles = StyleSheet.create({
   },
   time: {
     color: "white",
+    fontFamily: "Stack Sans Text",
     fontSize: 11,
     fontWeight: "500",
     fontVariant: ["tabular-nums"],
