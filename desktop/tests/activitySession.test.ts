@@ -4,7 +4,7 @@ import type { SessionView } from "../../mobile/src/client";
 
 const view: SessionView = {
   instanceId: "server", revision: 1, playing: true, positionSeconds: 30, duration: 200,
-  buffering: false, error: null, output: { endpointName: "Desk", deviceName: "Speakers" },
+  buffering: false, error: null, output: { endpointId: "desk", deviceId: "speakers", endpointName: "Desk", deviceName: "Speakers" },
   outputOnline: true, queueRevision: 1,
   queue: { current: { globalTrackId: "song" }, upcoming: [], tracks: [{ globalId: "song", provider: "qobuz", name: "Song", artist: "Artist", album: "Album", cover: "http://server/art", nativeCover: null, durationSeconds: 200 }] },
 };

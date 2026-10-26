@@ -31,6 +31,7 @@ use futures_util::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, RwLock, watch};
 use tokio_stream::wrappers::ReceiverStream;
+use tower_http::compression::{CompressionLayer, Predicate, predicate::SizeAbove};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use crate::{
@@ -276,6 +277,13 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
             wait_for_providers,
         ))
         .layer(cors)
+        // JSON only: shared state and queues shrink several times over, which matters on a
+        // relayed connection (Tailscale away from home). Media keeps its byte ranges intact.
+        .layer(CompressionLayer::new().gzip(true).compress_when(SizeAbove::new(1024).and(
+            |_: axum::http::StatusCode, _: axum::http::Version, headers: &axum::http::HeaderMap, _: &axum::http::Extensions| {
+                headers.get(CONTENT_TYPE).and_then(|value| value.to_str().ok()).is_some_and(|value| value.starts_with("application/json"))
+            },
+        )))
         // Outermost, so a foreign page is refused before CORS or provider waits.
         .layer(middleware::from_fn_with_state(
             access,
