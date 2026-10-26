@@ -15,6 +15,7 @@ import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
+import { useDiscover } from "../hooks/useDiscover";
 import { reducedMotion } from "../utils/reducedMotion";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
@@ -25,11 +26,13 @@ function HomeRow({
   empty,
   children,
   hasItems,
+  loading = false,
 }: {
   title: string;
   empty: string;
   children: ReactNode;
   hasItems: boolean;
+  loading?: boolean;
 }) {
   const row = useRef<HTMLUListElement>(null);
   const [scroll, setScroll] = useState({ left: false, right: false });
@@ -54,7 +57,7 @@ function HomeRow({
     return () => observer.disconnect();
   }, [children, updateScroll]);
   return (
-    <section className="homeSection" aria-label={title}>
+    <section className="homeSection" aria-label={title} aria-busy={loading || undefined}>
       <div className="homeSectionHeader">
         <h2>{title}</h2>
         {hasItems && (
@@ -93,7 +96,7 @@ function HomeRow({
           {children}
         </ul>
       ) : (
-        <p className="homeEmpty">{empty}</p>
+        <p className="homeEmpty" role="status">{empty}</p>
       )}
     </section>
   );
@@ -196,6 +199,7 @@ export function HomeView({
   onSelectPlaylist: (id: string) => void;
   registerScrollElement: (element: HTMLDivElement | null) => void;
 }) {
+  const discover = useDiscover(entries);
   const tracksById = useMemo(
     () => new Map(tracks.map((track) => [track.globalId, track])),
     [tracks],
@@ -302,6 +306,14 @@ export function HomeView({
         hasItems={older.length > 0}
       >
         <SongCards tracks={older} onAction={onAction} />
+      </HomeRow>
+      <HomeRow
+        title="Discover"
+        empty={discover.message}
+        hasItems={discover.tracks.length > 0}
+        loading={discover.loading}
+      >
+        <SongCards tracks={discover.tracks} onAction={onAction} />
       </HomeRow>
     </div>
   );

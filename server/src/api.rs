@@ -1,4 +1,5 @@
 mod credits;
+mod discover;
 mod playlists;
 
 use crate::loudness::Loudness;
@@ -91,6 +92,8 @@ struct AppState {
     artwork: Arc<crate::artwork_cache::ArtworkCache>,
     artist_metadata: Arc<Mutex<ArtistMetadataCache>>,
     playlist_mutations: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
+    discover: Arc<discover::Discover>,
+    user_state: Arc<crate::user_state::UserState>,
 }
 
 /// Requests own a cheap provider clone; signing out can remove the active session.
@@ -149,6 +152,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     let tidal_cell = Arc::new(ProviderSlot::new());
     let qobuz_cell = Arc::new(ProviderSlot::new());
     let spotify_cell = Arc::new(SyncRwLock::new(None));
+    let user_state = Arc::new(crate::user_state::UserState::new());
     let state = AppState {
         tidal: tidal_cell,
         qobuz: qobuz_cell,
@@ -174,6 +178,8 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         artwork_dimensions_cache: Arc::new(RwLock::new(HashMap::new())),
         artist_metadata: Arc::new(Mutex::new(HashMap::new())),
         playlist_mutations: Arc::new(Mutex::new(HashMap::new())),
+        discover: Arc::new(discover::Discover::default()),
+        user_state: user_state.clone(),
     };
 
     let config = crate::server_config::ServerConfig::load();
@@ -191,7 +197,6 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .allow_private_network(true);
 
     // One store of shared state and one set of devices, for the routes and the core alike.
-    let user_state = Arc::new(crate::user_state::UserState::new());
     let endpoints = Arc::new(crate::endpoints::Endpoints::default());
     let core = crate::session::Core::with_spotify(user_state.clone(), endpoints.clone(), Some(state.soloist.clone()));
     let app = Router::new()
@@ -215,6 +220,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change).delete(playlists::delete))
         .route("/api/library/tracks", post(add_track))
         .route("/api/library/tracks/remove", post(remove_tracks))
+        .route("/api/recommendations/discover", get(discover::get))
         .route("/api/search/tracks", get(search_tracks))
         .route("/api/search/providers", get(search_providers))
         .route("/api/search/catalog", get(search_catalog))
@@ -389,6 +395,7 @@ fn path_needs_providers(path: &str) -> bool {
     path != "/api/health"
         && path != "/api/state"
         && path != "/api/lyrics"
+        && path != "/api/recommendations/discover"
         && !path.starts_with("/api/artwork/")
         // Pairing, settings and other devices' playback never involve a music service.
         && !path.starts_with("/api/server/")
@@ -577,6 +584,7 @@ async fn start_auth(
                     .ok_or_else(|| {
                         ApiError::service_unavailable("Spotify login did not complete")
                     })?;
+                state.discover.invalidate().await;
                 state.soloist.set_account(Some(provider.account_id()));
                 // Replace a revoked session. OnceLock prevented reconnecting a
                 // service that had ever connected during this server lifetime.
@@ -651,6 +659,7 @@ async fn complete_auth(
             )));
         }
     }
+    state.discover.invalidate().await;
     Ok(Json(AuthStartResponse {
         status: "connected",
         login_url: None,
@@ -695,6 +704,7 @@ async fn disconnect_auth(
     state.search_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
     state.catalog_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
     *state.media_cache.write().await = MediaCache::default();
+    state.discover.invalidate().await;
     Ok(Json(AuthStatusResponse {
         tidal: state.tidal.get().is_some(), qobuz: state.qobuz.get().is_some(),
         spotify: current_spotify(&state).is_some(),
@@ -2832,6 +2842,7 @@ mod startup_gate_tests {
     #[test]
     fn health_and_artwork_answer_while_providers_restore() {
         assert!(!path_needs_providers("/api/health"));
+        assert!(!path_needs_providers("/api/recommendations/discover"));
         assert!(!path_needs_providers("/api/artwork/thumbnail"));
         assert!(!path_needs_providers("/api/artwork/palette"));
         assert!(!path_needs_providers("/api/music/local/tracks"));

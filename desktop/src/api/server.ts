@@ -10,7 +10,7 @@ import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
-import { serverBaseUrl, serverUrl } from "./serverConnection";
+import { fromStorage, serverBaseUrl, serverUrl } from "./serverConnection";
 
 export { serverBaseUrl } from "./serverConnection";
 
@@ -723,4 +723,24 @@ export async function loadArtistBiography(artist: CatalogArtist, signal?: AbortS
     artistBiographies.set(key, value);
     return value;
   }, signal);
+}
+
+export type DiscoverStatus = "loading" | "ready" | "insufficientHistory" | "noProviders" | "noMatches"
+  | "providerUnavailable" | "databaseUnavailable" | "stateUnavailable";
+export type DiscoverResponse = {
+  tracks: Track[];
+  reasons: Record<string, string>;
+  generatedAt: number;
+  status: DiscoverStatus;
+  refreshAfterMs: number | null;
+};
+
+/** The server owns taste, ranking, rotation, caching, and provider matching. */
+export async function loadDiscover(signal: AbortSignal): Promise<DiscoverResponse> {
+  const response = await fetch(`${serverBaseUrl}/api/recommendations/discover?limit=12`, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]), cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  const value = await response.json() as Omit<DiscoverResponse, "tracks"> & { tracks: (RemoteTrack | Track)[] };
+  return { ...value, tracks: value.tracks.map(track => "globalId" in track ? JSON.parse(fromStorage(JSON.stringify(track))) as Track : playableTrack(track)) };
 }

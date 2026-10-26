@@ -70,3 +70,7 @@ We at Quantium Labs really care about quality in our products over everything el
 ### Contact Us
 
 contact@tetrum.dev
+
+### Local music discovery
+
+The Home page’s Discover row uses server-owned listening history and a bundled CC0 music metadata database. Recommendations run entirely on your AMBRA server and resolve playable tracks through your connected services. See [recommendation architecture, data licenses, and database regeneration](docs/recommendations.md).
