@@ -979,10 +979,8 @@
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .settingsSaveBar {
-        animation: none;
-    }
+:root[data-reduce-motion] .settingsSaveBar {
+    animation: none;
 }
 
 @media (max-width: 1050px) {

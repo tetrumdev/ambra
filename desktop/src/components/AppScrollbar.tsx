@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import "./AppScrollbar.css";
+import { reducedMotion } from "../utils/reducedMotion";
 
 type AppScrollbarProps = {
   scrollElement: HTMLElement | null;
@@ -20,7 +21,6 @@ export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProp
     if (thumb && !scrollElement) thumb.hidden = true;
     if (!scrollElement || !rail || !thumb) return;
 
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
     let maximumScroll = 0;
     let thumbHeight = 0;
     let thumbTravel = 0;
@@ -64,7 +64,7 @@ export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProp
       lastFrameTime = time;
       targetScroll = clamp(targetScroll, maximumScroll);
       const distance = targetScroll - animatedScroll;
-      if (reducedMotion.matches || Math.abs(distance) < 0.5) {
+      if (reducedMotion() || Math.abs(distance) < 0.5) {
         scrollElement.scrollTop = targetScroll;
         motionFrame = 0;
       } else {
@@ -81,7 +81,7 @@ export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProp
     const scrollTo = (position: number) => {
       targetScroll = clamp(position, maximumScroll);
       showActivity();
-      if (reducedMotion.matches) {
+      if (reducedMotion()) {
         stopMotion();
         scrollElement.scrollTop = clamp(position, maximumScroll);
         updatePosition();

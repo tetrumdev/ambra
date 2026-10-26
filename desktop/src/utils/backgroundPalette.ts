@@ -111,6 +111,27 @@ export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
   return zones.map((sum, index) => counts[index] ? sum / counts[index] : 0.5);
 }
 
+const EDGE_SAMPLE_SIZE = 16;
+
+// Reads how bright each side of the cover is. Covers the webview may not read
+// back (no CORS) resolve to null and fall back to the palette.
+export function sampleCoverEdges(source: string): Promise<number[] | null> {
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  image.decoding = "async";
+  image.src = source;
+  return image.decode().then(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = EDGE_SAMPLE_SIZE;
+    canvas.height = EDGE_SAMPLE_SIZE;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) return null;
+    context.drawImage(image, 0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
+    const { data } = context.getImageData(0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
+    return coverEdgeLuminances(data, EDGE_SAMPLE_SIZE);
+  }).catch(() => null);
+}
+
 /**
  * `coverDim` is the share of the background still visible beside the cover
  * after any overlay drawn over the field but under the cover (1 = none).

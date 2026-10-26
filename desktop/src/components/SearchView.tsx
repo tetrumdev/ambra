@@ -18,6 +18,7 @@ import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
 import "./SearchView.css";
 import { motion } from "../utils/motion";
+import { reducedMotion } from "../utils/reducedMotion";
 
 type SearchViewProps = {
   onOpenEntity: (entity: BrowseEntity) => void;
@@ -90,7 +91,7 @@ function useResultGlide(root: React.RefObject<HTMLDivElement | null>, changes: u
   useLayoutEffect(() => {
     const container = root.current;
     if (!container) return;
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = reducedMotion();
     const base = container.getBoundingClientRect();
     // Read everything before animating anything, so the pass costs one layout.
     const measured = Array.from(container.querySelectorAll<HTMLElement>("[data-glide]"), (element) => {

@@ -40,6 +40,7 @@ import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { lyricDisplayLine } from "../utils/lyricTypography";
 import "./LyricsView.css";
 import "./TrackMenus.css";
+import { useReducedMotion } from "../utils/reducedMotion";
 
 type LyricsViewProps = {
   track: Track | undefined;
@@ -1094,19 +1095,10 @@ export function LyricsView({
   const [error, setError] = useState(false);
   const [detected, setDetected] = useState<{ lyrics: TrackLyrics; correctionMs: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [systemReducedMotion, setSystemReducedMotion] = useState(
-    () => window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-  );
+  // "system" is the stored name for following the app's Reduce motion setting.
+  const appReducedMotion = useReducedMotion();
   const reducedMotion =
-    motion === "reduced" || (motion === "system" && systemReducedMotion);
-
-  useEffect(() => {
-    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const update = () => setSystemReducedMotion(preference.matches);
-    update();
-    preference.addEventListener("change", update);
-    return () => preference.removeEventListener("change", update);
-  }, []);
+    motion === "reduced" || (motion === "system" && appReducedMotion);
 
   useEffect(() => {
     const controller = new AbortController();

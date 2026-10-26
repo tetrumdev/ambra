@@ -8,6 +8,7 @@ import type { QueueController } from "./useQueue";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { acceptsPlaybackShortcut, isCharacterKey, isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
+import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
 
 const noDeck = () => {};
 
@@ -66,7 +67,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   }), []);
 
   const currentTrack = queue.currentEntry?.track;
-  // The same server transport drives the keyboard and the OS media controls on every app.
+  const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
+  // App shortcuts control the shared transport; hardware controls only affect local playback.
   const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0 });
   shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0 };
   useEffect(() => {
@@ -93,38 +95,36 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     window.addEventListener("keydown", keydown);
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const mediaControl = createOutputMediaControlHandler(serverConnection?.clientId, () => coreView()?.output, coreCommand);
     if (isTauri()) void listen<string>("native-media-control", ({ payload }) => {
-      if (["play", "pause", "toggle", "next", "previous"].includes(payload)) {
-        if (payload === "play" || payload === "toggle") ensureOutput();
-        void coreCommand(payload).catch(() => {});
-      }
+      if (!disposed) mediaControl(payload);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); window.removeEventListener("keydown", keydown); clock.setRunning(false); };
   }, [clock, ensureOutput]);
 
   useEffect(() => {
     if (!isTauri()) return;
-    void invoke("set_native_media_commands_enabled", { enabled: !!currentTrack }).catch(() => {});
-    if (!currentTrack) return;
+    void invoke("set_native_media_commands_enabled", { enabled: localOutput && !!currentTrack }).catch(() => {});
+    if (!localOutput || !currentTrack) return;
     void invoke("set_native_media_metadata", { metadata: {
       title: currentTrack.name, artist: currentTrack.artist, album: currentTrack.album,
       durationSeconds: currentTrack.durationSeconds, coverSource: currentTrack.nativeCover,
       assetSource: currentTrack.audio,
     } }).catch(error => console.warn("Could not update Now Playing:", error));
-  }, [currentTrack]);
+  }, [currentTrack, localOutput]);
 
   useEffect(() => {
     if (!isTauri()) return;
     let lastSecond = -1;
     const update = () => {
-      const positionSeconds = Math.floor(clock.get());
+      const positionSeconds = localOutput ? Math.floor(clock.get()) : 0;
       if (positionSeconds === lastSecond) return;
       lastSecond = positionSeconds;
-      void invoke("set_native_media_playback", { isPlaying: !!currentTrack && (view?.playing ?? false), positionSeconds }).catch(() => {});
+      void invoke("set_native_media_playback", { isPlaying: localOutput && !!currentTrack && (view?.playing ?? false), positionSeconds }).catch(() => {});
     };
     update();
     return clock.subscribe(update);
-  }, [clock, currentTrack, view?.playing]);
+  }, [clock, currentTrack, view?.playing, localOutput]);
 
   return {
     currentTrack,

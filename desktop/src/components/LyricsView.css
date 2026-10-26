@@ -598,12 +598,10 @@ button.lyricLine:hover {
 #lyricsPage[data-shown="false"] .lyricsStage {
     transform: translateX(-24%) scale(0.92);
 }
-@media (prefers-reduced-motion: reduce) {
-    #lyricsPage,
-    #lyricsPage[data-shown="false"],
-    .lyricsStage {
-        transition: none;
-    }
+:root[data-reduce-motion] #lyricsPage,
+:root[data-reduce-motion] #lyricsPage[data-shown="false"],
+:root[data-reduce-motion] .lyricsStage {
+    transition: none;
 }
 
 /* Between songs: the old lyrics drift up and away while the new ones rise into place.
@@ -636,12 +634,10 @@ button.lyricLine:hover {
 #lyricsPage[data-reduced-motion="true"] .lyricsMessage {
     animation: none;
 }
-@media (prefers-reduced-motion: reduce) {
-    #lyricsPage[data-leaving="true"],
-    #lyricsPage[data-leaving="true"] .lyricsStage {
-        transition: none;
-    }
-    #lyricsPage[data-arriving="true"] .lyricsStage {
-        animation: none;
-    }
+:root[data-reduce-motion] #lyricsPage[data-leaving="true"],
+:root[data-reduce-motion] #lyricsPage[data-leaving="true"] .lyricsStage {
+    transition: none;
+}
+:root[data-reduce-motion] #lyricsPage[data-arriving="true"] .lyricsStage {
+    animation: none;
 }

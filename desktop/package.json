@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "remote:build": "vite build --config vite.remote.config.ts",
+    "remote:watch": "vite build --config vite.remote.config.ts --watch",
     "preview": "vite preview",
     "tauri": "tauri",
     "release": "../scripts/release.sh"

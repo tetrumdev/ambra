@@ -1,5 +1,6 @@
 import type { MouseEvent } from "react";
 import { motion } from "./motion";
+import { reducedMotion } from "./reducedMotion";
 
 const running = new WeakMap<HTMLDetailsElement, Animation>();
 
@@ -12,7 +13,7 @@ export function slideDetails(event: MouseEvent<HTMLElement>) {
   const details = event.currentTarget.parentElement;
   if (!(details instanceof HTMLDetailsElement)) return;
   const body = details.querySelector<HTMLElement>(":scope > :not(summary)");
-  if (!body || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (!body || reducedMotion()) return;
   event.preventDefault();
   const previous = running.get(details);
   // Turning back mid-slide picks up from the height on screen.

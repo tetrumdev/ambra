@@ -5,6 +5,7 @@ import { useGSAP } from "@gsap/react";
 import { MorphSVGPlugin } from "gsap/MorphSVGPlugin";
 import { CustomEase } from "gsap/CustomEase";
 import { motion } from "../utils/motion";
+import { reducedMotion } from "../utils/reducedMotion";
 
 gsap.registerPlugin(useGSAP, MorphSVGPlugin, CustomEase);
 
@@ -26,7 +27,7 @@ function PlayPauseIcon({ playing }: { playing: boolean }) {
   useGSAP(() => {
     const target = shapes[playing ? "pause" : "play"];
     const paths = icon.current!.querySelectorAll("path");
-    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const reduced = reducedMotion();
     paths.forEach((path, index) => {
       if (first.current || reduced) gsap.set(path, { attr: { d: target[index] } });
       else gsap.to(path, { morphSVG: target[index], duration: 0.32, ease: "power3.inOut", overwrite: true });
@@ -48,7 +49,7 @@ function SkipIcon({ backwards = false, activation }: { backwards?: boolean; acti
     if (seenActivation.current === activation) return;
     seenActivation.current = activation;
     animation.current?.progress(1).kill();
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    if (reducedMotion()) return;
 
     const paths = icon.current!.querySelectorAll("path");
     // Three triangles roll through two visible positions. Resetting at the end

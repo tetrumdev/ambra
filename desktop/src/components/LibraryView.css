@@ -1002,9 +1002,7 @@
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .libraryItem[data-revealed="true"] {
-        animation: none;
-        background-color: #262626;
-    }
+:root[data-reduce-motion] .libraryItem[data-revealed="true"] {
+    animation: none;
+    background-color: #262626;
 }
