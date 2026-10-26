@@ -61,7 +61,58 @@ fn cacheable_audio_range(range: Option<&str>) -> bool {
     })
 }
 
-pub struct DecodedSource {
+pub struct DecodedSource(Decoded);
+enum Decoded {
+    File(Box<FileDecodedSource>),
+    Live(Box<super::live::LivePcm>),
+}
+impl DecodedSource {
+    pub fn open(source: String) -> Result<Self, String> {
+        Self::open_at(source, 0.0)
+    }
+    pub fn open_at(source: String, position: f64) -> Result<Self, String> {
+        if is_live_source(&source) {
+            return super::live::LivePcm::open(source, position)
+                .map(|live| Self(Decoded::Live(Box::new(live))));
+        }
+        FileDecodedSource::open_at(source, position).map(|file| Self(Decoded::File(Box::new(file))))
+    }
+    pub fn spec(&self) -> StreamSpec {
+        match &self.0 {
+            Decoded::File(file) => file.spec(),
+            Decoded::Live(live) => live.spec(),
+        }
+    }
+    pub fn duration_seconds(&self) -> f64 {
+        match &self.0 {
+            Decoded::File(file) => file.duration_seconds(),
+            Decoded::Live(live) => live.duration_seconds(),
+        }
+    }
+    pub fn audio_quality(&self) -> AudioQuality {
+        match &self.0 {
+            Decoded::File(file) => file.audio_quality(),
+            Decoded::Live(live) => live.audio_quality(),
+        }
+    }
+    pub fn loudness(&self) -> LoudnessInfo {
+        match &self.0 {
+            Decoded::File(file) => file.loudness(),
+            Decoded::Live(_) => LoudnessInfo::default(),
+        }
+    }
+    pub fn decode_next(&mut self) -> Result<Option<&[f64]>, String> {
+        match &mut self.0 {
+            Decoded::File(file) => file.decode_next(),
+            Decoded::Live(live) => live.decode_next(),
+        }
+    }
+}
+pub(super) fn is_live_source(source: &str) -> bool {
+    is_http_source(source) && source_path(source).starts_with("/api/playback/live/")
+}
+
+struct FileDecodedSource {
     source: String,
     format: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
@@ -75,7 +126,7 @@ pub struct DecodedSource {
     meter: Option<LoudnessMeter>,
 }
 
-impl DecodedSource {
+impl FileDecodedSource {
     pub fn open(source: String) -> Result<Self, String> {
         Self::open_hls_position(source, None)
     }
@@ -215,6 +266,9 @@ impl DecodedSource {
             bitrate_kbps,
             bitrate_is_estimate: !is_pcm,
             normalization_gain_db: None,
+            capture_format: None,
+            requested_quality: None,
+            source_format_verified: None,
         };
 
         let cache_key = loudness::cache_key(&source);

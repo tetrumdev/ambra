@@ -1160,3 +1160,7 @@
 .serverSetupFind .settingRow:has(+ .serverJoinActions) {
     border-bottom: 0;
 }
+
+/* Soloist uses the existing Services controls and stays within that panel. */
+.settingsCallbackForm select { width: 100%; min-height: 36px; padding: 6px 10px; color: inherit; background: #171717; border: 1px solid #333; border-radius: 6px; }
+.settingsCallbackForm .soloistActions { flex-wrap: wrap; }

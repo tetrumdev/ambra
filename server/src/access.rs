@@ -37,6 +37,9 @@ const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/server/info", "/api/pair/re
 pub const TOKEN_PARAMETER: &str = "access_token";
 
 #[derive(Clone)]
+pub struct Caller { pub client_id: Option<String> }
+
+#[derive(Clone)]
 pub struct AccessPolicy {
     origins: Arc<Vec<String>>,
     network: SharedNetwork,
@@ -158,13 +161,16 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         };
     }
     // Preflights carry no credentials; CORS answers them, and the real request is checked.
+    if local { request.extensions_mut().insert(Caller { client_id: None }); }
     if local || request.method() == Method::OPTIONS || public_path(&path) {
         return next.run(request).await;
     }
     let (token, stripped) = take_token(&request);
-    if !token.is_some_and(|token| policy.network.is_paired_token(&token)) {
+    let client_id = token.and_then(|token| policy.network.paired_client_id(&token));
+    if client_id.is_none() {
         return (StatusCode::UNAUTHORIZED, "Pair this device with the server first").into_response();
     }
+    request.extensions_mut().insert(Caller { client_id });
     if let Some(uri) = stripped {
         *request.uri_mut() = uri;
     }

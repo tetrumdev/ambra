@@ -135,6 +135,7 @@ impl SpotifyQuality {
 }
 
 impl SpotifyProvider {
+    pub fn account_id(&self) -> String { self.session.username().to_owned() }
     pub fn disconnect(&self) { self.session.shutdown(); }
     /// Spotify stays optional so an absent login never prevents other providers from starting.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {

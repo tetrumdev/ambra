@@ -74,6 +74,7 @@ struct AppState {
     service_login: Arc<[Mutex<()>; 3]>,
     spotify: Arc<SyncRwLock<Option<SpotifyProvider>>>,
     spotify_login: Arc<Mutex<()>>,
+    soloist: Arc<crate::soloist::Manager>,
     pending_tidal_login: Arc<Mutex<Option<TidalLogin>>>,
     pending_qobuz_login: Arc<Mutex<Option<QobuzLogin>>>,
     http_client: reqwest::Client,
@@ -153,6 +154,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         qobuz: qobuz_cell,
         spotify: spotify_cell,
         spotify_login: Arc::new(Mutex::new(())),
+        soloist: crate::soloist::Manager::new(),
         service_login: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
@@ -191,12 +193,13 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     // One store of shared state and one set of devices, for the routes and the core alike.
     let user_state = Arc::new(crate::user_state::UserState::new());
     let endpoints = Arc::new(crate::endpoints::Endpoints::default());
-    let core = crate::session::Core::new(user_state.clone(), endpoints.clone());
+    let core = crate::session::Core::with_spotify(user_state.clone(), endpoints.clone(), Some(state.soloist.clone()));
     let app = Router::new()
         .merge(crate::network::public_router(network.clone()))
         .merge(crate::network::local_router(network.clone()))
         .merge(crate::endpoints::router(endpoints.clone()))
         .merge(crate::session::router(core.clone()))
+        .merge(crate::soloist::router(state.soloist.clone()))
         .merge(crate::impulses::router())
         .merge(crate::remote::router())
         .merge(crate::local_music::router(user_state.clone()))
@@ -292,7 +295,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .with_state(state.clone());
 
     // Open the port first; provider sessions restore concurrently behind it.
-    tokio::spawn(restore_providers(state, providers_ready_tx));
+    tokio::spawn(restore_providers(state.clone(), providers_ready_tx));
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -328,9 +331,20 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     }
     Ok(()) };
     tokio::select! {
-        result = serving => result,
-        _ = crate::server_process::stopped() => { core.save_transport(); Ok(()) }
+        result = serving => { state.soloist.shutdown().await; result },
+        _ = crate::server_process::stopped() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
+        _ = shutdown_signal() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
     }
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)] {
+        if let Ok(mut terminate) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
 }
 
 async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
@@ -354,6 +368,7 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
         let _ = state.qobuz.set(provider);
     }
     if let Ok(Some(provider)) = spotify {
+        state.soloist.set_account(Some(provider.account_id()));
         *state
             .spotify
             .write()
@@ -382,6 +397,8 @@ fn path_needs_providers(path: &str) -> bool {
         && !path.starts_with("/api/endpoints")
         && !path.starts_with("/api/impulses/")
         && !path.starts_with("/api/session")
+        && !path.starts_with("/api/spotify/playback/")
+        && !path.starts_with("/api/playback/live/")
         && !path.starts_with("/api/music/local/")
         && !path.starts_with(crate::remote::PATH)
 }
@@ -560,6 +577,7 @@ async fn start_auth(
                     .ok_or_else(|| {
                         ApiError::service_unavailable("Spotify login did not complete")
                     })?;
+                state.soloist.set_account(Some(provider.account_id()));
                 // Replace a revoked session. OnceLock prevented reconnecting a
                 // service that had ever connected during this server lifetime.
                 *state
@@ -673,6 +691,7 @@ async fn disconnect_auth(
             _ => unreachable!(),
         }
     }
+    if provider == "spotify" { state.soloist.disconnect().await.map_err(ApiError::upstream)?; }
     state.search_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
     state.catalog_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
     *state.media_cache.write().await = MediaCache::default();

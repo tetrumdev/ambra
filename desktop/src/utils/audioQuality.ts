@@ -37,6 +37,14 @@ function qualityFields(track: Track, decoded?: AudioQuality | null) {
 }
 
 export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) {
+  if (decoded?.captureFormat) {
+    const capture = decoded.captureFormat;
+    return {
+      name: decoded.requestedQuality === "lossless" ? "Lossless requested" : "Soloist capture",
+      details: `${capture.sampleFormat.toUpperCase()} PCM · ${capture.sampleRate / 1000} kHz · ${capture.channels === 2 ? "Stereo" : `${capture.channels} channels`}`,
+      description: `Requested Spotify quality: ${decoded.requestedQuality ?? "unknown"}. Original Spotify codec and bit depth are unverified. These details describe captured PCM before Ambra output conversion and DSP.`,
+    };
+  }
   const { codec, lossless, bitDepth, sampleRate, channels, bitrate, estimated } = qualityFields(track, decoded);
   const hiRes = lossless && ((bitDepth ?? 0) > 16 || (sampleRate ?? 0) > 48);
   const name = lossless
