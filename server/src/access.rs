@@ -36,6 +36,11 @@ pub const LOCAL_ONLY_PREFIX: &str = "/api/local/";
 const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/server/info", "/api/pair/request", crate::remote::PATH];
 pub const TOKEN_PARAMETER: &str = "access_token";
 
+/// A validated paired-device credential, for media manifests whose child requests
+/// cannot inherit the original request's authorization header or query string.
+#[derive(Clone)]
+pub struct MediaAccessToken(pub String);
+
 #[derive(Clone)]
 pub struct Caller { pub client_id: Option<String> }
 
@@ -166,11 +171,14 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         return next.run(request).await;
     }
     let (token, stripped) = take_token(&request);
-    let client_id = token.and_then(|token| policy.network.paired_client_id(&token));
-    if client_id.is_none() {
+    let authenticated = token.and_then(|token| {
+        policy.network.paired_client_id(&token).map(|client_id| (token, client_id))
+    });
+    let Some((token, client_id)) = authenticated else {
         return (StatusCode::UNAUTHORIZED, "Pair this device with the server first").into_response();
-    }
-    request.extensions_mut().insert(Caller { client_id });
+    };
+    request.extensions_mut().insert(Caller { client_id: Some(client_id) });
+    request.extensions_mut().insert(MediaAccessToken(token));
     if let Some(uri) = stripped {
         *request.uri_mut() = uri;
     }
@@ -221,6 +229,45 @@ mod tests {
         let (token, uri) = take_token(&request);
         assert_eq!(token.as_deref(), Some("abc+d"));
         assert_eq!(uri.unwrap().to_string(), "/api/artwork/thumbnail?url=x&size=3");
+    }
+
+    #[tokio::test]
+    async fn only_validated_credentials_reach_media_handlers() {
+        use axum::{Extension, Json, Router, middleware, routing::get};
+        let mut config = crate::server_config::ServerConfig::load_default_for_tests();
+        config.paired_clients.push(crate::server_config::PairedClient {
+            id: "phone".into(), name: "Phone".into(),
+            token_sha256: crate::server_config::token_hash("test+token"), paired_at_ms: 0,
+        });
+        let policy = AccessPolicy::from_env(crate::network::Network::new(config));
+        let router = Router::new().route("/protected", get(
+            |uri: Uri, credential: Option<Extension<MediaAccessToken>>, caller: Extension<Caller>| async move {
+                Json(serde_json::json!({ "uri": uri.to_string(), "token": credential.map(|Extension(token)| token.0), "client_id": caller.0.client_id }))
+            },
+        )).layer(middleware::from_fn_with_state(policy, enforce));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap();
+        });
+        let client = reqwest::Client::new();
+        for query in [false, true] {
+            let url = format!("http://{address}/protected{}", if query { "?access_token=test%2Btoken" } else { "" });
+            let mut request = client.get(url).header(HOST, "paired-device");
+            if !query { request = request.bearer_auth("test+token"); }
+            let response = request.send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body: serde_json::Value = response.json().await.unwrap();
+            assert_eq!(body["token"], "test+token");
+            assert_eq!(body["client_id"], "phone");
+            assert_eq!(body["uri"], "/protected");
+        }
+        for suffix in ["", "?access_token=wrong"] {
+            let response = client.get(format!("http://{address}/protected{suffix}"))
+                .header(HOST, "paired-device").send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
+        server.abort();
     }
 
     #[test]

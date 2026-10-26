@@ -1,10 +1,11 @@
 import { Image, type ImageRef } from "expo-image";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { PixelRatio, StyleSheet, View } from "react-native";
+import { PixelRatio, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withTiming,
+  type AnimatedStyle,
 } from "react-native-reanimated";
 import { scheduleOnRN } from "react-native-worklets";
 import type { Track } from "./client";
@@ -33,10 +34,12 @@ function CoverLayer({
   layer,
   size,
   drop,
+  cornerStyle,
 }: {
   layer: Layer;
   size: number;
   drop: (id: number) => void;
+  cornerStyle?: StyleProp<AnimatedStyle<ViewStyle>>;
 }) {
   const { id, motion, direction, leaving } = layer;
   const sliding = motion === "slide";
@@ -69,7 +72,7 @@ function CoverLayer({
       accessibilityElementsHidden={leaving}
       importantForAccessibility={leaving ? "no-hide-descendants" : "auto"}
     >
-      <View style={styles.clip}>
+      <Animated.View style={[styles.clip, cornerStyle]}>
         <Image
           source={layer.source}
           style={StyleSheet.absoluteFill}
@@ -77,20 +80,22 @@ function CoverLayer({
           transition={0}
           accessibilityLabel={layer.label}
         />
-      </View>
+      </Animated.View>
     </Animated.View>
   );
 }
 
-/** The bigscreen cover swap: directional slide for albums, fade for sharper copies. */
+/** One cover in both player sizes: directional slide for albums, fade for sharper copies. */
 export function AlbumCover({
   track,
   size,
   direction,
+  cornerStyle,
 }: {
   track: Track | null;
   size: number;
   direction: SkipDirection;
+  cornerStyle?: StyleProp<AnimatedStyle<ViewStyle>>;
 }) {
   const [layers, setLayers] = useState<Layer[]>([
     {
@@ -207,7 +212,7 @@ export function AlbumCover({
   }, [provider, album, nativeCover, thumbnail, full, size, direction, show]);
 
   return layers.map((layer) => (
-    <CoverLayer key={layer.id} layer={layer} size={size} drop={drop} />
+    <CoverLayer key={layer.id} layer={layer} size={size} drop={drop} cornerStyle={cornerStyle} />
   ));
 }
 

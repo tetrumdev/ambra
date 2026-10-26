@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import type { Track } from "./client";
 import { Icon, type IconName } from "./Icons";
@@ -9,7 +10,11 @@ import { Artwork } from "./Artwork";
 export type MenuAction = { label: string; icon: IconName; destructive?: boolean; run: () => void };
 
 /** A song's options, named and ordered as in desktop's menus (TrackPlaybackMenu, Queue). */
-export function Menu({ track, actions, onClose }: { track: Track; actions: MenuAction[]; onClose: () => void }) {
+export function Menu({ track, actions, onClose, onVisibilityChange }: { track: Track; actions: MenuAction[]; onClose: () => void; onVisibilityChange?: (visible: boolean) => void }) {
+  useLayoutEffect(() => {
+    onVisibilityChange?.(true);
+    return () => onVisibilityChange?.(false);
+  }, [onVisibilityChange]);
   return (
     <Sheet
       label={`Options for ${track.name}`}

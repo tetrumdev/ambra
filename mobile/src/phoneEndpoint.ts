@@ -69,7 +69,7 @@ export function followPhoneOutput() {
       if (next !== signature) { signature = next; void report(); }
     };
     player = new PhonePlayback({
-      create: source => createAudioPlayer(source, { updateInterval: 250, allowsExternalPlayback: true }),
+      create: source => createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
       mediaUrl: phoneMediaUrl,
       metadata,

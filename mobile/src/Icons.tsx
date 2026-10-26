@@ -7,6 +7,7 @@ const assets = {
   skip: require("../../desktop/public/skip.svg"),
   shuffle: require("../../desktop/public/shuffle.svg"),
   queue: require("../../desktop/public/queue.svg"),
+  lyrics: require("../../desktop/public/lyrics.svg"),
   more: require("../../desktop/public/menu.svg"),
   playNext: require("../../desktop/public/play-next.svg"),
   addToQueue: require("../../desktop/public/add-to-queue.svg"),
