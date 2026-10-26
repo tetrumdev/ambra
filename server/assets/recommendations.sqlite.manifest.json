@@ -1,0 +1,59 @@
+{
+  "coverage": {
+    "ambiguous_artist_names": 33771,
+    "artist_aliases": 245079,
+    "artist_genres": 183408,
+    "artist_mbids": 134058,
+    "artist_provider_ids": 42077,
+    "artists": 128657,
+    "genre_parents": 3424,
+    "genres": 3549
+  },
+  "gzipBytes": 15933748,
+  "gzipSha256": "c2425c77e49d34131f70c4307cfdc12ba827b179224f3e0955d24d28eac4f94f",
+  "license": "CC0-1.0",
+  "methodology": "scripts/recommendations/build.py",
+  "musicbrainz": "https://musicbrainz.org/doc/About/Data_License",
+  "musicbrainzCoreArchive": "https://data.metabrainz.org/pub/musicbrainz/data/fullexport/20261024-102842/mbdump.tar.bz2",
+  "musicbrainzCoreTables": [
+    "artist",
+    "artist_alias"
+  ],
+  "musicbrainzEnrichedArtists": 128590,
+  "schemaVersion": 1,
+  "sourceArchiveSha256": "b6e8d1fdb826ee51971eb66e1aab8acdc1badee1573980072e0927184f84a28c",
+  "sources": [
+    {
+      "extractedAt": "2026-10-26",
+      "file": "genres-wikidata.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "labels-wikidata.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "musicbrainz-core.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "provider-qobuz.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "provider-spotify.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "provider-tidal.json.gz"
+    },
+    {
+      "extractedAt": "2026-10-26",
+      "file": "wikidata-artists.json.gz"
+    }
+  ],
+  "sqliteBytes": 29048832,
+  "sqliteSha256": "6e84b772b6bd2c3cd3d04fa86dc047d581fc7f208d3d890cd66ed599ef045781",
+  "sqliteVersion": "3.53.1",
+  "wikidata": "https://www.wikidata.org/wiki/Wikidata:Licensing"
+}

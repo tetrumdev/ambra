@@ -1,6 +1,6 @@
 import "./TrackMenus.css";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { MENU_WIDTH } from "../utils/trackMenu";
@@ -29,12 +29,29 @@ export function TrackPlaybackMenu({
   const connected = useServiceAvailability();
   const menu = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(menu);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    return () => { if (previous?.isConnected) previous.focus(); };
+  }, []);
   if (trackId && !isTrackAvailable(trackId, connected)) return null;
   return (
     <div id="trackMenuBackdrop" onClick={onClose}>
       <div
         ref={menu}
         id="trackPlaybackMenu"
+        role="menu"
+        aria-label="Track playback"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" || event.key === "Tab") { onClose(); return; }
+          if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+          const current = items.indexOf(document.activeElement as HTMLButtonElement);
+          const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+            : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+          items[next]?.focus();
+        }}
         style={{
           left: xPos,
           top: yPos,
@@ -46,39 +63,39 @@ export function TrackPlaybackMenu({
           transformOrigin: "0 0",
         }}
       >
-        <div
+        <button type="button" role="menuitem"
           id="standalonePlay"
           className="menuItem"
           onClick={() => {
             if (trackId !== null) playStandalone(trackId);
           }}
         >
-          <img id="menuPlayIcon" className="menuIcon" src="/play.svg" />
+          <img id="menuPlayIcon" className="menuIcon" alt="" src="/play.svg" />
           Standalone Play
-        </div>
+        </button>
         {playTrack && (
-          <div
+          <button type="button" role="menuitem"
             id="normalPlay"
             className="menuItem"
             onClick={() => {
               if (trackId !== null) playTrack(trackId);
             }}
           >
-            <img id="menuPlayFromIcon" className="menuIcon" src="/skip.svg" />
+            <img id="menuPlayFromIcon" className="menuIcon" alt="" src="/skip.svg" />
             Play from Here
-          </div>
+          </button>
         )}
-        <div
+        <button type="button" role="menuitem"
           id="playNext"
           className="menuItem"
           onClick={() => {
             if (trackId !== null) playNext(trackId);
           }}
         >
-          <img id="menuPlayNextIcon" className="menuIcon" src="/play-next.svg" />
+          <img id="menuPlayNextIcon" className="menuIcon" alt="" src="/play-next.svg" />
           Play Next
-        </div>
-        <div
+        </button>
+        <button type="button" role="menuitem"
           id="addToQueue"
           className="menuItem"
           onClick={() => {
@@ -87,11 +104,11 @@ export function TrackPlaybackMenu({
         >
           <img
             id="menuAddToQueueIcon"
-            className="menuIcon"
+            className="menuIcon" alt=""
             src="/add-to-queue.svg"
           />
           Add to Queue
-        </div>
+        </button>
       </div>
     </div>
   );

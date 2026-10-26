@@ -236,6 +236,23 @@ impl UserState {
             .map_err(|error| error.to_string())?
     }
 
+    /// Atomic recommendation inputs from the same synchronized snapshot.
+    pub async fn recommendation_inputs(
+        self: &std::sync::Arc<Self>,
+    ) -> Result<(Option<String>, Option<String>), String> {
+        let _guard = self.lock.lock().await;
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let saved = state.load()?;
+            Ok((
+                saved.values.get("ambra.listening-history.v1").cloned(),
+                saved.values.get("ambra.playlists.v1").cloned(),
+            ))
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+
     /// Changes `key` as the server itself: validated, saved and announced like a client's write.
     /// `change` gets the current value and returns the new one (`None` removes it), or an error
     /// to leave everything as it was.
