@@ -60,11 +60,8 @@ impl Network {
         })
     }
 
-    pub fn is_paired_token(&self, token: &str) -> bool {
-        self.config
-            .read()
-            .map(|config| config.client_for_token(token).is_some())
-            .unwrap_or(false)
+    pub fn paired_client_id(&self, token: &str) -> Option<String> {
+        self.config.read().ok()?.client_for_token(token).map(|client| client.id.clone())
     }
 
     fn update(&self, change: impl FnOnce(&mut ServerConfig) -> Result<(), String>) -> Result<ServerConfig, String> {

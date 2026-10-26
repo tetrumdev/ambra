@@ -26,6 +26,12 @@ USAGE:
     ambra-server pair approve <code>           Let the device showing <code> use the server
     ambra-server pair deny <code>              Refuse a device's request
     ambra-server pair revoke <device>          Unpair a device, by name or ID
+    ambra-server login spotify                 Sign in with librespot, optionally pair Soloist
+    ambra-server spotify status                Sanitized playback backend status
+    ambra-server spotify backend librespot|soloist
+    ambra-server spotify soloist pair|reset|check|sign-out
+    ambra-server spotify soloist key           Enter a personal API key without echo
+    ambra-server spotify soloist install <absolute-path>
     ambra-server help                          This message
 
 The server shares itself with the local network by default (`config set bind lan`).
@@ -65,6 +71,16 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
     match words.as_slice() {
         ["help" | "--help" | "-h"] => Ok(HELP.into()),
         ["status"] => status().await,
+        ["login", "spotify"] => login_spotify().await,
+        ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
+        ["spotify", "backend", backend @ ("librespot" | "soloist")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "backend": backend }))).await?),
+        ["spotify", "soloist", action @ ("pair" | "reset" | "check" | "sign-out")] => pretty(local("POST", &format!("/api/local/spotify/soloist/{action}"), None).await?),
+        ["spotify", "soloist", "key"] => {
+            let key = rpassword::prompt_password("Personal Soloist API key (hidden): ").map_err(|_| "Could not read the key securely from the terminal")?;
+            local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
+            Ok("Soloist API key saved on the server.".into())
+        }
+        ["spotify", "soloist", "install", path] => pretty(local("POST", "/api/local/spotify/soloist/install", Some(json!({ "executable": path }))).await?),
         ["stop"] => { local("POST", "/api/local/stop", None).await?; Ok("Ambra server is stopping.".into()) }
         ["config"] | ["config", "show"] => config_show().await,
         ["config", "set", "bind", address] => config_set(json!({ "bind": address })).await,
@@ -96,6 +112,30 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
     }
 }
 
+fn pretty(value: Value) -> Result<String, String> { serde_json::to_string_pretty(&value).map_err(|e| e.to_string()) }
+
+async fn login_spotify() -> Result<String, String> {
+    use std::io::{IsTerminal, Write};
+    println!("Signing in to Spotify through librespot. Complete the browser login on the server machine.");
+    local("POST", "/api/auth/spotify/start", None).await?;
+    if !std::io::stdin().is_terminal() { return Ok("Spotify connected with librespot. Use `ambra-server spotify backend soloist` to opt into optional Soloist setup.".into()); }
+    print!("Also configure Soloist for experimental lossless playback? [y/N] ");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut answer = String::new(); std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") { return Ok("Spotify connected with librespot.".into()); }
+    local("POST", "/api/local/spotify/playback", Some(json!({ "backend": "soloist" }))).await?;
+    println!("Install your own Soloist executable: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates");
+    println!("Generate a personal key: https://developer.spotify.com/dashboard/soloist");
+    println!("Audio capture currently requires Linux. Release builds do not forward Spotify audio.");
+    let key = rpassword::prompt_password("Personal Soloist API key (hidden; leave empty to finish later): ").map_err(|_| "Could not read the key securely from the terminal")?;
+    if key.trim().is_empty() { return Ok("Soloist selected. Finish setup in Services on the server machine, or run `ambra-server spotify soloist key`.".into()); }
+    local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
+    let status = local("GET", "/api/spotify/playback/status", None).await?;
+    if status["state"] == "not_installed" { return Ok("Key saved. Install Soloist, then run `ambra-server spotify soloist install /absolute/path/to/soloist` and `ambra-server spotify soloist pair`.".into()); }
+    local("POST", "/api/local/spotify/soloist/pair", None).await?;
+    Ok("Open the official Spotify app on the same network. Select Ambra Soloist Pairing with the same account. Check `ambra-server spotify status`.".into())
+}
+
 fn local_url(path: &str) -> String {
     let port = crate::server_process::local_address().port();
     format!("http://127.0.0.1:{port}{path}")
@@ -104,7 +144,7 @@ fn local_url(path: &str) -> String {
 /// A local-only API call; `Err` says whether the server is running at all.
 async fn local(method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(if path == "/api/auth/spotify/start" { 180 } else { 45 }))
         .build()
         .map_err(|error| error.to_string())?;
     let request = match method {

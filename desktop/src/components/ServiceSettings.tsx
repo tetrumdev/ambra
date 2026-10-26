@@ -1,3 +1,4 @@
+import { SpotifyPlaybackSettings } from "./SpotifyPlaybackSettings";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useEffect, useState } from "react";
 import {
@@ -118,6 +119,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
           ? service.id === "spotify" ? "Waiting…" : "Opening…" : "Sign in"}
       </button>
     </section>)}
+    <SpotifyPlaybackSettings active={active} connected={status.spotify} />
     {disconnecting && <section className="settingsCallbackForm" role="group" aria-label="Confirm disconnect">
       <p>Disconnect {services.find(service => service.id === disconnecting)?.name} from this Ambra server?</p>
       <p className="settingsMuted">Its service playlists will disappear from Ambra, not from your service account. Ambra playlists stay intact. Its tracks will be unavailable until you reconnect or replace them with Improve Playlist.</p>

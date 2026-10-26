@@ -147,6 +147,7 @@ async fn report(agent: std::sync::Arc<Agent>) {
         if let Some(source) = status["currentSource"].as_str() {
             status["currentSource"] = Value::String(agent.sent_source(source));
         }
+        status["livePcmV1"] = Value::Bool(true);
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
         let reported = transitions(&status);
         body["status"] = status;

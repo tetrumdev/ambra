@@ -21,6 +21,10 @@ mod server_process;
 mod server_config;
 mod session;
 mod service_auth;
+mod soloist;
+#[allow(dead_code)] // Shared protocol includes both producer and consumer helpers.
+#[path = "../../shared/live_pcm.rs"]
+mod live_pcm;
 mod storage;
 mod tray;
 mod user_state;

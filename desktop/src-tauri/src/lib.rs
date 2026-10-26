@@ -34,6 +34,9 @@ mod local_server;
 mod local_import;
 mod media_controls;
 mod native_audio;
+#[allow(dead_code)] // Shared protocol includes both producer and consumer helpers.
+#[path = "../../../shared/live_pcm.rs"]
+mod live_pcm;
 mod persistence;
 mod playlist_export;
 mod remote_endpoint;

@@ -3,6 +3,11 @@ name = "ambra-server"
 version = "0.2.1"
 edition = "2024"
 
+[features]
+default = []
+# Intentionally unavailable in release builds, even when selected.
+experimental-soloist-forwarding = []
+
 [dependencies]
 axum = "0.8.9"
 base64 = "0.22.1"
@@ -23,6 +28,7 @@ qbz-qobuz = { path = "vendor/qbz/qbz-qobuz" }
 # Keep this separate from Ambra's reqwest 0.13 streaming client.
 qobuz-http = { package = "reqwest", version = "0.12", default-features = false, features = ["gzip"] }
 quick-xml = "0.41.0"
+rpassword = "7"
 reqwest = { version = "0.13.4", features = ["json", "query", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -31,7 +37,8 @@ sha2 = "0.10"
 tidlers = "0.5.0"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1"
-tokio-util = { version = "0.7", features = ["io"] }
+tokio-tungstenite = "0.28"
+tokio-util = { version = "0.7", features = ["io", "rt"] }
 tower-http = { version = "0.7.0", features = ["compression-gzip", "cors", "fs"] }
 urlencoding = "2"
 

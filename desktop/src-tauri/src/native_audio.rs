@@ -13,6 +13,7 @@ use serde::Serialize;
 use tauri::{App, AppHandle, Emitter, Manager, State};
 
 mod decoder;
+mod live;
 mod dither;
 mod dsp;
 mod gain;
@@ -98,6 +99,12 @@ pub(super) struct AudioQuality {
     bitrate_is_estimate: bool,
     /// The level change normalization applies to this song; absent while it plays unchanged.
     normalization_gain_db: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capture_format: Option<crate::live_pcm::Format>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_quality: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_format_verified: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -505,11 +512,13 @@ fn request<T>(
     command: impl FnOnce(Sender<Result<T, String>>) -> WorkerCommand,
 ) -> Result<T, String> {
     let (reply_tx, reply_rx) = bounded(1);
+    let command = command(reply_tx);
+    let timeout = if matches!(&command, WorkerCommand::Load { source, .. } if decoder::is_live_source(source)) { Duration::from_secs(45) } else { COMMAND_TIMEOUT };
     command_tx
-        .send(command(reply_tx))
+        .send(command)
         .map_err(|_| "The native audio worker is unavailable".to_owned())?;
     reply_rx
-        .recv_timeout(COMMAND_TIMEOUT)
+        .recv_timeout(timeout)
         .map_err(|_| "The native audio worker did not respond".to_owned())?
 }
 
@@ -832,6 +841,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     fn handle_command(&mut self, command: WorkerCommand) -> bool {
         match command {
             WorkerCommand::Warm { source } => {
+                if decoder::is_live_source(&source) { return false; }
                 let already_preparing = self.current_source.as_ref() == Some(&source)
                     || self
                         .next_source
@@ -1190,7 +1200,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         position_seconds: f64,
         autoplay: bool,
     ) -> Result<(), String> {
-        let preparation_deadline = Instant::now() + AUDIO_PREPARE_TIMEOUT;
+        let preparation_deadline = Instant::now() + if decoder::is_live_source(&source) { Duration::from_secs(40) } else { AUDIO_PREPARE_TIMEOUT };
         let previous_spec = self.spec;
         let was_resyncing = self.resync.is_active();
         self.output_retry = None;
@@ -1947,7 +1957,8 @@ fn signal_processed(settings: &AudioSettings) -> bool {
 }
 
 fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {
-    prepare_source_at_with_timeout(source, position_seconds, AUDIO_PREPARE_TIMEOUT)
+    let timeout = if decoder::is_live_source(&source) { Duration::from_secs(40) } else { AUDIO_PREPARE_TIMEOUT };
+    prepare_source_at_with_timeout(source, position_seconds, timeout)
 }
 
 fn prepare_source_at_with_timeout(

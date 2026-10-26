@@ -24,6 +24,10 @@ export type AudioQuality = {
   bitrateIsEstimate: boolean;
   /** The level change volume normalization applies; absent while the song plays unchanged. */
   normalizationGainDb?: number | null;
+  captureFormat?: { codec: string; sampleFormat: string; sampleRate: number; channels: number };
+  requestedQuality?: string;
+  sourceFormatVerified?: boolean;
+  playbackBackend?: "librespot" | "soloist";
 };
 
 export type Track = {
