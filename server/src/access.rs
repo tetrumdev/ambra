@@ -3,7 +3,8 @@
 //! The server holds signed-in provider sessions and serves decrypted audio, so:
 //!
 //! * a web page in the user's browser must not drive it: browsers attach `Origin` to
-//!   cross-origin calls, and only the app's own origins are accepted;
+//!   cross-origin calls, and only the app's own origins are accepted, plus pages this server
+//!   served itself (the phone remote), which still need a token like any other device;
 //! * the server machine itself is trusted, but only when the request both comes from a
 //!   loopback address and names a loopback host, so a DNS-rebinding page that reaches the
 //!   port under its own host name is not mistaken for the local app;
@@ -32,7 +33,7 @@ const APP_ORIGINS: &[&str] = &[
 ];
 /// Pairing approval and server settings, for the server machine only.
 pub const LOCAL_ONLY_PREFIX: &str = "/api/local/";
-const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/server/info", "/api/pair/request"];
+const PUBLIC_PATHS: &[&str] = &["/api/health", "/api/server/info", "/api/pair/request", crate::remote::PATH];
 pub const TOKEN_PARAMETER: &str = "access_token";
 
 #[derive(Clone)]
@@ -88,6 +89,12 @@ fn loopback_host(host: &[u8]) -> bool {
     )
 }
 
+/// A page this server served calling back to it. A DNS-rebinding page can pass this too, under
+/// its own host name, but never counts as local and has no paired token.
+fn same_origin(origin: &[u8], host: Option<&HeaderValue>) -> bool {
+    host.is_some_and(|host| origin.strip_prefix(b"http://") == Some(host.as_bytes()))
+}
+
 fn public_path(path: &str) -> bool {
     PUBLIC_PATHS
         .iter()
@@ -132,6 +139,7 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     let headers = request.headers();
     if let Some(origin) = headers.get(ORIGIN)
         && !policy.allows_origin(origin.as_bytes())
+        && !same_origin(origin.as_bytes(), headers.get(HOST))
     {
         return (StatusCode::FORBIDDEN, "Origin is not allowed").into_response();
     }
@@ -184,6 +192,18 @@ mod tests {
         assert!(public_path("/api/server/info"));
         assert!(!public_path("/api/pair/requests"));
         assert!(!public_path("/api/state"));
+        assert!(public_path("/remote"));
+        assert!(public_path("/remote/assets/index.js"));
+        assert!(!public_path("/remoteness"));
+    }
+
+    #[test]
+    fn same_origin_needs_a_matching_host() {
+        let host = HeaderValue::from_static("192.168.1.20:38147");
+        assert!(same_origin(b"http://192.168.1.20:38147", Some(&host)));
+        assert!(!same_origin(b"http://evil.example", Some(&host)));
+        assert!(!same_origin(b"https://192.168.1.20:38147", Some(&host)));
+        assert!(!same_origin(b"http://192.168.1.20:38147", None));
     }
 
     #[test]

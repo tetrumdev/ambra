@@ -1,3 +1,5 @@
+import { reducedMotion } from "./reducedMotion";
+
 const FADE_MS = 150;
 
 // Dialogs fade like system sheets. The close waits for the fade (the dialog
@@ -10,7 +12,7 @@ export function openDialog(dialog: HTMLDialogElement | null) {
 
 export function closeDialog(dialog: HTMLDialogElement | null) {
   if (!dialog?.open || "closing" in dialog.dataset) return;
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  if (reducedMotion()) {
     dialog.close();
     return;
   }

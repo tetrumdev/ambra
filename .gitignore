@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+dist-remote
 *.local
 
 # Editor directories and files
@@ -56,4 +57,25 @@ AGENTS.md
 GEMINI.md
 .aider*
 .continue/
+.github/copilot-instructions.md
+
+# AI agent settings and instructions, at any depth: kept local, never committed
+.claude/
+.cursor/
+.agents/
+.agent/
+.codex/
+.gemini/
+.windsurf/
+.continue/
+.roo/
+.aider*
+.mcp.json
+.clinerules
+.cursorrules
+.windsurfrules
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
 .github/copilot-instructions.md

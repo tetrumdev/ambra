@@ -1,4 +1,5 @@
 import { createElement, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { reducedMotion } from "../utils/reducedMotion";
 
 const FADE_MS = 150;
 
@@ -14,7 +15,7 @@ export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>) {
       : host;
     return () => {
       // Layout cleanups run before React detaches the element, so it can still be copied.
-      if (!element?.isConnected || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+      if (!element?.isConnected || reducedMotion()) return;
       const ghost = fadingCopy(element);
       if (!ghost) return;
       // StrictMode's rehearsal unmount leaves the element in place; only a real close fades.

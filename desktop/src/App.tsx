@@ -61,6 +61,7 @@ import { TrackColumnsContext, type TrackColumnsStore } from "./hooks/useTrackCol
 import { hideableTrackColumns, optionalColumnsTemplate, orderedOptionalColumns } from "./utils/trackColumnWidths";
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { enterView } from "./utils/viewMotion";
+import { setReducedMotion } from "./utils/reducedMotion";
 import { isSongEnding } from "./utils/songEnding";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
@@ -99,6 +100,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     const saved = loadPreferences();
     return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
   });
+  // Applied while rendering, before any child's effects read it.
+  setReducedMotion(preferences.ui.reduceMotion);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
@@ -1268,6 +1271,8 @@ function App({ localOnly }: { localOnly: boolean }) {
               void library.refreshStreamingMusic();
             }}
             onShowAudioQuality={showAudioQuality => setPreferences(current => ({ ...current, ui: { ...current.ui, showAudioQuality } }))}
+            reduceMotion={preferences.ui.reduceMotion}
+            onReduceMotion={reduceMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, reduceMotion } }))}
             animateSwirl={preferences.ui.animateSwirl}
             lyricMotion={preferences.ui.lyricMotion}
             autoSyncLyrics={preferences.ui.autoSyncLyrics}

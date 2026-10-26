@@ -90,10 +90,8 @@
     height: 10px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-    #progressBar::-webkit-slider-runnable-track {
-        transition: none;
-    }
+:root[data-reduce-motion] #progressBar::-webkit-slider-runnable-track {
+    transition: none;
 }
 
 #progressBar::-webkit-slider-thumb {

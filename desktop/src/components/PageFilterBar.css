@@ -83,8 +83,6 @@
     }
 }
 
-@media (prefers-reduced-motion: reduce) {
-    .pageFilter {
-        animation: none;
-    }
+:root[data-reduce-motion] .pageFilter {
+    animation: none;
 }
