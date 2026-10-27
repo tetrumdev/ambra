@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { serviceAuthStatus, type ServiceAuthStatus, type StreamingProvider } from "../api/server";
 import { isDeviceTrack } from "../utils/nativeAudioSource";
-import { serverConnection, serverOnline } from "../api/serverConnection";
+import { serverConnection, serverOnline, subscribeServerConnection } from "../api/serverConnection";
 import type { Track } from "../types/music";
 
 let status: ServiceAuthStatus | null = null;
@@ -17,6 +17,7 @@ export function updateServiceAvailability(value: ServiceAuthStatus) {
 }
 
 export async function refreshServiceAvailability() {
+  if (serverConnection && !serverConnection.server) return;
   const current = ++request;
   try {
     const value = await serviceAuthStatus();
@@ -24,6 +25,12 @@ export async function refreshServiceAvailability() {
   } catch { /* A network outage is not an account sign-out. Keep the last known state. */ }
 }
 
+subscribeServerConnection(() => {
+  request++;
+  status = null;
+  for (const listener of listeners) listener();
+  if (serverConnection?.server && listeners.size) refresh();
+});
 const refresh = () => { void refreshServiceAvailability(); };
 function subscribe(listener: () => void) {
   listeners.add(listener);

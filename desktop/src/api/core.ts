@@ -1,4 +1,4 @@
-import { forStorage, fromStorage, serverBaseUrl } from "./serverConnection";
+import { forStorage, fromStorage, serverBaseUrl, serverConnectionSignal, subscribeServerConnection } from "./serverConnection";
 import type { QueueState } from "../utils/queueNavigation";
 import { parseQueueSnapshot, queueSnapshot, resolveQueueSnapshot, type PersistedQueue } from "../utils/queueStorage";
 import { localMusicTrack } from "./localMusic";
@@ -42,7 +42,12 @@ let view: CoreView | null = null;
 let viewAt = performance.now();
 const listeners = new Set<() => void>();
 let chain: Promise<unknown> = Promise.resolve();
-let following = false;
+let following: AbortController | null = null;
+subscribeServerConnection(() => {
+  following?.abort(); following = null;
+  view = null; unsentQueueChange = null;
+  for (const listener of listeners) listener();
+});
 
 export const coreView = () => view;
 
@@ -68,7 +73,8 @@ export function subscribeCore(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
-function accept(next: ArrivingView) {
+function accept(next: ArrivingView, signal = serverConnectionSignal()) {
+  if (signal.aborted) return;
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return;
   if (view && next.instanceId !== view.instanceId) resetServerClock();
   const { queue: arrived, ...rest } = next;
@@ -76,7 +82,7 @@ function accept(next: ArrivingView) {
   if (arrived === undefined) {
     // Left out as already known; a restarted or different server's queue can't be assumed to match.
     if (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision) {
-      void request<ArrivingView>("/api/session").then(accept).catch(() => {});
+      void request<ArrivingView>("/api/session", undefined, signal).then(next => accept(next, signal)).catch(() => {});
       return;
     }
     queue = view.queue;
@@ -92,34 +98,44 @@ function accept(next: ArrivingView) {
 /** Tells the server which queue this app has, so an unchanged one isn't sent again. */
 const knownQueue = () => view ? `queue=${view.queueRevision}` : "";
 
-async function request<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { signal: AbortSignal.timeout(35_000) } : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000),
+async function request<T>(path: string, body?: unknown, signal = serverConnectionSignal()): Promise<T> {
+  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
   });
   const value = await response.json().catch(() => null) as (T & { error?: string }) | null;
+  signal.throwIfAborted();
   if (!response.ok) throw Object.assign(new Error(value?.error ?? `The server answered ${response.status}`), { status: response.status, body: value });
   return value as T;
 }
 
 /** Keeps `view` current for as long as the app runs; a few seconds' wait also corrects the position. */
 export function followCore() {
-  if (following) return;
-  following = true;
-  syncServerClock();
+  following?.abort();
+  const controller = new AbortController();
+  following = controller;
+  const signal = AbortSignal.any([controller.signal, serverConnectionSignal()]);
+  const stopClock = syncServerClock(signal);
   void (async () => {
-    for (;;) {
+    while (!signal.aborted) {
       try {
         const since = view ? `?since=${view.revision}&wait=5&${knownQueue()}` : "";
-        accept(await request<ArrivingView>(`/api/session${since}`));
+        accept(await request<ArrivingView>(`/api/session${since}`, undefined, signal), signal);
       } catch {
+        if (signal.aborted) break;
         await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
   })();
+  return () => {
+    controller.abort(); stopClock();
+    if (following === controller) following = null;
+  };
 }
 
-function inOrder<T>(work: () => Promise<T>): Promise<T> {
-  const result = chain.then(work, work);
+function inOrder<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const signal = serverConnectionSignal();
+  const run = () => { signal.throwIfAborted(); return work(signal); };
+  const result = chain.then(run, run);
   chain = result.catch(() => {});
   return result;
 }
@@ -134,7 +150,7 @@ export function coreCommand(action: string, details: Record<string, unknown> = {
     unsentQueueChange.playTrackId = details.trackId;
     return unsentQueueChange.done;
   }
-  return inOrder(async () => accept(await request<ArrivingView>(`/api/session/command?${knownQueue()}`, { action, ...details })));
+  return inOrder(async signal => accept(await request<ArrivingView>(`/api/session/command?${knownQueue()}`, { action, ...details }, signal), signal));
 }
 
 /** The queue as the server has it, with this app's copies of its songs where it knows them. */
@@ -151,9 +167,10 @@ export function coreQueue(tracks: Track[]): QueueState & { revision: number } {
 export function coreChangeQueue(tracks: () => Track[], change: (state: QueueState) => QueueState, playTrackId?: string) {
   const job: { playTrackId?: string; done: Promise<void> } = { playTrackId, done: Promise.resolve() };
   unsentQueueChange = job;
-  job.done = inOrder(async () => {
+  job.done = inOrder(async signal => {
     if (unsentQueueChange === job) unsentQueueChange = null;
     for (let attempt = 0; attempt < 4; attempt += 1) {
+      signal.throwIfAborted();
       const current = coreQueue(tracks());
       const next = change(current);
       if ([...next.history, ...(next.current ? [next.current] : []), ...next.upcoming].some(item => isDeviceTrack(item.track))) {
@@ -161,14 +178,15 @@ export function coreChangeQueue(tracks: () => Track[], change: (state: QueueStat
       }
       const queue = JSON.parse(forStorage(JSON.stringify(queueSnapshot(next.history, next.current, next.upcoming))));
       try {
-        accept(await request<CoreView>("/api/session/queue", { base: current.revision, queue, playTrackId: job.playTrackId }));
+        accept(await request<CoreView>("/api/session/queue", { base: current.revision, queue, playTrackId: job.playTrackId }, signal), signal);
         return;
       } catch (error) {
+        if (signal.aborted) throw error;
         if ((error as { status?: number }).status !== 409) throw error;
         // Retry on the actual queue in the refusal, rather than waiting for a separate poll.
         const session = (error as { body?: { session?: CoreView } }).body?.session;
-        if (session) accept(session);
-        else accept(await request<CoreView>("/api/session"));
+        if (session) accept(session, signal);
+        else accept(await request<CoreView>("/api/session", undefined, signal), signal);
       }
     }
     throw new Error("The queue kept changing on another device; try again.");

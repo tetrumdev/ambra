@@ -1,5 +1,5 @@
 import { flushPersistentState } from "./persistentStorage";
-import { serverBaseUrl } from "../api/server";
+import { serverBaseUrl, subscribeServerConnection } from "../api/serverConnection";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -61,6 +61,7 @@ let saving: Promise<void> | null = null;
 let hydration: Promise<void> | null = null;
 let attempt: Patch | null = null;
 let discarding = false;
+let switching = false;
 // Says which of this device's changes gave way to another device's; shown for a while.
 let setAsideNotice: string | null = null;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -92,7 +93,7 @@ async function request(init?: RequestInit & { query?: string; timeoutMs?: number
   const response = await fetch(`${serverBaseUrl}/api/state${query ?? ""}`, {
     ...rest,
     cache: "no-store",
-    signal: AbortSignal.timeout(timeoutMs ?? 10_000),
+    signal: AbortSignal.any([stateSession.signal, AbortSignal.timeout(timeoutMs ?? 10_000)]),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: string } | null;
@@ -136,8 +137,10 @@ function applyChanges(changes: unknown, atRevision: unknown) {
 
 // Shared state is loaded only after optional connection succeeds. Never upload device state.
 export function hydrateServerState(): Promise<void> {
+  const session = stateSession.signal;
   hydration ??= (async () => {
     const saved = await load();
+    session.throwIfAborted();
     values.clear();
     for (const [key, value] of Object.entries(saved.values)) values.set(key, value);
     revision = saved.revision;
@@ -145,6 +148,7 @@ export function hydrateServerState(): Promise<void> {
     if (pending.size > 0) scheduleSave(0);
     followServerState();
   })().catch(error => {
+    if (session.aborted) throw error;
     hydration = null;
     publish({ error: `Could not load listening state. ${String(error)}` });
     throw error;
@@ -152,20 +156,37 @@ export function hydrateServerState(): Promise<void> {
   return hydration;
 }
 
-let following = false;
+let stateSession = new AbortController();
+subscribeServerConnection(resetServerState);
+
+/** End this server's polling and revisions before exposing another server's state. */
+export function resetServerState() {
+  stateSession.abort();
+  stateSession = new AbortController();
+  clearTimeout(timer); timer = undefined;
+  clearTimeout(noticeTimer); setAsideNotice = null;
+  values.clear(); pending.clear(); pendingBase.clear();
+  revision = 0; attempt = null; saving = null; hydration = null;
+  publish({ ready: false, error: null, conflict: false });
+}
+
+let following: AbortSignal | null = null;
 /** Hears other devices' changes as they're saved, for as long as the app is open. */
 function followServerState() {
-  if (following) return;
-  following = true;
+  const session = stateSession.signal;
+  if (following === session) return;
+  following = session;
   void (async () => {
-    while (!discarding && !status.conflict) {
+    while (!session.aborted && !discarding && !status.conflict) {
       try {
         const response = await request({ query: `?since=${revision}&wait=25`, timeoutMs: 35_000 });
         const news = await response.json() as { revision?: unknown; changes?: unknown };
+        if (session.aborted) break;
         // An older server answers with the whole state at once and can't be followed.
         if (news.changes === undefined) break;
         applyChanges(news.changes, news.revision);
       } catch (error) {
+        if (session.aborted) break;
         if (error instanceof StateRequestError && error.conflict) {
           publish({ error: "The server's listening state was replaced. Reload to continue.", conflict: true });
           break;
@@ -173,7 +194,7 @@ function followServerState() {
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
     }
-    following = false;
+    if (following === session) following = null;
   })();
 }
 
@@ -182,8 +203,12 @@ export function getServerItem(key: string) {
 }
 
 export function reloadServerState() {
-  discarding = true;
-  window.location.reload();
+  if (pending.size || saving) {
+    publish({ error: "Save pending changes before reloading server state." });
+    return;
+  }
+  resetServerState();
+  void hydrateServerState().catch(() => {});
 }
 
 function scheduleSave(delay = 750) {
@@ -200,7 +225,18 @@ function scheduleSave(delay = 750) {
   }, delay);
 }
 
+/** Flush the old destination and block edits until the new connection is visible. */
+export async function withServerStateTransition(change: () => Promise<void>) {
+  if (switching) throw new Error("Server connection is changing. Try again.");
+  switching = true;
+  try {
+    await flushServerState();
+    await change();
+  } finally { switching = false; }
+}
+
 export function setServerItem(key: string, value: string | null) {
+  if (switching) throw new Error("Server connection is changing. Try again.");
   if (!status.ready) throw new Error("Connect to the server before editing shared data.");
   if (!serverStateKeys.has(key)) throw new Error("Unsupported server state key.");
   if (status.conflict) throw new Error(status.error ?? "Reload server state before editing.");
@@ -253,12 +289,14 @@ export function flushServerState(keepalive = false): Promise<void> {
     bases: Object.fromEntries([...pending.keys()].map(key => [key, pendingBase.get(key) ?? revision])),
   };
   const patch = attempt;
+  const session = stateSession.signal;
   saving = (async () => {
     const response = await request({
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch), keepalive,
     });
     const result = await response.json() as { revision: number; changes?: unknown };
+    session.throwIfAborted();
     if (!validRevision(result.revision) || result.revision < patch.revision) throw new Error("Server returned an invalid revision.");
     attempt = null;
     for (const [key, value] of Object.entries(patch.changes)) {
@@ -269,6 +307,7 @@ export function flushServerState(keepalive = false): Promise<void> {
     applyChanges(result.changes ?? {}, result.revision);
     publish({ error: setAsideNotice });
   })().catch(error => {
+    if (session.aborted) throw error;
     if (error instanceof StateRequestError && error.conflict && resolveConflict(patch, error.body)) {
       // Retry at once with what's left, now on top of the other device's changes.
       return;
@@ -284,10 +323,12 @@ export function flushServerState(keepalive = false): Promise<void> {
     if (!replaced) scheduleSave(5000);
     throw error;
   }).finally(() => {
+    if (session.aborted) return;
     saving = null;
     if (pending.size > 0 && !status.conflict) scheduleSave();
   });
   return saving.then(() => {
+    session.throwIfAborted();
     if (pending.size > 0) return flushServerState(keepalive);
   });
 }

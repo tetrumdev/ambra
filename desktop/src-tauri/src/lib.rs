@@ -162,22 +162,23 @@ fn save_library_index(path: &Path, entries: &[IndexEntry<Track>]) -> Result<(), 
     write_file_atomic(path, &encoded)
 }
 
-fn server_cache_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+fn server_cache_path(app: &tauri::AppHandle, name: &str, expected: Option<ambra_net::PublicKey>) -> Result<PathBuf, String> {
     let key = app.state::<server_link::ServerLink>().connection().server
         .and_then(|server| server.public_key).ok_or("No verified server selected")?;
+    if expected.is_some_and(|expected| expected != key) { return Err("Server connection changed".into()); }
     Ok(cache_directory(app)?.join("servers").join(key.to_string()).join(name))
 }
 
-fn streaming_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    server_cache_path(app, "streaming-library.json")
+fn streaming_cache_path(app: &tauri::AppHandle, expected: Option<ambra_net::PublicKey>) -> Result<PathBuf, String> {
+    server_cache_path(app, "streaming-library.json", expected)
 }
 
 // The streaming-library cache is a copy of what the Ambra server already owns, so
 // it lives in the rebuildable cache directory rather than in `localStorage` (size
 // limited, and synchronous on the UI thread) or the synchronized data directory.
 #[tauri::command]
-async fn load_streaming_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let path = streaming_cache_path(&app)?;
+async fn load_streaming_cache(app: tauri::AppHandle, server_identity: Option<ambra_net::PublicKey>) -> Result<Option<String>, String> {
+    let path = streaming_cache_path(&app, server_identity)?;
     tauri::async_runtime::spawn_blocking(move || match fs::read_to_string(&path) {
         Ok(encoded) => Ok(Some(encoded)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -188,22 +189,22 @@ async fn load_streaming_cache(app: tauri::AppHandle) -> Result<Option<String>, S
 }
 
 #[tauri::command]
-async fn save_streaming_cache(app: tauri::AppHandle, json: String) -> Result<(), String> {
-    let path = streaming_cache_path(&app)?;
+async fn save_streaming_cache(app: tauri::AppHandle, json: String, server_identity: Option<ambra_net::PublicKey>) -> Result<(), String> {
+    let path = streaming_cache_path(&app, server_identity)?;
     tauri::async_runtime::spawn_blocking(move || write_file_atomic(&path, json.as_bytes()))
         .await
         .map_err(|error| format!("Could not save the streaming library cache: {error}"))?
 }
 
-fn service_playlist_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    server_cache_path(app, "service-playlists.json")
+fn service_playlist_cache_path(app: &tauri::AppHandle, expected: Option<ambra_net::PublicKey>) -> Result<PathBuf, String> {
+    server_cache_path(app, "service-playlists.json", expected)
 }
 
 // Streaming-service playlists are copies of what each service owns, cached for the
 // same reasons as the streaming library so they open without a network round trip.
 #[tauri::command]
-async fn load_service_playlist_cache(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let path = service_playlist_cache_path(&app)?;
+async fn load_service_playlist_cache(app: tauri::AppHandle, server_identity: Option<ambra_net::PublicKey>) -> Result<Option<String>, String> {
+    let path = service_playlist_cache_path(&app, server_identity)?;
     tauri::async_runtime::spawn_blocking(move || match fs::read_to_string(&path) {
         Ok(encoded) => Ok(Some(encoded)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -214,8 +215,8 @@ async fn load_service_playlist_cache(app: tauri::AppHandle) -> Result<Option<Str
 }
 
 #[tauri::command]
-async fn save_service_playlist_cache(app: tauri::AppHandle, json: String) -> Result<(), String> {
-    let path = service_playlist_cache_path(&app)?;
+async fn save_service_playlist_cache(app: tauri::AppHandle, json: String, server_identity: Option<ambra_net::PublicKey>) -> Result<(), String> {
+    let path = service_playlist_cache_path(&app, server_identity)?;
     tauri::async_runtime::spawn_blocking(move || write_file_atomic(&path, json.as_bytes()))
         .await
         .map_err(|error| format!("Could not save the playlist cache: {error}"))?
@@ -1068,7 +1069,8 @@ pub fn run() {
             server_link::poll_pairing,
             server_link::leave_server,
             server_link::set_server_link_decided,
-            server_link::restart_app,
+            server_link::join_server,
+            server_link::cancel_pairing,
             local_import::import_local_music,
         ])
         .build(tauri::generate_context!())

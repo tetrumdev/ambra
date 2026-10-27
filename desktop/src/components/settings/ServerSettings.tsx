@@ -1,31 +1,40 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { serverConnection } from "../../api/serverConnection";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { connectToServer, getServerConnection, subscribeServerConnection } from "../../api/serverConnection";
 import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
-import { flushServerState } from "../../utils/serverState";
+import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { SettingRow, Toggle } from "./SettingsControls";
 
 type Discovered = { id: string; name: string; version: string; address: string };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
 
-/** Applying a new connection preserves all device state. Native bridges reopen on restart. */
-async function applyConnection() {
+/** Save both owners before changing the optional server; leave the local player mounted. */
+async function applyConnection(command: "join_server" | "leave_server", setSharedPlayback: (shared: boolean) => Promise<void>, args?: Record<string, unknown>) {
   window.dispatchEvent(new Event("ambra:save-session"));
   await flushPersistentState();
-  await invoke("restart_app");
+  await withServerStateTransition(async () => {
+    await invoke(command, args);
+    await setSharedPlayback(false);
+    await connectToServer();
+  });
 }
 
-function JoinFlow({ server, onCancel }: { server: { name: string; address: string }; onCancel: () => void }) {
+function JoinFlow({ server, onCancel, onConnected }: { server: { name: string; address: string }; onCancel: () => void; onConnected: () => void }) {
+  const { setSharedPlayback } = useClientConnection();
+  const completed = useRef(onConnected);
+  completed.current = onConnected;
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const started = useRef<Promise<PairingStarted> | null>(null);
   useEffect(() => {
     let disposed = false;
-    started.current ??= invoke<PairingStarted>("start_pairing", { address: server.address });
-    void started.current.then(value => { if (!disposed) setPairing(value); })
+    const started = invoke<PairingStarted>("start_pairing", { address: server.address });
+    void started.then(value => { if (!disposed) setPairing(value); })
       .catch(reason => { if (!disposed) setError(String(reason)); });
-    return () => { disposed = true; };
+    return () => {
+      disposed = true;
+      void started.then(value => invoke("cancel_pairing", { requestId: value.requestId })).catch(() => {});
+    };
   }, [server.address]);
   useEffect(() => {
     if (!pairing) return;
@@ -35,7 +44,10 @@ function JoinFlow({ server, onCancel }: { server: { name: string; address: strin
       try {
         const status = await invoke<string>("poll_pairing", { address: pairing.address, requestId: pairing.requestId });
         if (disposed) return;
-        if (status === "approved") await applyConnection();
+        if (status === "approved") {
+          await applyConnection("join_server", setSharedPlayback, { requestId: pairing.requestId });
+          completed.current();
+        }
         else if (status === "denied") setError(`${pairing.serverName} refused this device.`);
         else if (status === "expired") setError("The pairing request expired. Try again.");
         else timer = setTimeout(poll, 1500);
@@ -43,7 +55,7 @@ function JoinFlow({ server, onCancel }: { server: { name: string; address: strin
     };
     timer = setTimeout(poll, 1500);
     return () => { disposed = true; clearTimeout(timer); };
-  }, [pairing]);
+  }, [pairing, setSharedPlayback]);
   return <div className="serverJoin" role="status">
     {error ? <p className="settingsError">{error}</p> : pairing ? <>
       <p>Approve this device on <strong>{pairing.serverName}</strong> using its server CLI:</p>
@@ -55,7 +67,7 @@ function JoinFlow({ server, onCancel }: { server: { name: string; address: strin
   </div>;
 }
 
-function FindServers() {
+function FindServers({ onConnected }: { onConnected: () => void }) {
   const [servers, setServers] = useState<Discovered[]>([]);
   const [searching, setSearching] = useState(false);
   const [address, setAddress] = useState("");
@@ -69,7 +81,7 @@ function FindServers() {
   }, []);
   useEffect(() => { void search(); }, [search]);
   const join = () => { if (address.trim()) setJoining({ name: address.trim(), address: address.trim() }); };
-  if (joining) return <JoinFlow key={joining.address} server={joining} onCancel={() => setJoining(null)} />;
+  if (joining) return <JoinFlow key={joining.address} server={joining} onCancel={() => setJoining(null)} onConnected={onConnected} />;
   return <>
     {servers.map(server => <SettingRow key={server.id} label={server.name} hint={`${server.address} · version ${server.version}`}>
       <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Connect</button>
@@ -101,7 +113,7 @@ export function ServerSetup({ onBack }: { onBack: () => void }) {
   return <div className="serverSetup">
     <h2>Connect to Ambra Server</h2>
     <p className="settingsMuted">Connect to an independently running server for streaming, shared libraries, and shared playback. Local music works without one.</p>
-    <FindServers />
+    <FindServers onConnected={onBack} />
     <button type="button" className="settingsLink" onClick={onBack}>Back to local player settings</button>
   </div>;
 }
@@ -110,32 +122,39 @@ export function ServerSettings({ active }: { active: boolean }) {
   const { connected, network, sharedPlayback, setSharedPlayback, reconnect } = useClientConnection();
   const [setup, setSetup] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const server = serverConnection?.server;
+  const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
+  const server = connection?.server;
+  const [changing, setChanging] = useState(false);
+  const connectionType = !server ? "Local" : !connected ? "Offline"
+    : network.method === "Lan" ? "Local network"
+    : network.method === "Pwnat" ? "pwnat"
+    : network.method === "HyperDHT" ? "HyperDHT" : "Unknown";
   const disconnect = async () => {
-    try {
-      // Shared edits must be saved before changing their destination.
-      await flushServerState();
-      await setSharedPlayback(false);
-      await invoke("leave_server");
-      await applyConnection();
-    } catch (reason) { setError(String(reason)); }
+    if (changing) return;
+    setChanging(true);
+    setError(null);
+    try { await applyConnection("leave_server", setSharedPlayback); }
+    catch (reason) { setError(String(reason)); }
+    finally { setChanging(false); }
   };
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <div className="settingsGroup">
+      <SettingRow label="Connection type">
+        <input type="text" aria-label="Connection type" value={connectionType} readOnly />
+      </SettingRow>
       {server ? <>
         <SettingRow label={server.name} hint={server.address}>
           <span className="settingsChip" data-state={connected ? "connected" : "away"}>{connected ? "Connected" : "Disconnected"}</span>
         </SettingRow>
-        <p className="settingsMuted">Active transport: {connected ? network.method ?? network.state : "Offline"}</p>
         {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
         <SettingRow label="Shared playback session" hint="Control the server queue and share this device’s output. Turn off to play your private local queue.">
           <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
         </SettingRow>
         <div className="serverJoinActions">
           <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
-          <button type="button" className="settingsPill" onClick={() => void disconnect()}>Disconnect</button>
+          <button type="button" className="settingsPill" disabled={changing} onClick={() => void disconnect()}>Disconnect</button>
           <button type="button" className="settingsPill" onClick={() => {
             void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
           }}>Choose another server</button>
