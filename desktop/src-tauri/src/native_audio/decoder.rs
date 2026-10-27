@@ -56,9 +56,7 @@ fn cacheable_audio_range(range: Option<&str>) -> bool {
     let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) else {
         return false;
     };
-    end.checked_sub(start).is_some_and(|length| {
-        length < HTTP_INITIAL_CACHE_BYTES && (start < HTTP_STARTUP_WINDOW_BYTES || length < 4096)
-    })
+    end.checked_sub(start).is_some_and(|length| length < HTTP_INITIAL_CACHE_BYTES)
 }
 
 pub struct DecodedSource(Decoded);
@@ -667,6 +665,7 @@ struct HttpRangeSource {
     cache_start: u64,
     cache: Vec<u8>,
     initial_cache: Vec<u8>,
+    small_reads_until: u64,
     loudness: LoudnessInfo,
 }
 
@@ -693,6 +692,7 @@ impl HttpRangeSource {
             length,
             cache_start: 0,
             initial_cache: bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec(),
+            small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
             cache: bytes,
             loudness: LoudnessInfo::from_headers(&headers),
         })
@@ -710,7 +710,9 @@ impl HttpRangeSource {
             self.cache.clone_from(&self.initial_cache);
             return Ok(());
         }
-        let cache_bytes = if self.position < HTTP_STARTUP_WINDOW_BYTES {
+        // Accurate seeking probes several distant offsets. Fetch a small range
+        // at each probe, then return to larger reads once playback is sequential.
+        let cache_bytes = if self.position < self.small_reads_until {
             HTTP_INITIAL_CACHE_BYTES
         } else {
             HTTP_CACHE_BYTES
@@ -880,7 +882,11 @@ impl Seek for HttpRangeSource {
                 "Audio stream seek is outside the source",
             ));
         }
-        self.position = next as u64;
+        let next = next as u64;
+        if next != self.position {
+            self.small_reads_until = next.saturating_add(HTTP_STARTUP_WINDOW_BYTES);
+        }
+        self.position = next;
         Ok(self.position)
     }
 }

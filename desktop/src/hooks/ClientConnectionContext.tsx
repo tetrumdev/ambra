@@ -5,7 +5,7 @@ export type ClientConnection = {
   connected: boolean;
   network: NetworkStatus;
   sharedPlayback: boolean;
-  setSharedPlayback: (shared: boolean) => Promise<void>;
+  setSharedPlayback: (shared: boolean, remember?: boolean) => Promise<void>;
   reconnect: () => void;
 };
 export const ClientConnectionContext = createContext<ClientConnection>({
