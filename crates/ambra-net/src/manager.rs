@@ -27,7 +27,7 @@ pub enum Method {
     HyperDHT,
 }
 /// The complete policy: no fourth strategy can be selected.
-pub const METHODS: [Method; 3] = [Method::Lan, Method::Pwnat, Method::HyperDHT];
+pub const METHODS: [Method; 3] = [Method::Lan, Method::HyperDHT, Method::Pwnat];
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectedServer {
@@ -48,7 +48,7 @@ impl Default for Timing {
     fn default() -> Self {
         Self {
             lan: Duration::from_secs(3),
-            pwnat: Duration::from_secs(4),
+            pwnat: Duration::from_secs(8),
             hyperdht: Duration::from_secs(15),
             retry: Duration::from_secs(5),
         }
@@ -68,6 +68,7 @@ pub struct ConnectionManager {
     identity: Identity,
     token: RwLock<Option<String>>,
     dht: hyperdht::Client,
+    pwnat: pwnat::Client,
     active: RwLock<Option<Arc<HttpConnection>>>,
     connecting: Mutex<()>,
     status: watch::Sender<Status>,
@@ -92,6 +93,7 @@ impl ConnectionManager {
         });
         Arc::new(Self {
             dht: hyperdht::Client::new(identity.clone()),
+            pwnat: pwnat::Client::default(),
             identity,
             selected,
             token: RwLock::new(token),
@@ -151,11 +153,14 @@ impl ConnectionManager {
             }
             Method::Pwnat => {
                 self.state(ConnectionState::ConnectingPwnat, Some(method), None);
-                let endpoint = self
-                    .selected
-                    .public_endpoint
-                    .ok_or("No cached public endpoint; pwnat skipped")?;
-                pwnat::connect(endpoint, self.selected.public_key, &self.identity).await?
+                let capability = pwnat::capability();
+                if !capability.available { return Err(capability.reason.into()); }
+                let endpoint = match self.selected.public_endpoint {
+                    Some(endpoint) => endpoint,
+                    None => tokio::time::timeout(Duration::from_secs(3), self.dht.pwnat_endpoint(self.selected.public_key))
+                        .await.map_err(|_| "Signed pwnat endpoint lookup timed out; no cached public endpoint")??,
+                };
+                self.pwnat.connect(endpoint, self.selected.public_key, &self.identity).await?
             }
             Method::HyperDHT => {
                 self.state(ConnectionState::ConnectingHyperDHT, Some(method), None);
@@ -274,6 +279,7 @@ impl ConnectionManager {
             connection.close();
         }
         self.dht.shutdown().await;
+        self.pwnat.shutdown();
         self.state(ConnectionState::Offline, None, None);
     }
 
@@ -347,8 +353,8 @@ where
         };
         match result {
             Ok(Ok(connection)) => return Ok(connection),
-            Ok(Err(error)) => errors.push(format!("{method:?}: {error}")),
-            Err(_) => errors.push(format!("{method:?}: connection timed out")),
+            Ok(Err(error)) => { tracing::warn!(?method, %error, "Transport attempt failed"); errors.push(format!("{method:?}: {error}")); },
+            Err(_) => { tracing::warn!(?method, "Transport attempt timed out"); errors.push(format!("{method:?}: connection timed out")); },
         }
     }
     Err(errors.join("; ").into())
@@ -358,7 +364,7 @@ where
 mod tests {
     use super::*;
     #[tokio::test(start_paused = true)]
-    async fn policy_is_lan_then_pwnat_then_hyperdht_then_offline() {
+    async fn policy_is_lan_then_hyperdht_then_pwnat_then_offline() {
         for success in [
             Some(Method::Lan),
             Some(Method::Pwnat),
@@ -394,11 +400,11 @@ mod tests {
             async move {
                 match method {
                     Method::Lan => Err("LAN down".into()),
-                    Method::Pwnat => {
+                    Method::HyperDHT => {
                         let _guard = Guard(dropped);
                         std::future::pending::<Result<()>>().await
                     }
-                    Method::HyperDHT => Ok(()),
+                    Method::Pwnat => Ok(()),
                 }
             }
         })

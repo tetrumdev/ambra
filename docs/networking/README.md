@@ -2,7 +2,7 @@
 
 **Physical cross-network update (October 27, 2026):** see [the Mac cellular/Kubuntu home-Wi-Fi validation](cross-network-2026-10-27.md) for completed Desktop pairing, native HyperDHT audio playback, recovery checks, and the MTU fix. The original report below describes the earlier validation state.
 
-This implementation adds a native Rust networking subsystem to the existing server, Tauri desktop backend, and an Expo native module. The allowed connection policy is LAN, independent pwnat, native HyperDHT, then offline. There is no application-data relay, VPN integration, port-mapping strategy, or fourth fallback.
+This implementation adds a native Rust networking subsystem to the existing server, Tauri desktop backend, and an Expo native module. The allowed connection policy is LAN, native HyperDHT, optional independent pwnat, then offline. There is no application-data relay, VPN integration, port-mapping strategy, or fourth fallback.
 
 **Validation is incomplete on physical devices and across distinct NATs.** The code and tests below are working progress, not a claim that every acceptance criterion has been verified. In particular, mobile device builds and pwnat NAT traversal have not been demonstrated. A Node-client HTTP/2 interoperability test also remains unresolved.
 
@@ -47,13 +47,13 @@ Automatic discovery on iOS may be restricted by multicast entitlement/permission
 
 The implementation is independently written from the published [Autonomous NAT Traversal paper](https://samy.pl/pwnat/pwnat.pdf), [method description](https://sa.my/pwnat/), and [RFC 792](https://www.rfc-editor.org/rfc/rfc792). No GPL pwnat implementation source was read, copied, translated, linked, wrapped, vendored, or executed.
 
-The server periodically sends a fixed ICMP Echo Request to documentation address `192.0.2.1`, creating whatever ICMP NAT state the network permits. The client knows a configured public server endpoint and sends an independently constructed Time Exceeded quotation of that Echo Request. The receiver validates checksums, lengths, protocol, fragment fields, target, identifier and sequence before learning the sender's IP. It sends bounded UDP probes from the QUIC socket. The client retries ICMP signaling during the bounded QUIC attempt. Application traffic uses QUIC reliability/congestion control and an inner Noise handshake pinned to the server's Ed25519 key.
+The server periodically sends a fixed ICMP Echo Request to documentation address `192.0.2.1`, creating whatever ICMP NAT state the network permits. The client retrieves a signed public candidate through the existing DHT or uses a validated pairing hint and sends an independently constructed Time Exceeded quotation of that Echo Request. The receiver validates checksums, lengths, protocol, fragment fields, target, identifier and sequence before learning the sender's IP. It sends bounded UDP probes from the QUIC socket. The client retries ICMP signaling during the bounded QUIC attempt. Application traffic uses QUIC reliability/congestion control and an inner Noise handshake pinned to the server's Ed25519 key.
 
 The QUIC TLS certificate is ephemeral. The outer TLS certificate is not used as the Ambra identity; Noise verification completes before HTTP or a device token is sent. This permits one public identity across all transports without a custom certificate-signing protocol.
 
 This narrow variant assumes preserved ICMP identifiers and the agreed UDP port on both NATs. It does not guess randomized ports or use STUN/DHT during its attempt. It is IPv4-only. The documentation destination is not an Internet service; upstream filtering of that destination may also prevent state creation. No compatibility with the original pwnat executable is claimed.
 
-Raw ICMP capability detection never requests elevation or installs a helper. iOS/Android skip it explicitly. This macOS environment reports `Operation not permitted (os error 1)`, so the path is unavailable here. Packet tests pass, but no real pwnat NAT traversal or QUIC-through-NAT result is claimed. Patent and other legal questions are separate from source-code copyright; independent implementation is not a blanket legal clearance or proof of patent freedom. Ambra itself remains GPL-3.0, independently of the avoided upstream source.
+Raw ICMP capability detection never requests elevation or installs a helper. pwnat is now an explicit server opt-in. Linux/macOS can use a separately built, one-shot ICMP launcher that drops privileges before executing Ambra. Windows/iOS/Android skip pwnat explicitly. Compatible simulated NATs now pass real Ambra pairing, WAV streaming, and reconnect; physical Mac-to-Kubuntu pwnat remains untested pending manual Mac helper execution. Ordinary Linux client SNAT is verified incompatible with the fabricated ICMP error. See [the pwnat runbook](pwnat.md) and [dated results](pwnat-2026-10-27.md). Patent and other legal questions are separate from source-code copyright; independent implementation is not a blanket legal clearance or proof of patent freedom. Ambra itself remains GPL-3.0, independently of the avoided upstream source.
 
 ## 6. HyperDHT dependency and interoperability
 
@@ -81,7 +81,7 @@ DHT nodes can forward discovery/handshake/hole-punch signaling. Those control me
 
 ## 8. Connection manager and HTTP adapter
 
-The state model includes offline, discovery, each attempt, authentication, each connected method, reconnection and failure. LAN has a 3-second deadline, pwnat 4 seconds, HyperDHT 15 seconds, and reconnect retry 5 seconds. `Timing` can be supplied by native callers. Missing public hints skip pwnat immediately. Unsupported raw ICMP fails without privilege prompts. Failed rounds reset stale DHT context. A stable connection is retained until loss; discovery does not replace it opportunistically.
+The state model includes offline, discovery, each attempt, authentication, each connected method, reconnection and failure. The order is LAN, HyperDHT, then optional pwnat. LAN has a 3-second deadline, HyperDHT 15 seconds, pwnat 8 seconds (up to 3 seconds for signed discovery and 5 seconds for setup), and reconnect retry 5 seconds. `Timing` can be supplied by native callers. Missing public hints trigger a bounded signed DHT record lookup when raw ICMP is available. Unsupported raw ICMP fails without privilege prompts. Failed rounds reset stale DHT context. A stable connection is retained until loss; discovery does not replace it opportunistically.
 
 Only a verified server with a successfully authorized `/api/network/session` response reaches a connected state. Enrollment remains `Authenticating`. HTTP/2 carries the existing methods, statuses, headers, streamed bodies, range requests and concurrent polling. Pumps use 16 KiB chunks and bounded duplex buffers. HTTP/2 supplies multiplexing and flow control. Encrypted frames are capped at 1 MiB before allocation. No song-sized buffering or transcoding is introduced by the adapter.
 
@@ -161,7 +161,7 @@ Primary additions are peeroxide/peeroxide-dht/libudx (MIT OR Apache-2.0), Quinn 
 
 ## 17. Outstanding verification and limitations
 
-- No demonstrated pwnat traversal through an actual router; raw ICMP is denied on the test host.
+- No demonstrated physical Mac-to-Kubuntu pwnat traversal. Compatible simulated NATs pass; strict Linux client NAT is incompatible. Mac raw ICMP requires manual operator action.
 - No verified native mobile device build or physical mobile test.
 - No cross-router/cellular NAT matrix or long-running network-transition/playback test.
 - Node-client HTTP/2 streaming remains stalled after the first frame, despite successful Noise/UDX establishment; native Rust HTTP/2 transfer succeeds. Full bidirectional reference interoperability is not claimed.
@@ -176,7 +176,7 @@ Primary additions are peeroxide/peeroxide-dht/libudx (MIT OR Apache-2.0), Quinn 
 2. Open Server settings, Show QR code, or run `pair qr`. Pair a second desktop or a native mobile development build. Verify and approve the six-digit code on the intended server.
 3. On the same Wi-Fi, confirm `ConnectedLocal`. Remove Internet access while keeping the LAN available; repeat library, artwork, lyrics, streaming, seeking, queue and output operations.
 4. Move the client to a different physical network. Keep the same selected server. Confirm either authenticated direct HyperDHT or a clear offline state. Record both NATs and OS versions. Verify that discovery/signaling nodes carry no application payload.
-5. For pwnat validation, use an unprivileged environment where the OS already permits required ICMP, configure the server's real public endpoint with `network endpoint`, and regenerate the pairing link. Do not install privileged helpers, change production firewall policy or claim unsupported systems work. Capture ICMP and direct endpoint UDP in an isolated lab to prove traversal and QUIC/Noise authentication.
+5. For pwnat validation, follow [the optional helper and isolated test instructions](pwnat.md). Use signed endpoint discovery where available. Keep production firewall policy unchanged and distinguish compatible simulated NATs from physical public-network proof. Mac elevation must be performed privately by the operator, only for the dedicated launcher.
 6. Revoke the device while connected; verify new API calls and reconnection fail. Pair again explicitly. Test denial, expiry, changed server key and attempts to access local management remotely.
 7. During real audio playback, test sleep/wake, Wi-Fi/cellular changes, offline periods, seeking after recovery, long polls, concurrent artwork/library traffic, two output devices, foreground resumption and locked-screen playback. Record audible results and streaming/range behavior.
 

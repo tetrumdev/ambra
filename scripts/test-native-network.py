@@ -52,7 +52,10 @@ with tempfile.TemporaryDirectory(prefix="ambra-network-integration-") as directo
         cli("config", "set", "discovery", "off")
         assert json.loads(cli("network", "diagnose"))["discovery"] is False
         cli("config", "set", "discovery", "on")
-        cli("network", "endpoint", "203.0.113.10:38149")
+        cli("network", "endpoint", "8.8.8.8:38149")  # Validation only; no connection is made to this hint.
+        assert json.loads(config_path.read_text())["publicEndpoint"] == "8.8.8.8:38149"
+        cli("network", "endpoint", "auto")
+        assert json.loads(config_path.read_text())["publicEndpoint"] is None
         cli("config", "set", "bind", "lan")
         assert "bind:" in cli("config", "show")
         synthetic = bytes(range(256)) * 781 + bytes(range(64))
@@ -77,6 +80,17 @@ with tempfile.TemporaryDirectory(prefix="ambra-network-integration-") as directo
         print(denied_output.strip())
         cli("network", "p2p", "on")
         assert json.loads(cli("network", "status"))["p2p"] is True
+        cli("network", "pwnat", "on")
+        for _ in range(100):
+            optional = json.loads(cli("network", "status"))
+            if optional["pwnatError"] or optional["pwnatStatus"]["running"]:
+                break
+            time.sleep(0.05)
+        else:
+            raise RuntimeError("Optional pwnat did not report capability failure or readiness")
+        assert optional["secureListening"] and optional["pwnatEnabled"]
+        cli("network", "pwnat", "off")
+        assert json.loads(cli("network", "status"))["pwnatEnabled"] is False
         cli("network", "p2p", "off")
         assert json.loads(cli("network", "status"))["p2p"] is False
         print("PASS CLI identity, QR, approve/list/revoke, live P2P enable/disable")

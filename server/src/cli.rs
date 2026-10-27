@@ -24,8 +24,9 @@ USAGE:
     ambra-server config set discovery on|off   Whether clients on the network can find it
     ambra-server network status|diagnose         Native listeners and sanitized network diagnostics
     ambra-server network identity                Public cryptographic server identity
-    ambra-server network endpoint <IP:port>       Public hint for the next QR/pwnat attempt
+    ambra-server network endpoint <IP:port>|auto Set a public hint or use signed discovery
     ambra-server network p2p on|off               Enable or disable remote direct networking
+    ambra-server network pwnat on|off             Opt in to raw-ICMP fallback (requires helper)
     ambra-server pair qr                          Public QR pairing link (requires running server)
     ambra-server pair list                     Devices waiting to pair, and paired devices
     ambra-server pair approve <code>           Let the device showing <code> use the server
@@ -90,9 +91,11 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
             Ok(identity.public_key().to_string())
         },
         ["network", "p2p", enabled @ ("on" | "off")] => config_set(json!({ "p2p": *enabled == "on" })).await,
+        ["network", "pwnat", enabled @ ("on" | "off")] => config_set(json!({ "pwnat": *enabled == "on" })).await,
+        ["network", "endpoint", "auto"] => config_set(json!({ "publicEndpoint": null })).await,
         ["network", "endpoint", endpoint] => {
             let endpoint = endpoint.parse::<std::net::SocketAddr>().map_err(|_| "Use a public IP:port")?;
-            if ambra_net::lan::is_local(endpoint.ip()) || endpoint.port() == 0 { return Err("Use a public IP:port".into()); }
+            ambra_net::pwnat::validate_endpoint(endpoint).map_err(|e| e.to_string())?;
             config_set(json!({ "publicEndpoint": endpoint })).await
         },
         ["pair", "qr"] => {
@@ -336,7 +339,12 @@ async fn config_set(change: Value) -> Result<String, String> {
                 config.name = name.trim().to_owned();
             }
             if let Some(p2p) = change["p2p"].as_bool() { config.p2p = p2p; }
-            if let Some(endpoint) = change["publicEndpoint"].as_str() { config.public_endpoint = Some(endpoint.parse().map_err(|_| "Invalid public endpoint")?); }
+            if let Some(pwnat) = change["pwnat"].as_bool() { config.pwnat = pwnat; }
+            if let Some(endpoint) = change.get("publicEndpoint") {
+                config.public_endpoint = if endpoint.is_null() { None } else {
+                    Some(endpoint.as_str().ok_or("Invalid public endpoint")?.parse().map_err(|_| "Invalid public endpoint")?)
+                };
+            }
             if let Some(discovery) = change["discovery"].as_bool() {
                 config.discovery = discovery;
             }

@@ -33,6 +33,9 @@ pub struct ServerConfig {
     pub discovery: bool,
     #[serde(default = "enabled")]
     pub p2p: bool,
+    /// Raw ICMP is optional and never enables privileges automatically.
+    #[serde(default)]
+    pub pwnat: bool,
     #[serde(default = "secure_port")]
     pub secure_port: u16,
     #[serde(default)]
@@ -55,6 +58,7 @@ impl ServerConfig {
             bind: DEFAULT_BIND.into(),
             discovery: true,
             p2p: true,
+            pwnat: false,
             secure_port: secure_port(),
             public_endpoint: None,
             paired_clients: Vec::new(),
@@ -73,16 +77,28 @@ impl ServerConfig {
     /// The saved settings, if there are any valid ones.
     pub fn load_existing() -> Option<Self> {
         let bytes = fs::read(Self::path()).ok()?;
-        serde_json::from_slice::<Self>(&bytes).ok().filter(|config| config.validate().is_ok())
+        Self::decode(&bytes).ok()
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, String> {
+        let mut config: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+        // Old versions accepted reserved hints. Discard only that hint, never
+        // the server identity or paired devices when upgrading their settings.
+        if config.public_endpoint.is_some_and(|endpoint| ambra_net::pwnat::validate_endpoint(endpoint).is_err()) {
+            eprintln!("Ignoring invalid legacy pwnat endpoint; retaining server settings and paired devices");
+            config.public_endpoint = None;
+        }
+        config.validate()?;
+        Ok(config)
     }
 
     /// The saved settings, or new ones (saved straight away so the ID stays put).
     pub fn load() -> Self {
         let path = Self::path();
         match fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Self>(&bytes) {
-                Ok(config) if config.validate().is_ok() => return config,
-                Ok(_) | Err(_) => eprintln!(
+            Ok(bytes) => match Self::decode(&bytes) {
+                Ok(config) => return config,
+                Err(_) => eprintln!(
                     "Ignoring invalid server settings in {}; starting from defaults",
                     path.display()
                 ),
@@ -102,6 +118,9 @@ impl ServerConfig {
             return Err("The server ID is invalid".into());
         }
         validate_name(&self.name)?;
+        if let Some(endpoint) = self.public_endpoint {
+            ambra_net::pwnat::validate_endpoint(endpoint).map_err(|e| e.to_string())?;
+        }
         parse_bind(&self.bind).map(|_| ())
     }
 
@@ -215,6 +234,31 @@ pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> Result<(), String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pwnat_is_opt_in_and_saved_endpoint_must_be_public_ipv4() {
+        let mut config = ServerConfig::new();
+        let mut old = serde_json::to_value(&config).unwrap();
+        old.as_object_mut().unwrap().remove("pwnat");
+        assert!(!serde_json::from_value::<ServerConfig>(old).unwrap().pwnat);
+        assert!(!config.pwnat);
+        for endpoint in ["100.106.252.60:38149", "192.0.2.1:38149", "[::1]:38149", "8.8.8.8:0"] {
+            config.public_endpoint = Some(endpoint.parse().unwrap());
+            assert!(config.validate().is_err());
+        }
+        config.public_endpoint = Some("8.8.8.8:38149".parse().unwrap());
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_legacy_endpoint_does_not_reset_identity_or_pairing() {
+        let mut config = ServerConfig::new();
+        config.public_endpoint = Some("203.0.113.10:38149".parse().unwrap());
+        config.paired_clients.push(PairedClient { id: "existing".into(), name: "Device".into(), token_sha256: token_hash("existing-token"), paired_at_ms: 1, public_key: None });
+        let restored = ServerConfig::decode(&serde_json::to_vec(&config).unwrap()).unwrap();
+        assert_eq!(restored.id, config.id);
+        assert_eq!(restored.paired_clients, config.paired_clients);
+        assert_eq!(restored.public_endpoint, None);
+    }
 
     #[test]
     fn bind_shorthands_and_bare_ips() {
