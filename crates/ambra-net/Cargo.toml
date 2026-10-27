@@ -1,0 +1,36 @@
+[package]
+name = "ambra-net"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+
+[dependencies]
+base64 = "0.22"
+axum = "0.8.9"
+bytes = "1"
+futures-util = "0.3"
+getrandom = "0.3"
+hex = "0.4"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio", "service"] }
+if-addrs = "0.13"
+libudx = "=1.7.3"
+peeroxide-dht = { path = "../../vendor/peeroxide-dht" }
+peeroxide = { path = "../../vendor/peeroxide" }
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+rcgen = { version = "0.14", default-features = false, features = ["ring", "crypto"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+socket2 = { version = "0.6", features = ["all"] }
+tokio = { version = "1", features = ["net", "rt-multi-thread", "macros", "sync", "time", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tower = { version = "0.5", features = ["util"] }
+zeroize = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

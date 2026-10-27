@@ -14,6 +14,7 @@ mod lyrics;
 mod media_cache;
 mod models;
 mod network;
+mod p2p;
 mod playlists;
 mod providers;
 mod recommendations;
