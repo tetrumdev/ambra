@@ -26,6 +26,11 @@ pub use macos::{Capture, capability};
 mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::{Capture, capability};
+#[cfg(target_os = "windows")]
+pub(crate) use windows::{audio_defaults, configure_driver, driver_present, ensure_platform, restore_audio_defaults};
+#[cfg(all(test, not(target_os = "windows")))]
+#[path = "windows/pcm.rs"]
+mod windows_pcm_tests;
 
 pub fn private_directory(path: &Path) -> Result<(), Error> {
     std::fs::create_dir_all(path).map_err(Error::io)?;

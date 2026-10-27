@@ -1,0 +1,41 @@
+name: Independent server
+
+on:
+  push:
+    paths: ['server/**', 'crates/ambra-net/**', 'vendor/**', 'scripts/check-client-package.py', 'scripts/tests/**', '.github/workflows/server.yml']
+  pull_request:
+    paths: ['server/**', 'crates/ambra-net/**', 'vendor/**', 'scripts/check-client-package.py', 'scripts/tests/**', '.github/workflows/server.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      AMBRA_CONFIG_DIR: ${{ runner.temp }}/ambra-server-tests/config
+      AMBRA_DATA_DIR: ${{ runner.temp }}/ambra-server-tests/data
+      AMBRA_CACHE_DIR: ${{ runner.temp }}/ambra-server-tests/cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      - name: Test normal release server
+        run: cargo test --manifest-path server/Cargo.toml --locked --release
+      - name: Validate optional driver installer script
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/server/src/soloist/windows_driver/setup.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+      - name: Verify client distribution boundaries
+        run: python scripts/tests/test_client_package.py

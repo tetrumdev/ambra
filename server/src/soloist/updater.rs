@@ -345,7 +345,7 @@ async fn install_response(
 }
 
 /// Writes only a bounded response body. The caller owns its private staging directory.
-async fn save_archive(response: reqwest::Response, path: &Path, limit: u64) -> Result<(), Error> {
+pub(super) async fn save_archive(response: reqwest::Response, path: &Path, limit: u64) -> Result<(), Error> {
     if response.content_length().is_some_and(|size| size > limit) {
         return Err(invalid_archive());
     }
@@ -484,7 +484,7 @@ fn copy_member(reader: &mut impl Read, target: Option<&mut File>, size: u64) -> 
     }
     Ok(())
 }
-fn preflight_zip(file: &mut File) -> Result<(), Error> {
+pub(super) fn preflight_zip(file: &mut File) -> Result<(), Error> {
     // Bound metadata before ZipArchive allocates its central directory. Official releases
     // do not need ZIP64, multi-disk archives, or trailing data; reject those formats.
     let length = file.metadata().map_err(Error::io)?.len();

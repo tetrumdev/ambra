@@ -61,7 +61,7 @@ pub(crate) async fn fail_installation(manager: &Manager) {
     assert_eq!(status.preferred_quality, Quality::High);
     assert_eq!(status.error.unwrap().code, ErrorCode::UpdateFailed);
 }
-fn directory() -> PathBuf {
+pub(super) fn directory() -> PathBuf {
     let directory = std::env::temp_dir().join(format!(
         "ambra-soloist-{}",
         crate::server_config::random_hex(8)
@@ -70,16 +70,6 @@ fn directory() -> PathBuf {
     directory
 }
 
-#[test]
-fn forwarding_gate_cannot_be_enabled_in_distributable_builds() {
-    if !cfg!(all(
-        ambra_development_build,
-        debug_assertions,
-        feature = "experimental-soloist-forwarding"
-    )) {
-        assert!(!forwarding_enabled());
-    }
-}
 #[cfg(unix)]
 fn fixture() -> PathBuf {
     static BINARY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -189,6 +179,72 @@ fn data_directory_lease_excludes_overlapping_sessions() {
     assert_eq!(manager.paths.lock().unwrap_err().code, ErrorCode::Busy);
     drop(lease);
     assert!(manager.paths.lock().is_ok());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn normal_build_selects_soloist_after_setup_and_preserves_readiness_checks() {
+    let root = directory();
+    let manager = manager(&root, false);
+    updater::migrate(&manager.paths.install, &fixture())
+        .await
+        .unwrap();
+    crate::server_config::write_private(&manager.paths.key, b"fixture-personal-api-key").unwrap();
+    std::fs::create_dir_all(manager.paths.session.join("settings/Users/fixture-user")).unwrap();
+    manager.config.write().unwrap().lossless_enabled = true;
+    manager.inspect_installed().await;
+
+    let status = manager.status();
+    assert!(status.forwarding_enabled);
+    assert!(status.paired);
+    assert_eq!(status.account_matches, Some(true));
+    assert_eq!(status.state, State::Ready);
+    if status.capture.available {
+        assert_eq!(status.backend, PlaybackBackend::Soloist);
+        assert_eq!(status.preferred_quality, Quality::Lossless);
+    } else {
+        assert_eq!(status.backend, PlaybackBackend::Librespot);
+        assert_eq!(status.preferred_quality, Quality::High);
+    }
+    if crate::service_auth::disconnected("spotify") {
+        assert_eq!(
+            manager.readiness().unwrap_err().code,
+            ErrorCode::AuthenticationFailed
+        );
+    } else if status.capture.available {
+        manager.readiness().unwrap();
+    } else {
+        assert_eq!(
+            manager.readiness().unwrap_err().code,
+            ErrorCode::CaptureUnavailable
+        );
+    }
+
+    manager.set_account(Some("different-account".into()));
+    assert_eq!(manager.status().preferred_quality, Quality::High);
+    assert_eq!(
+        manager.readiness().unwrap_err().code,
+        ErrorCode::AuthenticationFailed
+    );
+
+    manager.set_account(Some("fixture".into()));
+    std::fs::remove_file(&manager.paths.key).unwrap();
+    assert_eq!(manager.status().state, State::ApiKeyRequired);
+    assert_eq!(manager.status().preferred_quality, Quality::High);
+    if !crate::service_auth::disconnected("spotify") {
+        assert_eq!(
+            manager.readiness().unwrap_err().code,
+            ErrorCode::ApiKeyRequired
+        );
+    }
+
+    manager.config.write().unwrap().lossless_enabled = false;
+    assert_eq!(manager.status().backend, PlaybackBackend::Librespot);
+    assert_eq!(
+        manager.readiness().unwrap_err().code,
+        ErrorCode::NotInstalled
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
 
@@ -454,7 +510,7 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
 #[test]
 fn automatic_quality_covers_capability_lifecycle() {
     let select = |state, binary, key, pairing, capture| {
-        preferred_lossless(true, state, binary, key, pairing, capture, true)
+        preferred_lossless(true, state, binary, key, pairing, capture)
     };
     for state in [
         State::NotInstalled,
@@ -478,24 +534,7 @@ fn automatic_quality_covers_capability_lifecycle() {
     ] {
         assert!(select(state, true, true, true, true), "{state:?}");
     }
-    assert!(!preferred_lossless(
-        true,
-        State::Ready,
-        true,
-        true,
-        true,
-        true,
-        false
-    ));
-    assert!(!preferred_lossless(
-        false,
-        State::Ready,
-        true,
-        true,
-        true,
-        true,
-        true
-    ));
+    assert!(!preferred_lossless(false, State::Ready, true, true, true, true));
     // Recovery is current capability, never a stored backend preference.
     assert!(select(State::Ready, true, true, true, true));
 }

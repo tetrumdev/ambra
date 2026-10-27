@@ -9,6 +9,8 @@ mod runtime;
 #[cfg(test)]
 pub(crate) mod tests;
 mod updater;
+#[cfg(any(target_os = "windows", test))]
+pub(crate) mod windows_driver;
 
 use crate::live_pcm::StreamInfo;
 use axum::{
@@ -64,7 +66,6 @@ pub enum ErrorCode {
     UpdateFailed,
     Expired,
     Busy,
-    ForwardingDisabled,
     Cancelled,
     StorageFailed,
 }
@@ -282,6 +283,7 @@ pub struct Status {
     pub capture: capture::Capability,
     pub capture_format: crate::live_pcm::Format,
     pub source_format_verified: bool,
+    /// Retained for client compatibility; all server builds support Soloist forwarding.
     pub forwarding_enabled: bool,
     pub automatic_updates_supported: bool,
     pub update_checks: bool,
@@ -313,13 +315,6 @@ pub struct Manager {
     test_ready: bool,
 }
 
-pub fn forwarding_enabled() -> bool {
-    cfg!(all(
-        ambra_development_build,
-        debug_assertions,
-        feature = "experimental-soloist-forwarding"
-    )) && std::env::var("AMBRA_EXPERIMENTAL_SOLOIST_FORWARDING").as_deref() == Ok("1")
-}
 impl Manager {
     pub fn new() -> Arc<Self> {
         let paths = Paths::application();
@@ -430,7 +425,6 @@ impl Manager {
             api_key_present,
             paired && self.account_matches() == Some(true),
             capture.available,
-            forwarding_enabled(),
         );
         let preferred_quality = if available {
             Quality::Lossless
@@ -467,7 +461,7 @@ impl Manager {
             capture,
             capture_format: Default::default(),
             source_format_verified: false,
-            forwarding_enabled: forwarding_enabled(),
+            forwarding_enabled: true,
             automatic_updates_supported: true,
             update_checks: config.lossless_enabled && config.download_consent,
             downloads_url: binary::DOWNLOADS,
@@ -487,12 +481,6 @@ impl Manager {
         }
         if self.shutdown.is_cancelled() {
             return Err(Error::cancelled());
-        }
-        if !forwarding_enabled() {
-            return Err(Error::new(
-                ErrorCode::ForwardingDisabled,
-                "Spotify audio forwarding is disabled. It requires a debug development build, the experimental-soloist-forwarding feature, and explicit runtime opt-in; distributable builds cannot enable it.",
-            ));
         }
         if crate::service_auth::disconnected("spotify") {
             return Err(Error::new(
@@ -1006,14 +994,12 @@ fn preferred_lossless(
     key: bool,
     paired: bool,
     capture: bool,
-    forwarding: bool,
 ) -> bool {
     enabled
         && valid_build
         && key
         && paired
         && capture
-        && forwarding
         && matches!(
             state,
             State::Ready | State::Playing | State::Paused | State::Buffering | State::Updating

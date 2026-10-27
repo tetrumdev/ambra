@@ -26,7 +26,7 @@ function sourceFiles(directory: string): string[] {
 
 test("clients contain no server host or Spotify capture implementation", () => {
   for (const file of [...sourceFiles("desktop/src-tauri/src"), ...sourceFiles("mobile/modules"), ...sourceFiles("desktop/src/api")]) {
-    expect(read(file), file).not.toMatch(/ActivateAudioInterfaceAsync|AudioHardwareCreateProcessTap|module-pipe-sink|librespot::|librespot[-_](?:core|audio|playback)|soloist\/(?:install|pair|reset|sign-out)|start_local_server|Command::new\([^\n]*ambra-server|sidecar\s*\(/);
+    expect(read(file), file).not.toMatch(/ActivateAudioInterfaceAsync|AudioHardwareCreateProcessTap|module-pipe-sink|VBCABLE|vbaudio_cable|Get-AuthenticodeSignature|Windows\.Media\.Internal\.AudioPolicyConfig|librespot::|librespot[-_](?:core|audio|playback)|soloist\/(?:install|pair|reset|sign-out)|start_local_server|Command::new\([^\n]*ambra-server|sidecar\s*\(/);
   }
   const api = read("desktop/src/api/spotifyPlayback.ts");
   expect(api).not.toContain("POST");
