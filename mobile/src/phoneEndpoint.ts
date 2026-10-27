@@ -57,7 +57,7 @@ export function followPhoneOutput() {
         }
       } catch (reason) {
         if (reason instanceof Unpaired) { abort.abort(); player?.release(); }
-        if (!abort.signal.aborted && !info?.ready) publish({ ...descriptor, ready: false, error: "Couldn't connect this phone to the server." });
+        if (!abort.signal.aborted && !info?.ready) publish({ ...descriptor, ready: false, error: reason instanceof Error ? reason.message : "Couldn't connect this phone to the server." });
       } finally {
         reporting = false;
         if (reportAgain && !abort.signal.aborted) { reportAgain = false; reportTimer = setTimeout(() => { void report(); }, 50); }
@@ -132,8 +132,8 @@ export function followPhoneOutput() {
         });
       }
     }
-  }).catch(() => {
-    if (!abort.signal.aborted) publish({ id: "", name: "Phone", ready: false, error: "Couldn't prepare this phone for playback. Reopen Ambra to retry." });
+  }).catch(reason => {
+    if (!abort.signal.aborted) publish({ id: "", name: "Phone", ready: false, error: reason instanceof Error ? reason.message : "Couldn't prepare this phone for playback. Reopen Ambra to retry." });
   });
 
   return () => {

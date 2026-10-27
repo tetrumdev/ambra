@@ -11,10 +11,13 @@ case "${1:-}" in
       cargo build --locked --release --manifest-path "$manifest" --target "$target"
     done
     build_dir="$project_dir/crates/ambra-mobile-bridge/target"
-    mkdir -p "$build_dir/ios-simulator"
+    # Keep headers outside the output directory so xcodebuild cannot copy its own XCFramework recursively.
+    header_dir="$build_dir/ios-headers"
+    mkdir -p "$build_dir/ios-simulator" "$header_dir"
+    cp "$module_dir/ios/AmbraNetwork.h" "$header_dir/AmbraNetwork.h"
     lipo -create "$build_dir/aarch64-apple-ios-sim/release/libambra_mobile.a" "$build_dir/x86_64-apple-ios/release/libambra_mobile.a" -output "$build_dir/ios-simulator/libambra_mobile.a"
     rm -rf "$module_dir/ios/AmbraNetwork.xcframework"
-    xcodebuild -create-xcframework -library "$build_dir/aarch64-apple-ios/release/libambra_mobile.a" -headers "$module_dir/ios" -library "$build_dir/ios-simulator/libambra_mobile.a" -headers "$module_dir/ios" -output "$module_dir/ios/AmbraNetwork.xcframework"
+    xcodebuild -create-xcframework -library "$build_dir/aarch64-apple-ios/release/libambra_mobile.a" -headers "$header_dir" -library "$build_dir/ios-simulator/libambra_mobile.a" -headers "$header_dir" -output "$module_dir/ios/AmbraNetwork.xcframework"
     ;;
   android)
     command -v cargo-ndk >/dev/null || { echo 'Install cargo-ndk and Android NDK first.' >&2; exit 1; }

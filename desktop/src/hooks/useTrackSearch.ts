@@ -3,6 +3,8 @@ import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, t
 import type { GlobalTrackId, Track } from "../types/music";
 import { groupSearchResults } from "../utils/searchRanking";
 import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
+import { preloadArtwork } from "../utils/artworkImages";
+import { providerThumbnail } from "../utils/providerThumbnail";
 
 const empty: SearchSnapshot = { results: [], allResults: [], candidates: [], artists: [], albums: [], isSearching: false, hasMore: false, error: null, canRetry: false };
 const resolvedTracks = new Map<string, { track: Track; expires: number }>();
@@ -101,6 +103,12 @@ export function useTrackSearch(query: string, provider: SearchProvider) {
           query: trimmedQuery, providers: selected, combined: provider === "all", onUpdate,
           fetchPage: async (...args) => {
             const page = await searchServerCatalog(args[0], args[1], args[2]);
+            // Use the brief result-merging window to fetch covers before their cards mount.
+            if (!args[2].aborted) page.tracks.slice(0, 5).forEach((track, index) => {
+              void preloadArtwork(providerThumbnail(track.nativeCover ?? track.cover), false, {
+                fetchPriority: index === 0 ? "high" : "auto", timeoutMs: 3000,
+              }).catch(() => {});
+            });
             return { ...page, tracks: page.tracks.map(cachedTrack) };
           },
         });

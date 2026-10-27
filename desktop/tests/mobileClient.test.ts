@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { editUpcoming, enqueueEntries, playlistEntries, shuffledEntries } from "../../mobile/src/queueModel";
 import type { QueueSnapshot, SessionView, Track } from "../../mobile/src/client";
+import { refreshLyricPlayback } from "../../mobile/src/lyricsPlayback";
 
 mock.module("../../mobile/node_modules/expo-constants", () => ({ default: { expoConfig: { hostUri: "100.64.0.10:8081" } } }));
 let legacyPairing = false;
@@ -21,7 +22,7 @@ mock.module("../../mobile/modules/ambra-network/src", () => ({
   networkCall: async (operation: string, args: unknown) => { nativeCalls.push({ operation, args }); return { baseUrl: "http://phone-server:38147", state: "ConnectedLocal" }; },
 }));
 mock.module("../../mobile/node_modules/react-native", () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
-const { changeQueue, command, coverPalette, endpoints, megaPlaylist, phoneMediaUrl, refreshSession, restore, requestPairing, serverAddress, sessionView, sessionViewAge, trackLyrics } = await import("../../mobile/src/client");
+const { changeQueue, command, coverPalette, currentTrack, endpoints, megaPlaylist, phoneMediaUrl, refreshSession, restore, requestPairing, serverAddress, sessionView, sessionViewAge, trackLyrics } = await import("../../mobile/src/client");
 const originalFetch = globalThis.fetch;
 beforeAll(async () => {
   globalThis.fetch = mock(async (input: string | URL | Request) => response({
@@ -169,18 +170,32 @@ test("lyric re-sync authenticates clock samples, refreshes playback, and leaves 
     expect(path).toBe("/api/session");
     return response({ ...session(16, 5, queue), playing: true, positionSeconds: 90, serverTimeMs: Date.now() - 123456 - 400 });
   }) as typeof fetch;
-  await refreshSession(new AbortController().signal, { clock: "force" });
+  const playback = await refreshLyricPlayback(new AbortController().signal, true);
   expect(calls.filter(path => path === "/api/session/clock")).toHaveLength(3);
   expect(calls.at(-1)).toBe("/api/session");
   expect(sessionView()?.positionSeconds).toBe(90);
   expect(sessionViewAge()).toBeGreaterThanOrEqual(0.35);
   expect(sessionViewAge()).toBeLessThan(1);
+  expect(playback?.view).toBe(sessionView());
+  expect(playback?.ageSeconds).toBeGreaterThanOrEqual(0.35);
   calls.length = 0;
   await refreshSession(new AbortController().signal, { clock: "recent" });
   expect(calls).toEqual(["/api/session"]);
   calls.length = 0;
   await refreshSession(new AbortController().signal);
   expect(calls).toEqual(["/api/session"]);
+});
+
+test("opening lyrics keeps refresh errors asynchronous and aborting an opening sends no requests", async () => {
+  const abort = new AbortController();
+  abort.abort();
+  globalThis.fetch = mock(async () => { throw new Error("Must not fetch an abandoned opening"); }) as typeof fetch;
+  expect(await refreshLyricPlayback(abort.signal)).toBeNull();
+  expect(globalThis.fetch).not.toHaveBeenCalled();
+  globalThis.fetch = mock(async () => { throw new TypeError("Network request failed"); }) as typeof fetch;
+  let opening: ReturnType<typeof refreshLyricPlayback> | undefined;
+  expect(() => { opening = refreshLyricPlayback(new AbortController().signal); }).not.toThrow();
+  await expect(opening!).rejects.toThrow("Network request failed");
 });
 
 test("lyric re-sync still refreshes position when an older server has no clock endpoint", async () => {
@@ -217,6 +232,48 @@ test("legacy pairing requires explicit key migration and never sends credentials
     expect(await restore()).toEqual({ address: "http://phone-server:38147", paired: false });
     expect(nativeCalls).toEqual([]); expect(savedValues).toEqual([]);
   } finally { legacyPairing = false; }
+});
+
+test("a new P2P bridge clears the old song and ignores a late response body from the previous connection", async () => {
+  const previous: QueueSnapshot = { version: 1, history: [], current: item, upcoming: [], tracks: [track] };
+  globalThis.fetch = mock(async () => response(session(100, 50, previous))) as typeof fetch;
+  await refreshSession(new AbortController().signal);
+  expect(currentTrack(sessionView())?.name).toBe("Song");
+  let finishBody!: (value: SessionView) => void;
+  let bodyStarted!: () => void;
+  const started = new Promise<void>(resolve => { bodyStarted = resolve; });
+  globalThis.fetch = mock(async () => ({ status: 200, ok: true, json: () => {
+    bodyStarted(); return new Promise<SessionView>(resolve => { finishBody = resolve; });
+  } })) as typeof fetch;
+  const late = refreshSession(new AbortController().signal).then(() => null, error => error);
+  await started;
+  await restore();
+  expect(sessionView()).toBeNull();
+  const freshTrack = { ...track, globalId: "fresh", name: "Current P2P song" };
+  const fresh: QueueSnapshot = { ...previous, current: { ...item, globalTrackId: "fresh" }, tracks: [freshTrack] };
+  globalThis.fetch = mock(async () => response({ ...session(1, 1, fresh), instanceId: "fresh-server" })) as typeof fetch;
+  await refreshSession(new AbortController().signal);
+  finishBody(session(101, 50, previous));
+  expect((await late).name).toBe("AbortError");
+  expect(currentTrack(sessionView())?.name).toBe("Current P2P song");
+});
+
+test("old unauthorized replies and queued controls cannot close or change a newly opened P2P connection", async () => {
+  let finishRequest!: (value: Response) => void;
+  let requestStarted!: () => void;
+  const started = new Promise<void>(resolve => { requestStarted = resolve; });
+  globalThis.fetch = mock(async () => { requestStarted(); return new Promise<Response>(resolve => { finishRequest = resolve; }); }) as typeof fetch;
+  const active = command("play").then(() => null, error => error);
+  await started;
+  const queued = command("next").then(() => null, error => error);
+  nativeCalls.length = 0;
+  await restore();
+  finishRequest(response({ error: "Old bridge closed" }, 401));
+  expect((await active).name).toBe("AbortError");
+  expect((await queued).name).toBe("AbortError");
+  expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  expect(nativeCalls.some(call => call.operation === "close")).toBe(false);
+  expect(sessionView()).toBeNull();
 });
 
 test("explicit pairing to another server clears the old session before using its native bridge", async () => {

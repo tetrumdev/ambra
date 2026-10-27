@@ -8,13 +8,13 @@ import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
-export function Pairing({ savedAddress, onPaired }: { savedAddress: string | null; onPaired: () => void }) {
+export function Pairing({ savedAddress, onPaired, initialError = null }: { savedAddress: string | null; onPaired: () => void; initialError?: string | null }) {
   const [address, setAddress] = useState(() => savedAddress?.startsWith("ambra://pair/") ? savedAddress : "");
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
 

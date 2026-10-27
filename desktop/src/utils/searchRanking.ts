@@ -110,11 +110,9 @@ function plainEdition(track: Track) {
 function compareEdition(left: Track, right: Track, query: string) {
   return requestedEdition(left, query) - requestedEdition(right, query)
     || Number(left.explicit) - Number(right.explicit)
+    // Audio quality wins before release placement. A song sharing its album's title is not proof of a single.
+    || compareSoundQuality(left, right)
     || Number(compilation(right)) - Number(compilation(left))
-    || Number(albumFamily(right) === title(right.name)) - Number(albumFamily(left) === title(left.name))
-    || Number(lossless(left)) - Number(lossless(right))
-    || (left.maximumBitDepth ?? (lossless(left) ? 16 : 0)) - (right.maximumBitDepth ?? (lossless(right) ? 16 : 0))
-    || (left.maximumSamplingRateKHz ?? (lossless(left) ? 44.1 : 0)) - (right.maximumSamplingRateKHz ?? (lossless(right) ? 44.1 : 0))
     || Number(remaster(left)) - Number(remaster(right))
     // The album itself over one of its editions, and a plainly titled copy over one that
     // spells out its guests, which variant releases tend to.

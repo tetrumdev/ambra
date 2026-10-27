@@ -9,3 +9,4 @@
 desktop-state.json export-ignore
 .env export-ignore
 .env.* export-ignore
+/mobile/scripts/*.sh text eol=lf

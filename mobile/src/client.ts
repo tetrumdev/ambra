@@ -66,10 +66,28 @@ export class Unpaired extends Error {}
 
 let baseUrl = "";
 let pairingPayload: string | null = null;
+let connectionEpoch = 0;
+
+function assertConnection(epoch: number) {
+  if (epoch !== connectionEpoch) throw Object.assign(new Error("The server connection changed. Try again."), { name: "AbortError" });
+}
+
+/** A fresh native bridge must fetch its own queue before the player displays a song. */
+function resetSession() {
+  connectionEpoch++;
+  baseUrl = "";
+  view = null;
+  viewAt = Date.now();
+  playbackClock.reset();
+  for (const listener of listeners) listener();
+}
 
 /** The server and token saved by an earlier pairing, if any. */
 export async function restore() {
+  resetSession();
+  const epoch = connectionEpoch;
   const [address, saved, payload] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, PAYLOAD_KEY].map(key => SecureStore.getItemAsync(key)));
+  assertConnection(epoch);
   pairingPayload = payload;
   if (!saved || !payload || !nativeNetworkAvailable) {
     // Never silently pin a key based on the legacy random server ID.
@@ -77,6 +95,7 @@ export async function restore() {
     return { address: payload ?? address, paired: false };
   }
   const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: saved });
+  assertConnection(epoch);
   baseUrl = opened.baseUrl;
   return { address: payload, paired: true };
 }
@@ -84,6 +103,7 @@ export async function restore() {
 export const networkStatus = () => networkCall<{ state: string; method?: string; error?: string }>("status");
 
 async function forget() {
+  resetSession();
   await SecureStore.deleteItemAsync(TOKEN_KEY);
   await networkCall("close");
 }
@@ -137,6 +157,7 @@ async function request<T>(path: string, init: RequestInit & { timeoutMs?: number
 }
 
 async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
+  const epoch = connectionEpoch;
   const timeout = new AbortController();
   const timer = setTimeout(() => timeout.abort(), init.timeoutMs ?? 20_000);
   const abort = () => timeout.abort();
@@ -148,11 +169,13 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
       signal: timeout.signal,
       headers: { ...(init.body ? { "Content-Type": "application/json" } : {}) },
     });
+    assertConnection(epoch);
     if (response.status === 401) {
       await forget();
       throw new Unpaired("This phone isn't paired with the server");
     }
     const body = await response.json().catch(() => null) as (T & { error?: string }) | null;
+    assertConnection(epoch);
     if (!response.ok) throw Object.assign(new Error(body?.error ?? `The server answered ${response.status}`), { status: response.status, body });
     return body as T;
   } catch (error) {
@@ -171,9 +194,10 @@ export type PairingStarted = { requestId: string; code: string };
 export async function requestPairing(address: string, name: string) {
   if (!address.trim().startsWith("ambra://pair/")) throw new Error("Paste the pairing link from ambra-server pair qr. Legacy addresses need re-pairing.");
   pairingPayload = address.trim();
-  view = null;
-  for (const listener of listeners) listener();
+  resetSession();
+  const epoch = connectionEpoch;
   const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload });
+  assertConnection(epoch);
   baseUrl = opened.baseUrl;
   return request<PairingStarted>("/api/pair/request", {
     method: "POST", body: JSON.stringify({ clientId: await clientId(), clientName: name.slice(0, 64) }), timeoutMs: 30_000,
@@ -182,14 +206,19 @@ export async function requestPairing(address: string, name: string) {
 
 /** Resolves once someone approves the code at the server. */
 export async function awaitPairing(requestId: string, signal: AbortSignal) {
+  const epoch = connectionEpoch;
   while (!signal.aborted) {
     const status = await request<{ status: string; token?: string }>(`/api/pair/request/${requestId}`, { signal });
     if (status.status === "approved" && status.token) {
       await SecureStore.setItemAsync(TOKEN_KEY, status.token);
       await SecureStore.setItemAsync(PAYLOAD_KEY, pairingPayload!);
+      assertConnection(epoch);
+      if (signal.aborted) return;
+      resetSession();
+      const pairedEpoch = connectionEpoch;
       const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload, token: status.token });
+      assertConnection(pairedEpoch);
       baseUrl = opened.baseUrl;
-      if (view) view = JSON.parse(rebased(JSON.stringify(view))) as SessionView;
       return;
     }
     if (status.status !== "pending") throw new Error(status.status === "denied" ? "The server refused this phone." : "The code expired.");
@@ -261,7 +290,9 @@ function inOrder<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export function command(action: string, details: Record<string, unknown> = {}) {
+  const epoch = connectionEpoch;
   return inOrder(async () => {
+    assertConnection(epoch);
     accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}` : ""}`, {
       method: "POST",
       body: JSON.stringify({ action, ...details }),
@@ -310,7 +341,9 @@ export function phoneMediaUrl(source: string) {
 
 /** Apply against the latest queue; rebase on conflicts without losing another device's edits. */
 export function changeQueue(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play = false) {
+  const epoch = connectionEpoch;
   return inOrder(async () => {
+    assertConnection(epoch);
     for (let attempt = 0; attempt < 4; attempt++) {
       if (!view) accept(await request<ArrivingView>("/api/session"));
       const current = view!;
