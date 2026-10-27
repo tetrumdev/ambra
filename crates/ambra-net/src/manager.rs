@@ -189,7 +189,7 @@ impl ConnectionManager {
         Ok(connection)
     }
     pub async fn connect(&self) -> Result<Arc<HttpConnection>> {
-        let _lock = tokio::select! { _ = self.cancel.cancelled() => return Err("Connection cancelled".into()), lock = self.connecting.lock() => lock };
+        let _lock = tokio::select! { biased; _ = self.cancel.cancelled() => return Err("Connection cancelled".into()), lock = self.connecting.lock() => lock };
         if let Some(connection) = self
             .active
             .read()
@@ -225,6 +225,7 @@ impl ConnectionManager {
         }
         // A request is sent once. Never replay a mutation after an ambiguous disconnect.
         let result = tokio::select! {
+            biased;
             _ = self.cancel.cancelled() => return Err("Connection cancelled".into()),
             result = tokio::time::timeout(Duration::from_secs(65), connection.request(request)) => result?,
         };
@@ -240,6 +241,17 @@ impl ConnectionManager {
         }
         result
     }
+    /// Cancel requests and release transports, including enrollment-only managers.
+    pub async fn shutdown(&self) {
+        self.cancel.cancel();
+        let _connecting = self.connecting.lock().await;
+        if let Some(connection) = self.active.write().await.take() {
+            connection.close();
+        }
+        self.dht.shutdown().await;
+        self.state(ConnectionState::Offline, None, None);
+    }
+
     pub async fn run(&self) {
         loop {
             if self.cancel.is_cancelled() {
@@ -251,9 +263,7 @@ impl ConnectionManager {
             }
             tokio::select! { _ = self.cancel.cancelled() => break, _ = tokio::time::sleep(self.timing.retry) => {} }
         }
-        self.active.write().await.take();
-        self.dht.shutdown().await;
-        self.state(ConnectionState::Offline, None, None);
+        self.shutdown().await;
     }
 }
 

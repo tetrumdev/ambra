@@ -150,6 +150,10 @@ impl HttpConnection {
     pub async fn closed(&self) {
         self.closed.cancelled().await;
     }
+    pub fn close(&self) {
+        self.closed.cancel();
+        self._pump.cancel.cancel();
+    }
     pub async fn request(&self, mut request: Request<Body>) -> Result<Response<Incoming>> {
         // The bridge has one destination. Never honor absolute proxy destinations or Host.
         let path = request.uri().path_and_query().map_or("/", |p| p.as_str());

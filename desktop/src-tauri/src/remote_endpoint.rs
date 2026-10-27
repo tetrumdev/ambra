@@ -48,11 +48,11 @@ pub struct SharedOutput(tokio::sync::Mutex<Option<[tauri::async_runtime::JoinHan
 /// Only an explicit shared session may report or control this device's player.
 #[tauri::command]
 pub async fn set_shared_output(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let link = app.state::<crate::server_link::ServerLink>();
+    let _transition = link.transition.lock().await;
+    stop_shared_output(&app).await;
     let state = app.state::<SharedOutput>();
     let mut tasks = state.0.lock().await;
-    if let Some(previous) = tasks.take() {
-        for task in previous { task.abort(); let _ = task.await; }
-    }
     if enabled {
         let link = app.state::<crate::server_link::ServerLink>();
         let connection = link.connection();
@@ -60,6 +60,14 @@ pub async fn set_shared_output(app: AppHandle, enabled: bool) -> Result<(), Stri
         *tasks = Some(start(app.clone(), connection.base_url, connection.token, connection.client_id, connection.client_name)?);
     }
     Ok(())
+}
+
+pub async fn stop_shared_output(app: &AppHandle) {
+    let state = app.state::<SharedOutput>();
+    let mut tasks = state.0.lock().await;
+    if let Some(previous) = tasks.take() {
+        for task in previous { task.abort(); let _ = task.await; }
+    }
 }
 
 fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<[tauri::async_runtime::JoinHandle<()>; 2], String> {

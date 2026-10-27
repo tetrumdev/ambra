@@ -5,7 +5,7 @@ import {
   removePersistentItem,
   setPersistentItem,
 } from "./persistentStorage";
-import { forStorage, fromStorage, serverCacheKey } from "../api/serverConnection";
+import { forStorage, fromStorage, serverCacheKey, subscribeServerConnection, serverConnectionSignal, serverConnection } from "../api/serverConnection";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
 const STREAMING_CACHE_SAVE_DELAY_MS = 1000;
@@ -112,18 +112,29 @@ async function desktopInvoke<T>(command: string, args?: Record<string, unknown>)
  */
 export async function loadStreamingCache(): Promise<Track[]> {
   if (!inDesktop()) return [];
-  let encoded = fromStorage(await desktopInvoke<string | null>("load_streaming_cache"));
-  const legacy = fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY)));
+  const signal = serverConnectionSignal();
+  const key = serverCacheKey(STREAMING_LIBRARY_CACHE_KEY);
+  const serverIdentity = serverConnection?.server?.publicKey;
+  let encoded = await desktopInvoke<string | null>("load_streaming_cache", { serverIdentity });
+  signal.throwIfAborted();
+  encoded = fromStorage(encoded);
+  const legacy = fromStorage(getPersistentItem(key));
   if (encoded === null && legacy !== null) {
     encoded = legacy;
-    await desktopInvoke("save_streaming_cache", { json: legacy });
+    await desktopInvoke("save_streaming_cache", { json: legacy, serverIdentity });
+    signal.throwIfAborted();
   }
-  if (legacy !== null) removePersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY));
+  if (legacy !== null) removePersistentItem(key);
   return encoded === null ? [] : parseCachedServerTracks(encoded);
 }
 
 let pendingStreamingTracks: Track[] | null = null;
 let streamingSaveTimer: ReturnType<typeof setTimeout> | undefined;
+
+subscribeServerConnection(() => {
+  clearTimeout(streamingSaveTimer);
+  pendingStreamingTracks = null;
+});
 
 function flushStreamingCache() {
   streamingSaveTimer = undefined;
@@ -131,10 +142,11 @@ function flushStreamingCache() {
   pendingStreamingTracks = null;
   if (tracks === null) return;
   const json = forStorage(JSON.stringify(tracks.filter((track) => track.provider !== "local")));
-  void desktopInvoke("save_streaming_cache", { json })
+  const key = serverCacheKey(STREAMING_LIBRARY_CACHE_KEY);
+  void desktopInvoke("save_streaming_cache", { json, serverIdentity: serverConnection?.server?.publicKey })
     .then(() => {
-      if (fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY))) !== null) {
-        removePersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY));
+      if (getPersistentItem(key) !== null) {
+        removePersistentItem(key);
       }
     })
     .catch((error) => console.warn("Could not save the streaming library cache:", error));

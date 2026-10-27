@@ -4,7 +4,7 @@ import type { ServicePlaylistContents } from "../api/playlists";
 import type { Playlist } from "../types/music";
 import { normalizeCachedTracks } from "./libraryCache";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
-import { forStorage, fromStorage, serverCacheKey } from "../api/serverConnection";
+import { forStorage, fromStorage, serverCacheKey, subscribeServerConnection, serverConnectionSignal, serverConnection } from "../api/serverConnection";
 
 const CACHE_KEY = "ambra.service-playlists.v1";
 const SAVE_DELAY_MS = 1000;
@@ -85,9 +85,10 @@ function inDesktop() {
 
 export async function loadServicePlaylistCache(): Promise<ServicePlaylistCache | null> {
   try {
-    return parse(inDesktop()
-      ? fromStorage(await invoke<string | null>("load_service_playlist_cache"))
-      : fromStorage(getPersistentItem(serverCacheKey(CACHE_KEY))));
+    const signal = serverConnectionSignal();
+    const encoded = inDesktop() ? await invoke<string | null>("load_service_playlist_cache", { serverIdentity: serverConnection?.server?.publicKey }) : getPersistentItem(serverCacheKey(CACHE_KEY));
+    signal.throwIfAborted();
+    return parse(fromStorage(encoded));
   } catch {
     return null;
   }
@@ -95,6 +96,11 @@ export async function loadServicePlaylistCache(): Promise<ServicePlaylistCache |
 
 let pending: ServicePlaylistCache | null = null;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+subscribeServerConnection(() => {
+  clearTimeout(saveTimer);
+  pending = null;
+});
 
 function flush() {
   saveTimer = undefined;
@@ -109,7 +115,7 @@ function flush() {
     contents: Object.fromEntries(Object.entries(cache.contents).filter(([id]) => listed.has(id))),
   });
   if (inDesktop()) {
-    void invoke("save_service_playlist_cache", { json: forStorage(json) })
+    void invoke("save_service_playlist_cache", { json: forStorage(json), serverIdentity: serverConnection?.server?.publicKey })
       .catch(error => console.warn("Could not save the playlist cache:", error));
     return;
   }

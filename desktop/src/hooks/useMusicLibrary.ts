@@ -1,7 +1,8 @@
+import { getServerConnection, subscribeServerConnection, serverBaseUrl } from "../api/serverConnection";
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { setPersistentItem } from "../utils/persistentStorage";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isTrackAvailable } from "./useServiceAvailability";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { mark } from "../utils/perf";
@@ -98,6 +99,9 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
 }
 
 export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): MusicLibrary {
+  const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
+  const serverKey = connection?.baseUrl ?? serverBaseUrl;
+  const loadedServer = useRef(serverKey);
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
   const savedLibraryOrder = useRef(libraryOrder);
   useEffect(() => {
@@ -141,10 +145,19 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   serverTracksRef.current = serverTracks;
   const savedServerTracks = useRef(serverTracks);
   useEffect(() => {
-    if (savedServerTracks.current === serverTracks) return;
+    if (loadedServer.current !== serverKey || savedServerTracks.current === serverTracks) return;
     savedServerTracks.current = serverTracks;
     saveCachedServerTracks(serverTracks);
-  }, [serverTracks]);
+  }, [serverTracks, serverKey]);
+
+  useEffect(() => {
+    if (loadedServer.current === serverKey) return;
+    loadedServer.current = serverKey;
+    const empty: Track[] = [];
+    savedServerTracks.current = empty;
+    setServerTracks(empty); setSharedLocalTracks([]); setIsServerReachable(false);
+    setError(null); setAddAlbumError(null);
+  }, [serverKey]);
 
   const savedRemovedTrackIds = useRef(removedTrackIds);
   useEffect(() => {
@@ -261,7 +274,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
       controller.abort();
       stopListening?.();
     };
-  }, [localOnly]);
+  }, [localOnly, serverKey]);
 
   useEffect(() => {
     if (localOnly) return;
@@ -280,7 +293,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     void refresh();
     const timer = setInterval(() => void refresh(), 5000);
     return () => { disposed = true; controller.abort(); clearInterval(timer); };
-  }, [localOnly]);
+  }, [localOnly, serverKey]);
 
   const addAlbum = useCallback(async (url: string) => {
     setIsAddingAlbum(true);
@@ -383,7 +396,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     } finally {
       setIsLocalLoading(false);
     }
-  }, [localOnly]);
+  }, [localOnly, serverKey]);
 
   const refreshStreamingMusic = useCallback(async () => {
     if (localOnly) return 0;
@@ -398,7 +411,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
       setIsServerReachable(false);
       throw reason;
     }
-  }, [localOnly]);
+  }, [localOnly, serverKey]);
 
   return {
     tracks,

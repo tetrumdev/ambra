@@ -10,7 +10,7 @@ import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
-import { fromStorage, serverBaseUrl, serverUrl } from "./serverConnection";
+import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection } from "./serverConnection";
 
 export { serverBaseUrl } from "./serverConnection";
 
@@ -744,3 +744,8 @@ export async function loadDiscover(signal: AbortSignal): Promise<DiscoverRespons
   const value = await response.json() as Omit<DiscoverResponse, "tracks"> & { tracks: (RemoteTrack | Track)[] };
   return { ...value, tracks: value.tracks.map(track => "globalId" in track ? JSON.parse(fromStorage(JSON.stringify(track))) as Track : playableTrack(track)) };
 }
+
+subscribeServerConnection(() => {
+  for (const cache of [catalogResponses, artistProfiles, artistAlbumPages, albumTracks, trackCredits, albumInfos, artistBiographies]) cache.clear();
+  artistRequests.clear(); artworkQualityRequests.clear(); paletteRequests.clear();
+});
