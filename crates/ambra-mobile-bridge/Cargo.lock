@@ -36,6 +36,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "if-addrs",
+ "libc",
  "libudx",
  "peeroxide",
  "peeroxide-dht",
@@ -48,6 +49,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+ "tracing",
  "zeroize",
 ]
 
@@ -801,8 +803,6 @@ checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
 [[package]]
 name = "libudx"
 version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cadbd1061d2eb3b990abd921c61b954f4f539cf613bd6c92818f22be29f46cd"
 dependencies = [
  "thiserror 2.0.21",
  "tokio",

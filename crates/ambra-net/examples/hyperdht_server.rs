@@ -51,6 +51,7 @@ async fn main() -> ambra_net::Result<()> {
         app,
         status.clone(),
         cancel.clone(),
+        None,
     ));
     for _ in 0..120 {
         tokio::time::sleep(Duration::from_secs(1)).await;

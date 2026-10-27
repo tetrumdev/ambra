@@ -23,7 +23,12 @@ async fn main() -> ambra_net::Result<()> {
         local_addresses: payload.local_addresses.clone(),
         public_endpoint: payload.public_endpoint,
     };
-    let enrollment = ConnectionManager::new(identity.clone(), selected.clone(), None);
+    let pwnat_only = args.iter().any(|a| a == "--pwnat-only");
+    let enrollment = if pwnat_only {
+        ConnectionManager::with_timing(identity.clone(), selected.clone(), None, ambra_net::manager::Timing {
+            lan: Duration::ZERO, hyperdht: Duration::ZERO, ..Default::default()
+        })
+    } else { ConnectionManager::new(identity.clone(), selected.clone(), None) };
     let started = enrollment.json("POST", "/api/pair/request", Some(serde_json::json!({ "clientId": client_id, "clientName": "Native integration probe" }))).await?;
     println!("CODE {}", started["code"].as_str().ok_or("Missing code")?);
     std::io::stdout().flush()?;
@@ -57,6 +62,7 @@ async fn main() -> ambra_net::Result<()> {
     assert_eq!(replay["status"], "expired");
     let manager = enrollment.clone();
     println!("TRANSPORT {}", serde_json::to_string(&manager.status())?);
+    if pwnat_only { assert_eq!(manager.status().method, Some(ambra_net::manager::Method::Pwnat)); }
     manager.json("GET", "/api/session", None).await?;
     let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await?;
     let client = reqwest::Client::new();
@@ -139,7 +145,7 @@ async fn main() -> ambra_net::Result<()> {
                 }
                 "rebind" => {
                     manager.connect().await?.close();
-                    println!("REBIND closed existing transport; reconnecting with fresh sockets");
+                    println!("REBIND closed existing stream; reconnecting");
                 }
                 "stream" => match stream_audio(&client, &url, &audio).await {
                     Ok(()) => {}, Err(error) => println!("STREAM failed: {error}"),

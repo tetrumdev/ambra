@@ -32,7 +32,7 @@ its original address; it is not silently assigned to a different server.
 
 `Root.tsx` waits only for local persistent storage. It renders the normal `App` and starts saved
 pairing reconnection independently. Server state hydration never gates mounting the player.
-The connection manager retains LAN, pwnat, HyperDHT, then offline, with no relay. An unconfigured
+The connection manager uses LAN, HyperDHT, optional pwnat, then offline, with no relay. An unconfigured
 client opens no server bridge. A bridge initialization failure is reported as a disconnected
 connection and cannot prevent local startup.
 

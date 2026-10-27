@@ -25,20 +25,39 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
     }
     let mut remote_cancel: Option<CancellationToken> = None;
     let mut remote_tasks = tokio::task::JoinSet::new();
+    let mut pwnat_cancel: Option<CancellationToken> = None;
+    let mut pwnat_tasks = tokio::task::JoinSet::new();
+    let mut pwnat_config = None;
     loop {
-        let enabled = network.config.read().map(|c| c.p2p).unwrap_or(false) && !address.ip().is_loopback();
+        let (enabled, pwnat_enabled, public_endpoint) = network.config.read()
+            .map(|c| (c.p2p && !address.ip().is_loopback(), c.pwnat, c.public_endpoint)).unwrap_or_default();
+        let desired = (enabled && pwnat_enabled, public_endpoint);
+        if pwnat_config != Some(desired) {
+            if let Some(stop) = pwnat_cancel.take() { stop.cancel(); }
+            let _ = tokio::time::timeout(Duration::from_secs(3), async { while pwnat_tasks.join_next().await.is_some() {} }).await;
+            pwnat_tasks.shutdown().await;
+            *network.pwnat_status.write().unwrap_or_else(|p| p.into_inner()) = ambra_net::pwnat::Status {
+                configured_endpoint: public_endpoint, ..Default::default()
+            };
+            pwnat_config = Some(desired);
+            if desired.0 {
+                let stop = cancel.child_token(); pwnat_cancel = Some(stop.clone());
+                let identity = network.identity.clone(); let app = app.clone(); let status = network.pwnat_status.clone();
+                pwnat_tasks.spawn(async move {
+                    if let Err(error) = ambra_net::pwnat::serve(secure, identity, app, stop, status.clone()).await {
+                        eprintln!("Optional pwnat unavailable: {error}");
+                        status.write().unwrap_or_else(|p| p.into_inner()).error = Some(error.to_string());
+                    }
+                });
+            }
+        }
         if enabled && remote_cancel.is_none() {
             let stop = cancel.child_token(); remote_cancel = Some(stop.clone());
             let status = network.dht_status.clone(); let identity = network.identity.clone(); let dht_app = app.clone(); let stop_dht = stop.clone();
+            let pwnat_status = network.pwnat_status.clone();
             remote_tasks.spawn(async move {
-                if let Err(error) = ambra_net::hyperdht::serve(identity, dht_app, status.clone(), stop_dht).await {
+                if let Err(error) = ambra_net::hyperdht::serve(identity, dht_app, status.clone(), stop_dht, Some(pwnat_status)).await {
                     if let Ok(mut status) = status.write() { status.running = false; status.error = Some(error.to_string()); }
-                }
-            });
-            let identity = network.identity.clone(); let app = app.clone(); let network = network.clone();
-            remote_tasks.spawn(async move {
-                if let Err(error) = ambra_net::pwnat::serve(secure, identity, app, stop).await {
-                    if let Ok(mut status) = network.pwnat_status.write() { *status = Some(error.to_string()); }
                 }
             });
         } else if !enabled && remote_cancel.is_some() {
@@ -51,9 +70,13 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
             _ = network.changed.notified() => {},
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             Some(_) = remote_tasks.join_next(), if !remote_tasks.is_empty() => {},
+            Some(_) = pwnat_tasks.join_next(), if !pwnat_tasks.is_empty() => {},
         }
     }
     if let Some(stop) = remote_cancel { stop.cancel(); }
+    if let Some(stop) = pwnat_cancel { stop.cancel(); }
+    let _ = tokio::time::timeout(Duration::from_secs(3), async { while pwnat_tasks.join_next().await.is_some() {} }).await;
+    pwnat_tasks.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(3), async { while remote_tasks.join_next().await.is_some() {} }).await;
     remote_tasks.shutdown().await; tasks.shutdown().await;
 }
