@@ -94,6 +94,7 @@ struct EndpointView {
     id: String,
     name: String,
     devices: Value,
+    available_devices: Value,
     selected_device_id: Value,
     status: Value,
 }
@@ -107,7 +108,9 @@ async fn list(State(endpoints): State<Shared>) -> Json<Vec<EndpointView>> {
         .map(|(id, endpoint)| EndpointView {
             id: id.clone(),
             name: endpoint.name.clone(),
-            devices: endpoint.devices.clone(),
+            devices: Value::Array(endpoint.devices.as_array().into_iter().flatten()
+                .filter(|device| device["enabled"] != false).cloned().collect()),
+            available_devices: endpoint.devices.clone(),
             selected_device_id: endpoint.selected_device_id.clone(),
             status: endpoint.status.clone(),
         })
