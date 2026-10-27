@@ -51,7 +51,9 @@ impl Client {
             });
         }
         let node = node.as_ref().ok_or("DHT failed to initialize")?;
+        tracing::debug!(server = %key, "HyperDHT bootstrap started");
         node.handle.bootstrapped().await?;
+        tracing::debug!(server = %key, "HyperDHT bootstrap complete; resolving public key");
         let mut options = peeroxide_dht::hyperdht::ConnectOpts::default();
         options.local_connection = false;
         let connection = node
@@ -67,6 +69,7 @@ impl Client {
         if connection.remote_public_key != key.0 || connection.remote_addr.is_none() {
             return Err("DHT identity or direct endpoint missing".into());
         }
+        tracing::info!(peer = %key, endpoint = ?connection.remote_addr, "HyperDHT authenticated direct encrypted stream; data relay disabled");
         // Vendored connect rejects relay_through before it can open a data stream.
         let socket = connection.socket.clone();
         Ok(transport::adapt(connection.stream, Some(Box::new(socket))))
@@ -143,11 +146,17 @@ pub async fn serve(
             connection = incoming.recv() => {
                 let Some(connection) = connection else { break; };
                 if tasks.len() >= 64 { swarm.release_peer(connection.peer.remote_public_key).await; continue; }
-                let peer = transport::RemotePeer { public_key: PublicKey(connection.peer.remote_public_key), address: "192.0.2.1:0".parse()?, session: Arc::new(()) };
+                let Some(address) = connection.peer.remote_addr.filter(|a| !peeroxide_dht::address_policy::is_overlay(a.ip())) else {
+                    eprintln!("Rejecting HyperDHT session without a native peer endpoint");
+                    swarm.release_peer(connection.peer.remote_public_key).await;
+                    continue;
+                };
+                tracing::info!(peer = %PublicKey(connection.peer.remote_public_key), endpoint = %address, "HyperDHT accepted authenticated direct encrypted stream; data relay disabled");
+                let peer = transport::RemotePeer { public_key: PublicKey(connection.peer.remote_public_key), address, session: Arc::new(()) };
                 let socket = connection.peer.socket.clone();
                 let (io, pump) = transport::adapt(connection.peer.stream, Some(Box::new(socket)));
                 let app = app.clone(); let cancel = cancel.clone(); let swarm = swarm.clone(); let key = peer.public_key;
-                tasks.spawn(async move { if let Err(error) = transport::serve(io, pump, peer, app, cancel).await { eprintln!("HyperDHT HTTP session closed: {error}"); } swarm.release_peer(key.0).await; });
+                tasks.spawn(async move { if let Err(error) = transport::serve(io, pump, peer, app, cancel).await { eprintln!("HyperDHT HTTP session closed: {error:?}"); } swarm.release_peer(key.0).await; });
             }
         }
     }

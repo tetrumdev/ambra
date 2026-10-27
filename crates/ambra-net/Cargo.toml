@@ -5,6 +5,7 @@ edition = "2024"
 license = "GPL-3.0-only"
 
 [dependencies]
+tracing = "0.1"
 base64 = "0.22"
 axum = "0.8.9"
 bytes = "1"
@@ -15,7 +16,7 @@ http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
 if-addrs = "0.13"
-libudx = "=1.7.3"
+libudx = { version = "=1.7.3", path = "../../vendor/libudx" }
 peeroxide-dht = { path = "../../vendor/peeroxide-dht" }
 peeroxide = { path = "../../vendor/peeroxide" }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }

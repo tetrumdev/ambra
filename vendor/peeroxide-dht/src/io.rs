@@ -489,6 +489,7 @@ impl Io {
 
         let addr_str = format!("{}:{}", params.to.host, params.to.port);
         let addr: SocketAddr = addr_str.parse().ok()?;
+        if crate::address_policy::is_overlay(addr.ip()) { return None; }
 
         let tid = self.tid;
         self.tid = self.tid.wrapping_add(1);
@@ -588,6 +589,7 @@ impl Io {
 
         let addr_str = format!("{}:{}", params.to.host, params.to.port);
         let addr: SocketAddr = addr_str.parse().ok()?;
+        if crate::address_policy::is_overlay(addr.ip()) { return None; }
 
         let tid = self.tid;
         self.tid = self.tid.wrapping_add(1);
@@ -761,6 +763,7 @@ impl Io {
             Err(_) => return false,
         };
 
+        if crate::address_policy::is_overlay(addr.ip()) { return false; }
         let tid = match preserve_tid {
             Some(t) => t,
             None => {
@@ -951,6 +954,7 @@ impl Io {
             SocketKind::Server => &self.server_socket,
         };
 
+        if crate::address_policy::is_overlay(addr.ip()) { return; }
         let bytes_len = bytes.len() as u64;
         if let Err(e) = socket.send_to(&bytes, addr) {
             tracing::warn!(err = %e, "send_reply_internal: send_to failed");
@@ -985,6 +989,7 @@ impl Io {
 
     /// Decode and dispatch a datagram from either socket.
     fn process_datagram(&mut self, datagram: Datagram, socket_kind: SocketKind) -> Option<IoEvent> {
+        if crate::address_policy::is_overlay(datagram.addr.ip()) { return None; }
         if datagram.data.len() < 2 {
             return None;
         }

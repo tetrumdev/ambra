@@ -69,6 +69,7 @@ version = "0.13"
 
 [dependencies.libudx]
 version = "1.7.3"
+path = "../libudx"
 
 [dependencies.poly1305]
 version = "0.8"
