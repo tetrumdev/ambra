@@ -8,6 +8,7 @@ mod process;
 mod runtime;
 #[cfg(test)]
 pub(crate) mod tests;
+mod updater;
 
 use crate::live_pcm::StreamInfo;
 use axum::{
@@ -19,14 +20,19 @@ use axum::{
     routing::{get, post},
 };
 use bytes::Bytes;
+pub use config::PlaybackBackend;
 use config::{ApiKey, Config, Quality};
-pub use config::{Fallback, PlaybackBackend};
 use futures_util::Stream;
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::path::Path;
 use std::{
     fs::{File, OpenOptions},
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex as SyncMutex, RwLock},
+    path::PathBuf,
+    sync::{
+        Arc, Mutex as SyncMutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
@@ -90,7 +96,7 @@ impl Error {
     fn expired() -> Self {
         Self::new(
             ErrorCode::Expired,
-            "Soloist build expired. Download a current official build, then install it through Ambra; pairing is preserved.",
+            "Soloist build expired. Automatic refresh will retry after download consent; pairing is preserved.",
         )
     }
     fn cancelled() -> Self {
@@ -127,6 +133,7 @@ impl IntoResponse for Error {
 pub enum State {
     #[default]
     NotInstalled,
+    Downloading,
     UnsupportedPlatform,
     ApiKeyRequired,
     PairingRequired,
@@ -258,7 +265,13 @@ impl Paths {
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
+    /// Preferred renderer; effective_renderer describes the current stream.
     pub backend: PlaybackBackend,
+    pub preferred_quality: Quality,
+    pub effective_renderer: Option<PlaybackBackend>,
+    pub effective_quality: Option<Quality>,
+    pub lossless_enabled: bool,
+    pub download_consent: bool,
     pub state: State,
     pub build: Option<binary::Build>,
     pub needs_refresh: bool,
@@ -272,7 +285,6 @@ pub struct Status {
     pub forwarding_enabled: bool,
     pub automatic_updates_supported: bool,
     pub update_checks: bool,
-    pub fallback: Fallback,
     pub downloads_url: &'static str,
     pub error: Option<Error>,
 }
@@ -291,6 +303,10 @@ pub struct Manager {
     health: RwLock<(State, Option<binary::Build>, Option<Error>)>,
     expected_account: RwLock<Option<String>>,
     operation: Mutex<()>,
+    maintenance: Mutex<()>,
+    force_update: AtomicBool,
+    effective_renderer: RwLock<Option<PlaybackBackend>>,
+    capture_error: RwLock<Option<Error>>,
     active: SyncMutex<Option<Active>>,
     shutdown: CancellationToken,
     #[cfg(test)]
@@ -320,6 +336,10 @@ impl Manager {
             health: RwLock::new((State::NotInstalled, None, error)),
             expected_account: RwLock::new(None),
             operation: Mutex::new(()),
+            maintenance: Mutex::new(()),
+            force_update: AtomicBool::new(false),
+            effective_renderer: RwLock::new(None),
+            capture_error: RwLock::new(None),
             active: SyncMutex::new(None),
             shutdown: CancellationToken::new(),
             #[cfg(test)]
@@ -332,11 +352,9 @@ impl Manager {
                     return;
                 };
                 let cancel = manager.shutdown.clone();
-                if manager.config().update_checks || manager.health.read().unwrap().1.is_none() {
-                    manager.refresh().await;
-                }
+                manager.refresh().await;
                 drop(manager);
-                tokio::select! { _ = cancel.cancelled() => return, _ = tokio::time::sleep(Duration::from_secs(24 * 3600)) => {} }
+                tokio::select! { _ = cancel.cancelled() => return, _ = tokio::time::sleep(Duration::from_secs(30)) => {} }
             }
         });
         manager
@@ -347,11 +365,18 @@ impl Manager {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
-    pub fn backend(&self) -> PlaybackBackend {
-        self.config().backend
+    pub fn lossless_enabled(&self) -> bool {
+        self.config().lossless_enabled
     }
-    pub fn fallback(&self) -> Fallback {
-        self.config().fallback
+    pub fn report_renderer(&self, live: bool) {
+        *self.effective_renderer.write().unwrap() = Some(if live {
+            PlaybackBackend::Soloist
+        } else {
+            PlaybackBackend::Librespot
+        });
+    }
+    pub fn clear_effective_renderer(&self) {
+        *self.effective_renderer.write().unwrap() = None;
     }
     pub fn set_account(&self, account: Option<String>) {
         let changed = *self.expected_account.read().unwrap() != account;
@@ -372,7 +397,15 @@ impl Manager {
     }
     pub fn status(&self) -> Status {
         let config = self.config();
-        let (mut state, build, error) = self.health.read().unwrap().clone();
+        let (mut state, build, mut error) = self.health.read().unwrap().clone();
+        let mut capture = capture::capability();
+        if let Some(capture_error) = self.capture_error.read().unwrap().clone() {
+            capture.available = false;
+            capture.reason = capture_error.message.clone();
+            if error.is_none() {
+                error = Some(capture_error);
+            }
+        }
         let paired = self.paths.paired();
         let api_key_present = self.paths.key().is_ok();
         if build
@@ -390,8 +423,38 @@ impl Manager {
                 state = State::PairingRequired;
             }
         }
+        let available = preferred_lossless(
+            config.lossless_enabled,
+            state,
+            build.as_ref().is_some_and(|b| !b.expired(binary::now())),
+            api_key_present,
+            paired && self.account_matches() == Some(true),
+            capture.available,
+            forwarding_enabled(),
+        );
+        let preferred_quality = if available {
+            Quality::Lossless
+        } else {
+            Quality::High
+        };
+        let effective_renderer = *self.effective_renderer.read().unwrap();
         Status {
-            backend: config.backend,
+            backend: if available {
+                PlaybackBackend::Soloist
+            } else {
+                PlaybackBackend::Librespot
+            },
+            preferred_quality,
+            effective_renderer,
+            effective_quality: effective_renderer.map(|renderer| {
+                if renderer == PlaybackBackend::Soloist {
+                    Quality::Lossless
+                } else {
+                    Quality::High
+                }
+            }),
+            lossless_enabled: config.lossless_enabled,
+            download_consent: config.download_consent,
             state,
             needs_refresh: build
                 .as_ref()
@@ -400,22 +463,27 @@ impl Manager {
             api_key_present,
             paired,
             account_matches: self.account_matches(),
-            requested_quality: config.quality,
-            capture: capture::capability(),
+            requested_quality: preferred_quality,
+            capture,
             capture_format: Default::default(),
             source_format_verified: false,
             forwarding_enabled: forwarding_enabled(),
-            automatic_updates_supported: false,
-            update_checks: config.update_checks,
-            fallback: config.fallback,
+            automatic_updates_supported: true,
+            update_checks: config.lossless_enabled && config.download_consent,
             downloads_url: binary::DOWNLOADS,
             error,
         }
     }
     pub fn readiness(&self) -> Result<(), Error> {
         #[cfg(test)]
-        if self.test_ready {
+        if self.test_ready && self.config().lossless_enabled {
             return Ok(());
+        }
+        if !self.config().lossless_enabled {
+            return Err(Error::new(
+                ErrorCode::NotInstalled,
+                "Optional lossless support is disabled; Spotify uses High through librespot",
+            ));
         }
         if self.shutdown.is_cancelled() {
             return Err(Error::cancelled());
@@ -433,20 +501,30 @@ impl Manager {
             ));
         }
         let status = self.status();
-        if status.account_matches == Some(false) {
+        if status.account_matches != Some(true) {
             return Err(Error::new(
                 ErrorCode::AuthenticationFailed,
                 "Soloist account does not match the Spotify account connected to Ambra",
             ));
         }
-        if !status.capture.available {
-            return Err(Error::new(
-                ErrorCode::CaptureUnavailable,
-                &status.capture.reason,
-            ));
+        if !status.api_key_present {
+            self.paths.key()?;
+        }
+        // A prior runtime failure keeps preferred quality High. A new initialization
+        // may probe the native backend again; only successful capture restores Lossless.
+        let capture = capture::capability();
+        if !capture.available {
+            return Err(Error::new(ErrorCode::CaptureUnavailable, &capture.reason));
         }
         match status.state {
-            State::Ready | State::Playing | State::Paused | State::Buffering => Ok(()),
+            State::Ready | State::Playing | State::Paused | State::Buffering | State::Updating
+                if status
+                    .build
+                    .as_ref()
+                    .is_some_and(|build| !build.expired(binary::now())) =>
+            {
+                Ok(())
+            }
             State::ApiKeyRequired => Err(Error::new(
                 ErrorCode::ApiKeyRequired,
                 "Enter a personal Soloist API key on the server machine",
@@ -464,44 +542,101 @@ impl Manager {
             })),
         }
     }
+    fn schedule_refresh(self: &Arc<Self>) {
+        let manager = self.clone();
+        tokio::spawn(async move {
+            manager.refresh().await;
+        });
+    }
     async fn refresh(&self) {
-        let _operation = self.operation.lock().await;
-        let config = self.config();
+        let Ok(_maintenance) = self.maintenance.try_lock() else {
+            return;
+        };
+        let mut config = self.config();
+        // Import the old configured executable once. Never grant network consent implicitly.
+        if let Some(source) = &config.migration_executable {
+            match updater::migrate(&self.paths.install, source).await {
+                Ok(_) => {
+                    let _operation = self.operation.lock().await;
+                    let mut current = self.config();
+                    if current.migration_executable == config.migration_executable {
+                        current.migration_executable = None;
+                        if let Err(error) = current.save(&self.paths.settings) {
+                            self.health.write().unwrap().2 = Some(Error::storage(error));
+                            return;
+                        }
+                        *self.config.write().unwrap() = current.clone();
+                    }
+                    config = current;
+                }
+                Err(error) => {
+                    self.health.write().unwrap().2 = Some(error);
+                }
+            }
+        }
+        self.inspect_installed().await;
+        let old = updater::installed(&self.paths.install);
+        if config.lossless_enabled && config.download_consent {
+            {
+                let mut health = self.health.write().unwrap();
+                if old.is_none() {
+                    health.0 = State::Downloading;
+                } else if health.0 == State::Ready {
+                    health.0 = State::Updating;
+                }
+            }
+            // No playback lock: updates install immutable digest paths; active renderers retain theirs.
+            if let Err(error) = updater::maintain(
+                &self.paths.install,
+                true,
+                self.force_update.swap(false, Ordering::AcqRel),
+            )
+            .await
+            {
+                self.health.write().unwrap().2 = Some(error);
+            }
+        }
+        self.inspect_installed().await;
+    }
+    async fn inspect_installed(&self) {
         let result = async {
-            let path = binary::locate(config.executable.as_deref())?;
-            binary::inspect_status(&path).await
+            let path = self.binary()?;
+            let build = binary::inspect_status(&path).await?;
+            prefs::render("", &build.version, Quality::Lossless)?;
+            Ok::<_, Error>(build)
         }
         .await;
         let mut health = self.health.write().unwrap();
         match result {
             Ok(build) => {
                 health.1 = Some(build);
-                health.2 = None;
-                if !matches!(
-                    health.0,
-                    State::Playing | State::Paused | State::Buffering | State::Updating
-                ) {
+                if !matches!(health.0, State::Playing | State::Buffering) {
                     health.0 = if self.paths.key().is_err() {
                         State::ApiKeyRequired
-                    } else if !self.paths.paired() || self.account_matches() == Some(false) {
+                    } else if !self.paths.paired() || self.account_matches() != Some(true) {
                         State::PairingRequired
                     } else {
                         State::Ready
                     };
                 }
+                health.2 = updater::diagnostic(&self.paths.install);
             }
             Err(error) => {
                 if !matches!(health.0, State::Playing | State::Buffering) {
                     health.0 = state_for(&error);
-                    // Do not report a previous executable's version/expiration for a
-                    // missing or invalid replacement. Exit 10 may still use known metadata.
                     if error.code != ErrorCode::Expired {
                         health.1 = None;
                     }
                 }
-                health.2 = Some(error);
+                // Keep the more useful download diagnostic when nothing is installed.
+                if health.2.is_none() || error.code != ErrorCode::NotInstalled {
+                    health.2 = Some(error);
+                }
             }
         }
+    }
+    fn binary(&self) -> Result<PathBuf, Error> {
+        binary::locate(updater::installed(&self.paths.install).as_deref())
     }
     pub fn interrupt(&self) {
         if let Some(active) = self
@@ -546,8 +681,11 @@ impl Manager {
     }
     pub async fn retry_playback(&self) {
         self.stop_playback().await;
-        self.health.write().unwrap().0 = State::NotInstalled;
-        self.refresh().await;
+        // A failed capture remains unavailable until the capability probe retries.
+        // Retry through the session uses librespot immediately; never relaunch the failed renderer.
+        if self.health.read().unwrap().0 != State::Error {
+            self.refresh().await;
+        }
     }
     pub async fn shutdown(&self) {
         self.shutdown.cancel();
@@ -600,11 +738,7 @@ impl Manager {
             start_position_seconds: position,
             duration_seconds: duration,
             created_at_ms: binary::now() * 1000,
-            requested_quality: serde_json::to_value(self.config().quality)
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .to_owned(),
+            requested_quality: "lossless".into(),
             source_format_verified: false,
         };
         let (sender, receiver) = mpsc::channel(8);
@@ -631,6 +765,18 @@ impl Manager {
             .and_then(|active| active.info.as_ref())
             .is_some_and(|info| info.stream_id == id)
         {
+            if state == State::Playing {
+                *self.capture_error.write().unwrap() = None;
+            } else if let Some(error) = error.as_ref().filter(|error| {
+                matches!(
+                    error.code,
+                    ErrorCode::CaptureUnavailable
+                        | ErrorCode::SinkStartupFailed
+                        | ErrorCode::PlaybackStalled
+                )
+            }) {
+                *self.capture_error.write().unwrap() = Some(error.clone());
+            }
             let mut health = self.health.write().unwrap();
             health.0 = state;
             health.2 = error;
@@ -643,7 +789,7 @@ impl Manager {
     ) -> Result<LiveBody, Error> {
         self.readiness()?;
         let _operation = self.operation.lock().await;
-        let binary = binary::locate(self.config().executable.as_deref())?;
+        let binary = self.binary()?;
         let build = binary::inspect(&binary).await?;
         let key = self.paths.key()?;
         let (info, sender, receiver, cancel) = {
@@ -680,7 +826,7 @@ impl Manager {
         };
         let manager = self.clone();
         let paths = self.paths.clone();
-        let quality = self.config().quality;
+        let quality = Quality::Lossless;
         let stream_id = info.stream_id.clone();
         let task_cancel = cancel.clone();
         let task = tokio::spawn(async move {
@@ -708,6 +854,12 @@ impl Manager {
                     crate::live_pcm::error_frame(&error.message),
                 ),
             };
+            if error
+                .as_ref()
+                .is_some_and(|error| error.code == ErrorCode::Expired)
+            {
+                manager.force_update.store(true, Ordering::Release);
+            }
             manager.state_for_stream(&stream_id, state, error);
             let _ =
                 tokio::time::timeout(Duration::from_secs(2), sender.send(Bytes::from(frame))).await;
@@ -720,15 +872,6 @@ impl Manager {
     async fn configure(&self, change: SettingsChange) -> Result<(), Error> {
         let _operation = self.operation.lock().await;
         let mut config = self.config();
-        if let Some(path) = change.executable {
-            if !path.is_empty() {
-                let path = binary::locate(Some(Path::new(&path)))?;
-                binary::inspect(&path).await?;
-                config.executable = Some(path);
-            } else {
-                config.executable = None;
-            }
-        }
         let key = change.api_key.map(ApiKey::parse).transpose().map_err(|_| {
             Error::new(
                 ErrorCode::InvalidApiKey,
@@ -741,19 +884,16 @@ impl Manager {
                 "Connect Spotify through librespot before configuring Soloist",
             ));
         }
-        if let Some(backend) = change.backend {
-            config.backend = backend;
+        if let Some(enabled) = change.lossless_enabled {
+            config.lossless_enabled = enabled;
         }
-        if let Some(quality) = change.quality {
-            config.quality = quality;
+        if let Some(consent) = change.download_consent {
+            config.download_consent = consent;
         }
-        if let Some(checks) = change.update_checks {
-            config.update_checks = checks;
+        // Enabling lossless or granting consent never interrupts the current stream.
+        if !config.lossless_enabled {
+            self.stop_locked().await;
         }
-        if let Some(fallback) = change.fallback {
-            config.fallback = fallback;
-        }
-        self.stop_locked().await;
         self.paths.prepare()?;
         if let Some(key) = key {
             crate::server_config::write_private(&self.paths.key, key.expose().as_bytes())
@@ -761,7 +901,12 @@ impl Manager {
         }
         config.save(&self.paths.settings).map_err(Error::storage)?;
         *self.config.write().unwrap() = config;
-        self.health.write().unwrap().0 = State::NotInstalled;
+        if !matches!(
+            self.health.read().unwrap().0,
+            State::Playing | State::Buffering
+        ) {
+            self.health.write().unwrap().0 = State::NotInstalled;
+        }
         Ok(())
     }
     async fn pair(self: &Arc<Self>) -> Result<(), Error> {
@@ -774,7 +919,7 @@ impl Manager {
                 "Connect Spotify through librespot first, then pair the same account",
             ));
         }
-        let binary = binary::locate(self.config().executable.as_deref())?;
+        let binary = self.binary()?;
         binary::inspect(&binary).await?;
         let key = self.paths.key()?;
         self.stop_locked().await;
@@ -805,6 +950,9 @@ impl Manager {
                     health.2 = None;
                 }
                 Err(error) => {
+                    if error.code == ErrorCode::Expired {
+                        manager.force_update.store(true, Ordering::Release);
+                    }
                     health.0 = state_for(&error);
                     health.2 = Some(error);
                 }
@@ -843,79 +991,33 @@ impl Manager {
         let _operation = self.operation.lock().await;
         self.reset_locked(true).await?;
         let mut config = self.config();
-        config.backend = PlaybackBackend::Librespot;
+        config.lossless_enabled = false;
         config.save(&self.paths.settings).map_err(Error::storage)?;
         *self.config.write().unwrap() = config;
         self.set_account(None);
         Ok(())
     }
-    async fn install(&self, source: &Path) -> Result<(), Error> {
-        use sha2::{Digest, Sha256};
-        let _operation = self.operation.lock().await;
-        if self
-            .active
-            .lock()
-            .unwrap()
-            .as_ref()
-            .is_some_and(|a| a.task.as_ref().is_some_and(|t| !t.is_finished()))
-        {
-            return Err(Error::new(
-                ErrorCode::Busy,
-                "Pause playback and finish pairing before refreshing the Soloist executable",
-            ));
-        }
-        self.stop_locked().await;
-        let source = binary::locate(Some(source))?;
-        binary::inspect(&source).await?;
-        self.paths.prepare()?;
-        let _lease = self.paths.lock()?;
-        let temporary = self
-            .paths
-            .install
-            .join(format!(".staging-{}", crate::server_config::random_hex(8)));
-        self.health.write().unwrap().0 = State::Updating;
-        let result = async {
-            std::fs::copy(source, &temporary).map_err(Error::io)?;
-            File::open(&temporary)
-                .map_err(Error::io)?
-                .sync_all()
-                .map_err(Error::io)?;
-            binary::inspect(&temporary).await?;
-            let mut file = File::open(&temporary).map_err(Error::io)?;
-            let mut hash = Sha256::new();
-            std::io::copy(&mut file, &mut hash).map_err(Error::io)?;
-            let digest = format!("{:x}", hash.finalize());
-            let directory = self.paths.install.join(digest);
-            capture::private_directory(&directory)?;
-            let installed = directory.join(format!("soloist{}", std::env::consts::EXE_SUFFIX));
-            if !installed.exists() {
-                std::fs::rename(&temporary, &installed).map_err(Error::io)?;
-            }
-            let mut config = self.config();
-            config.executable = Some(installed);
-            // Old version remains in its digest directory. A failed save keeps the old config.
-            config.save(&self.paths.settings).map_err(Error::storage)?;
-            *self.config.write().unwrap() = config;
-            Ok::<_, Error>(())
-        }
-        .await;
-        let _ = std::fs::remove_file(temporary);
-        match result {
-            Ok(()) => {
-                self.health.write().unwrap().0 = State::Ready;
-                Ok(())
-            }
-            Err(_) => {
-                let error = Error::new(
-                    ErrorCode::UpdateFailed,
-                    "Soloist refresh failed; previous executable and pairing remain available",
-                );
-                self.health.write().unwrap().0 = State::Error;
-                self.health.write().unwrap().2 = Some(error.clone());
-                Err(error)
-            }
-        }
-    }
+}
+/// Capability policy; current streams remain pinned by the session until a playback boundary.
+fn preferred_lossless(
+    enabled: bool,
+    state: State,
+    valid_build: bool,
+    key: bool,
+    paired: bool,
+    capture: bool,
+    forwarding: bool,
+) -> bool {
+    enabled
+        && valid_build
+        && key
+        && paired
+        && capture
+        && forwarding
+        && matches!(
+            state,
+            State::Ready | State::Playing | State::Paused | State::Buffering | State::Updating
+        )
 }
 fn state_for(error: &Error) -> State {
     match error.code {
@@ -952,17 +1054,9 @@ impl Drop for LiveBody {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SettingsChange {
-    backend: Option<PlaybackBackend>,
-    executable: Option<String>,
+    lossless_enabled: Option<bool>,
+    download_consent: Option<bool>,
     api_key: Option<String>,
-    quality: Option<Quality>,
-    update_checks: Option<bool>,
-    fallback: Option<Fallback>,
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct InstallRequest {
-    executable: PathBuf,
 }
 
 pub fn router<S: Clone + Send + Sync + 'static>(manager: Arc<Manager>) -> Router<S> {
@@ -973,7 +1067,6 @@ pub fn router<S: Clone + Send + Sync + 'static>(manager: Arc<Manager>) -> Router
         .route("/api/local/spotify/soloist/reset", post(reset))
         .route("/api/local/spotify/soloist/sign-out", post(sign_out))
         .route("/api/local/spotify/soloist/check", post(check))
-        .route("/api/local/spotify/soloist/install", post(install))
         .route(
             "/api/playback/live/{stream_id}",
             get(live).head(|| async { StatusCode::METHOD_NOT_ALLOWED }),
@@ -984,16 +1077,14 @@ async fn status(RouteState(manager): RouteState<Arc<Manager>>) -> Json<Status> {
     Json(manager.status())
 }
 async fn settings(RouteState(manager): RouteState<Arc<Manager>>) -> Json<serde_json::Value> {
-    Json(
-        serde_json::json!({ "status": manager.status(), "executable": manager.config().executable }),
-    )
+    Json(serde_json::json!({ "status": manager.status() }))
 }
 async fn configure(
     RouteState(manager): RouteState<Arc<Manager>>,
     Json(change): Json<SettingsChange>,
 ) -> Result<Json<Status>, Error> {
     manager.configure(change).await?;
-    manager.refresh().await;
+    manager.schedule_refresh();
     Ok(Json(manager.status()))
 }
 async fn pair(RouteState(manager): RouteState<Arc<Manager>>) -> Result<Json<Status>, Error> {
@@ -1002,7 +1093,7 @@ async fn pair(RouteState(manager): RouteState<Arc<Manager>>) -> Result<Json<Stat
 }
 async fn reset(RouteState(manager): RouteState<Arc<Manager>>) -> Result<Json<Status>, Error> {
     manager.reset(false).await?;
-    manager.refresh().await;
+    manager.schedule_refresh();
     Ok(Json(manager.status()))
 }
 async fn sign_out(RouteState(manager): RouteState<Arc<Manager>>) -> Result<Json<Status>, Error> {
@@ -1010,16 +1101,8 @@ async fn sign_out(RouteState(manager): RouteState<Arc<Manager>>) -> Result<Json<
     Ok(Json(manager.status()))
 }
 async fn check(RouteState(manager): RouteState<Arc<Manager>>) -> Json<Status> {
-    manager.refresh().await;
+    manager.schedule_refresh();
     Json(manager.status())
-}
-async fn install(
-    RouteState(manager): RouteState<Arc<Manager>>,
-    Json(request): Json<InstallRequest>,
-) -> Result<Json<Status>, Error> {
-    manager.install(&request.executable).await?;
-    manager.refresh().await;
-    Ok(Json(manager.status()))
 }
 async fn live(
     RouteState(manager): RouteState<Arc<Manager>>,

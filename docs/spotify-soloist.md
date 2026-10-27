@@ -1,355 +1,230 @@
-# Experimental Spotify Soloist playback
+# Spotify playback on the independent Ambra Server
 
-## Ownership and compatibility
+Ambra Server owns Spotify authentication, catalog, library, playlists, availability,
+Connect integration, and lossy playback through librespot. Ambra's session controller
+owns the queue, position, history, and track transitions. Optional Soloist renders only
+the selected track with `--single-track`; its events verify rendering and never own the queue.
 
-The Spotify provider continues to own catalog, OAuth, playlists, library operations, and
-librespot file playback. `session.rs` remains the sole queue and transport authority.
-Soloist is an optional audio renderer: each requested track gets a `--single-track` run.
-Spotify Connect queue events are observations only and never modify the Ambra queue.
-Pairing uses a separate, finite `--pair` process, not a persistent Connect player.
+Desktop and mobile remain independent clients. Neither client bundles, starts, hosts,
+installs, or updates Ambra Server or Soloist. Local music continues without a server.
+Install and start [Ambra Server separately](cross-device-playback.md), then connect clients.
+Spotify administration is available only on the server machine through its CLI/local API.
+Paired remote clients receive sanitized status and existing server streams.
 
-Existing settings without Soloist configuration continue to use librespot. The new
-configuration is stored separately from server pairing settings and Spotify credentials.
-Rolling back means selecting librespot or running an older Ambra version; existing
-credentials, native playlists, library data, queue, and listening history remain intact.
-Older output clients lack the live PCM capability and cannot be selected for Soloist
-unless the administrator explicitly permits librespot fallback before track startup.
-No fallback occurs after a Soloist stream has begun.
+## Automatic quality
 
-## Audio boundary
+After `ambra-server login spotify`, playback requests **High** through librespot
+(160 kbps preferred). No Soloist executable, API key, pairing, or consent is required.
+The legacy `AMBRA_SPOTIFY_QUALITY` override no longer controls this automatic policy.
+Existing internal lossy tiers remain available to other callers.
 
-Linux uses a private classic PulseAudio daemon without physical-device modules. Soloist
-gets private PulseAudio and PipeWire runtime paths; an observed sink input with its PID
-must appear on the private sink before capture is released. A fresh sink and FIFO are
-created for every run. Capture is signed 32-bit little-endian PCM, 44,100 Hz, stereo.
-There is no silence-based track detection or silence trimming. Playback events, process
-exit, and delivered frame counts determine boundaries. An unexpected track is an error.
+Lossless becomes preferred automatically when lossless support is enabled, a compatible
+unexpired binary is installed, the key and matching paired Spotify account are present,
+the capture backend is available, and the development forwarding gate permits playback.
+Installing, downloading, unpaired, expired, incompatible, or failed capture states use High.
+A valid existing build remains usable while its replacement downloads.
 
-The live transport uses an explicitly framed PCM HTTP body, without Content-Length or
-byte ranges. This preserves all captured bits without an encoder subprocess or extra
-codec dependency. At 352,800 bytes/s (2.8224 Mbit/s) it costs more bandwidth than FLAC.
-FLAC is suitable for future bandwidth optimization but is unnecessary for this initial
-single-output LAN experiment. Stream IDs are unique, single-consumer, and bound to a
-session generation. Seeking, recovery, and output handoff create new streams. EOF is
-explicit; a dropped connection is an error, not a successful end of track.
+The renderer stays pinned during an active stream. Capability improvements apply at the
+next track or playback initialization boundary, including seek, resume, and output restart.
+Outputs without live PCM support use librespot. While optional lossless is enabled,
+Spotify tracks are not speculatively preloaded, so the server can select quality at each
+track boundary. Ordinary playback retains preloading when lossless support is disabled.
 
-The desktop decoder feeds PCM through the existing output, volume, and DSP path.
-Requested quality and capture format are separate. The public Soloist API does not
-verify Spotify's original codec or bit depth. S32LE capture is not evidence of a 24-bit
-FLAC source.
+A live load or capture failure stops the old renderer and retries through the existing
+session using librespot and the saved position. This preserves the generation, queue,
+and history count. The server never splices a second renderer into the existing PCM body.
+The next track can use Soloist again after capability recovers. Capability is rechecked
+approximately every 30 seconds; network maintenance has its own daily limit. A failed
+capture keeps the reported preference at High until a subsequent initialization verifies
+capture successfully. A binary inspection alone cannot restore the Lossless claim.
 
-## Permission boundary
+`GET /api/spotify/playback/status` exposes `preferredQuality`, `effectiveRenderer`, and
+`effectiveQuality`. The legacy `backend` field now describes the preferred renderer,
+not a user setting. `effectiveRenderer` is null when no Spotify output is selected.
+The session's `audioQuality` reports the actual renderer and requested quality.
+Captured S32LE PCM does **not** prove Spotify delivered 24-bit or even lossless source audio;
+`sourceFormatVerified` remains false.
 
-Spotify documents playback on the device running Soloist. It does not document permission
-for server-to-remote-client PCM redistribution. Ambra therefore does not enable Spotify
-audio forwarding in release builds. Local development requires all three: a debug build,
-the `experimental-soloist-forwarding` Cargo feature, and the runtime environment variable
-`AMBRA_EXPERIMENTAL_SOLOIST_FORWARDING=1`. This is a development experiment, not evidence
-of distribution permission. No Soloist executable or API key is bundled or downloaded.
+## Optional server setup and consent
 
-## Setup
-
-Use a Spotify Premium account with access to Soloist and the desired quality tier. Obtain
-the executable and a personal API key directly from Spotify. Ambra does not generate keys,
-download builds, or bypass account or regional restrictions.
-
-1. Start Ambra Server and sign in to Spotify normally. In a terminal on the server,
-   `ambra-server login spotify` completes librespot login first, then offers optional
-   Soloist setup. Noninteractive login leaves Soloist setup to a later command.
-2. In **Settings → Services → Spotify playback** on the server machine, choose Soloist.
-   Enter the executable's absolute server path, or leave it empty to locate `soloist`
-   on the server's PATH. Executables must be native, executable, and not group/world writable.
-3. Enter the personal key in the password field and save. The key is never returned by
-   status or settings APIs. On Unix, Ambra uses private directories and mode-0600 files;
-   Windows uses the current user's application-data directory and its inherited ACLs.
-4. Choose **Pair through Spotify**. Open the official Spotify app on the same network,
-   using the account already connected to Ambra, and select **Ambra Soloist Pairing**.
-   Pairing has a five-minute deadline. Check status until pairing is saved.
-5. Select quality, save, and choose an updated Ambra desktop app as the shared output.
-   The default quality ceiling is Lossless. Actual source quality can be lower.
-
-Equivalent commands, run on the server machine with the server already running:
+Run these commands in a terminal on the independently running server:
 
 ```sh
 ambra-server login spotify
-ambra-server spotify soloist install /absolute/path/to/soloist
+ambra-server spotify soloist setup
+ambra-server spotify status
 ambra-server spotify soloist key
 ambra-server spotify soloist pair
-ambra-server spotify status
-ambra-server spotify backend soloist
 ```
 
-The key command reads a hidden terminal prompt. Never put the key in shell arguments,
-environment variables, screenshots, or bug reports. Soloist itself requires the key in
-its child-process arguments; same-user process inspection can therefore see it. Ambra
-does not print commands or retain raw third-party logs. Only fixed, classified errors
-survive log processing.
+`setup` explains direct downloads and automatic maintenance, links Spotify's conditions,
+and requests explicit consent. Declining leaves ordinary High playback available. After
+consent, installation runs in the background. Enter your personal key through the hidden
+prompt; `key` also supports entering it later. Once status shows installation complete,
+run `pair`. Open the official Spotify application on the same network, using the same
+Spotify account, and select **Ambra Soloist Pairing**. Pairing has a five-minute deadline.
+No backend or quality switch follows pairing.
 
-Administration is limited to the server machine through the existing `/api/local/`
-protections. Paired remote clients can read sanitized `/api/spotify/playback/status`.
-Pairing tokens do not grant permission to configure an executable or key. For a headless
-Linux server, use its CLI for key entry, installation, pairing, and backend selection;
-quality/fallback can also be configured through its local settings API.
-
-To run the development experiment on Linux:
+Other commands:
 
 ```sh
-# Debian/Ubuntu example; run the server as an ordinary user, not root.
-sudo apt-get install pulseaudio pulseaudio-utils
-cargo build --manifest-path server/Cargo.toml --features experimental-soloist-forwarding
-AMBRA_EXPERIMENTAL_SOLOIST_FORWARDING=1 server/target/debug/ambra-server serve
+ambra-server spotify soloist check       # Inspect current capability and maintenance state
+ambra-server spotify soloist reset       # Remove pairing; retain personal key
+ambra-server spotify soloist sign-out    # Remove pairing/key; disable optional lossless
+ambra-server spotify soloist disable     # Disable lossless and revoke future download consent
 ```
 
-Stop any existing server first. If Cargo uses a shared target directory, use the executable
-path reported by Cargo instead. Keep configuration/data/cache environment overrides
-consistent between the foreground server and CLI. A long or whitespace-containing Linux
-cache path is rejected because PulseAudio module arguments and Unix sockets have path
-limits; use a private short `AMBRA_CACHE_DIR` if needed. The opt-in enables a development
-experiment only. Establish permission before distributing any audio-forwarding integration.
+There is no manual executable path, install, refresh, quality, or backend command/API.
+Legacy settings import the configured executable into managed storage when validation
+succeeds. The original executable remains untouched. Old backend selection migrates to
+lossless enablement, but **never** grants download consent. Keys, sessions, playlists,
+and listening history remain in their existing stores. Failed imports retain their
+migration path and diagnostic for retry. A compatible previous managed build can be
+restored automatically; expired builds cannot become usable through rollback.
 
-## Lifecycle, controls, and recovery
+## Binary lifecycle and security
 
-One manager serializes configuration changes and process ownership. A file lease excludes
-overlapping Ambra sessions using the same pairing directory. Each stream owns a fresh
-private sink, FIFO, process group, loopback WebSocket connection, and cancellation token.
-Startup requires a matching track event, authenticated session, confirmed seek (when
-requested), unity volume, and the Soloist PID as the only private sink input. The sink
-must be stereo at 44,100 Hz; other input rates are rejected to avoid hidden resampling.
+The server downloads only from Spotify's official HTTPS CDN, after consent. Current
+archives are `soloist_release_x86_64.tar.gz`, `soloist_release_arm64.tar.gz`, and
+`soloist_release_arm32.tar.gz` for Linux, `soloist_release_osx_arm64.tar.gz` for macOS,
+and `soloist_release_windows_x86_64.zip` for Windows. On 2026-10-27, all five downloaded
+archives contained **1.3.10.20**, build timestamp **1793102484**. The native macOS executable
+reported `soloist 1.3.10.20 build 1793102484 (20261027) (g19412df6ea) (macos/aarch64)`.
+Its `--help` retains Ambra's required options, including `--initial-volume`. All five
+executables retain the six managed audio preference keys. This is binary/CLI evidence;
+it does not establish real-account lossless delivery. No executable is bundled in Ambra
+artifacts or mirrored by Ambra.
 
-The WebSocket client reconnects with bounded backoff, queries playback after authenticated
-connection, limits frame sizes, and distinguishes command acknowledgements from observed
-playback changes. It implements local play/pause/seek/skip/volume/shuffle/repeat/activation
-commands. The queue-driven renderer uses only the subset needed for one requested track.
-It never activates a persistent Connect queue as a second authority.
+Startup inspects the installed build. Network checks start at build age 76 days and
+repeat approximately every 24 hours. Builds expire at 90 days; exit code 10 also requests
+an immediate refresh attempt. Conditional ETag requests avoid repeated downloads.
+Failed attempts are throttled, persisted, and reported without replacing a usable build.
 
-Ambra pause cancels the renderer and pauses the selected output. Resume starts a new
-single-track run at the server's saved position. Seek also starts a new run, with its
-sink suspended until the seek is confirmed. Output handoff and output process restart
-replace the stream. Unique stream IDs and session generations reject stale events;
-history remains keyed by the canonical track and existing generation. Soloist never
-speculatively preloads the next Spotify track. These operations can have audible startup
-gaps; this integration does not promise gapless playback or multiroom synchronization.
+Installation uses a separate cross-process update lease, private staging directories,
+bounded HTTPS requests, trusted redirects restricted to the official CDN host, and
+128 MiB compressed/256 MiB expanded limits. Extraction rejects traversal, absolute paths,
+symlinks, hard links, special entries, duplicate executables, oversized metadata, and
+unsupported archive extensions. It validates native CPU/executable identity before running
+bounded `--version` and `--help` probes. Unknown preference/API families fail closed.
 
-Before startup, the suspended sink's pipe is drained at an explicit lifecycle boundary.
-After startup, samples are never trimmed based on amplitude. Buffering pauses capture
-demand; reads are paced slightly above real time, with a bounded burst. Full HTTP buffers
-suspend the private sink instead of dropping samples. A stalled consumer fails after ten
-seconds; source startup/buffering has a thirty-second deadline. Unexpected track changes,
-lost authentication, capture failure, and partial tracks produce errors rather than
-advancing the shared queue as if playback completed successfully.
+The compatibility contract accepts the known Soloist **1.3.7.*** and **1.3.10.*** families
+and required CLI options. The current 1.3.10.20 build uses the same preference keys as
+the original 1.3.7 integration. Versions must have four numeric components. Unknown
+families and changed CLI options fail closed before promotion. New patch builds within
+these families may install automatically. A new family requires Ambra compatibility
+verification; the last compatible build remains installed if validation fails.
+The WebSocket parser also rejects failed authentication, mismatched tracks, and missing
+playback confirmations at runtime.
 
-Up to three startup restarts use 1/2/4-second backoff, only for process failures before
-audio delivery. Once samples have been delivered, recovery requires an explicit playback
-retry; Ambra never silently replays or changes backend mid-track. Fallback defaults to
-**Report the error**. **Use librespot before starting the track** permits fallback only
-when Soloist readiness fails before a live load begins, including unsupported outputs.
-The session's `audioQuality.playbackBackend` reports the renderer actually selected.
+Validated binaries live at `soloist/bin/<sha256>/soloist[.exe]` under the server data root.
+An atomic `managed.json` pointer retains current and previous versions. Running renderers
+keep their immutable binary path; updates never stop them. Failed validation or promotion
+preserves the old pointer. Interrupted staging is cleaned under the update lease.
 
-Stop, cancellation, output disconnection, server shutdown, sign-out, and backend changes
-terminate owned children. Unix shutdown sends TERM, waits two seconds, then kills the
-process group if needed. Linux children also receive SIGKILL when their parent dies.
-Stale capture directories and WebSocket discovery files are removed under the lease.
-The next request creates a new sink after capture failure; audio is not spliced into an
-already interrupted stream.
+`spotify-playback.json`, `soloist/api-key`, and `soloist/session/` use the server config
+root. Audio/cache and private capture use the server cache root. Existing `AMBRA_CONFIG_DIR`,
+`AMBRA_DATA_DIR`, and `AMBRA_CACHE_DIR` overrides apply. Unix files/directories are private;
+Windows uses the user's application-data ACLs. Credentials are separate from binaries.
+The key is never serialized into status or logs. Soloist requires the key in process
+arguments, so same-user process inspection can see it; Ambra never logs those arguments.
 
-## Pairing, storage, and refresh
+## Capture and transport coverage
 
-Storage follows Ambra's existing roots (`AMBRA_CONFIG_DIR`, `AMBRA_DATA_DIR`, and
-`AMBRA_CACHE_DIR` overrides apply):
+Linux retains its private PulseAudio daemon, isolated sink/FIFO, verified Soloist PID,
+unity gain, S32LE stereo at 44,100 Hz, bounded transport, and cleanup. The private daemon
+loads no physical audio modules. Soloist receives private PulseAudio and disabled host
+PipeWire routing variables; stream startup verifies the actual sink input. PipeWire hosts
+still need classic `pulseaudio` and `pactl` installed. Short paths without whitespace are
+required for PulseAudio module/socket arguments. No physical audio hardware is required.
 
-- Config: `spotify-playback.json`, `soloist/api-key`, and `soloist/session/`.
-- Data: versioned `soloist/bin/<sha256>/soloist` and `soloist/session.lock`.
-- Cache: `soloist/audio/` (Soloist's bounded 512 MB cache) and temporary `soloist/capture/`.
+macOS Apple Silicon uses Core Audio process taps on macOS 14.2 or newer. A process-specific
+`CATapDescription` with `CATapMuted` suppresses physical output while preserving tap audio.
+Soloist starts at volume zero; the server installs the tap before requesting unity volume.
+A private aggregate device and lightweight I/O callback feed a bounded atomic ring.
+Native Float32 or Int32 converts to the existing S32LE stereo transport. Unsupported rates
+fail rather than silently resample. The server embeds its audio recording usage description;
+grant system audio recording permission to the server's launching application when prompted.
+Missing permission, headless audio sessions, device changes, or overflow cause controlled fallback.
+Core Audio cannot pause the renderer through a tap; bounded overflow fails without dropping samples.
 
-Normal restarts retain key and pairing. Where Soloist's stored account directory can be
-compared with librespot's canonical username, Ambra rejects mismatched or ambiguous
-accounts. This is a local stored-session check, not a separate Spotify identity API.
-**Reset pairing** removes Soloist's saved session but retains its key. **Sign out Soloist**
-removes both and selects librespot. Disconnecting Spotify through Services first records
-the deliberate disconnect, then stops Soloist and removes its authentication state.
-It follows existing service cleanup rules without deleting native Ambra playlists.
+Windows x86-64 includes native WASAPI process-tree loopback using
+`ActivateAudioInterfaceAsync`, `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`,
+`PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE`, `IAudioClient`, and `IAudioCaptureClient`.
+The implementation negotiates Float32 stereo at 44,100 Hz, converts to S32LE, bounds its
+queue, and cleans up COM resources. It requires Windows build 20348 or newer and an audio session.
+**Windows lossless remains disabled:** process loopback does not suppress physical rendering,
+and Soloist exposes no supported silent WASAPI output route. Session muting cannot be assumed
+to preserve captured PCM; muting the global endpoint would affect unrelated audio. The server
+fails before launching Soloist and uses High. This is an unresolved platform requirement.
+No third-party virtual drivers or global audio changes are introduced.
 
-Startup and optional daily checks inspect `soloist --version`, parse the build epoch,
-and report refresh due after 76 days and expiration after 90 days. Exit code 10 is also
-an expiration error. Checks inspect the installed executable; they do not query or
-download a remote release. Automatic downloads remain unsupported until a permitted
-distribution method and explicit consent flow are established.
+All capture implementations remain under `server/src/soloist/capture/`. The shared interface
+covers initialization, process targeting, route verification, bounded reads, cancellation,
+and cleanup. The framed PCM protocol remains unchanged: S32LE 44,100 Hz stereo, bounded
+32 KiB frames, explicit END/error, one authorized output consumer, no range seeking or recording.
+Other client outputs retain their existing lossy transport. Client volume and DSP remain local.
 
-Download a new build from Spotify, pause playback, then use **Install / refresh binary**
-or `ambra-server spotify soloist install /absolute/path/to/new/soloist`. Ambra validates
-the staged copy, flushes it, moves it into a digest directory, and atomically changes
-the configured path. A running playback/pairing process blocks installation. Key and
-session directories are separate and survive refresh. Failed validation/save leaves
-the old configured executable available. Earlier digest directories remain available
-for rollback: select their absolute executable path in local settings. An expired build
-cannot be restored to usable playback merely by selecting it.
+## Distribution and forwarding restrictions
 
-## Transport and platform limits
+Spotify's downloads page prohibits redistributing Soloist archives/binaries. Ambra instead
+links the official page and performs an administrator-consented direct download from Spotify.
+This does not establish permission to forward Spotify PCM to remote clients. Review the
+[Developer Terms](https://developer.spotify.com/terms) and
+[Developer Policy](https://developer.spotify.com/policy) before distribution or commercial use.
 
-`shared/live_pcm.rs` specifies the protocol: magic/version, bounded JSON stream metadata,
-then length-prefixed aligned PCM frames (maximum 32 KiB), explicit END, or bounded error.
-Timestamps and start position are in metadata; sample counts give subsequent offsets.
-The server queue has eight frames (at most 256 KiB of audio); the desktop HTTP reader has
-two bounded chunks, followed by the existing bounded audio engine buffers. There is no
-disk recording, offline export, fake content length, or byte-range seek. Dropping a body
-cancels its producer. A stream allows one consumer and is bound to the selected endpoint;
-other paired devices cannot take its audio URL. Host-local access remains trusted under
-Ambra's existing policy. Use the existing protected/trusted LAN model; this change does
-not add TLS to Ambra's HTTP connections.
+The existing forwarding gate remains intact. Distributable/release builds always use High
+through librespot. Only a debug development server built with
+`--features experimental-soloist-forwarding` **and** started with
+`AMBRA_EXPERIMENTAL_SOLOIST_FORWARDING=1` can attempt Soloist forwarding. Neither consent
+nor a client setting bypasses this gate. The restriction does not disable librespot,
+Qobuz, Tidal, local music, catalog access, or other server features.
 
-Linux capture is implemented for official Soloist Linux CPU targets. The Linux implementation
-has **not been exercised on a Linux host or real Soloist account during this change**.
-macOS Apple Silicon and Windows x86-64 have binary/version management and pairing code,
-but Core Audio process taps and WASAPI application loopback capture are not implemented.
-Other Soloist platforms/architectures are rejected. Updated desktop clients implement
-the PCM decoder; mobile/browser outputs do not advertise the capability and receive an
-unsupported-output error unless pre-start librespot fallback is explicitly selected.
+## Verification
 
-## Automated verification
-
-Run without Spotify credentials:
+Account-free tests cover automatic quality, stream pinning, controlled fallback, history,
+consent/migration, archive validation, expiry/exit 10, compatibility, rollback, process
+ownership, authorization, and bounded PCM. Native macOS callback tests cover conversion,
+channel layouts, alignment, and overflow. Windows code is cross-checked for compilation;
+this is not a Windows playback test. Linux parser tests also run on macOS.
 
 ```sh
 cargo test --manifest-path server/Cargo.toml
 cargo test --manifest-path server/Cargo.toml --features experimental-soloist-forwarding
-cargo clippy --manifest-path server/Cargo.toml --all-targets --features experimental-soloist-forwarding
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
-bun install --cwd mobile --frozen-lockfile
-bun test desktop/tests
+bun run --cwd desktop test
+bun run --cwd mobile test
 bun run --cwd desktop build
 ```
 
-Desktop distributions contain only the client. The server is built and distributed separately.
-Native fixture tests require a C compiler (`cc`). Fixtures simulate version, pairing persistence,
-invalid keys, and expiration without Spotify. Mock WebSockets test acknowledgements
-separately from asynchronous events. HTTP tests exercise fragmented delivery, precise
-PCM conversion, and missing END. Session tests exercise stale reports and history across
-pause/resume/seek/skip. None of these prove real Spotify playback or physical isolation.
+Client source/build regression guards live in `desktop/tests/serverBoundary.test.ts`.
+`scripts/check-client-package.py` inspects desktop bundles/installers and mobile APK/AAB/IPA
+contents for server/Soloist executables. Release CI runs the desktop package check and
+builds the standalone server separately.
 
-On Linux, run the ignored synthetic capture smoke test before real-account testing:
+The download pipeline tests install and upgrade native fixtures through both tar and ZIP
+responses, configure global/per-user preferences, preserve credentials and the previous
+build, and reject unknown versions, missing startup controls, expired builds, and downgrades.
+A separate opt-in smoke test exercises the official CDN without credentials or pairing:
+
+```sh
+cargo test --manifest-path server/Cargo.toml official_cdn_installs_and_rechecks_without_credentials -- --ignored
+```
+
+The ignored Linux synthetic test requires PulseAudio tools and a Linux host:
 
 ```sh
 cargo test --manifest-path server/Cargo.toml linux_private_sink_captures_synthetic_pcm_without_hardware -- --ignored --nocapture
 ```
 
-It creates synthetic PCM, routes `paplay` through the private sink, checks the process
-identity/sample format/unity gain, reads nonzero PCM, and tears down the resources.
-It does not record Spotify audio or claim original source bit depth.
+Real-account playback, physical speaker silence, unrelated-audio isolation, long-run memory,
+permission prompts, device changes, and network recovery require native integration tests.
+Do not claim those tests passed from fixture or compilation results. No native Spotify
+playback has been physically verified during this implementation.
 
-## Manual Linux integration test (required before claiming working capture)
-
-Use a user-installed supported Soloist build, Premium account, official Spotify app,
-and an updated desktop output. Keep the server's speakers muted initially. Do not save
-Spotify PCM to a file. Record results and timings as text, never credentials or audio.
-
-1. Run the synthetic test, then start the gated debug server and complete pairing above.
-   Restart the server and verify pairing persists. Verify lossless requested and S32LE
-   44,100 Hz stereo appear separately from the unknown original source format.
-2. Before playback, note host `pactl list short sink-inputs` (and `wpctl status` if the
-   host uses PipeWire). During playback, use the capture directory's `native` socket:
-   `pactl --server=unix:/absolute/capture/runtime/native --format=json list sinks` and
-   `list sink-inputs`. Expect one `ambra` S32LE 2ch 44100Hz sink and one Soloist PID input,
-   unmuted at 65536 volume. Inspect `list modules`: no ALSA/hardware sink modules.
-   Compare host inputs again: Soloist must be absent. Only after these checks, carefully
-   verify the server's physical output remains silent while the selected client plays.
-   Stop immediately if routing differs; do not accept a PULSE environment variable alone
-   as evidence of isolation.
-3. Select a track through Ambra's queue. Measure time from command dispatch to the first
-   output report with `isPlaying=true`, `buffering=false`, and advancing `currentTime`.
-   Repeat five cold starts and five seeks; record median and maximum startup latency.
-   Check captured metadata, not a catalog badge, for the transport format. Source codec
-   or bit depth requires independent source evidence, which Soloist's public API lacks.
-4. Run for at least thirty minutes. Sample server/desktop RSS (`ps -o rss= -p <pid>`) and
-   buffering/position from `/api/session`; record maximum RSS and stall durations.
-   Include a track with an intentionally silent intro and outro. Verify silence remains
-   content, not a false end. Confirm one queue transition and one existing-rule history
-   count per played generation, including after a client reconnect.
-5. Exercise pause while buffering, resume, seek while buffering, rapid next/previous,
-   selected-output handoff, app close/reopen, and server restart. Verify old stream URLs
-   fail and late reports never advance the new track or resurrect paused playback.
-   Switch Spotify to Qobuz/Tidal/local content and back; verify no stale Spotify audio.
-6. Temporarily interrupt only the server's Internet connection while retaining the LAN.
-   Test a short interruption and one longer than thirty seconds. Record recovery delay,
-   buffering duration, and visible error. An interruption may fail the stream; an
-   explicit play retry must create a new stream at the saved position without another
-   history count. No mid-track silent fallback is allowed.
-7. Replace the key with an invalid one, reset/re-pair, test a mismatched Spotify account,
-   and disconnect Spotify while pairing and while playing. Verify children terminate,
-   key/session removal persists after restart, and native Ambra playlists remain intact.
-   Test missing PulseAudio, capture-daemon termination, and an expired official build if
-   available. Verify specific errors and other providers still work.
-8. Pause and install a newer official build. Verify saved pairing/key persist. Try an
-   invalid executable and verify the old path remains configured. Inspect status near
-   the expiration boundary using automated fixtures; do not change the host's clock.
-9. From an unpaired client, status/audio requests must fail. From a paired remote client,
-   status succeeds but `/api/local/spotify/...` fails. A different paired output must
-   not consume the selected output's live stream. A normal release build with the
-   runtime variable set must still report `forwardingEnabled: false`.
-
-Real-account capture, speaker isolation, latency, long-run memory, and network recovery
-measurements remain outstanding until this procedure runs on Linux. No verified Spotify
-24-bit FLAC source claim is made.
-
-## Change inventory and observed results
-
-New files:
-
-- `server/build.rs`: makes the development gate independent of release debug assertions.
-- `server/src/soloist/{mod,binary,config,process,control,prefs,capture,runtime,tests}.rs`:
-  configuration, lifecycle, local control, isolated capture, transport producer, and tests.
-- `server/tests/fixtures/soloist.c`: native account-free subprocess fixture.
-- `shared/live_pcm.rs`: shared framed PCM protocol and validation.
-- `desktop/src-tauri/src/native_audio/live.rs`: bounded HTTP reader and PCM decoder.
-- `desktop/src/api/spotifyPlayback.ts` and
-  `desktop/src/components/SpotifyPlaybackSettings.tsx`: setup and sanitized status.
-- `desktop/tests/soloistQuality.test.ts`: prevents capture precision becoming a source claim.
-- `docs/spotify-soloist.md`: architecture, setup, limitations, and verification procedure.
-
-Modified files:
-
-- `server/{Cargo.toml,Cargo.lock}` and `server/src/main.rs`: dependencies, experimental
-  feature, and module wiring.
-- `server/src/{api,access,network,cli,session,endpoints}.rs` and
-  `server/src/providers/spotify.rs`: lifecycle wiring, caller identity, setup, account
-  identity, live playback dispatch, and generation/history protection.
-- `desktop/src-tauri/{Cargo.toml,Cargo.lock}` and
-  `desktop/src-tauri/src/{lib,native_audio,remote_endpoint}.rs`, plus
-  `native_audio/decoder.rs`: shared protocol, live capability, decoding, and timeouts.
-- `desktop/src/components/{ServiceSettings.tsx,SettingsView.css}`,
-  `desktop/src/types/music.ts`, and `desktop/src/utils/audioQuality.ts`: existing settings
-  integration and accurate requested/captured quality display.
-- `docs/cross-device-playback.md`: integration link and distribution boundary.
-
-Observed on Apple Silicon macOS during implementation:
-
-- Server tests: 130 passed in both default and experimental-feature runs. One default
-  run hit the existing write-behind benchmark's fixed 400 ms wait during parallel builds;
-  the full default suite passed when rerun without that build contention.
-- Desktop Rust tests: 29 passed, using the missing-sidecar checkout override above.
-- Frontend tests: 31 passed after installing the existing mobile test dependencies.
-- TypeScript/Vite production build and server release build passed. The Vite build keeps
-  the existing large-chunk warning. Release server with both opt-ins still returned
-  `forwardingEnabled: false`, selected librespot by default, and shut down cleanly on SIGTERM.
-- The normal desktop build compiled and signed the macOS app, then failed in the DMG
-  packaging script. `bun run --cwd desktop tauri build --bundles app` passed separately,
-  including rebuilding the server sidecar. No installer was published.
-- Server/desktop Clippy completed with existing repository warnings. Newly added Soloist
-  modules and shared protocol pass rustfmt. Whole-project formatting checks still report
-  existing formatting differences, also reproduced against unmodified HEAD files.
-- Diff whitespace and sensitive-file checks passed, including a separate scan of new files.
-
-These are software/fixture results on macOS. The Linux-only smoke test, real-account pairing
-and playback, native Windows management, and Linux measurement procedure have not run here.
-
-## References
-
-- [Spotify Soloist documentation](https://developer.spotify.com/documentation/soloist)
-- [Authentication](https://developer.spotify.com/documentation/soloist/concepts/authentication)
-- [WebSocket API](https://developer.spotify.com/documentation/soloist/reference/websocket-api)
-- [Downloads and updates](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates)
-- [Music Assistant Soloist architecture](https://github.com/music-assistant/server/tree/dev/music_assistant/providers/spotify_connect/soloist)
-- [Music Assistant provider backend](https://github.com/music-assistant/server/tree/dev/music_assistant/providers/spotify/backends)
-
-Music Assistant is an architectural reference (Apache-2.0). Ambra's Rust integration is
-independently written; it does not import Python code. Undocumented Spotify preferences
-are isolated in `server/src/soloist/prefs.rs` and limited to tested version families.
+References: [Spotify Soloist](https://developer.spotify.com/documentation/soloist),
+[downloads](https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates),
+[CLI](https://developer.spotify.com/documentation/soloist/reference/command-line),
+[Music Assistant](https://github.com/music-assistant/server/tree/dev/music_assistant/providers/spotify_connect/soloist),
+[private PulseAudio reference](https://github.com/music-assistant/server/blob/dev/music_assistant/helpers/pulse_capture.py),
+[Microsoft process loopback sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/),
+[Apple process taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps).

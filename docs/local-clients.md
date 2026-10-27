@@ -86,8 +86,7 @@ this migration cannot reconstruct deleted playlists.
 ## Server administration
 
 All hosting, network settings, QR generation, approval, denial, revocation, and provider
-administration run through `ambra-server`. Existing commands remain. Additional provider
-controls include:
+administration run through `ambra-server`. Provider controls include:
 
 ```sh
 ambra-server login spotify
@@ -97,13 +96,15 @@ ambra-server login complete tidal
 ambra-server login complete qobuz
 ambra-server logout spotify
 ambra-server services status
-ambra-server spotify soloist quality lossless
-ambra-server spotify soloist checks on
-ambra-server spotify soloist fallback never
-ambra-server spotify soloist executable /absolute/path/to/soloist
+ambra-server spotify soloist setup
+ambra-server spotify soloist key
+ambra-server spotify soloist pair
+ambra-server spotify status
 ```
 
-Callback URLs and Soloist API keys use hidden terminal input. Clients display sanitized status.
+Callback URLs and Soloist API keys use hidden terminal input. Soloist setup requests consent
+for automatic server-managed downloads and updates. Quality selection is automatic; see
+[Spotify setup and platform limits](spotify-soloist.md). Clients display sanitized status.
 Provider administration requests, including legacy auth paths, are rejected over encrypted
 client connections. The server retains its existing cryptographic identity and authorization.
 Release CI builds the server as a separate downloadable executable after verifying that the

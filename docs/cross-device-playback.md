@@ -9,10 +9,12 @@ output. Mobile's Server tab retains the existing shared player; Local music uses
 Choosing another shared output moves the server's song and position there. This supports one
 selected shared output, rather than synchronized playback across several outputs at once.
 
-Spotify keeps librespot as its default backend. The optional, experimental Soloist backend
-runs on the server and can provide isolated Linux PCM capture to an updated desktop output.
-Audio forwarding is disabled in distributable builds. See [Soloist setup and verification](spotify-soloist.md)
-for the development gate, platform limits, pairing, and manual Linux test procedure.
+Spotify uses librespot for its primary integration and automatic High playback. Optional
+server-owned Soloist rendering automatically prefers Lossless when ready. Linux private
+PulseAudio capture and macOS process taps are implemented; Windows capture remains disabled
+until silent rendering is supported. Audio forwarding stays disabled in distributable builds.
+See [Soloist setup and verification](spotify-soloist.md) for consent, automatic downloads,
+updates, platform limitations, and tests. Clients contain no Soloist administration.
 
 Opening the app restores local settings, playlists, and playback first. A saved pairing reconnects
 in the background through the Rust connection manager. An unavailable server leaves the local

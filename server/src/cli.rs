@@ -36,14 +36,10 @@ USAGE:
     ambra-server logout spotify|tidal|qobuz    Remove a server provider account
     ambra-server services status               Provider connection status
     ambra-server spotify status                Sanitized playback backend status
-    ambra-server spotify backend librespot|soloist
+    ambra-server spotify soloist setup       Consent to automatic downloads and updates
     ambra-server spotify soloist pair|reset|check|sign-out
-    ambra-server spotify soloist key           Enter a personal API key without echo
-    ambra-server spotify soloist quality normal|high|very_high|lossless
-    ambra-server spotify soloist checks on|off
-    ambra-server spotify soloist fallback never|librespot_before_start
-    ambra-server spotify soloist executable <absolute-path>
-    ambra-server spotify soloist install <absolute-path>
+    ambra-server spotify soloist key         Enter a personal API key without echo
+    ambra-server spotify soloist disable     Disable optional lossless support
     ambra-server help                          This message
 
 The server shares itself with the local network by default (`config set bind lan`).
@@ -118,19 +114,16 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
         },
         ["logout", provider @ ("spotify" | "tidal" | "qobuz")] => pretty(local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?),
         ["services", "status"] => pretty(local("GET", "/api/auth/status", None).await?),
-        ["spotify", "soloist", "quality", quality @ ("normal" | "high" | "very_high" | "lossless")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "quality": quality }))).await?),
-        ["spotify", "soloist", "checks", enabled @ ("on" | "off")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "updateChecks": *enabled == "on" }))).await?),
-        ["spotify", "soloist", "fallback", fallback @ ("never" | "librespot_before_start")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "fallback": fallback }))).await?),
-        ["spotify", "soloist", "executable", path] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "executable": path }))).await?),
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
-        ["spotify", "backend", backend @ ("librespot" | "soloist")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "backend": backend }))).await?),
+        ["spotify", "soloist", "setup"] => setup_soloist().await,
+        ["spotify", "soloist", "disable"] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": false, "downloadConsent": false}))).await?),
         ["spotify", "soloist", action @ ("pair" | "reset" | "check" | "sign-out")] => pretty(local("POST", &format!("/api/local/spotify/soloist/{action}"), None).await?),
         ["spotify", "soloist", "key"] => {
             let key = rpassword::prompt_password("Personal Soloist API key (hidden): ").map_err(|_| "Could not read the key securely from the terminal")?;
             local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
             Ok("Soloist API key saved on the server.".into())
         }
-        ["spotify", "soloist", "install", path] => pretty(local("POST", "/api/local/spotify/soloist/install", Some(json!({ "executable": path }))).await?),
+
         ["stop"] => { local("POST", "/api/local/stop", None).await?; Ok("Ambra server is stopping.".into()) }
         ["config"] | ["config", "show"] => config_show().await,
         ["config", "set", "bind", address] => config_set(json!({ "bind": address })).await,
@@ -165,25 +158,33 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
 fn pretty(value: Value) -> Result<String, String> { serde_json::to_string_pretty(&value).map_err(|e| e.to_string()) }
 
 async fn login_spotify() -> Result<String, String> {
-    use std::io::{IsTerminal, Write};
-    println!("Signing in to Spotify through librespot. Complete the browser login on the server machine.");
+    println!("Signing in through librespot. Complete browser login on the server machine.");
     local("POST", "/api/auth/spotify/start", None).await?;
-    if !std::io::stdin().is_terminal() { return Ok("Spotify connected with librespot. Use `ambra-server spotify backend soloist` to opt into optional Soloist setup.".into()); }
-    print!("Also configure Soloist for experimental lossless playback? [y/N] ");
+    Ok("Spotify connected. High quality is automatic. Optional lossless setup: ambra-server spotify soloist setup".into())
+}
+
+async fn setup_soloist() -> Result<String, String> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err("Run Soloist setup in a terminal on the server to grant download and update consent".into());
+    }
+    println!("Optional Soloist lossless support downloads Spotify's executable directly to this independent server and maintains automatic updates. Never redistribute that executable.");
+    println!("Review Spotify's conditions: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates");
+    println!("Release builds retain the Spotify PCM forwarding restriction. Regular High playback remains available.");
+    print!("Consent to server-managed Soloist downloads and automatic updates? [y/N] ");
     std::io::stdout().flush().map_err(|e| e.to_string())?;
-    let mut answer = String::new(); std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") { return Ok("Spotify connected with librespot.".into()); }
-    local("POST", "/api/local/spotify/playback", Some(json!({ "backend": "soloist" }))).await?;
-    println!("Install your own Soloist executable: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates");
-    println!("Generate a personal key: https://developer.spotify.com/dashboard/soloist");
-    println!("Audio capture currently requires Linux. Release builds do not forward Spotify audio.");
-    let key = rpassword::prompt_password("Personal Soloist API key (hidden; leave empty to finish later): ").map_err(|_| "Could not read the key securely from the terminal")?;
-    if key.trim().is_empty() { return Ok("Soloist selected. Run `ambra-server spotify soloist key`.".into()); }
-    local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
-    let status = local("GET", "/api/spotify/playback/status", None).await?;
-    if status["state"] == "not_installed" { return Ok("Key saved. Install Soloist, then run `ambra-server spotify soloist install /absolute/path/to/soloist` and `ambra-server spotify soloist pair`.".into()); }
-    local("POST", "/api/local/spotify/soloist/pair", None).await?;
-    Ok("Open the official Spotify app on the same network. Select Ambra Soloist Pairing with the same account. Check `ambra-server spotify status`.".into())
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+        return Ok("No consent granted. Spotify continues at High through librespot.".into());
+    }
+    local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": true, "downloadConsent": true}))).await?;
+    println!("Automatic installation started. Generate your personal key: https://developer.spotify.com/dashboard/soloist");
+    let key = rpassword::prompt_password("Personal Soloist API key (hidden; empty to enter later): ").map_err(|_| "Could not read the key securely")?;
+    if !key.trim().is_empty() {
+        local("POST", "/api/local/spotify/playback", Some(json!({"apiKey": key}))).await?;
+    }
+    Ok("Check `ambra-server spotify status`. When installed, run `ambra-server spotify soloist pair`, then select Ambra Soloist Pairing in Spotify with the same account. Lossless becomes preferred automatically when capture and forwarding are available; otherwise High continues.".into())
 }
 
 fn local_url(path: &str) -> String {
