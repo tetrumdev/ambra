@@ -4,7 +4,7 @@ import type { ServicePlaylistContents } from "../api/playlists";
 import type { Playlist } from "../types/music";
 import { normalizeCachedTracks } from "./libraryCache";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
-import { forStorage, fromStorage } from "../api/serverConnection";
+import { forStorage, fromStorage, serverCacheKey } from "../api/serverConnection";
 
 const CACHE_KEY = "ambra.service-playlists.v1";
 const SAVE_DELAY_MS = 1000;
@@ -87,7 +87,7 @@ export async function loadServicePlaylistCache(): Promise<ServicePlaylistCache |
   try {
     return parse(inDesktop()
       ? fromStorage(await invoke<string | null>("load_service_playlist_cache"))
-      : getPersistentItem(CACHE_KEY));
+      : fromStorage(getPersistentItem(serverCacheKey(CACHE_KEY))));
   } catch {
     return null;
   }
@@ -114,7 +114,7 @@ function flush() {
     return;
   }
   try {
-    setPersistentItem(CACHE_KEY, json);
+    setPersistentItem(serverCacheKey(CACHE_KEY), json);
   } catch {
     // A storage quota or privacy setting should not prevent playlist playback.
   }

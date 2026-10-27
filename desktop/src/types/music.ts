@@ -32,6 +32,8 @@ export type AudioQuality = {
 
 export type Track = {
   globalId: GlobalTrackId;
+  /** Verified owner of cached server metadata; absent for device files and legacy entries. */
+  serverIdentity?: string;
   provider: MusicProvider;
   providerTrackId: string;
   playbackKind: PlaybackKind;

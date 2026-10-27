@@ -3,12 +3,25 @@ import type { Track } from "../types/music";
 import { bindPlaylistTracks, removePlaylistTracks, reorderPlaylistTracks, unbindPlaylistTracks } from "../utils/playlists";
 import { addPlaylistTrack, emptyPlaylists, parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY, savePlaylistSnapshot, withPackages, type PlaylistSnapshot } from "../utils/playlistStorage";
 import { getPersistentItem } from "../utils/persistentStorage";
-import { subscribeServerState } from "../utils/serverState";
+import { getServerItem, setServerItem, subscribeServerState } from "../utils/serverState";
+
+import { subscribeLocalStorage } from "../utils/storageEvents";
+import { forStorage, fromStorage, serverConnection } from "../api/serverConnection";
+import { isDeviceTrack } from "../utils/nativeAudioSource";
+import { useClientConnection } from "./ClientConnectionContext";
 
 const storedPlaylists = () => getPersistentItem(PLAYLIST_STORAGE_KEY);
+const serverPlaylists = () => fromStorage(getServerItem(PLAYLIST_STORAGE_KEY));
+const writeSharedPlaylist = (key: string, value: string) => {
+  const snapshot = parsePlaylistSnapshot(value);
+  if (snapshot.tracks.some(isDeviceTrack)) {
+    throw new Error("Private local music must be explicitly imported before adding it to a server playlist.");
+  }
+  setServerItem(key, forStorage(value));
+};
 
-export function usePlaylists() {
-  const raw = useSyncExternalStore(subscribeServerState, storedPlaylists);
+function usePlaylistStore(remote: boolean) {
+  const raw = useSyncExternalStore(remote ? subscribeServerState : subscribeLocalStorage, remote ? serverPlaylists : storedPlaylists);
   const loaded = useMemo(() => {
     try {
       return { snapshot: parsePlaylistSnapshot(raw), error: null };
@@ -25,7 +38,7 @@ export function usePlaylists() {
     if (loaded.error) return false;
     try {
       // Save the complete membership + metadata change before confirming it in the UI.
-      const saved = savePlaylistSnapshot(next);
+      const saved = savePlaylistSnapshot(next, remote ? writeSharedPlaylist : undefined);
       current.current = saved;
       setError(null);
       return true;
@@ -103,5 +116,33 @@ export function usePlaylists() {
         orderedTrackIds,
       ),
     }),
+  };
+}
+
+/** Local playlists keep their IDs and storage. Shared playlists always write back to their server. */
+export function usePlaylists() {
+  const local = usePlaylistStore(false);
+  const remote = usePlaylistStore(true);
+  const { connected, sharedPlayback } = useClientConnection();
+  const prefix = `ambra-server-playlist:${serverConnection?.server?.publicKey ?? "unpaired"}:`;
+  const owner = (id: string) => id.startsWith(prefix) ? remote : local;
+  const original = (id: string) => id.startsWith(prefix) ? id.slice(prefix.length) : id;
+  const playlists = useMemo(() => [
+    ...(sharedPlayback ? [] : local.playlists),
+    ...(connected ? remote.playlists.map(playlist => ({ ...playlist, id: prefix + playlist.id, name: `${playlist.name} (Server)` })) : []),
+  ], [local.playlists, remote.playlists, connected, sharedPlayback, prefix]);
+  const tracks = useMemo(() => [...local.tracks, ...(connected ? remote.tracks : [])], [local.tracks, remote.tracks, connected]);
+  return {
+    playlists, tracks, error: local.error ?? (connected ? remote.error : null),
+    create: local.create, duplicate: local.duplicate,
+    replaceTracks: (id: string, replacements: Map<string, Track>) => owner(id).replaceTracks(original(id), replacements),
+    rename: (id: string, name: string) => owner(id).rename(original(id), name),
+    deletePlaylist: (id: string) => owner(id).deletePlaylist(original(id)),
+    addTrack: (id: string, track: Track) => owner(id).addTrack(original(id), track),
+    updateTrack: (track: Track) => local.updateTrack(track),
+    removeTracks: (id: string, ids: string[]) => owner(id).removeTracks(original(id), ids),
+    bindTracks: (id: string, ids: string[]) => owner(id).bindTracks(original(id), ids),
+    unbindTracks: (id: string, ids: string[]) => owner(id).unbindTracks(original(id), ids),
+    reorderTracks: (id: string, ids: string[]) => owner(id).reorderTracks(original(id), ids),
   };
 }

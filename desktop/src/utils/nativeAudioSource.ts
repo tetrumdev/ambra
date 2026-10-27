@@ -1,7 +1,13 @@
 import type { Track } from "../types/music";
 
+/** Tauri uses an HTTP asset origin on Windows and the asset scheme on macOS. Both are device files. */
+export function isDeviceTrack(track: Pick<Track, "provider" | "audio">) {
+  return track.provider === "local" && (track.audio.startsWith("asset:") || /^https?:\/\/asset\.localhost(?:\/|$)/.test(track.audio)
+    || !/^(https?:|\/api\/)/.test(track.audio));
+}
+
 export function nativeAudioSource(track: Track) {
-  if (track.provider === "local" && !/^https?:\/\//.test(track.audio)) return track.providerTrackId;
+  if (isDeviceTrack(track)) return track.providerTrackId;
   if (track.playbackKind === "dash") {
     return track.audio.replace(/\/manifest\.mpd(?=\?|$)/, "/playlist.m3u8");
   }

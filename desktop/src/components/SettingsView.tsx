@@ -1,3 +1,4 @@
+import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { useEffect, useState, type RefCallback, useSyncExternalStore } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
@@ -20,7 +21,9 @@ import { serverConnection } from "../api/serverConnection";
 
 /** Whether the server's core is playing on this output of this computer, or of `endpointId`. */
 function usePlayingOn() {
-  const core = useSyncExternalStore(subscribeCore, coreView);
+  const shared = useClientConnection().sharedPlayback;
+  const sharedCore = useSyncExternalStore(subscribeCore, coreView);
+  const core = shared ? sharedCore : null;
   return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
 }
 
@@ -225,20 +228,21 @@ function UpdateSettings() {
 
 /** Outputs on the other devices using this server, set up from here as on that device. */
 function RemoteOutputs({ active }: { active: boolean }) {
-  const endpoints = useEndpoints(active, true);
+  const { connected, sharedPlayback } = useClientConnection();
+  const endpoints = useEndpoints(active && connected && sharedPlayback, true);
   if (!endpoints.length) return null;
   return <>{endpoints.map(endpoint => <RemoteEndpointOutputs key={endpoint.id} endpoint={endpoint} />)}</>;
 }
 
 function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
-  const audio = useAudioSettings()!;
+  const [presets, setPresets] = useState<AudioSettings["presets"]>([]);
   const { playingOn } = usePlayingOn();
   const [outputs, setOutputs] = useState<OutputSettings[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const on = { endpointId: endpoint.id, endpointName: endpoint.name };
   const connected = new Set(["", ...endpoint.devices.map(device => device.id)]);
   const load = async () => {
-    try { setOutputs((await invokeOn<AudioSettings>(on, "native_audio_settings")).outputs); setError(null); }
+    try { const settings = await invokeOn<AudioSettings>(on, "native_audio_settings"); setOutputs(settings.outputs); setPresets(settings.presets); setError(null); }
     catch (reason) { setError(String(reason)); }
   };
   useEffect(() => { void load(); }, [endpoint.id]);
@@ -267,11 +271,11 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
           <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
           <Toggle label={`Show ${output.name} on ${endpoint.name} in player`} checked={output.enabled} onChange={enabled => void change(output, { enabled })} />
         </div>
-        <SettingRow label="DSP preset" hint="Presets are shared by every device">
+        <SettingRow label="DSP preset" hint={`Presets stored on ${endpoint.name}`}>
           <select aria-label={`DSP preset for ${output.name} on ${endpoint.name}`} value={output.presetId ?? ""}
             onChange={event => void change(output, { presetId: event.currentTarget.value || null })}>
             <option value="">None</option>
-            {audio.settings.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
+            {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
           </select>
         </SettingRow>
         <SettingRow label="Exclusive mode" hint="Bit-perfect, with no other sounds">

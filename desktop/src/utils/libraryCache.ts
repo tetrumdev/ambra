@@ -5,7 +5,7 @@ import {
   removePersistentItem,
   setPersistentItem,
 } from "./persistentStorage";
-import { forStorage, fromStorage } from "../api/serverConnection";
+import { forStorage, fromStorage, serverCacheKey } from "../api/serverConnection";
 
 const STREAMING_LIBRARY_CACHE_KEY = "ambra.streaming-library.v1";
 const STREAMING_CACHE_SAVE_DELAY_MS = 1000;
@@ -87,7 +87,7 @@ export function loadCachedServerTracks(): Track[] {
 
   try {
     return parseCachedServerTracks(
-      getPersistentItem(STREAMING_LIBRARY_CACHE_KEY),
+      fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY))),
     );
   } catch {
     return [];
@@ -113,12 +113,12 @@ async function desktopInvoke<T>(command: string, args?: Record<string, unknown>)
 export async function loadStreamingCache(): Promise<Track[]> {
   if (!inDesktop()) return [];
   let encoded = fromStorage(await desktopInvoke<string | null>("load_streaming_cache"));
-  const legacy = getPersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+  const legacy = fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY)));
   if (encoded === null && legacy !== null) {
     encoded = legacy;
     await desktopInvoke("save_streaming_cache", { json: legacy });
   }
-  if (legacy !== null) removePersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+  if (legacy !== null) removePersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY));
   return encoded === null ? [] : parseCachedServerTracks(encoded);
 }
 
@@ -133,8 +133,8 @@ function flushStreamingCache() {
   const json = forStorage(JSON.stringify(tracks.filter((track) => track.provider !== "local")));
   void desktopInvoke("save_streaming_cache", { json })
     .then(() => {
-      if (getPersistentItem(STREAMING_LIBRARY_CACHE_KEY) !== null) {
-        removePersistentItem(STREAMING_LIBRARY_CACHE_KEY);
+      if (fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY))) !== null) {
+        removePersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY));
       }
     })
     .catch((error) => console.warn("Could not save the streaming library cache:", error));
@@ -152,7 +152,7 @@ export function saveCachedServerTracks(tracks: Track[]) {
 
   try {
     setPersistentItem(
-      STREAMING_LIBRARY_CACHE_KEY,
+      serverCacheKey(STREAMING_LIBRARY_CACHE_KEY),
       JSON.stringify(tracks.filter((track) => track.provider !== "local")),
     );
   } catch {

@@ -25,8 +25,10 @@ export type ServerConnection = {
   clientId: string;
 };
 
-const builtInBaseUrl = (import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:38147").replace(/\/$/, "");
+const builtInBaseUrl = (import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:9").replace(/\/$/, "");
 export let serverBaseUrl = builtInBaseUrl;
+export let serverOnline = false;
+export function setServerOnline(online: boolean) { serverOnline = online; }
 export let serverConnection: ServerConnection | null = null;
 let token: string | null = null;
 
@@ -111,4 +113,30 @@ export function connectFromBrowser(baseUrl: string, accessToken: string | null) 
 export function setServerForTesting(baseUrl: string, accessToken: string | null) {
   serverBaseUrl = baseUrl;
   token = accessToken;
+}
+
+/** Cache keys always include verified server identity. Old unattributed caches remain available for rollback. */
+export function serverCacheKey(key: string) {
+  return `${key}.server.${serverConnection?.server?.publicKey ?? serverBaseUrl}`;
+}
+
+/** Local playlists can cache remote metadata, but may only rebase it onto the same verified server. */
+export function forDeviceStorage(text: string) {
+  const identity = serverConnection?.server?.publicKey;
+  if (!identity) return forStorage(text);
+  try {
+    return forStorage(JSON.stringify(JSON.parse(text), (_key, value) =>
+      value && typeof value === "object" && typeof value.globalId === "string"
+        && typeof value.audio === "string" && value.audio.startsWith(`${serverBaseUrl}/`) && !value.serverIdentity
+        ? { ...value, serverIdentity: identity } : value));
+  } catch { return forStorage(text); }
+}
+export function fromDeviceStorage(text: string | null) {
+  if (!text || !text.includes('"serverIdentity"')) return text;
+  try {
+    return JSON.stringify(JSON.parse(text, (_key, value) =>
+      value && typeof value === "object" && value.serverIdentity
+        && value.serverIdentity === serverConnection?.server?.publicKey
+        ? JSON.parse(fromStorage(JSON.stringify(value))) : value));
+  } catch { return text; }
 }
