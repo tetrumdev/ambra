@@ -109,6 +109,12 @@ fn public_path(path: &str) -> bool {
         .any(|public| path == *public || path.strip_prefix(public).is_some_and(|rest| rest.starts_with('/')))
 }
 
+/// Paired apps may sign in, but server configuration and provider sign-out remain local administration.
+fn browser_sign_in_path(path: &str) -> bool {
+    matches!(path.strip_prefix("/api/auth/").and_then(|path| path.split_once('/')),
+        Some(("tidal" | "qobuz" | "spotify", "start" | "complete" | "cancel")))
+}
+
 /// The token from the header or query, and the URI without the query parameter, so handlers
 /// that parse their own query never see it.
 fn take_token(request: &Request) -> (Option<String>, Option<Uri>) {
@@ -159,7 +165,7 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     let local = remote_peer.is_none() && peer_is_loopback && headers.get(HOST).is_none_or(|host| loopback_host(host.as_bytes()));
     let path = request.uri().path().to_owned();
 
-    if path.starts_with(LOCAL_ONLY_PREFIX) || (path.starts_with("/api/auth/") && path != "/api/auth/status") {
+    if path.starts_with(LOCAL_ONLY_PREFIX) || (path.starts_with("/api/auth/") && path != "/api/auth/status" && !browser_sign_in_path(&path)) {
         return if local {
             next.run(request).await
         } else {
@@ -306,15 +312,18 @@ mod tests {
         let app = Router::new().route("/api/local/config", get(|| async { "admin" }))
             .route("/api/music", get(|| async { "audio" }))
             .route("/api/auth/tidal/start", axum::routing::post(|| async { "provider admin" }))
+            .route("/api/auth/tidal/disconnect", axum::routing::post(|| async { "provider sign-out" }))
             .layer(middleware::from_fn_with_state(AccessPolicy::from_env(network.clone()), enforce));
         let request = |path: &str, peer_key: Option<ambra_net::PublicKey>, token: &str| {
-            let mut request = Request::builder().uri(path).header(HOST, "localhost").header(AUTHORIZATION, format!("Bearer {token}"))
+            let mut request = Request::builder().method(if path.starts_with("/api/auth/") { "POST" } else { "GET" }).uri(path).header(HOST, "localhost").header(AUTHORIZATION, format!("Bearer {token}"))
                 .header("x-forwarded-for", "127.0.0.1").header("x-ambra-local", "true").body(Body::empty()).unwrap();
             request.extensions_mut().insert(ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
             if let Some(key) = peer_key { request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1234".parse().unwrap(), session: std::sync::Arc::new(()) }); }
             request
         };
-        assert_eq!(app.clone().oneshot(request("/api/auth/tidal/start", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(app.clone().oneshot(request("/api/auth/tidal/start", Some(device_key), "valid")).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(request("/api/auth/tidal/start", Some(device_key), "wrong")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(app.clone().oneshot(request("/api/auth/tidal/disconnect", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(app.clone().oneshot(request("/api/local/config", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "valid")).await.unwrap().status(), StatusCode::OK);
         assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "wrong")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
@@ -323,6 +332,17 @@ mod tests {
         network.config.write().unwrap().paired_clients.clear();
         assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "valid")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
         assert_eq!(app.oneshot(request("/api/local/config", None, "")).await.unwrap().status(), StatusCode::OK);
+    }
+
+    #[test]
+    fn browser_sign_in_does_not_admit_unrelated_provider_administration() {
+        for provider in ["tidal", "qobuz", "spotify"] {
+            for action in ["start", "complete", "cancel"] {
+                assert!(browser_sign_in_path(&format!("/api/auth/{provider}/{action}")));
+            }
+            assert!(!browser_sign_in_path(&format!("/api/auth/{provider}/disconnect")));
+            assert!(!browser_sign_in_path(&format!("/api/auth/{provider}/complete/extra")));
+        }
     }
 
 }

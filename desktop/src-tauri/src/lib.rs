@@ -40,6 +40,7 @@ mod persistence;
 mod playlist_export;
 mod remote_endpoint;
 mod server_link;
+mod service_login;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1072,6 +1073,8 @@ pub fn run() {
             server_link::set_server_link_decided,
             server_link::join_server,
             server_link::cancel_pairing,
+            service_login::open_service_login,
+            service_login::cancel_service_login,
             local_import::import_local_music,
         ])
         .build(tauri::generate_context!())
