@@ -4,13 +4,15 @@ import App from "./App";
 import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
 import { ClientConnectionContext, type NetworkStatus } from "./hooks/ClientConnectionContext";
 import { hydratePersistentStorage } from "./utils/persistentStorage";
-import { connectToServer, serverConnection, setServerOnline } from "./api/serverConnection";
+import { connectToServer, serverConnection, setServerOnline, subscribeServerConnection, getServerConnection, serverBaseUrl } from "./api/serverConnection";
 import { flushServerState, hydrateServerState, installServerStateLifecycle, serverStateStatus, subscribeServerState, reloadServerState } from "./utils/serverState";
 import { mark } from "./utils/perf";
 import { useStartupWindow } from "./hooks/useStartupWindow";
 
 /** Local hydration and playback never wait for discovery, authentication, or server state. */
 export function Root() {
+  const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
+  const [networkServer, setNetworkServer] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [network, setNetwork] = useState<NetworkStatus>({ state: "Offline" });
   const [sharedPlayback, setShared] = useState(false);
@@ -20,7 +22,7 @@ export function Root() {
   const changingMode = useRef(Promise.resolve());
   const releasePlayer = useRef<() => Promise<void>>(async () => {});
   const registerPlaybackRelease = useCallback((release: () => Promise<void>) => { releasePlayer.current = release; }, []);
-  const connected = network.state.startsWith("Connected");
+  const connected = networkServer === connection?.baseUrl && network.state.startsWith("Connected");
   setServerOnline(connected);
   useStartupWindow(ready);
 
@@ -51,7 +53,11 @@ export function Root() {
 
   const reconnect = useCallback(() => {
     if (!serverConnection?.server) return;
-    void invoke<NetworkStatus>("network_connection_status").then(setNetwork).catch(() => setNetwork({ state: "Offline" }));
+    const base = serverBaseUrl;
+    void invoke<NetworkStatus>("network_connection_status").then(status => {
+      if (base !== serverBaseUrl) return;
+      setNetworkServer(serverConnection?.baseUrl ?? null); setNetwork(status);
+    }).catch(() => { if (base === serverBaseUrl) setNetwork({ state: "Offline" }); });
     void hydrateServerState().catch(() => {});
   }, []);
 
@@ -69,9 +75,12 @@ export function Root() {
     const check = async () => {
       try {
         await connectToServer();
-        if (!serverConnection?.server) return;
-        const status = await invoke<NetworkStatus>("network_connection_status");
         if (disposed) return;
+        if (!serverConnection?.server) { setNetwork({ state: "Offline" }); setNetworkServer(null); return; }
+        const selected = serverConnection;
+        const status = await invoke<NetworkStatus>("network_connection_status");
+        if (disposed || selected !== serverConnection) return;
+        setNetworkServer(serverConnection?.baseUrl ?? null);
         setNetwork(status);
         if (status.state.startsWith("Connected")) void hydrateServerState().catch(() => {});
       } catch { if (!disposed) setNetwork({ state: "Offline" }); }
@@ -79,7 +88,7 @@ export function Root() {
     };
     void check();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [ready]);
+  }, [ready, connection]);
   useEffect(installServerStateLifecycle, []);
   useEffect(() => {
     if (!connected && sharedPlayback) void setSharedPlayback(false);

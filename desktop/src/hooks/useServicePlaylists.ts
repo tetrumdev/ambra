@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getServerConnection, subscribeServerConnection, serverBaseUrl } from "../api/serverConnection";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { serviceAuthStatus, type StreamingProvider } from "../api/server";
 import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
 import type { Playlist, Track } from "../types/music";
@@ -31,6 +32,9 @@ function needsFetch(cached: CachedPlaylistContents | undefined, playlist: Playli
 }
 
 export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
+  const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
+  const serverKey = connection?.baseUrl ?? serverBaseUrl;
+  const cacheServer = useRef(serverKey);
   const connectedServices = useServiceAvailability();
   const [groups, setGroups] = useState<PlaylistServiceGroup[]>([]);
   const [contents, setContents] = useState<Record<string, CachedPlaylistContents>>({});
@@ -94,7 +98,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       });
     requests.current.set(playlist.id, { controller, promise });
     return promise;
-  }, [enabled]);
+  }, [enabled, serverKey]);
 
   const refresh = useCallback(async (signal?: AbortSignal) => {
     if (!enabled) return;
@@ -153,12 +157,21 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       setHydrated(true);
     });
     return () => { cancelled = true; };
-  }, [enabled]);
+  }, [enabled, serverKey]);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!hydrated || cacheServer.current !== serverKey) return;
     saveServicePlaylistCache({ version: 1, groups: groups.map(({ provider, playlists }) => ({ provider, playlists })), contents });
-  }, [hydrated, groups, contents]);
+  }, [hydrated, groups, contents, serverKey]);
+
+  useEffect(() => {
+    if (cacheServer.current === serverKey) return;
+    cacheServer.current = serverKey;
+    currentGroups.current = []; currentContents.current = {};
+    setGroups([]); setContents({}); setHydrated(false); setError(null); setErrors({});
+    for (const request of requests.current.values()) request.controller.abort();
+    requests.current.clear();
+  }, [serverKey]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -185,7 +198,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       for (const request of requests.current.values()) request.controller.abort();
       requests.current.clear();
     };
-  }, [refresh, enabled]);
+  }, [refresh, enabled, serverKey]);
 
   useEffect(() => {
     const playlist = currentGroups.current.flatMap(group => group.playlists).find(playlist => playlist.id === selectedId);

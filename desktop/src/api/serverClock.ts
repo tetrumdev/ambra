@@ -1,4 +1,4 @@
-import { serverBaseUrl } from "./serverConnection";
+import { serverBaseUrl, serverConnectionSignal, subscribeServerConnection } from "./serverConnection";
 
 /**
  * This app's estimate of the server's clock (server/src/session.rs `server_time_ms`), so a
@@ -14,34 +14,42 @@ const SAMPLES_LAST_MS = 120_000;
 const FIRST_SAMPLES = 5;
 
 let samples: Sample[] = [];
-let syncing = false;
+let generation = 0;
+subscribeServerConnection(() => { generation++; samples = []; });
 
-async function sample() {
+async function sample(signal = serverConnectionSignal()) {
+  const current = generation;
   const sent = performance.now();
-  const response = await fetch(`${serverBaseUrl}/api/session/clock`, { cache: "no-store", signal: AbortSignal.timeout(5_000) });
+  const response = await fetch(`${serverBaseUrl}/api/session/clock`, { cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(5_000)]) });
   const { serverTimeMs } = await response.json() as { serverTimeMs: number };
   const received = performance.now();
+  if (signal.aborted || current !== generation) return;
   if (!response.ok || !Number.isFinite(serverTimeMs)) return;
   samples = [...samples.filter(sample => received - sample.at < SAMPLES_LAST_MS),
     { offset: serverTimeMs - (sent + received) / 2, roundTrip: received - sent, at: received }];
 }
 
 /** Keeps the estimate current for as long as the app runs. */
-export function syncServerClock() {
-  if (syncing) return;
-  syncing = true;
-  void (async () => {
-    // A few at once, so the first estimate doesn't rest on one connection's setup.
-    for (let index = 0; index < FIRST_SAMPLES; index += 1) await sample().catch(() => {});
-    for (;;) {
-      await new Promise(resolve => setTimeout(resolve, SAMPLE_EVERY_MS));
-      await sample().catch(() => {});
-    }
-  })();
+export function syncServerClock(parent = serverConnectionSignal()) {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([parent, controller.signal]);
+  let timer: ReturnType<typeof setTimeout>;
+  const sync = async () => {
+    for (let index = 0; index < FIRST_SAMPLES && !signal.aborted; index++) await sample(signal).catch(() => {});
+    const next = async () => {
+      if (signal.aborted) return;
+      await sample(signal).catch(() => {});
+      if (!signal.aborted) timer = setTimeout(() => void next(), SAMPLE_EVERY_MS);
+    };
+    if (!signal.aborted) timer = setTimeout(() => void next(), SAMPLE_EVERY_MS);
+  };
+  void sync();
+  return () => { controller.abort(); clearTimeout(timer); };
 }
 
 /** The server restarted: its clock began again. */
 export function resetServerClock() {
+  generation++;
   samples = [];
   void sample().catch(() => {});
 }

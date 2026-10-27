@@ -96,7 +96,7 @@ impl Settings {
     }
 }
 
-/// What the webview needs to talk to the server, fixed for this run of the app.
+/// The current optional server connection, independent of the local player.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Connection {
@@ -116,14 +116,29 @@ pub struct Connection {
 pub struct ServerLink {
     directory: PathBuf,
     settings: Mutex<Settings>,
+    runtime: Mutex<Runtime>,
+    pub transition: tokio::sync::Mutex<()>,
+    pairing: Mutex<Pairing>,
+}
+
+struct Runtime {
     connection: Connection,
     manager: Option<Arc<ambra_net::ConnectionManager>>,
-    _bridge: Option<ambra_net::bridge::Bridge>,
-    pairing: Mutex<Option<PairingSession>>,
+    bridge: Option<ambra_net::bridge::Bridge>,
     network_error: Option<String>,
 }
 
-struct PairingSession { address: String, request_id: String, payload: ambra_net::pairing::PairingPayload, manager: Arc<ambra_net::ConnectionManager> }
+#[derive(Default)]
+struct Pairing { generation: u64, session: Option<PairingSession> }
+struct PairingSession { address: String, request_id: String, payload: ambra_net::pairing::PairingPayload, manager: Arc<ambra_net::ConnectionManager>, approved: Option<(JoinedServer, String)> }
+
+impl Drop for PairingSession {
+    fn drop(&mut self) {
+        self.manager.cancel.cancel();
+        let manager = self.manager.clone();
+        tauri::async_runtime::spawn(async move { manager.shutdown().await; });
+    }
+}
 
 pub fn client_name() -> String {
     std::env::var("COMPUTERNAME")
@@ -144,37 +159,44 @@ impl ServerLink {
     /// Reads the saved choice without starting a server or changing it when offline.
     pub fn start(directory: PathBuf) -> Result<Self, String> {
         let settings = Settings::load(&directory);
-        let joined = settings.server.clone().filter(|_| settings.mode == Mode::Join);
-        let prepared = (|| -> Result<_, String> {
-            if let Some(server) = &joined {
-                if let Some(public_key) = server.public_key {
-                    let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
-                    let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint };
-                    let network = ambra_net::ConnectionManager::new(identity, selected, settings.token.clone());
-                    let local = tauri::async_runtime::block_on(ambra_net::bridge::Bridge::start(network.clone())).map_err(|e| e.to_string())?;
-                    return Ok((Some(network), Some(local)));
-                }
-                return Err("Legacy pairing has no cryptographic identity. Pair again using the server QR link.".into());
-            }
-            Ok((None, None))
-        })();
-        let (manager, bridge, network_error) = match prepared {
-            Ok((manager, bridge)) => (manager, bridge, None),
-            Err(error) => (None, None, Some(error)),
-        };
-        let base_url = bridge.as_ref().map(|bridge| bridge.base_url.clone()).unwrap_or_else(|| "http://127.0.0.1:9".into());
-        let connection = Connection {
+        let runtime = tauri::async_runtime::block_on(Runtime::prepare(&directory, &settings));
+        // A saved server can be unavailable without preventing local startup.
+        let runtime = runtime.unwrap_or_else(|error| Runtime {
+            connection: Self::describe(&settings, None), manager: None, bridge: None, network_error: Some(error),
+        });
+        Ok(Self { directory, settings: Mutex::new(settings), runtime: Mutex::new(runtime), transition: tokio::sync::Mutex::new(()), pairing: Mutex::new(Pairing::default()) })
+    }
+
+    fn describe(settings: &Settings, bridge: Option<&ambra_net::bridge::Bridge>) -> Connection {
+        Connection {
             mode: settings.mode,
-            base_url,
-            token: None,
-            fallback: false,
-            server: settings.server.clone(),
-            when_away: WhenAway::Wait,
-            decided: settings.decided,
-            client_name: client_name(),
-            client_id: settings.client_id.clone(),
+            base_url: bridge.map(|bridge| bridge.base_url.clone()).unwrap_or_else(|| "http://127.0.0.1:9".into()),
+            token: None, fallback: false, server: settings.server.clone(), when_away: WhenAway::Wait,
+            decided: settings.decided, client_name: client_name(), client_id: settings.client_id.clone(),
+        }
+    }
+
+    // Caller serializes selection changes with shared-output ownership changes.
+    async fn install(&self, next: Settings, app: Option<&tauri::AppHandle>) -> Result<(), String> {
+        let runtime = Runtime::prepare(&self.directory, &next).await?;
+        next.save(&self.directory)?;
+        // Preparation and persistence can fail; keep the previous output alive until both succeed.
+        if let Some(app) = app { crate::remote_endpoint::stop_shared_output(app).await; }
+        let previous = {
+            let mut settings = self.settings.lock().map_err(|_| "Server settings are unavailable")?;
+            let mut current = self.runtime.lock().map_err(|_| "Server connection is unavailable")?;
+            *settings = next;
+            std::mem::replace(&mut *current, runtime)
         };
-        Ok(Self { directory, settings: Mutex::new(settings), connection, manager, _bridge: bridge, pairing: Mutex::new(None), network_error })
+        if let Some(bridge) = previous.bridge { bridge.shutdown().await; }
+        Ok(())
+    }
+
+    fn cancel_pairing(&self) -> Result<u64, String> {
+        let mut pending = self.pairing.lock().map_err(|_| "Pairing unavailable")?;
+        pending.generation += 1;
+        pending.session.take();
+        Ok(pending.generation)
     }
 
     fn change(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
@@ -182,12 +204,13 @@ impl ServerLink {
         let mut next = settings.clone();
         change(&mut next);
         next.save(&self.directory)?;
+        self.runtime.lock().map_err(|_| "Server connection is unavailable")?.connection.decided = next.decided;
         *settings = next;
         Ok(())
     }
 
     pub fn connection(&self) -> Connection {
-        self.connection.clone()
+        self.runtime.lock().expect("server connection lock").connection.clone()
     }
 
     pub fn client_id(&self) -> String {
@@ -195,9 +218,24 @@ impl ServerLink {
     }
 }
 
+impl Runtime {
+    async fn prepare(directory: &Path, settings: &Settings) -> Result<Self, String> {
+        let (manager, bridge) = if settings.mode == Mode::Join {
+            let server = settings.server.as_ref().ok_or("Missing server")?;
+            let public_key = server.public_key.ok_or("Legacy pairing has no cryptographic identity. Pair again using the server QR link.")?;
+            let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
+            let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint };
+            let manager = ambra_net::ConnectionManager::new(identity, selected, settings.token.clone());
+            let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.map_err(|e| e.to_string())?;
+            (Some(manager), Some(bridge))
+        } else { (None, None) };
+        Ok(Self { connection: ServerLink::describe(settings, bridge.as_ref()), manager, bridge, network_error: None })
+    }
+}
+
 #[tauri::command]
 pub fn server_connection(link: tauri::State<'_, ServerLink>) -> Connection {
-    link.connection.clone()
+    link.connection()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -220,9 +258,10 @@ pub async fn discover_servers(timeout_ms: Option<u64>) -> Result<Vec<DiscoveredS
 
 #[tauri::command]
 pub fn network_connection_status(link: tauri::State<'_, ServerLink>) -> Value {
-    link.manager.as_ref().map(|m| serde_json::to_value(m.status()).unwrap_or(Value::Null)).unwrap_or_else(|| {
-        json!({ "state": if link.connection.mode == Mode::Join { "Failed" } else { "Offline" },
-            "error": link.network_error })
+    let runtime = link.runtime.lock().expect("server connection lock");
+    runtime.manager.as_ref().map(|m| serde_json::to_value(m.status()).unwrap_or(Value::Null)).unwrap_or_else(|| {
+        json!({ "state": if runtime.connection.mode == Mode::Join { "Failed" } else { "Offline" },
+            "error": runtime.network_error })
     })
 }
 
@@ -299,23 +338,28 @@ async fn pairing_target(address: &str) -> Result<ambra_net::pairing::PairingPayl
 
 #[tauri::command]
 pub async fn start_pairing(link: tauri::State<'_, ServerLink>, address: String) -> Result<PairingStarted, String> {
+    let generation = { let _transition = link.transition.lock().await; link.cancel_pairing()? };
     let payload = pairing_target(&address).await?;
     let identity = ambra_net::Identity::load_or_create(&link.directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
     let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint };
     let manager = ambra_net::ConnectionManager::new(identity, selected, None);
+    let mut session = PairingSession { address: address.clone(), request_id: String::new(), payload: payload.clone(), manager: manager.clone(), approved: None };
     let started = manager.json("POST", "/api/pair/request", Some(json!({ "clientId": link.client_id(), "clientName": client_name() }))).await.map_err(|e| e.to_string())?;
     let request_id = started["requestId"].as_str().ok_or("Missing pairing handle")?.to_owned();
     let result = PairingStarted { request_id: request_id.clone(), code: started["code"].as_str().ok_or("Missing pairing code")?.into(), address: address.clone(), server_name: payload.name.clone() };
-    *link.pairing.lock().map_err(|_| "Pairing unavailable")? = Some(PairingSession { address, request_id, payload, manager });
+    let mut pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
+    if pending.generation != generation { return Err("Pairing cancelled".into()); }
+    session.request_id = request_id;
+    pending.session = Some(session);
     Ok(result)
 }
 
 #[tauri::command]
 pub async fn poll_pairing(link: tauri::State<'_, ServerLink>, address: String, request_id: String) -> Result<String, String> {
-    let (manager, payload) = {
+    let (manager, payload, generation) = {
         let pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
-        let session = pending.as_ref().filter(|s| s.address == address && s.request_id == request_id).ok_or("Start pairing again")?;
-        (session.manager.clone(), session.payload.clone())
+        let session = pending.session.as_ref().filter(|s| s.address == address && s.request_id == request_id).ok_or("Start pairing again")?;
+        (session.manager.clone(), session.payload.clone(), pending.generation)
     };
     let reply = manager.json("GET", &format!("/api/pair/request/{request_id}"), None).await.map_err(|e| e.to_string())?;
     let status = reply["status"].as_str().unwrap_or("expired").to_owned();
@@ -326,32 +370,55 @@ pub async fn poll_pairing(link: tauri::State<'_, ServerLink>, address: String, r
             address: payload.local_addresses.first().map(|a| a.to_string()).unwrap_or_else(|| payload.public_key.to_string()),
             public_key: Some(payload.public_key), local_addresses: payload.local_addresses, public_endpoint: payload.public_endpoint,
         };
-        link.change(|settings| { settings.mode = Mode::Join; settings.decided = true; settings.server = Some(server); settings.token = Some(token); })?;
-        link.pairing.lock().map_err(|_| "Pairing unavailable")?.take();
+        let mut pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
+        if pending.generation != generation { return Err("Pairing cancelled".into()); }
+        let session = pending.session.as_mut().ok_or("Start pairing again")?;
+        session.approved = Some((server, token));
     }
     Ok(status)
 }
 
+#[tauri::command]
+pub async fn cancel_pairing(link: tauri::State<'_, ServerLink>, request_id: String) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    let mut pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
+    if pending.session.as_ref().is_some_and(|session| session.request_id == request_id) {
+        pending.generation += 1;
+        pending.session.take();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn join_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>, request_id: String) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    let (server, token) = {
+        let pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
+        pending.session.as_ref().filter(|session| session.request_id == request_id)
+            .and_then(|session| session.approved.clone()).ok_or("Pairing is not approved")?
+    };
+    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+    next.mode = Mode::Join; next.decided = true; next.server = Some(server); next.token = Some(token);
+    link.install(next, Some(&app)).await?;
+    link.cancel_pairing()?;
+    Ok(())
+}
+
 /// Disconnect the client without touching any device or server data.
 #[tauri::command]
-pub fn leave_server(link: tauri::State<'_, ServerLink>) -> Result<(), String> {
-    link.change(|settings| {
-        settings.mode = Mode::Host;
-        settings.decided = true;
-        settings.server = None;
-        settings.token = None;
-    })
+pub async fn leave_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    link.cancel_pairing()?;
+    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+    next.mode = Mode::Host; next.decided = true; next.server = None; next.token = None;
+    link.install(next, Some(&app)).await
 }
 
 /// The first-run offer to join a server on the network was answered or dismissed.
 #[tauri::command]
-pub fn set_server_link_decided(link: tauri::State<'_, ServerLink>) -> Result<(), String> {
+pub async fn set_server_link_decided(link: tauri::State<'_, ServerLink>) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
     link.change(|settings| settings.decided = true)
-}
-
-#[tauri::command]
-pub fn restart_app(app: tauri::AppHandle) {
-    app.restart();
 }
 
 #[cfg(test)]
@@ -387,9 +454,77 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("ambra-unconfigured-{}", std::process::id()));
         let link = ServerLink::start(directory).unwrap();
         assert!(link.connection().server.is_none());
-        assert!(link.manager.is_none());
-        assert!(link._bridge.is_none());
+        assert!(link.runtime.lock().unwrap().manager.is_none());
+        assert!(link.runtime.lock().unwrap().bridge.is_none());
         assert_eq!(link.connection().base_url, "http://127.0.0.1:9");
+    }
+
+    #[test]
+    fn runtime_switches_release_old_bridges_and_preserve_device_state() {
+        let directory = std::env::temp_dir().join(format!("ambra-runtime-{}", std::process::id()));
+        let link = ServerLink::start(directory.clone()).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        let local = directory.join("persistent-state.json");
+        std::fs::write(&local, b"private playlists, queue, playback and settings").unwrap();
+        let initial = link.settings.lock().unwrap().clone();
+        tauri::async_runtime::block_on(async {
+            let keys = [ambra_net::Identity::generate().unwrap().public_key(), ambra_net::Identity::generate().unwrap().public_key()];
+            let mut previous: Option<(String, Arc<ambra_net::ConnectionManager>)> = None;
+            for index in 0..6 {
+                let mut next = initial.clone();
+                if index % 3 != 2 {
+                    next.mode = Mode::Join;
+                    next.server = Some(JoinedServer { id: index.to_string(), name: "Independent".into(), address: "127.0.0.1:9".into(), public_key: Some(keys[index % 2]), local_addresses: vec![], public_endpoint: None });
+                    next.token = Some(format!("token-{index}"));
+                }
+                link.install(next, None).await.unwrap();
+                if let Some((url, manager)) = previous.take() {
+                    assert!(manager.cancel.is_cancelled());
+                    assert_eq!(manager.status().state, ambra_net::ConnectionState::Offline);
+                    let address = url.strip_prefix("http://").unwrap().split('/').next().unwrap();
+                    assert!(tokio::net::TcpStream::connect(address).await.is_err(), "old bridge still accepts connections");
+                    assert!(manager.connect().await.is_err());
+                }
+                let connection = link.connection();
+                assert_eq!(connection.client_id, initial.client_id);
+                assert!(connection.token.is_none(), "the bridge must keep authentication private");
+                let runtime = link.runtime.lock().unwrap();
+                if let Some(manager) = &runtime.manager {
+                    assert_eq!(connection.server.as_ref().unwrap().public_key, Some(keys[index % 2]));
+                    previous = Some((connection.base_url, manager.clone()));
+                } else {
+                    assert_eq!(connection.mode, Mode::Host);
+                    assert!(runtime.bridge.is_none());
+                    assert!(connection.server.is_none());
+                    assert!(link.settings.lock().unwrap().token.is_none());
+                }
+            }
+        });
+        assert_eq!(std::fs::read(&local).unwrap(), b"private playlists, queue, playback and settings");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn failed_switches_keep_the_current_connection_and_saved_selection() {
+        let directory = std::env::temp_dir().join(format!("ambra-switch-failure-{}", std::process::id()));
+        let link = ServerLink::start(directory.clone()).unwrap();
+        let initial = link.settings.lock().unwrap().clone();
+        tauri::async_runtime::block_on(async {
+            let mut next = initial.clone();
+            next.mode = Mode::Join;
+            next.server = Some(JoinedServer { id: "bad".into(), name: "Legacy".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None });
+            next.token = Some("secret".into());
+            assert!(link.install(next.clone(), None).await.is_err());
+            assert_eq!(link.connection().mode, Mode::Host);
+            next.server.as_mut().unwrap().public_key = Some(ambra_net::Identity::generate().unwrap().public_key());
+            // A settings write failure must not partially commit the prepared bridge.
+            std::fs::create_dir_all(directory.join(FILE_NAME)).unwrap();
+            assert!(link.install(next, None).await.is_err());
+            assert_eq!(link.connection().mode, Mode::Host);
+            assert_eq!(link.settings.lock().unwrap().client_id, initial.client_id);
+            assert!(link.settings.lock().unwrap().token.is_none());
+        });
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
