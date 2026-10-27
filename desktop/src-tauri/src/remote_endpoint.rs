@@ -15,7 +15,7 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager};
 
 use crate::native_audio::{self, NativeAudioPlayer};
 
@@ -149,18 +149,38 @@ fn urlencoding(value: &str) -> String {
         .collect()
 }
 
+struct SettingsListener(AppHandle, tauri::EventId);
+impl Drop for SettingsListener {
+    fn drop(&mut self) { self.0.unlisten(self.1); }
+}
+
 async fn refresh_devices(agent: std::sync::Arc<Agent>) {
+    let changed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let wake = changed.clone();
+    let listener = agent.app.listen("native-audio-settings-changed", move |_| wake.notify_one());
+    let _listener = SettingsListener(agent.app.clone(), listener);
     loop {
         let player = agent.app.state::<NativeAudioPlayer>();
-        let mut body = json!({});
-        if let Ok(devices) = native_audio::list_native_audio_devices(player.clone()).await {
-            body["devices"] = serde_json::to_value(devices).unwrap_or(json!([]));
+        let devices = native_audio::list_native_audio_devices(player.clone()).await;
+        let settings = native_audio::native_audio_settings(player).await;
+        if let (Ok(devices), Ok(settings)) = (devices, settings) {
+            // System Default is a virtual output, so hardware enumeration never includes it.
+            // Keep disabled outputs in this snapshot for remote settings; the server filters pickers.
+            let outputs: Vec<Value> = settings.outputs.iter().filter(|output|
+                output.id.is_empty() || devices.iter().any(|device| device.id == output.id))
+                .map(|output| json!({
+                    "id": output.id, "name": output.name, "enabled": output.enabled,
+                    "isDefault": output.id.is_empty() || devices.iter().any(|device| device.id == output.id && device.is_default),
+                })).collect();
+            let body = json!({ "devices": outputs, "selectedDeviceId": settings.selected_output_id });
+            let updated = if let Ok(mut report) = agent.device_report.lock() {
+                let updated = *report != body;
+                *report = body;
+                updated
+            } else { false };
+            if updated { let _ = agent.app.emit("native-audio-devices-changed", ()); }
         }
-        if let Ok(settings) = native_audio::native_audio_settings(player).await {
-            body["selectedDeviceId"] = Value::String(settings.selected_output_id);
-        }
-        if let Ok(mut report) = agent.device_report.lock() { *report = body; }
-        tokio::time::sleep(DEVICES_EVERY).await;
+        tokio::select! { _ = changed.notified() => {}, _ = tokio::time::sleep(DEVICES_EVERY) => {} }
     }
 }
 

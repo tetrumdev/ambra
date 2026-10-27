@@ -240,12 +240,18 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
   const [outputs, setOutputs] = useState<OutputSettings[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const on = { endpointId: endpoint.id, endpointName: endpoint.name };
-  const connected = new Set(["", ...endpoint.devices.map(device => device.id)]);
+  const connected = new Set(["", ...(endpoint.availableDevices ?? endpoint.devices).map(device => device.id)]);
   const load = async () => {
     try { const settings = await invokeOn<AudioSettings>(on, "native_audio_settings"); setOutputs(settings.outputs); setPresets(settings.presets); setError(null); }
     catch (reason) { setError(String(reason)); }
   };
-  useEffect(() => { void load(); }, [endpoint.id]);
+  useEffect(() => {
+    let disposed = false;
+    void invokeOn<AudioSettings>(on, "native_audio_settings").then(settings => {
+      if (!disposed) { setOutputs(settings.outputs); setPresets(settings.presets); setError(null); }
+    }).catch(reason => { if (!disposed) setError(String(reason)); });
+    return () => { disposed = true; };
+  }, [endpoint]);
   const change = async (output: OutputSettings, settings: Partial<OutputSettings>) => {
     setOutputs(current => current?.map(item => item.id === output.id ? { ...item, ...settings } : item) ?? null);
     try { await invokeOn(on, "set_output_settings", { outputId: output.id, change: settings }); }

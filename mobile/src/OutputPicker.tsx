@@ -33,7 +33,7 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
       } finally { running = false; if (!abort.signal.aborted) setLoading(false); }
     };
     void refresh();
-    const timer = setInterval(() => { void refresh(); }, 3000);
+    const timer = setInterval(() => { void refresh(); }, 1000);
     return () => { abort.abort(); clearInterval(timer); };
   }, [reload]);
 
