@@ -2,6 +2,7 @@ mod access;
 mod api;
 mod artwork_cache;
 mod artwork_quality;
+mod browser_auth;
 mod cli;
 mod credits;
 mod discovery;

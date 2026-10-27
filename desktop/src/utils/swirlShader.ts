@@ -4,6 +4,7 @@ import {
 } from "./backgroundPalette";
 import { SWIRL_SHARPNESS, swirlBiases } from "./swirlProportions";
 import { SURFACE_BLACK } from "./surfaceBlack";
+import { perceptualColor, perceptualColorShader } from "./perceptualColor";
 
 /**
  * The cover-colored swirl behind the player: its shaders and the palette it is drawn from.
@@ -16,6 +17,8 @@ export type SwirlGL = WebGLRenderingContextBase & WebGLRenderingContextOverloads
 
 export const COLOR_TRANSITION_MS = 1800;
 export const EDGE_COMPONENTS = COVER_EDGE_ZONES * 4;
+/** Appended after the existing palette, luminance, direction and bias components. */
+export const EDGE_COLORS_OFFSET = 16 + EDGE_COMPONENTS * 2;
 export const NOISE_TEXTURE_SIZE = 256;
 // The field drifts far too slowly for frames beyond 60 fps to differ, so
 // high-refresh displays draw every other frame instead of doubling the work.
@@ -45,6 +48,10 @@ uniform float u_coverDim;
 // Per zone along the cover's sides (top, right, bottom, left per entry).
 uniform vec4 u_edgeLuma[${COVER_EDGE_ZONES}];
 uniform vec4 u_edgeDirection[${COVER_EDGE_ZONES}];
+// Edge colors and lightness arrive in Oklab, converted once when the palette changes.
+uniform vec3 u_edgeColors[${COVER_EDGE_ZONES * 4}];
+
+${perceptualColorShader}
 
 float noise(vec2 point) {
   vec2 cell = floor(point);
@@ -84,44 +91,85 @@ vec3 separateFromCover(vec3 color) {
   vec2 offset = gl_FragCoord.xy - u_cover.xy;
   vec2 outside = abs(offset) - u_cover.z;
   float gap = length(max(outside, 0.0));
-  float nearby = exp(-(gap * gap) / (u_cover.w * u_cover.w));
+  // A broad glow makes even small corrections visible as stationary patches.
+  // Keep the adjustment within a soft, narrow strip beside the actual boundary.
+  float reach = min(u_cover.w, max(8.0, u_cover.z * 0.12));
+  float nearby = 1.0 - smoothstep(0.0, reach, gap);
+  // The artwork covers the interior; only visible pixels outside its edge need this work.
+  if (nearby <= 0.0 || max(outside.x, outside.y) < 0.0) return color;
 
   // Corners blend their two sides' edge measurements.
-  vec4 side = max(vec4(offset.y, offset.x, -offset.y, -offset.x), 0.0)
-    / max(length(offset), 1.0);
-  side *= side;
-  side *= side;
-  side /= max(dot(side, vec4(1.0)), 0.0001);
+  // Use distances from the four edges, rather than rays from the cover's center.
+  // The small overlap near corners makes the nearest two sides blend continuously.
+  vec4 normal = vec4(offset.y, offset.x, -offset.y, -offset.x) - u_cover.z;
+  vec4 side = smoothstep(vec4(-reach), vec4(0.0), normal)
+    * exp(-max(normal, 0.0) * max(normal, 0.0) / (reach * reach));
 
   // Position along each side in zone units; top and bottom run left to right,
   // the sides top to bottom (cover image space, so GL's y is flipped).
-  vec2 along = clamp((vec2(offset.x, -offset.y) / u_cover.z + 1.0) * 0.5, 0.0, 1.0)
+  vec2 along = (vec2(offset.x, -offset.y) / u_cover.z + 1.0) * 0.5
     * ${COVER_EDGE_ZONES}.0 - 0.5;
   vec4 position = vec4(along, along);
-  vec4 zoneLuma = vec4(0.0);
-  vec4 zoneDirection = vec4(0.0);
+  float correction = 0.0;
   vec4 total = vec4(0.0);
+  // Compare what is seen: an overlay may darken the field but not the cover.
+  vec3 visible = u_coverDim * clamp(color, 0.0, 1.0);
+  vec3 linear = linearFromSrgb(visible);
+  vec3 perceptual = perceptualFromLinear(linear);
+  float luma = perceptual.x;
+  float brightestChannel = max(max(linear.r, linear.g), linear.b);
+  float lightnessLimit = luma > 0.0001
+    ? luma * pow(linearFromSrgb(vec3(u_coverDim)).r / max(brightestChannel, 0.000001), 1.0 / 3.0)
+    : pow(linearFromSrgb(vec3(u_coverDim)).r, 1.0 / 3.0);
   for (int zone = 0; zone < ${COVER_EDGE_ZONES}; zone++) {
-    vec4 weight = max(1.0 - abs(position - float(zone)), 0.0);
-    weight = weight * weight * (3.0 - 2.0 * weight);
-    zoneLuma += u_edgeLuma[zone] * weight;
-    zoneDirection += u_edgeDirection[zone] * weight;
+    // Gaussian weights have no zone boundaries or flat joins. Test each real
+    // sample first: interpolating black and cream must not invent a gray edge.
+    vec4 distance = position - float(zone);
+    vec4 weight = exp(-distance * distance / 0.85) * side;
+    vec4 difference = vec4(luma) - u_edgeLuma[zone];
+    vec4 colorDistance = vec4(
+      length(perceptual.yz - u_edgeColors[zone * 4].yz),
+      length(perceptual.yz - u_edgeColors[zone * 4 + 1].yz),
+      length(perceptual.yz - u_edgeColors[zone * 4 + 2].yz),
+      length(perceptual.yz - u_edgeColors[zone * 4 + 3].yz)
+    );
+    vec4 similar = (1.0 - smoothstep(vec4(0.07), vec4(0.12), abs(difference)))
+      * (1.0 - smoothstep(vec4(0.025), vec4(0.065), colorDistance));
+    // Follow the field's current contrast, not the palette's average brightness.
+    // Only an almost identical shade needs the cover's preferred escape direction.
+    // Keep that escape direction stable through a collision. Trying to brighten
+    // saturated red just because the field is slightly lighter produces no separation.
+    // At absolute black, a small perceptual delta can round back to a single
+    // display level. Keep a modest visible floor for a genuinely matching edge.
+    vec4 margin = max(vec4(0.07), 0.16 - u_edgeLuma[zone]);
+    vec4 canLift = 1.0 - smoothstep(vec4(lightnessLimit - 0.002), vec4(lightnessLimit + 0.002), u_edgeLuma[zone] + margin);
+    vec4 canDeepen = smoothstep(vec4(0.0), vec4(0.01), u_edgeLuma[zone] - margin);
+    vec4 canFollow = mix(canDeepen, canLift, step(vec4(0.0), difference));
+    vec4 direction = mix(sign(u_edgeDirection[zone]), sign(difference),
+      smoothstep(vec4(0.012), vec4(0.04), abs(difference)) * canFollow);
+    vec4 deficit = max(margin - direction * difference, 0.0);
+    correction += dot(weight, similar * direction * deficit * abs(u_edgeDirection[zone]));
     total += weight;
   }
-  float edge = dot(side, zoneLuma / total);
-  float direction = dot(side, zoneDirection / total);
 
   // Keep existing contrast and gently separate similar colors. Bounded
   // adjustments preserve the moving field instead of forcing it to match
   // brightness targets from the stationary cover zones.
-  // Compare what is seen: an overlay may darken the field but not the cover.
-  float luma = u_coverDim * dot(color, vec3(0.2126, 0.7152, 0.0722));
-  float similarity = 1.0 - smoothstep(0.03, 0.22, abs(luma - edge));
-  float amount = nearby * similarity * abs(direction);
-  vec3 deeper = color * (1.0 - 0.07 * amount);
-  // Lift toward what shows as white through the overlay, so the visible change matches.
-  vec3 lifted = mix(color, vec3(1.0 / u_coverDim), 0.04 * amount);
-  return direction < 0.0 ? deeper : lifted;
+  // A lift is only needed when the edge nearly disappears into the field.
+  // The wider shadow threshold must not leave a bright halo around distinct artwork.
+  // Both lightening and darkening now require the same close color/luma match.
+  float amount = nearby * correction / max(dot(total, vec4(1.0)), 0.0001);
+  // Convert the visible correction back through the overlay, so the visible change matches the measured deficit.
+  // A fixed five-level RGB limit was too weak for near-identical saturated colors.
+  // Use the perceptual deficit instead, and scale linear RGB to retain the swirl's hue.
+  if (abs(amount) < 0.000001) return color;
+  // Retain part of the local field variation even at a matching edge, so the
+  // needed separation does not replace the moving swirl with a flat fixed stripe.
+  float lightness = clamp(luma + 0.85 * amount, 0.0, 1.0);
+  vec3 separated = luma > 0.0001
+    ? linear * pow(lightness / luma, 3.0)
+    : vec3(lightness * lightness * lightness);
+  return srgbFromLinear(separated) / max(u_coverDim, 0.05);
 }
 
 void main() {
@@ -214,12 +262,16 @@ export function paletteComponents(
 ) {
   const palette = colors.slice(0, 4);
   while (palette.length < 4) palette.push(palette[0] ?? SURFACE_BLACK);
+  const edgeColors = separation.colors ?? separation.edges.flatMap(edge => [edge, edge, edge]);
+  const perceptualEdges = Array.from({ length: EDGE_COMPONENTS }, (_, index) =>
+    perceptualColor(edgeColors.slice(index * 3, index * 3 + 3)));
   // Transition colors, proportions and cover separation without changing the field's shape.
   return [
     ...palette.flatMap(colorComponents),
-    ...separation.edges,
+    ...perceptualEdges.map(edge => edge[0]),
     ...separation.directions,
     ...swirlBiases(weights),
+    ...perceptualEdges.flat(),
   ];
 }
 

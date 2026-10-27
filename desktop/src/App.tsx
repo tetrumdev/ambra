@@ -309,6 +309,12 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   if (screen === "home" || screen === "library" || screen === "search" || screen === "settings") {
     queueReturnScreenRef.current = screen;
   }
+  // Page history restores content; retain player/queue overlays and their return screens too.
+  const settingsReturnRef = useRef<{
+    screen: AppScreen;
+    playerReturnScreen: typeof playerReturnScreenRef.current;
+    queueReturnScreen: typeof queueReturnScreenRef.current;
+  } | null>(null);
   const underlyingScreen = screen === "bigscreen" || screen === "lyrics" ? playerReturnScreenRef.current : screen;
   const { back: goBack, forward: goForward, canGo: canGoInHistory } = usePageNavigation({
     screen: underlyingScreen === "queue" ? queueReturnScreenRef.current : underlyingScreen,
@@ -603,11 +609,16 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   const canNavigate = useStableCallback((direction: "back" | "forward") => {
     if (document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop], .columnPickerMenu")) return false;
+    if (screen === "settings" && direction === "back") return true;
     if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") return direction === "back";
     return canGoInHistory(direction);
   });
   const navigate = useStableCallback((direction: "back" | "forward") => {
     if (!canNavigate(direction)) return false;
+    if (screen === "settings" && direction === "back") {
+      closeCurrentScreen();
+      return true;
+    }
     if (screen === "bigscreen" || screen === "lyrics" || screen === "queue") {
       leaveScreen();
       return true;
@@ -630,7 +641,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         // A text field in settings keeps Escape for itself.
         if (isTypingTarget(event.target)) return;
         event.preventDefault();
-        if (!event.repeat && !goBack()) changeScreen("library");
+        if (!event.repeat) closeCurrentScreen();
         return;
       }
       if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") return;
@@ -1030,6 +1041,17 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   };
 
   const closeCurrentScreen = () => {
+    if (screen === "settings") {
+      const origin = settingsReturnRef.current;
+      settingsReturnRef.current = null;
+      const restored = goBack();
+      if (origin) {
+        playerReturnScreenRef.current = origin.playerReturnScreen;
+        queueReturnScreenRef.current = origin.queueReturnScreen;
+        changeScreen(origin.screen);
+      } else if (!restored) changeScreen("library");
+      return;
+    }
     if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") { goBack(); return; }
     changeScreen(
       (screen === "bigscreen" || screen === "lyrics")
@@ -1042,6 +1064,12 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   const openQueue = () => changeScreen("queue");
   const openSettings = () => {
+    if (screen === "settings") return;
+    settingsReturnRef.current = {
+      screen,
+      playerReturnScreen: playerReturnScreenRef.current,
+      queueReturnScreen: queueReturnScreenRef.current,
+    };
     setBrowseEntity(null);
     setSelectedPlaylistId(null);
     changeScreen("settings");
@@ -1212,7 +1240,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           </button>
         )}
         {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
-        {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={() => changeScreen("library")} /> : <Sidebar
+        {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={closeCurrentScreen} /> : <Sidebar
           isHomeActive={isHomeView && !isQueueView}
           onOpenHome={() => {
             setBrowseEntity(null);
