@@ -506,6 +506,7 @@ struct PlaybackEngine<O: AudioOutput> {
     pcm: VecDeque<f64>,
     spec: Option<StreamSpec>,
     next_source: Option<QueuedSource>,
+    deferred_next_source: Option<String>,
     ready_next: Option<(String, PreparedSource)>,
     warm_source: Option<QueuedSource>,
     desired_playing: bool,
@@ -682,6 +683,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             pcm: VecDeque::new(),
             spec: None,
             next_source: None,
+            deferred_next_source: None,
             ready_next: None,
             warm_source: None,
             desired_playing: false,
@@ -995,9 +997,6 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     output.set_gain(self.gain.amplitude())?;
                 }
             }
-            if output_changed && self.current_source.is_some() {
-                self.seek(position)?;
-            }
             Ok(())
         })();
         if let Err(error) = applied {
@@ -1041,6 +1040,17 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 }
             }
             self.dsp = Some(next);
+        }
+        if output_changed && self.current_source.is_some() {
+            if self.desired_playing {
+                // The output choice is committed. A failed song must not roll it back.
+                if let Err(error) = self.seek(position) {
+                    self.fail(error);
+                }
+            } else {
+                // Resume from the audible position on Play, without reopening a paused or failed song.
+                self.defer_stream(position);
+            }
         }
         Ok(())
     }
@@ -1177,16 +1187,33 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             None
         };
         self.decoder = None;
+        self.spec = None;
         self.pcm.clear();
         self.reset_gain_buffer();
         self.desired_playing = autoplay;
         self.decoder_ended = false;
         self.next_source = None;
+        self.deferred_next_source = next_source.clone();
         self.ready_next = None;
         self.position_base = position_seconds;
         self.rendered_frames = 0;
         self.current_source = Some(source.clone());
         self.rendering = false;
+        if !autoplay {
+            // Restoring a paused session needs only its source and position. Providers and
+            // files may not be available yet; decoding starts when the listener presses Play.
+            drop(previous_output);
+            self.defer_stream(position_seconds);
+            self.warm_source = None;
+            update_status(&self.status, |status| {
+                *status = PlaybackStatus {
+                    current_source: Some(source),
+                    current_time: position_seconds,
+                    ..PlaybackStatus::default()
+                };
+            });
+            return Ok(());
+        }
         self.set_buffering(Some(source.clone()), position_seconds, 0.0);
 
         // Reuse an in-flight hover preparation as well as completed queue audio.
@@ -1225,6 +1252,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let audio_quality = self.install_prepared(prepared)?;
         // Prioritize the selected song's initial download over preloading the next.
         self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
+        self.deferred_next_source = None;
         if autoplay && previous_spec == Some(spec) {
             self.output = previous_output.take();
             if self.output.is_some() && was_resyncing {
@@ -1263,6 +1291,12 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         {
             return Ok(());
         }
+        if self.spec.is_none() && !self.desired_playing {
+            self.deferred_next_source = source;
+            self.next_source = None;
+            self.ready_next = None;
+            return Ok(());
+        }
         let Some(source) = source else {
             self.next_source = None;
             self.ready_next = None;
@@ -1289,14 +1323,11 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             .clone()
             .ok_or_else(|| "No native audio track is loaded".to_owned())?;
         if self.decoder.is_none() && !self.decoder_ended {
-            let status = lock_status(&self.status).clone();
-            let position_seconds = status.current_time;
-            self.set_buffering(Some(source.clone()), position_seconds, status.duration);
-            let prepared = prepare_source_at(source, position_seconds)?;
-            let audio_quality = self.install_prepared(prepared)?;
-            update_status(&self.status, |status| {
-                status.audio_quality = Some(audio_quality);
-            });
+            let position_seconds = lock_status(&self.status).current_time;
+            let next_source = self.deferred_next_source.clone()
+                .or_else(|| self.next_source.as_ref().map(|next| next.source.clone()))
+                .or_else(|| self.ready_next.as_ref().map(|(source, _)| source.clone()));
+            return self.load(source, next_source, position_seconds, true);
         }
         if self.output.is_none() {
             let spec = self
@@ -1330,6 +1361,14 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn seek(&mut self, position_seconds: f64) -> Result<(), String> {
+        if self.current_source.is_some() && !self.desired_playing && self.output.is_none() {
+            self.defer_stream(position_seconds);
+            update_status(&self.status, |status| {
+                status.current_time = position_seconds;
+                status.ended = false;
+            });
+            return Ok(());
+        }
         let spec = self
             .spec
             .ok_or_else(|| "No native audio track is loaded".to_owned())?;
@@ -1781,25 +1820,27 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             output.reset()?;
         }
         self.output = None;
-        self.rendering = false;
-        self.decoder = None;
-        self.pcm.clear();
-        self.reset_gain_buffer();
-        self.position_base = position_seconds;
-        self.rendered_frames = 0;
-        let source = self
-            .current_source
-            .clone()
-            .ok_or_else(|| "No native audio track is loaded".to_owned())?;
-        let prepared = prepare_source_at(source, position_seconds)?;
-        let audio_quality = self.install_prepared(prepared)?;
+        self.defer_stream(position_seconds);
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
-            status.audio_quality = Some(audio_quality);
             status.is_playing = false;
             status.buffering = false;
         });
         Ok(())
+    }
+
+    /// Keep the song and audible position without retaining a decoder or a device format.
+    fn defer_stream(&mut self, position_seconds: f64) {
+        self.decoder = None;
+        self.spec = None;
+        self.pcm.clear();
+        self.reset_gain_buffer();
+        self.dsp = None;
+        self.decoder_ended = false;
+        self.rendering = false;
+        self.resync = ResyncDelay::default();
+        self.position_base = position_seconds;
+        self.rendered_frames = 0;
     }
 
     fn fail(&mut self, error: String) {
@@ -2044,5 +2085,201 @@ mod cross_network_tests {
         request(&player.command_tx, |reply| WorkerCommand::Pause { reply }).unwrap();
         drop(player);
         drop(link);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{path::PathBuf, sync::atomic::AtomicU64};
+
+    struct TestOutput {
+        device_id: Option<String>,
+        channels: usize,
+        frames_written: usize,
+    }
+
+    impl AudioOutput for TestOutput {
+        fn list_devices() -> Result<Vec<NativeAudioDevice>, String> {
+            Ok(vec![NativeAudioDevice {
+                id: "headphones".into(),
+                name: "Headphones".into(),
+                is_default: false,
+            }])
+        }
+
+        fn open(spec: StreamSpec) -> Result<Self, String> {
+            Self::open_device_with_mode(spec, None, false, false)
+        }
+
+        fn open_device_with_mode(
+            spec: StreamSpec,
+            device_id: Option<&str>,
+            _exclusive_mode: bool,
+            _processed: bool,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                device_id: device_id.map(str::to_owned),
+                channels: spec.channels,
+                frames_written: 0,
+            })
+        }
+
+        fn start(&mut self) -> Result<(), String> { Ok(()) }
+        fn pause(&mut self) -> Result<(), String> { Ok(()) }
+        fn reset(&mut self) -> Result<(), String> { Ok(()) }
+        fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String> {
+            let frames = ((first.len() + second.len()) / self.channels).min(256);
+            self.frames_written += frames;
+            Ok(frames)
+        }
+        fn queued_frames(&mut self) -> Result<usize, String> { Ok(0) }
+        fn is_drained(&mut self) -> Result<bool, String> { Ok(true) }
+    }
+
+    fn engine() -> PlaybackEngine<TestOutput> {
+        PlaybackEngine::new(unbounded().1, Arc::default(), None)
+    }
+
+    struct Song(PathBuf);
+    impl Song {
+        fn missing() -> Self {
+            static ID: AtomicU64 = AtomicU64::new(0);
+            Self(std::env::temp_dir().join(format!(
+                "ambra-playback-{}-{}.wav", std::process::id(), ID.fetch_add(1, Ordering::Relaxed)
+            )))
+        }
+        fn source(&self) -> String { self.0.to_str().unwrap().to_owned() }
+        fn create(&self) {
+            let mut writer = hound::WavWriter::create(&self.0, hound::WavSpec {
+                channels: 2, sample_rate: 48_000, bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            }).unwrap();
+            for _ in 0..96_000 { writer.write_sample(100_i16).unwrap(); }
+            writer.finalize().unwrap();
+        }
+    }
+    impl Drop for Song {
+        fn drop(&mut self) { let _ = std::fs::remove_file(&self.0); }
+    }
+
+    fn play(worker: &mut PlaybackEngine<TestOutput>) -> Result<(), String> {
+        let (reply, result) = bounded(1);
+        worker.handle_command(WorkerCommand::Play { reply });
+        result.recv().unwrap()
+    }
+
+    #[test]
+    fn output_selection_needs_no_song_and_still_validates_devices() {
+        let mut worker = engine();
+        worker.select_device(Some("headphones".into())).unwrap();
+        worker.set_exclusive_mode(true).unwrap();
+        assert_eq!(worker.audio_settings.selected_output_id, "headphones");
+        assert!(worker.audio_settings.selected().exclusive_mode);
+        assert!(worker.output.is_none());
+        assert!(worker.select_device(Some("disconnected".into())).is_err());
+        assert_eq!(worker.audio_settings.selected_output_id, "headphones");
+    }
+
+    #[test]
+    fn paused_restore_and_seek_defer_unavailable_audio_until_play() {
+        let mut worker = engine();
+        let song = Song::missing();
+        worker.load(song.source(), Some("missing-next.wav".into()), 0.2, false).unwrap();
+        worker.queue(Some("new-next.wav".into()), Some(song.source())).unwrap();
+        worker.seek(0.4).unwrap();
+        worker.select_device(Some("headphones".into())).unwrap();
+        assert!(worker.decoder.is_none());
+        assert!(worker.next_source.is_none());
+        assert_eq!(worker.deferred_next_source.as_deref(), Some("new-next.wav"));
+        assert!(lock_status(&worker.status).error.is_none());
+        assert_eq!(lock_status(&worker.status).current_time, 0.4);
+        assert!(play(&mut worker).is_err());
+        assert!(lock_status(&worker.status).error.is_some());
+
+        // The same restored song can recover once available, without choosing another song.
+        song.create();
+        play(&mut worker).unwrap();
+        assert_eq!(worker.output.as_ref().unwrap().device_id.as_deref(), Some("headphones"));
+        assert_eq!(lock_status(&worker.status).current_time, 0.4);
+        assert!(lock_status(&worker.status).duration > 0.9);
+        assert!(lock_status(&worker.status).error.is_none());
+        assert_eq!(worker.next_source.as_ref().unwrap().source, "new-next.wav");
+    }
+
+    #[test]
+    fn active_device_switch_resumes_audio_at_the_saved_position_and_device_volume() {
+        let mut worker = engine();
+        let song = Song::missing();
+        song.create();
+        let mut settings = worker.audio_settings.clone();
+        settings.discover(&TestOutput::list_devices().unwrap());
+        settings.outputs.iter_mut().find(|output| output.id == "headphones").unwrap().volume = 37.0;
+        worker.apply_audio_settings(settings).unwrap();
+        worker.load(song.source(), None, 0.2, true).unwrap();
+        worker.select_device(Some("headphones".into())).unwrap();
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
+        assert_eq!(worker.gain.volume(), 37.0);
+        worker.pump().unwrap();
+        let output = worker.output.as_ref().unwrap();
+        assert_eq!(output.device_id.as_deref(), Some("headphones"));
+        assert!(output.frames_written > 0);
+        assert!(lock_status(&worker.status).is_playing);
+        assert!(lock_status(&worker.status).error.is_none());
+    }
+
+    #[test]
+    fn failed_first_load_cannot_block_output_or_exclusive_mode_changes() {
+        let mut worker = engine();
+        let song = Song::missing();
+        let (reply, result) = bounded(1);
+        worker.handle_command(WorkerCommand::Load {
+            source: song.source(), next_source: None, position_seconds: 0.0, autoplay: true, reply,
+        });
+        assert!(result.recv().unwrap().is_err());
+        assert!(worker.spec.is_none());
+        worker.select_device(Some("headphones".into())).unwrap();
+        worker.set_exclusive_mode(true).unwrap();
+        assert_eq!(worker.audio_settings.selected_output_id, "headphones");
+        assert!(worker.audio_settings.selected().exclusive_mode);
+        song.create();
+        play(&mut worker).unwrap();
+        assert!(lock_status(&worker.status).error.is_none());
+    }
+
+    #[test]
+    fn song_failure_during_active_switch_keeps_the_new_output_selected() {
+        let mut worker = engine();
+        let song = Song::missing();
+        song.create();
+        worker.load(song.source(), None, 0.2, true).unwrap();
+        std::fs::remove_file(&song.0).unwrap();
+        worker.select_device(Some("headphones".into())).unwrap();
+        assert_eq!(worker.audio_settings.selected_output_id, "headphones");
+        assert!(lock_status(&worker.status).error.is_some());
+        song.create();
+        play(&mut worker).unwrap();
+        assert_eq!(worker.output.as_ref().unwrap().device_id.as_deref(), Some("headphones"));
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
+    }
+
+    #[test]
+    fn releasing_a_paused_device_does_not_reopen_the_song() {
+        let mut worker = engine();
+        let song = Song::missing();
+        song.create();
+        worker.load(song.source(), None, 0.0, true).unwrap();
+        worker.rendered_frames = 9_600;
+        worker.pause().unwrap();
+        std::fs::remove_file(&song.0).unwrap();
+        worker.release_paused_output().unwrap();
+        assert!(worker.output.is_none());
+        assert!(worker.decoder.is_none());
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
+        assert!(lock_status(&worker.status).error.is_none());
+        worker.select_device(Some("headphones".into())).unwrap();
+        song.create();
+        play(&mut worker).unwrap();
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
     }
 }

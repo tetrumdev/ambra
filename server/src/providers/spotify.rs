@@ -140,7 +140,37 @@ impl SpotifyProvider {
     pub fn disconnect(&self) { self.session.shutdown(); }
     /// Spotify stays optional so an absent login never prevents other providers from starting.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
-        if !interactive && crate::service_auth::disconnected("spotify") { return Ok(None); }
+        Self::authenticate(interactive, None).await
+    }
+
+    pub fn start_browser_login() -> ProviderResult<(crate::browser_auth::SpotifyLogin, String)> {
+        let port = env::var("AMBRA_SPOTIFY_OAUTH_PORT").ok().and_then(|value| value.parse::<u16>().ok()).filter(|port| *port > 0).unwrap_or(DEFAULT_OAUTH_PORT);
+        Ok(crate::browser_auth::SpotifyLogin::new(SessionConfig::default().client_id, port)?)
+    }
+
+    pub async fn complete_browser_login(login: crate::browser_auth::SpotifyLogin, callback: &str) -> ProviderResult<Self> {
+        let fields = login.exchange_fields(callback)?;
+        let response = crate::http_client::builder().timeout(Duration::from_secs(20)).build()?
+            .post(OAUTH_TOKEN_ENDPOINT).form(&fields).send().await?;
+        if !response.status().is_success() { return Err(io::Error::other("Spotify could not complete authorization. Start sign-in again").into()); }
+        let response: SpotifyOAuthResponse = response.json().await?;
+        if response.access_token.is_empty() || response.expires_in == 0 || response.refresh_token.as_ref().is_none_or(|token| token.is_empty()) {
+            return Err(io::Error::other("Spotify returned an incomplete sign-in").into());
+        }
+        let token = OAuthToken {
+            access_token: response.access_token, refresh_token: response.refresh_token.unwrap(),
+            expires_at: Instant::now().checked_add(Duration::from_secs(response.expires_in)).ok_or_else(|| io::Error::other("Invalid Spotify token lifetime"))?,
+            token_type: response.token_type,
+            scopes: response.scope.map(|scopes| scopes.split_whitespace().map(str::to_owned).collect())
+                .unwrap_or_else(|| vec!["streaming".into(), "user-read-private".into()]),
+        };
+        let provider = Self::authenticate(false, Some(token)).await?.ok_or_else(|| io::Error::other("Spotify sign-in did not complete"))?;
+        crate::service_auth::set_disconnected("spotify", false)?;
+        Ok(provider)
+    }
+
+    async fn authenticate(interactive: bool, supplied_token: Option<OAuthToken>) -> ProviderResult<Option<Self>> {
+        if !interactive && supplied_token.is_none() && crate::service_auth::disconnected("spotify") { return Ok(None); }
         if interactive { crate::service_auth::set_disconnected("spotify", false)?; }
         let credentials_path = spotify_credentials_path();
         let audio_cache_path = spotify_audio_cache_path();
@@ -164,7 +194,10 @@ impl SpotifyProvider {
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(20))
             .build()?;
-        let (credentials, search_auth) = if let Some(token) = environment_access_token {
+        let (credentials, search_auth) = if let Some(token) = supplied_token {
+            save_spotify_refresh_token(&oauth_refresh_path, &token.refresh_token)?;
+            (Credentials::with_access_token(token.access_token.clone()), SpotifySearchAuth::Refreshable(token))
+        } else if let Some(token) = environment_access_token {
             (
                 Credentials::with_access_token(token.clone()),
                 SpotifySearchAuth::Static(token),

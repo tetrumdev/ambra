@@ -9,7 +9,7 @@ import { useTrackReorder, type ReorderRules } from "../hooks/useTrackReorder";
 import { movePackaged, packageDrop, packageIndex } from "../utils/playlistPackages";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
-import { MENU_WIDTH } from "../utils/trackMenu";
+import { MENU_WIDTH, isKeyboardMenuClick } from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
@@ -29,6 +29,7 @@ import {
 type OpenMenu =
   | {
       kind: "playback";
+      openedWithKeyboard: boolean;
       trackId: GlobalTrackId;
       x: number;
       y: number;
@@ -221,6 +222,7 @@ export function TrackList({
 
     setOpenMenu({
       kind: "playback",
+      openedWithKeyboard: isKeyboardMenuClick(event),
       trackId,
       x: event.clientX,
       y: event.clientY,
@@ -235,6 +237,7 @@ export function TrackList({
     if (!removeTracks && !addToLibrary && !playlistOptions) {
       setOpenMenu({
         kind: "playback",
+        openedWithKeyboard: isKeyboardMenuClick(event),
         trackId,
         x: event.clientX,
         y: event.clientY,
@@ -296,6 +299,7 @@ export function TrackList({
           xPos={openMenu.x}
           yPos={openMenu.y}
           trackId={openMenu.trackId}
+          openedWithKeyboard={openMenu.openedWithKeyboard}
           playTrack={playTrack}
           playStandalone={playStandalone}
           addToQueue={addToQueue}

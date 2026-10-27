@@ -10,7 +10,7 @@ import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
-import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection } from "./serverConnection";
+import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection, serverConnectionSignal } from "./serverConnection";
 
 export { serverBaseUrl } from "./serverConnection";
 
@@ -72,6 +72,7 @@ export type ServiceAuthStatus = Record<StreamingProvider, boolean>;
 export type ServiceAuthStart = {
   status: "connected" | "callbackRequired";
   loginUrl: string | null;
+  attemptId?: string;
 };
 
 async function responseError(response: Response) {
@@ -142,22 +143,34 @@ export async function serviceAuthStatus(live = false): Promise<ServiceAuthStatus
 
 export async function startServiceAuth(
   provider: StreamingProvider,
+  signal?: AbortSignal,
 ): Promise<ServiceAuthStart> {
-  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/start`, {
+  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/start?browser=true`, {
     method: "POST",
+    signal,
   });
   if (!response.ok) throw new Error(await responseError(response));
   return response.json() as Promise<ServiceAuthStart>;
 }
 
 export async function completeServiceAuth(
-  provider: Exclude<StreamingProvider, "spotify">,
+  provider: StreamingProvider,
   callbackUrl: string,
+  attemptId?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/complete`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ callbackUrl }),
+    body: JSON.stringify({ callbackUrl, attemptId }),
+    signal,
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+}
+
+export async function cancelServiceAuth(provider: StreamingProvider, attemptId: string, signal?: AbortSignal): Promise<void> {
+  const response = await fetch(`${serverBaseUrl}/api/auth/${provider}/cancel`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ attemptId }), signal,
   });
   if (!response.ok) throw new Error(await responseError(response));
 }
@@ -197,6 +210,8 @@ export type ArtworkQuality = {
   width: number;
   height: number;
   colors: string[];
+  /** False when a failed metadata/image probe still needs another attempt. */
+  complete?: boolean;
 };
 
 type TrackPlayback = {
@@ -305,32 +320,48 @@ export function highestQualityAlbumArtwork(album: {
     return cached;
   }
 
-  const request = fetch(`${serverBaseUrl}/api/quality/artwork`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sourceProvider: album.provider,
-      albumId: album.albumId,
-      upc: album.upc ?? null,
-      coverUrl: album.coverUrl,
-    }),
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(
-          `Artwork quality resolver returned HTTP ${response.status}`,
-        );
+  const baseUrl = serverBaseUrl;
+  const connection = serverConnectionSignal();
+  const body = JSON.stringify({
+    sourceProvider: album.provider,
+    albumId: album.albumId,
+    upc: album.upc ?? null,
+    coverUrl: album.coverUrl,
+  });
+  const request = Promise.resolve().then(async () => {
+    for (let attempt = 0; ; attempt++) {
+      connection.throwIfAborted();
+      let response: Response;
+      try {
+        response = await fetch(`${baseUrl}/api/quality/artwork`, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body,
+          signal: AbortSignal.any([connection, AbortSignal.timeout(12_000)]),
+        });
+      } catch (error) {
+        if (connection.aborted || attempt >= 2) throw error;
+        await artworkRetryDelay(attempt, connection);
+        continue;
       }
+      if (!response.ok) {
+        if (attempt < 2 && [408, 429, 500, 502, 503, 504].includes(response.status)) {
+          await artworkRetryDelay(attempt, connection);
+          continue;
+        }
+        throw new Error(`Artwork quality resolver returned HTTP ${response.status}`);
+      }
+      connection.throwIfAborted();
       const artwork = (await response.json()) as ArtworkQuality;
       // The source cover may only have won because a larger one couldn't be reached. The server
       // remembers lookups that completed, so asking again is cheap and picks up a recovery.
-      if (artwork.url === album.coverUrl && artworkQualityRequests.get(cacheKey) === request)
+      const complete = artwork.complete ?? artwork.url !== album.coverUrl;
+      if (!complete && artworkQualityRequests.get(cacheKey) === request)
         artworkQualityRequests.delete(cacheKey);
       return artwork;
-    })
+    }
+  })
     .catch((reason: unknown) => {
       if (artworkQualityRequests.get(cacheKey) === request) artworkQualityRequests.delete(cacheKey);
-      console.warn("Could not resolve highest-quality album artwork:", reason);
+      if (!connection.aborted) console.warn("Could not resolve highest-quality album artwork:", reason);
       return null;
     });
 
@@ -339,6 +370,18 @@ export function highestQualityAlbumArtwork(album: {
     artworkQualityRequests.delete(artworkQualityRequests.keys().next().value!);
   }
   return request;
+}
+
+function artworkRetryDelay(attempt: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    signal.throwIfAborted();
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, 400 * (attempt + 1));
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export function playableTrack(track: RemoteTrack): Track {

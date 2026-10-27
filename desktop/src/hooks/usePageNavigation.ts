@@ -15,7 +15,8 @@ export type AppPage = {
 };
 
 function pageKey(page: AppPage) {
-  if (page.screen === "settings") return `settings:${page.settingsTab}`;
+  // Changing tabs stays within the same Settings visit, so Back leaves Settings at once.
+  if (page.screen === "settings") return "settings";
   if (page.entity) return entityKey(page.entity);
   if (page.screen !== "library") return page.screen;
   return page.playlistId ? `playlist:${page.playlistId}` : `library:${page.section}`;
