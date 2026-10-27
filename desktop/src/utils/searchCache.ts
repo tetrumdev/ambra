@@ -5,6 +5,8 @@ export class SearchCache<T> {
 
   constructor(private ttlMs = 300_000, private capacity = 60) {}
 
+  clear() { this.entries.clear(); }
+
   get(key: string): T | undefined {
     const entry = this.entries.get(key);
     if (!entry) return undefined;

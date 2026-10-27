@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 
 /**
- * Where the server is for this run of the app, and the token a paired device sends.
+ * The current optional server and the token a paired device sends.
  *
  * Saved data never holds a token or a fixed server address: server URLs inside it are
  * stripped of their token when written (`forStorage`) and moved onto this run's server,
@@ -31,6 +31,15 @@ export let serverOnline = false;
 export function setServerOnline(online: boolean) { serverOnline = online; }
 export let serverConnection: ServerConnection | null = null;
 let token: string | null = null;
+let reading = 0;
+let requests = new AbortController();
+const listeners = new Set<() => void>();
+export const getServerConnection = () => serverConnection;
+export function subscribeServerConnection(listener: () => void) {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+export const serverConnectionSignal = () => requests.signal;
 
 const TOKEN_PARAMETER = "access_token";
 // A server URL as saved in JSON: plain http, an explicit port, and an /api/ path.
@@ -82,7 +91,10 @@ function sendTokenWithFetch() {
   const original = window.fetch.bind(window);
   window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    if (!token || !url.startsWith(`${serverBaseUrl}/`)) return original(input, init);
+    if (!url.startsWith(`${serverBaseUrl}/`)) return original(input, init);
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    init = { ...init, signal: signal ? AbortSignal.any([signal, requests.signal]) : requests.signal };
+    if (!token) return original(input, init);
     const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
     if (!headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
     return original(input, { ...init, headers });
@@ -92,7 +104,12 @@ function sendTokenWithFetch() {
 /** Learns this run's server from the desktop app; call before anything talks to the server. */
 export async function connectToServer() {
   if (!isTauri()) return;
+  const current = ++reading;
   const connection = await invoke<ServerConnection>("server_connection");
+  if (current !== reading || JSON.stringify(connection) === JSON.stringify(serverConnection)) return;
+  requests.abort();
+  requests = new AbortController();
+  serverOnline = false;
   serverConnection = connection;
   // A development build aimed at a particular server keeps it while hosting.
   if (connection.mode === "join" || !import.meta.env.VITE_AMBRA_SERVER_URL) {
@@ -100,6 +117,7 @@ export async function connectToServer() {
   }
   token = connection.fallback ? null : connection.token;
   sendTokenWithFetch();
+  for (const listener of listeners) listener();
 }
 
 /** Outside the desktop app (the phone remote): talk to `baseUrl` as a paired device. */

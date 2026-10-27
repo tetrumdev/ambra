@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 
 const calls: { command: string; args?: Record<string, unknown> }[] = [];
+let selectedServer: string | null = null;
 let native = { currentSource: null as string | null, currentTime: 0, duration: 180, isPlaying: false, buffering: false, ended: false, error: null, audioQuality: null };
 const scanned = { audio: "/Music/Ambra/song.flac", name: "Offline song", artist: "Artist", album: "Album", cover: null, trackNumber: 1, durationSeconds: 180 };
 const tauriCore = await import("@tauri-apps/api/core");
@@ -12,6 +13,8 @@ mock.module("@tauri-apps/api/core", () => ({
   isTauri: () => true, convertFileSrc: (source: string) => `asset://localhost${source}`,
   invoke: async (command: string, args?: Record<string, unknown>) => {
     calls.push({ command, args });
+    if (command === "server_connection") return { mode: selectedServer ? "join" : "host", baseUrl: selectedServer ? `http://${selectedServer}:38147` : "http://127.0.0.1:9", token: null,
+      server: selectedServer ? { id: selectedServer, name: selectedServer, publicKey: selectedServer } : null, clientId: "local-player", clientName: "Test" };
     if (command === "load_cached_music" || command === "scan_music") return [scanned];
     if (command === "native_audio_status") return { ...native };
     if (command === "load_native_audio") native = { ...native, currentSource: String(args?.source), currentTime: Number(args?.positionSeconds) || 0, isPlaying: args?.autoplay === true };
@@ -30,8 +33,8 @@ const dom = new Window({ url: "http://localhost/" });
 const originalFetch = globalThis.fetch;
 let requestCount = 0;
 let controls: { play(): void; create(): string | null; release(): Promise<void> };
-function Harness() {
-  const library = useMusicLibrary(true);
+function Harness({ localOnly = true }: { localOnly?: boolean }) {
+  const library = useMusicLibrary(localOnly);
   const queue = useQueue(library.catalogTracks, null, !library.isRestoring);
   const playlists = usePlaylists();
   const player = useAudioPlayer(library.catalogTracks, { trackId: null, positionSeconds: 0 }, {
@@ -122,4 +125,33 @@ test("connected playlists use one authoritative collection for display and every
   await act(async () => { root.render(render(false)); });
   expect(container.textContent).toBe("Private local");
   await act(async () => { root.unmount(); });
+});
+
+
+test("local audio, position, queue, playlists and settings survive repeated live connection changes", async () => {
+  const { connectToServer } = await import("../src/api/serverConnection");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async () => Response.json({ tracks: [] })) as typeof fetch;
+  selectedServer = null; await connectToServer();
+  const container = document.createElement("div"); const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<Harness />); });
+    await act(async () => { controls.create(); controls.play(); await new Promise(resolve => setTimeout(resolve, 250)); });
+    native.currentTime = 42;
+    const source = native.currentSource;
+    const queue = localStorage.getItem("ambra.queue.v1");
+    const playlists = localStorage.getItem("ambra.playlists.v1");
+    localStorage.setItem("ambra.audio-settings.v1", "private audio settings");
+    const initialCalls = calls.length;
+    for (const server of ["first", "second", null, "first", null]) {
+      await act(async () => { selectedServer = server; await connectToServer(); root.render(<Harness localOnly={!server} />); });
+      expect(native.isPlaying).toBe(true); expect(native.currentSource).toBe(source); expect(native.currentTime).toBe(42);
+      expect(localStorage.getItem("ambra.queue.v1")).toBe(queue);
+      expect(localStorage.getItem("ambra.playlists.v1")).toBe(playlists);
+      expect(localStorage.getItem("ambra.audio-settings.v1")).toBe("private audio settings");
+    }
+    expect(calls.slice(initialCalls).filter(call => ["load_native_audio", "pause_native_audio", "restart_app"].includes(call.command))).toEqual([]);
+  } finally {
+    await act(async () => root.unmount()); globalThis.fetch = previousFetch;
+  }
 });

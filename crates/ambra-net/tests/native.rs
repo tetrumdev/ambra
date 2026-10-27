@@ -115,6 +115,28 @@ fn manager(identity: &Identity, address: std::net::SocketAddr) -> Arc<Connection
         Some("fixture-token".into()),
     )
 }
+
+#[tokio::test]
+async fn repeated_server_switches_close_transports_without_stopping_servers() {
+    let first = harness().await;
+    let second = harness().await;
+    let client = reqwest::Client::new();
+    for server in [&first, &second, &first, &second] {
+        let manager = manager(&server.0, server.1);
+        let connection = manager.connect().await.unwrap();
+        let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.unwrap();
+        let url = format!("{}/api/range", bridge.base_url);
+        assert!(client.get(&url).send().await.unwrap().status().is_success());
+        bridge.shutdown().await;
+        assert!(connection.is_closed());
+        assert_eq!(manager.status().state, ConnectionState::Offline);
+        assert!(manager.connect().await.is_err());
+        assert!(client.get(url).send().await.is_err());
+        assert!(!server.3.is_finished(), "switching must never stop the independent server");
+    }
+    first.2.cancel(); second.2.cancel();
+    first.3.await.unwrap().unwrap(); second.3.await.unwrap().unwrap();
+}
 #[test]
 fn identities_persist_and_corruption_does_not_rotate() {
     let directory = tempfile::tempdir().unwrap();
