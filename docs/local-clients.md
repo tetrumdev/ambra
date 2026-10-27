@@ -46,12 +46,20 @@ and restart the client to reopen its native bridge. This does not restart or man
 A network outage never opens setup or restarts the player. Local playback continues through
 connection loss and reconnect. Streaming operations may fail while disconnected.
 
-Desktop starts with local playback, including when a server is available. The explicit **Shared
-playback session** switch controls the server queue and registers this computer as a server
-output. Returning to local playback restores the separate local queue and position. Loss of
-the shared connection returns to local mode. Shared playback does not automatically resume
-when the connection returns; choose it again. Mobile similarly separates Local music from its
-existing shared Server player. Moving between playback modes stops the previous audio owner.
+Desktop defaults to shared playback when connected to a server. The **Shared playback session**
+switch controls the server queue and registers this computer as a server output. Its choice is
+saved on this device across restarts and reconnections. Returning to local playback restores the
+separate local queue and position. Connection loss temporarily returns to local mode without
+changing that preference. Losing the selected audio output pauses the server session at its last
+reported position; reconnecting or reopening that output does not automatically start the song.
+Closing another controller leaves the selected output playing. Mobile similarly separates Local
+music from its existing shared Server player. Moving between playback modes stops the previous
+audio owner.
+
+Output heartbeats continue while audio is loading or seeking. Remote playheads wait for the
+output to report audible playback and receive fresh positions every second while playing.
+Releasing a paused audio device keeps the decoder and unplayed samples, so resuming does not
+download the song again.
 
 ## Migration and rollback
 

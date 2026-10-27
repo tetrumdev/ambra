@@ -10,12 +10,12 @@ type Discovered = { id: string; name: string; version: string; address: string }
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
 
 /** Save both owners before changing the optional server; leave the local player mounted. */
-async function applyConnection(command: "join_server" | "leave_server", setSharedPlayback: (shared: boolean) => Promise<void>, args?: Record<string, unknown>) {
+async function applyConnection(command: "join_server" | "leave_server", setSharedPlayback: (shared: boolean, remember?: boolean) => Promise<void>, args?: Record<string, unknown>) {
   window.dispatchEvent(new Event("ambra:save-session"));
   await flushPersistentState();
   await withServerStateTransition(async () => {
     await invoke(command, args);
-    await setSharedPlayback(false);
+    await setSharedPlayback(false, false);
     await connectToServer();
   });
 }

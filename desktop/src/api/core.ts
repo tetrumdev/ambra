@@ -99,7 +99,7 @@ function accept(next: ArrivingView, signal = serverConnectionSignal()) {
 const knownQueue = () => view ? `queue=${view.queueRevision}` : "";
 
 async function request<T>(path: string, body?: unknown, signal = serverConnectionSignal()): Promise<T> {
-  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {
+  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
   });
   const value = await response.json().catch(() => null) as (T & { error?: string }) | null;
@@ -115,21 +115,56 @@ export function followCore() {
   following = controller;
   const signal = AbortSignal.any([controller.signal, serverConnectionSignal()]);
   const stopClock = syncServerClock(signal);
-  void (async () => {
-    while (!signal.aborted) {
-      try {
-        const since = view ? `?since=${view.revision}&wait=5&${knownQueue()}` : "";
-        accept(await request<ArrivingView>(`/api/session${since}`, undefined, signal), signal);
-      } catch {
-        if (signal.aborted) break;
-        await new Promise(resolve => setTimeout(resolve, 2000));
-      }
-    }
-  })();
-  return () => {
-    controller.abort(); stopClock();
+  let poll: AbortController | null = null;
+  let retry: (() => void) | null = null;
+  let refreshPending = false;
+  // A poll or its timeout may have been suspended while hidden or asleep. Replace it
+  // with an immediate snapshot, including the position even if the revision is unchanged.
+  const refresh = () => {
+    refreshPending = true;
+    poll?.abort();
+    retry?.();
+  };
+  const visible = () => { if (!document.hidden) refresh(); };
+  const cleanup = () => {
+    poll?.abort(); retry?.(); stopClock();
+    window.removeEventListener("focus", refresh);
+    window.removeEventListener("pageshow", refresh);
+    window.removeEventListener("online", refresh);
+    document.removeEventListener("visibilitychange", visible);
     if (following === controller) following = null;
   };
+  window.addEventListener("focus", refresh);
+  window.addEventListener("pageshow", refresh);
+  window.addEventListener("online", refresh);
+  document.addEventListener("visibilitychange", visible);
+  signal.addEventListener("abort", cleanup, { once: true });
+  void (async () => {
+    while (!signal.aborted) {
+      const immediate = refreshPending;
+      refreshPending = false;
+      const current = new AbortController();
+      poll = current;
+      const requestSignal = AbortSignal.any([signal, current.signal]);
+      let failed = false;
+      try {
+        const since = view && !immediate ? `?since=${view.revision}&wait=5&${knownQueue()}` : `?${knownQueue()}`;
+        const next = await request<ArrivingView>(`/api/session${since}`, undefined, requestSignal);
+        if (!requestSignal.aborted) accept(next, signal);
+      } catch {
+        if (signal.aborted) break;
+        failed = true;
+      } finally {
+        poll = null;
+      }
+      if (failed && !refreshPending && !signal.aborted) await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(timer); retry = null; resolve(); };
+        const timer = setTimeout(done, 2000);
+        retry = done;
+      });
+    }
+  })();
+  return () => controller.abort();
 }
 
 function inOrder<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {

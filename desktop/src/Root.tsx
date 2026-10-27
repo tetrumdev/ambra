@@ -3,11 +3,13 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import App from "./App";
 import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
 import { ClientConnectionContext, type NetworkStatus } from "./hooks/ClientConnectionContext";
-import { hydratePersistentStorage } from "./utils/persistentStorage";
+import { flushPersistentState, getPersistentItem, hydratePersistentStorage, setPersistentItem } from "./utils/persistentStorage";
 import { connectToServer, serverConnection, setServerOnline, subscribeServerConnection, getServerConnection, serverBaseUrl } from "./api/serverConnection";
 import { flushServerState, hydrateServerState, installServerStateLifecycle, serverStateStatus, subscribeServerState, reloadServerState } from "./utils/serverState";
 import { mark } from "./utils/perf";
 import { useStartupWindow } from "./hooks/useStartupWindow";
+
+const sharedPlaybackKey = "ambra.shared-playback.v1";
 
 /** Local hydration and playback never wait for discovery, authentication, or server state. */
 export function Root() {
@@ -16,6 +18,7 @@ export function Root() {
   const [ready, setReady] = useState(false);
   const [network, setNetwork] = useState<NetworkStatus>({ state: "Offline" });
   const [sharedPlayback, setShared] = useState(false);
+  const [preferSharedPlayback, setPreferSharedPlayback] = useState(true);
   const [playerGeneration, setPlayerGeneration] = useState(0);
   const playbackMode = useRef(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -26,7 +29,7 @@ export function Root() {
   setServerOnline(connected);
   useStartupWindow(ready);
 
-  const setSharedPlayback = useCallback((shared: boolean) => {
+  const applySharedPlayback = useCallback((shared: boolean) => {
     const change = changingMode.current.then(async () => {
       if (playbackMode.current === shared) return;
       window.dispatchEvent(new Event("ambra:save-session"));
@@ -51,6 +54,14 @@ export function Root() {
     return change;
   }, []);
 
+  const setSharedPlayback = useCallback(async (shared: boolean, remember = true) => {
+    await applySharedPlayback(shared);
+    if (!remember) return;
+    setPersistentItem(sharedPlaybackKey, String(shared));
+    setPreferSharedPlayback(shared);
+    await flushPersistentState();
+  }, [applySharedPlayback]);
+
   const reconnect = useCallback(() => {
     if (!serverConnection?.server) return;
     const base = serverBaseUrl;
@@ -64,7 +75,11 @@ export function Root() {
   useEffect(() => {
     let disposed = false;
     void hydratePersistentStorage().finally(() => {
-      if (!disposed) { setReady(true); mark("state-hydrated"); }
+      if (!disposed) {
+        setPreferSharedPlayback(getPersistentItem(sharedPlaybackKey) !== "false");
+        setReady(true);
+        mark("state-hydrated");
+      }
     });
     return () => { disposed = true; };
   }, []);
@@ -91,8 +106,8 @@ export function Root() {
   }, [ready, connection]);
   useEffect(installServerStateLifecycle, []);
   useEffect(() => {
-    if (!connected && sharedPlayback) void setSharedPlayback(false);
-  }, [connected, sharedPlayback, setSharedPlayback]);
+    if (ready) void applySharedPlayback(connected && preferSharedPlayback).catch(() => {});
+  }, [ready, connected, preferSharedPlayback, applySharedPlayback]);
 
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-tauri-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={{ connected, network, sharedPlayback, setSharedPlayback, reconnect }}>
