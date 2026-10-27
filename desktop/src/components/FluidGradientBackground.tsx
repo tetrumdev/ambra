@@ -3,6 +3,7 @@ import type { CoverSeparation } from "../utils/backgroundPalette";
 import {
   COLOR_TRANSITION_MS,
   EDGE_COMPONENTS,
+  EDGE_COLORS_OFFSET,
   MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
   createNoiseTexture,
@@ -34,6 +35,11 @@ type FluidGradientBackgroundProps = {
 
 /** Matches the lyrics backdrop fade by default, so the separation eases with what is visible beside the cover. */
 const COVER_DIM_TRANSITION_MS = 700;
+/** Reveal any needed edge lift gently after the artwork and its palette have settled. */
+const COVER_LIFT_FADE_MS = 300;
+const COVER_MOTION_EVENTS = [
+  "animationstart", "animationend", "animationcancel", "transitionrun", "transitionend", "transitioncancel",
+] as const;
 
 export function FluidGradientBackground({
   colors,
@@ -52,6 +58,7 @@ export function FluidGradientBackground({
     ...weights.slice(0, 4),
     ...separation.edges,
     ...separation.directions,
+    ...(separation.colors ?? []),
   ].join(":");
   // Swirl time advances at `speed`, which eases rather than switching, so pausing never freezes a frame mid-motion.
   const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number; speed: number } | null>(null);
@@ -180,9 +187,10 @@ export function FluidGradientBackground({
     const shaderCoverDim = gl.getUniformLocation(program, "u_coverDim");
     const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
     const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
+    const shaderEdgeColors = gl.getUniformLocation(program, "u_edgeColors[0]");
     if (
       !buffer || !noiseTexture || position < 0 || !resolution || !time || !shaderNoise || !shaderColors
-      || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection
+      || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection || !shaderEdgeColors
     ) {
       gl.deleteTexture(noiseTexture);
       gl.deleteBuffer(buffer);
@@ -216,9 +224,15 @@ export function FluidGradientBackground({
     const measureCover = () => {
       const element = document.getElementById(coverIdRef.current);
       if (element !== observedCover) {
-        if (observedCover) resizeObserver.unobserve(observedCover);
+        if (observedCover) {
+          resizeObserver.unobserve(observedCover);
+          for (const event of COVER_MOTION_EVENTS) observedCover.removeEventListener(event, scheduleDraw);
+        }
         observedCover = element;
-        if (element) resizeObserver.observe(element);
+        if (element) {
+          resizeObserver.observe(element);
+          for (const event of COVER_MOTION_EVENTS) element.addEventListener(event, scheduleDraw);
+        }
       }
       const bounds = canvas.getBoundingClientRect();
       const rect = element?.getBoundingClientRect();
@@ -251,6 +265,7 @@ export function FluidGradientBackground({
     };
     let lastDrawnAt = -Infinity;
     let coverWasFlying = false;
+    let coverLiftStartedAt: number | null = null;
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
@@ -289,7 +304,8 @@ export function FluidGradientBackground({
       // The cover may mount after the canvas; keep looking until it appears. While it moves
       // (opening, closing, or gliding beside the lyrics) the glow follows it every frame, and
       // once more after it lands, since the last moving frame is a little short of its place.
-      const flying = !!observedCover?.getAnimations().length;
+      const flying = observedCover?.getAnimations({ subtree: true })
+        .some(animation => animation.playState === "running" || animation.pending) ?? false;
       if (!observedCover || !observedCover.isConnected || flying || coverWasFlying) measureCover();
       coverWasFlying = flying;
       gl.uniform4fv(shaderCover, cover);
@@ -297,7 +313,18 @@ export function FluidGradientBackground({
       const dimProgress = easedProgress((now - dim.startedAt) / dim.duration);
       gl.uniform1f(shaderCoverDim, dim.from + (dim.to - dim.from) * dimProgress);
       gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
-      gl.uniform4fv(shaderEdgeDirection, palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2));
+      gl.uniform3fv(shaderEdgeColors, palette.slice(EDGE_COLORS_OFFSET, EDGE_COLORS_OFFSET + EDGE_COMPONENTS * 3));
+      // Cover images slide/fade inside their container. Their old edge samples must not
+      // leave a stationary bright outline behind while the artwork or palette is changing.
+      if (!observedCover || flying || progress < 1 || dimProgress < 1) coverLiftStartedAt = null;
+      else coverLiftStartedAt ??= now;
+      const liftProgress = coverLiftStartedAt === null
+        ? 0
+        : easedProgress((now - coverLiftStartedAt) / COVER_LIFT_FADE_MS);
+      const edgeDirections = palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2);
+      gl.uniform4fv(shaderEdgeDirection, liftProgress < 1
+        ? edgeDirections.map(direction => direction * liftProgress)
+        : edgeDirections);
       gl.uniform4fv(shaderBias, palette.slice(12 + EDGE_COMPONENTS * 2, 16 + EDGE_COMPONENTS * 2));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
@@ -312,7 +339,8 @@ export function FluidGradientBackground({
       journey.seconds += elapsed * journey.speed;
       gl.uniform1f(time, journey.seconds);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (activeRef.current && (journey.speed > 0 || swirlTarget > 0 || progress < 1 || dimProgress < 1 || flying)) {
+      if (activeRef.current && (journey.speed > 0 || swirlTarget > 0 || progress < 1 || dimProgress < 1 || flying
+        || (coverLiftStartedAt !== null && liftProgress < 1))) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };
@@ -326,6 +354,7 @@ export function FluidGradientBackground({
 
     return () => {
       resizeObserver.disconnect();
+      for (const event of COVER_MOTION_EVENTS) observedCover?.removeEventListener(event, scheduleDraw);
       document.removeEventListener("visibilitychange", scheduleDraw);
       stopFollowingMotion();
       drawRef.current = null;

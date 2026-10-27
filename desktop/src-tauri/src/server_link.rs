@@ -130,13 +130,14 @@ struct Runtime {
 
 #[derive(Default)]
 struct Pairing { generation: u64, session: Option<PairingSession> }
-struct PairingSession { address: String, request_id: String, payload: ambra_net::pairing::PairingPayload, manager: Arc<ambra_net::ConnectionManager>, approved: Option<(JoinedServer, String)> }
+struct PairingSession { address: String, request_id: String, payload: ambra_net::pairing::PairingPayload, manager: Option<Arc<ambra_net::ConnectionManager>>, approved: Option<(JoinedServer, String)> }
 
 impl Drop for PairingSession {
     fn drop(&mut self) {
-        self.manager.cancel.cancel();
-        let manager = self.manager.clone();
-        tauri::async_runtime::spawn(async move { manager.shutdown().await; });
+        if let Some(manager) = self.manager.take() {
+            manager.cancel.cancel();
+            tauri::async_runtime::spawn(async move { manager.shutdown().await; });
+        }
     }
 }
 
@@ -159,7 +160,7 @@ impl ServerLink {
     /// Reads the saved choice without starting a server or changing it when offline.
     pub fn start(directory: PathBuf) -> Result<Self, String> {
         let settings = Settings::load(&directory);
-        let runtime = tauri::async_runtime::block_on(Runtime::prepare(&directory, &settings));
+        let runtime = tauri::async_runtime::block_on(Runtime::prepare(&directory, &settings, None));
         // A saved server can be unavailable without preventing local startup.
         let runtime = runtime.unwrap_or_else(|error| Runtime {
             connection: Self::describe(&settings, None), manager: None, bridge: None, network_error: Some(error),
@@ -177,8 +178,8 @@ impl ServerLink {
     }
 
     // Caller serializes selection changes with shared-output ownership changes.
-    async fn install(&self, next: Settings, app: Option<&tauri::AppHandle>) -> Result<(), String> {
-        let runtime = Runtime::prepare(&self.directory, &next).await?;
+    async fn install(&self, next: Settings, app: Option<&tauri::AppHandle>, enrollment: Option<Arc<ambra_net::ConnectionManager>>) -> Result<(), String> {
+        let runtime = Runtime::prepare(&self.directory, &next, enrollment).await?;
         next.save(&self.directory)?;
         // Preparation and persistence can fail; keep the previous output alive until both succeed.
         if let Some(app) = app { crate::remote_endpoint::stop_shared_output(app).await; }
@@ -197,6 +198,24 @@ impl ServerLink {
         pending.generation += 1;
         pending.session.take();
         Ok(pending.generation)
+    }
+
+    async fn join(&self, request_id: &str, app: Option<&tauri::AppHandle>) -> Result<(), String> {
+        let _transition = self.transition.lock().await;
+        let (server, token, manager) = {
+            let pending = self.pairing.lock().map_err(|_| "Pairing unavailable")?;
+            let session = pending.session.as_ref().filter(|session| session.request_id == request_id).ok_or("Pairing is not approved")?;
+            let (server, token) = session.approved.clone().ok_or("Pairing is not approved")?;
+            (server, token, session.manager.clone().ok_or("Pairing already joined")?)
+        };
+        manager.authorize(token.clone()).await.map_err(|e| e.to_string())?;
+        let mut next = self.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+        next.mode = Mode::Join; next.decided = true; next.server = Some(server); next.token = Some(token);
+        self.install(next, app, Some(manager)).await?;
+        // Ownership moved into the joined runtime; dropping enrollment must not close it.
+        if let Some(session) = self.pairing.lock().map_err(|_| "Pairing unavailable")?.session.as_mut() { session.manager.take(); }
+        self.cancel_pairing()?;
+        Ok(())
     }
 
     fn change(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
@@ -219,13 +238,13 @@ impl ServerLink {
 }
 
 impl Runtime {
-    async fn prepare(directory: &Path, settings: &Settings) -> Result<Self, String> {
+    async fn prepare(directory: &Path, settings: &Settings, enrollment: Option<Arc<ambra_net::ConnectionManager>>) -> Result<Self, String> {
         let (manager, bridge) = if settings.mode == Mode::Join {
             let server = settings.server.as_ref().ok_or("Missing server")?;
             let public_key = server.public_key.ok_or("Legacy pairing has no cryptographic identity. Pair again using the server QR link.")?;
             let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
             let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint };
-            let manager = ambra_net::ConnectionManager::new(identity, selected, settings.token.clone());
+            let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::new(identity, selected, settings.token.clone()));
             let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.map_err(|e| e.to_string())?;
             (Some(manager), Some(bridge))
         } else { (None, None) };
@@ -293,6 +312,8 @@ fn normalize_address(address: &str) -> Result<String, String> {
 
 fn http() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|error| error.to_string())
@@ -324,11 +345,14 @@ async fn pairing_target(address: &str) -> Result<ambra_net::pairing::PairingPayl
         let address = normalize_address(address)?;
         // Manual bootstrap exchanges public hints only; approval verifies the pinned key.
         tauri::async_runtime::spawn_blocking(move || {
-            let info = http()?.get(format!("http://{address}/api/server/info")).send().map_err(|e| e.to_string()).and_then(answer)?;
+            use std::net::ToSocketAddrs;
+            let addresses: Vec<_> = address.to_socket_addrs().map_err(|e| e.to_string())?
+                .filter(|a| ambra_net::lan::is_local(a.ip())).collect();
+            let endpoint = addresses.first().ok_or("Manual pairing requires a native LAN address; use the server pairing link across networks")?;
+            let info = http()?.get(format!("http://{endpoint}/api/server/info")).send().map_err(|e| e.to_string()).and_then(answer)?;
             let public_key = serde_json::from_value(info["publicKey"].clone()).map_err(|_| "Server needs an update before encrypted pairing")?;
             let port = info["securePort"].as_u64().and_then(|p| u16::try_from(p).ok()).ok_or("Secure listener unavailable")?;
-            use std::net::ToSocketAddrs;
-            let local_addresses = address.to_socket_addrs().map_err(|e| e.to_string())?.filter(|a| ambra_net::lan::is_local(a.ip()))
+            let local_addresses = addresses.into_iter()
                 .map(|a| SocketAddr::new(a.ip(), port)).collect();
             Ok::<_, String>(ambra_net::pairing::PairingPayload { version: 1, public_key, name: info["name"].as_str().unwrap_or("Ambra").into(), local_addresses, public_endpoint: None })
         }).await.map_err(|e| e.to_string())??
@@ -343,7 +367,7 @@ pub async fn start_pairing(link: tauri::State<'_, ServerLink>, address: String) 
     let identity = ambra_net::Identity::load_or_create(&link.directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
     let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint };
     let manager = ambra_net::ConnectionManager::new(identity, selected, None);
-    let mut session = PairingSession { address: address.clone(), request_id: String::new(), payload: payload.clone(), manager: manager.clone(), approved: None };
+    let mut session = PairingSession { address: address.clone(), request_id: String::new(), payload: payload.clone(), manager: Some(manager.clone()), approved: None };
     let started = manager.json("POST", "/api/pair/request", Some(json!({ "clientId": link.client_id(), "clientName": client_name() }))).await.map_err(|e| e.to_string())?;
     let request_id = started["requestId"].as_str().ok_or("Missing pairing handle")?.to_owned();
     let result = PairingStarted { request_id: request_id.clone(), code: started["code"].as_str().ok_or("Missing pairing code")?.into(), address: address.clone(), server_name: payload.name.clone() };
@@ -359,7 +383,7 @@ pub async fn poll_pairing(link: tauri::State<'_, ServerLink>, address: String, r
     let (manager, payload, generation) = {
         let pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
         let session = pending.session.as_ref().filter(|s| s.address == address && s.request_id == request_id).ok_or("Start pairing again")?;
-        (session.manager.clone(), session.payload.clone(), pending.generation)
+        (session.manager.clone().ok_or("Pairing already joined")?, session.payload.clone(), pending.generation)
     };
     let reply = manager.json("GET", &format!("/api/pair/request/{request_id}"), None).await.map_err(|e| e.to_string())?;
     let status = reply["status"].as_str().unwrap_or("expired").to_owned();
@@ -391,17 +415,7 @@ pub async fn cancel_pairing(link: tauri::State<'_, ServerLink>, request_id: Stri
 
 #[tauri::command]
 pub async fn join_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>, request_id: String) -> Result<(), String> {
-    let _transition = link.transition.lock().await;
-    let (server, token) = {
-        let pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
-        pending.session.as_ref().filter(|session| session.request_id == request_id)
-            .and_then(|session| session.approved.clone()).ok_or("Pairing is not approved")?
-    };
-    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
-    next.mode = Mode::Join; next.decided = true; next.server = Some(server); next.token = Some(token);
-    link.install(next, Some(&app)).await?;
-    link.cancel_pairing()?;
-    Ok(())
+    link.join(&request_id, Some(&app)).await
 }
 
 /// Disconnect the client without touching any device or server data.
@@ -411,7 +425,7 @@ pub async fn leave_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLi
     link.cancel_pairing()?;
     let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
     next.mode = Mode::Host; next.decided = true; next.server = None; next.token = None;
-    link.install(next, Some(&app)).await
+    link.install(next, Some(&app), None).await
 }
 
 /// The first-run offer to join a server on the network was answered or dismissed.
@@ -477,7 +491,7 @@ mod tests {
                     next.server = Some(JoinedServer { id: index.to_string(), name: "Independent".into(), address: "127.0.0.1:9".into(), public_key: Some(keys[index % 2]), local_addresses: vec![], public_endpoint: None });
                     next.token = Some(format!("token-{index}"));
                 }
-                link.install(next, None).await.unwrap();
+                link.install(next, None, None).await.unwrap();
                 if let Some((url, manager)) = previous.take() {
                     assert!(manager.cancel.is_cancelled());
                     assert_eq!(manager.status().state, ambra_net::ConnectionState::Offline);
@@ -514,12 +528,12 @@ mod tests {
             next.mode = Mode::Join;
             next.server = Some(JoinedServer { id: "bad".into(), name: "Legacy".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None });
             next.token = Some("secret".into());
-            assert!(link.install(next.clone(), None).await.is_err());
+            assert!(link.install(next.clone(), None, None).await.is_err());
             assert_eq!(link.connection().mode, Mode::Host);
             next.server.as_mut().unwrap().public_key = Some(ambra_net::Identity::generate().unwrap().public_key());
             // A settings write failure must not partially commit the prepared bridge.
             std::fs::create_dir_all(directory.join(FILE_NAME)).unwrap();
-            assert!(link.install(next, None).await.is_err());
+            assert!(link.install(next, None, None).await.is_err());
             assert_eq!(link.connection().mode, Mode::Host);
             assert_eq!(link.settings.lock().unwrap().client_id, initial.client_id);
             assert!(link.settings.lock().unwrap().token.is_none());
@@ -562,5 +576,50 @@ mod tests {
         assert_eq!(connection.when_away, WhenAway::Wait);
         std::fs::remove_file(directory.join(FILE_NAME)).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod pairing_handoff_tests {
+    use super::*;
+
+    #[test]
+    fn approved_pairing_transfers_the_manager_without_cancelling_it() {
+        let directory = std::env::temp_dir().join(format!("ambra-handoff-{}", std::process::id()));
+        let link = ServerLink::start(directory.clone()).unwrap();
+        tauri::async_runtime::block_on(async {
+            let server = ambra_net::Identity::generate().unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let cancel = tokio_util::sync::CancellationToken::new();
+            let app = axum::Router::new().route("/api/network/session", axum::routing::get(|request: axum::extract::Request| async move {
+                if request.headers().get("authorization").is_some_and(|v| v == "Bearer paired-token") { axum::http::StatusCode::OK } else { axum::http::StatusCode::UNAUTHORIZED }
+            }));
+            let task = tokio::spawn(ambra_net::lan::serve(listener, server.clone(), app, cancel.clone()));
+            let payload = ambra_net::pairing::PairingPayload { version: 1, public_key: server.public_key(), name: "Independent".into(), local_addresses: vec![address], public_endpoint: None };
+            let manager = ambra_net::ConnectionManager::new(ambra_net::Identity::generate().unwrap(), ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: vec![address], public_endpoint: None }, None);
+            let connection = manager.connect().await.unwrap();
+            let joined = JoinedServer { id: "independent".into(), name: payload.name.clone(), address: address.to_string(), public_key: Some(payload.public_key), local_addresses: vec![address], public_endpoint: None };
+            link.pairing.lock().unwrap().session = Some(PairingSession { address: payload.encode().unwrap(), request_id: "approved".into(), payload, manager: Some(manager.clone()), approved: Some((joined, "paired-token".into())) });
+            link.join("approved", None).await.unwrap();
+            assert!(!manager.cancel.is_cancelled());
+            assert!(link.pairing.lock().unwrap().session.is_none());
+            assert!(Arc::ptr_eq(link.runtime.lock().unwrap().manager.as_ref().unwrap(), &manager));
+            assert!(Arc::ptr_eq(&connection, &manager.connect().await.unwrap()));
+            assert_eq!(manager.status().state, ambra_net::ConnectionState::ConnectedLocal);
+            let bridge = link.runtime.lock().unwrap().bridge.take().unwrap();
+            bridge.shutdown().await;
+            cancel.cancel();
+            task.await.unwrap().unwrap();
+        });
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_pairing_rejects_tailscale_before_bootstrap_http() {
+        for address in ["100.106.252.60", "[fd7a:115c:a1e0::f537:fc3d]:38147"] {
+            let error = pairing_target(address).await.unwrap_err();
+            assert!(error.contains("native LAN address"), "{error}");
+        }
     }
 }

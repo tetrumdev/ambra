@@ -40,6 +40,7 @@ mod persistence;
 mod playlist_export;
 mod remote_endpoint;
 mod server_link;
+mod service_login;
 mod window_bounds;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1004,6 +1005,7 @@ fn startup_elapsed_ms() -> u64 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).with_ansi(false).try_init();
     let _ = PROCESS_STARTED.set(Instant::now());
     let app = tauri::Builder::default()
         .plugin(window_bounds::init())
@@ -1071,6 +1073,8 @@ pub fn run() {
             server_link::set_server_link_decided,
             server_link::join_server,
             server_link::cancel_pairing,
+            service_login::open_service_login,
+            service_login::cancel_service_login,
             local_import::import_local_music,
         ])
         .build(tauri::generate_context!())
