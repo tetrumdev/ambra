@@ -155,7 +155,8 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         .extensions()
         .get::<ConnectInfo<SocketAddr>>()
         .is_some_and(|ConnectInfo(peer)| peer.ip().is_loopback());
-    let local = peer_is_loopback && headers.get(HOST).is_none_or(|host| loopback_host(host.as_bytes()));
+    let remote_peer = request.extensions().get::<ambra_net::transport::RemotePeer>().cloned();
+    let local = remote_peer.is_none() && peer_is_loopback && headers.get(HOST).is_none_or(|host| loopback_host(host.as_bytes()));
     let path = request.uri().path().to_owned();
 
     if path.starts_with(LOCAL_ONLY_PREFIX) {
@@ -170,15 +171,28 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     if local || request.method() == Method::OPTIONS || public_path(&path) {
         return next.run(request).await;
     }
+    if remote_peer.is_none() {
+        return (StatusCode::UPGRADE_REQUIRED, "Use Ambra native encrypted networking; legacy remote clients must pair again").into_response();
+    }
     let (token, stripped) = take_token(&request);
     let authenticated = token.and_then(|token| {
-        policy.network.paired_client_id(&token).map(|client_id| (token, client_id))
+        policy.network.paired_client_id(&token, remote_peer.as_ref().map(|peer| peer.public_key))
+            .map(|client_id| (token, client_id))
     });
     let Some((token, client_id)) = authenticated else {
         return (StatusCode::UNAUTHORIZED, "Pair this device with the server first").into_response();
     };
+    if let Some(peer) = &remote_peer {
+        if let Ok(mut sessions) = policy.network.authenticated_sessions.write() {
+            sessions.retain(|_, active| { active.retain(|s| s.strong_count() > 0); !active.is_empty() });
+            let active = sessions.entry(client_id.clone()).or_default();
+            let session = Arc::downgrade(&peer.session);
+            if !active.iter().any(|s| s.ptr_eq(&session)) { active.push(session); }
+        }
+    }
     request.extensions_mut().insert(Caller { client_id: Some(client_id) });
-    request.extensions_mut().insert(MediaAccessToken(token));
+    // Native bridges authenticate child media requests; never put the device bearer in a manifest.
+    let _ = token;
     if let Some(uri) = stripped {
         *request.uri_mut() = uri;
     }
@@ -237,14 +251,15 @@ mod tests {
         let mut config = crate::server_config::ServerConfig::load_default_for_tests();
         config.paired_clients.push(crate::server_config::PairedClient {
             id: "phone".into(), name: "Phone".into(),
-            token_sha256: crate::server_config::token_hash("test+token"), paired_at_ms: 0,
+            token_sha256: crate::server_config::token_hash("test+token"), paired_at_ms: 0, public_key: None,
         });
         let policy = AccessPolicy::from_env(crate::network::Network::new(config));
         let router = Router::new().route("/protected", get(
             |uri: Uri, credential: Option<Extension<MediaAccessToken>>, caller: Extension<Caller>| async move {
                 Json(serde_json::json!({ "uri": uri.to_string(), "token": credential.map(|Extension(token)| token.0), "client_id": caller.0.client_id }))
             },
-        )).layer(middleware::from_fn_with_state(policy, enforce));
+        )).layer(middleware::from_fn_with_state(policy, enforce))
+            .layer(Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -258,7 +273,7 @@ mod tests {
             let response = request.send().await.unwrap();
             assert_eq!(response.status(), StatusCode::OK);
             let body: serde_json::Value = response.json().await.unwrap();
-            assert_eq!(body["token"], "test+token");
+            assert!(body["token"].is_null());
             assert_eq!(body["client_id"], "phone");
             assert_eq!(body["uri"], "/protected");
         }
@@ -279,4 +294,33 @@ mod tests {
         assert!(!policy.allows_origin(b"https://example.com"));
         assert!(!policy.allows_origin(b"null"));
     }
+    #[tokio::test]
+    async fn encrypted_remote_origin_never_inherits_loopback_administration_and_revocation_applies() {
+        use tower::ServiceExt;
+        use axum::{Router, body::Body, routing::get, middleware};
+        let device_key = ambra_net::Identity::generate().unwrap().public_key();
+        let network = crate::network::Network::new(crate::server_config::ServerConfig::load_default_for_tests());
+        network.config.write().unwrap().paired_clients.push(crate::server_config::PairedClient {
+            id: "device".into(), name: "Device".into(), token_sha256: crate::server_config::token_hash("valid"), paired_at_ms: 0, public_key: Some(device_key),
+        });
+        let app = Router::new().route("/api/local/config", get(|| async { "admin" }))
+            .route("/api/music", get(|| async { "audio" }))
+            .layer(middleware::from_fn_with_state(AccessPolicy::from_env(network.clone()), enforce));
+        let request = |path: &str, peer_key: Option<ambra_net::PublicKey>, token: &str| {
+            let mut request = Request::builder().uri(path).header(HOST, "localhost").header(AUTHORIZATION, format!("Bearer {token}"))
+                .header("x-forwarded-for", "127.0.0.1").header("x-ambra-local", "true").body(Body::empty()).unwrap();
+            request.extensions_mut().insert(ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
+            if let Some(key) = peer_key { request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1234".parse().unwrap(), session: std::sync::Arc::new(()) }); }
+            request
+        };
+        assert_eq!(app.clone().oneshot(request("/api/local/config", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
+        assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "valid")).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "wrong")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        let stranger = ambra_net::Identity::generate().unwrap().public_key();
+        assert_eq!(app.clone().oneshot(request("/api/music", Some(stranger), "valid")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        network.config.write().unwrap().paired_clients.clear();
+        assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "valid")).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(app.oneshot(request("/api/local/config", None, "")).await.unwrap().status(), StatusCode::OK);
+    }
+
 }

@@ -187,7 +187,8 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         Some(address) => crate::server_config::parse_bind(&address)?,
         None => config.address(),
     };
-    let network = crate::network::Network::new(config);
+    let identity = ambra_net::Identity::load_or_create(&crate::storage::config_path("network-identity.key"))?;
+    let network = crate::network::Network::with_identity(config, identity);
     let access = crate::access::AccessPolicy::from_env(network.clone());
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::list(access.origin_values()))
@@ -315,13 +316,14 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         println!("Ambra server listening on http://{address} (this machine only)");
     } else {
         println!("Ambra server listening on http://{address} (shared with the local network)");
-        tokio::spawn(crate::discovery::run(network.clone()));
     }
 
     // Bound to one LAN address, the server also answers on loopback, so this machine's app and
     // the CLI keep their trusted local access.
     let loopback = (!address.ip().is_loopback() && !address.ip().is_unspecified())
         .then(|| std::net::SocketAddr::from(([127, 0, 0, 1], address.port())));
+    let networking_cancel = tokio_util::sync::CancellationToken::new();
+    let networking = tokio::spawn(crate::p2p::run(network.clone(), app.clone(), address, networking_cancel.clone()));
     let service = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     let serving = async { match loopback {
         Some(loopback) => {
@@ -336,11 +338,14 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         None => axum::serve(listener, service).await?,
     }
     Ok(()) };
-    tokio::select! {
+    let result = tokio::select! {
         result = serving => { state.soloist.shutdown().await; result },
         _ = crate::server_process::stopped() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
         _ = shutdown_signal() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
-    }
+    };
+    networking_cancel.cancel();
+    let _ = tokio::time::timeout(Duration::from_secs(4), networking).await;
+    result
 }
 
 async fn shutdown_signal() {

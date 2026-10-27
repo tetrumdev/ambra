@@ -5,10 +5,10 @@
 //! server remains selected until the listener chooses another one.
 
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket},
+    net::{IpAddr, SocketAddr},
     path::{Path, PathBuf},
-    sync::Mutex,
-    time::{Duration, Instant},
+    sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -16,8 +16,6 @@ use serde_json::{Value, json};
 use tauri::Manager;
 
 const FILE_NAME: &str = "server-link.json";
-const DISCOVERY_PORT: u16 = 38148;
-const DISCOVERY_REQUEST: &[u8] = b"AMBRA-DISCOVER/1";
 const LOCAL_SERVER: &str = "127.0.0.1:38147";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +43,12 @@ pub struct JoinedServer {
     pub name: String,
     /// `host:port`, as discovered or typed.
     pub address: String,
+    #[serde(default)]
+    pub public_key: Option<ambra_net::PublicKey>,
+    #[serde(default)]
+    pub local_addresses: Vec<SocketAddr>,
+    #[serde(default)]
+    pub public_endpoint: Option<SocketAddr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,7 +93,7 @@ impl Settings {
 
     fn save(&self, directory: &Path) -> Result<(), String> {
         let bytes = serde_json::to_vec_pretty(self).map_err(|error| error.to_string())?;
-        crate::write_file_atomic(&directory.join(FILE_NAME), &bytes)
+        write_private(&directory.join(FILE_NAME), &bytes)
     }
 }
 
@@ -114,7 +118,12 @@ pub struct ServerLink {
     directory: PathBuf,
     settings: Mutex<Settings>,
     connection: Connection,
+    manager: Option<Arc<ambra_net::ConnectionManager>>,
+    _bridge: Option<ambra_net::bridge::Bridge>,
+    pairing: Mutex<Option<PairingSession>>,
 }
+
+struct PairingSession { address: String, request_id: String, payload: ambra_net::pairing::PairingPayload, manager: Arc<ambra_net::ConnectionManager> }
 
 pub fn client_name() -> String {
     std::env::var("COMPUTERNAME")
@@ -145,11 +154,25 @@ fn local_base_url(directory: &Path) -> String {
 
 impl ServerLink {
     /// Reads the saved choice without starting a server or changing it when offline.
-    pub fn start(directory: PathBuf) -> Self {
+    pub fn start(directory: PathBuf) -> Result<Self, String> {
         let settings = Settings::load(&directory);
         let joined = settings.server.clone().filter(|_| settings.mode == Mode::Join);
+        let mut manager = None;
+        let mut bridge = None;
         let (base_url, token) = match &joined {
-            Some(server) => (format!("http://{}", server.address), settings.token.clone()),
+            Some(server) => {
+                if let Some(public_key) = server.public_key {
+                    let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
+                    let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint };
+                    let network = ambra_net::ConnectionManager::new(identity, selected, settings.token.clone());
+                    let local = tauri::async_runtime::block_on(ambra_net::bridge::Bridge::start(network.clone())).map_err(|e| e.to_string())?;
+                    let base = local.base_url.clone(); manager = Some(network); bridge = Some(local);
+                    (base, None)
+                } else {
+                    // No silent key learning from an unauthenticated legacy server ID.
+                    ("http://127.0.0.1:9".into(), None)
+                }
+            },
             None => (local_base_url(&directory), None),
         };
         let connection = Connection {
@@ -163,7 +186,7 @@ impl ServerLink {
             client_name: client_name(),
             client_id: settings.client_id.clone(),
         };
-        Self { directory, settings: Mutex::new(settings), connection }
+        Ok(Self { directory, settings: Mutex::new(settings), connection, manager, _bridge: bridge, pairing: Mutex::new(None) })
     }
 
     fn change(&self, change: impl FnOnce(&mut Settings)) -> Result<(), String> {
@@ -208,67 +231,32 @@ pub struct DiscoveredServer {
     pub address: String,
 }
 
-/// Every IPv4 broadcast address this machine can send to. Windows sends the all-ones
-/// broadcast out of a single adapter (often a virtual one), so each subnet is asked directly.
-fn broadcast_targets() -> Vec<Ipv4Addr> {
-    let mut targets = vec![Ipv4Addr::BROADCAST];
-    for interface in if_addrs::get_if_addrs().unwrap_or_default() {
-        if interface.is_loopback() {
-            continue;
-        }
-        if let if_addrs::IfAddr::V4(address) = interface.addr {
-            let broadcast = address.broadcast.unwrap_or_else(|| {
-                Ipv4Addr::from(u32::from(address.ip) | !u32::from(address.netmask))
-            });
-            if !targets.contains(&broadcast) {
-                targets.push(broadcast);
-            }
-        }
-    }
-    targets
-}
-
-fn discover(timeout: Duration) -> Result<Vec<DiscoveredServer>, String> {
-    let socket = UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).map_err(|error| format!("Could not search the network: {error}"))?;
-    socket.set_broadcast(true).map_err(|error| error.to_string())?;
-    for target in broadcast_targets() {
-        let _ = socket.send_to(DISCOVERY_REQUEST, (target, DISCOVERY_PORT));
-    }
-    let deadline = Instant::now() + timeout;
-    let mut found: Vec<DiscoveredServer> = Vec::new();
-    let mut buffer = [0_u8; 2048];
-    while let Some(remaining) = deadline.checked_duration_since(Instant::now()).filter(|left| !left.is_zero()) {
-        socket.set_read_timeout(Some(remaining)).map_err(|error| error.to_string())?;
-        let Ok((length, sender)) = socket.recv_from(&mut buffer) else { break };
-        let Ok(reply) = serde_json::from_slice::<Value>(&buffer[..length]) else { continue };
-        let (Some("ambra"), Some(id), Some(name), Some(port)) = (
-            reply["service"].as_str(),
-            reply["id"].as_str(),
-            reply["name"].as_str(),
-            reply["port"].as_u64().and_then(|port| u16::try_from(port).ok()),
-        ) else {
-            continue;
-        };
-        // One server answers once per subnet it's on; keep the first address that replied.
-        if found.iter().any(|server| server.id == id) {
-            continue;
-        }
-        found.push(DiscoveredServer {
-            id: id.to_owned(),
-            name: name.to_owned(),
-            version: reply["version"].as_str().unwrap_or("").to_owned(),
-            address: SocketAddr::new(sender.ip(), port).to_string(),
-        });
-    }
-    Ok(found)
-}
-
 #[tauri::command]
 pub async fn discover_servers(timeout_ms: Option<u64>) -> Result<Vec<DiscoveredServer>, String> {
     let timeout = Duration::from_millis(timeout_ms.unwrap_or(1500).clamp(200, 10_000));
-    tauri::async_runtime::spawn_blocking(move || discover(timeout))
-        .await
-        .map_err(|error| error.to_string())?
+    Ok(ambra_net::lan::discover(timeout).await.map_err(|e| e.to_string())?.into_iter().map(|server| DiscoveredServer {
+        id: server.info.id, name: server.info.name, version: server.info.version,
+        address: SocketAddr::new(server.address.ip(), server.info.port).to_string(),
+    }).collect())
+}
+
+#[tauri::command]
+pub fn network_connection_status(link: tauri::State<'_, ServerLink>) -> Value {
+    link.manager.as_ref().map(|m| serde_json::to_value(m.status()).unwrap_or(Value::Null)).unwrap_or_else(|| {
+        json!({ "state": if link.connection.mode == Mode::Join { "Failed" } else { "Offline" },
+            "error": if link.connection.mode == Mode::Join { Some("Legacy pairing has no cryptographic identity. Pair again using the server QR link.") } else { None } })
+    })
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(path.parent().ok_or("Missing settings directory")?).map_err(|e| e.to_string())?;
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    let mut options = std::fs::OpenOptions::new(); options.write(true).create(true).truncate(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+    use std::io::Write;
+    let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
+    file.write_all(bytes).and_then(|_| file.sync_all()).map_err(|e| e.to_string())?;
+    drop(file); std::fs::rename(temporary, path).map_err(|e| e.to_string())
 }
 
 /// `host[:port]`, with Ambra's port when none is given.
@@ -314,64 +302,51 @@ pub struct PairingStarted {
 
 #[tauri::command]
 pub async fn start_pairing(link: tauri::State<'_, ServerLink>, address: String) -> Result<PairingStarted, String> {
-    let address = normalize_address(&address)?;
-    let client_id = link.client_id();
-    tauri::async_runtime::spawn_blocking(move || {
-        let client = http()?;
-        let info = client
-            .get(format!("http://{address}/api/server/info"))
-            .send()
-            .map_err(|_| format!("No Ambra server answered at {address}"))
-            .and_then(answer)?;
-        if info["service"] != "ambra" {
-            return Err(format!("{address} isn't an Ambra server"));
-        }
-        let started = client
-            .post(format!("http://{address}/api/pair/request"))
-            .json(&json!({ "clientId": client_id, "clientName": client_name() }))
-            .send()
-            .map_err(|error| error.to_string())
-            .and_then(answer)?;
-        Ok(PairingStarted {
-            request_id: started["requestId"].as_str().unwrap_or_default().to_owned(),
-            code: started["code"].as_str().unwrap_or_default().to_owned(),
-            server_name: info["name"].as_str().unwrap_or("the server").to_owned(),
-            address,
-        })
-    })
-    .await
-    .map_err(|error| error.to_string())?
+    let payload = if address.starts_with("ambra://pair/") {
+        ambra_net::pairing::PairingPayload::decode(&address).map_err(|e| e.to_string())?
+    } else {
+        let address = normalize_address(&address)?;
+        // Manual bootstrap exchanges public hints only; approval verifies the pinned key.
+        tauri::async_runtime::spawn_blocking(move || {
+            let info = http()?.get(format!("http://{address}/api/server/info")).send().map_err(|e| e.to_string()).and_then(answer)?;
+            let public_key = serde_json::from_value(info["publicKey"].clone()).map_err(|_| "Server needs an update before encrypted pairing")?;
+            let port = info["securePort"].as_u64().and_then(|p| u16::try_from(p).ok()).ok_or("Secure listener unavailable")?;
+            use std::net::ToSocketAddrs;
+            let local_addresses = address.to_socket_addrs().map_err(|e| e.to_string())?.filter(|a| ambra_net::lan::is_local(a.ip()))
+                .map(|a| SocketAddr::new(a.ip(), port)).collect();
+            Ok::<_, String>(ambra_net::pairing::PairingPayload { version: 1, public_key, name: info["name"].as_str().unwrap_or("Ambra").into(), local_addresses, public_endpoint: None })
+        }).await.map_err(|e| e.to_string())??
+    };
+    let identity = ambra_net::Identity::load_or_create(&link.directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
+    let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint };
+    let manager = ambra_net::ConnectionManager::new(identity, selected, None);
+    let started = manager.json("POST", "/api/pair/request", Some(json!({ "clientId": link.client_id(), "clientName": client_name() }))).await.map_err(|e| e.to_string())?;
+    let request_id = started["requestId"].as_str().ok_or("Missing pairing handle")?.to_owned();
+    let result = PairingStarted { request_id: request_id.clone(), code: started["code"].as_str().ok_or("Missing pairing code")?.into(), address: address.clone(), server_name: payload.name.clone() };
+    *link.pairing.lock().map_err(|_| "Pairing unavailable")? = Some(PairingSession { address, request_id, payload, manager });
+    Ok(result)
 }
 
-/// `pending`, `denied`, `expired`, or `approved` — in which case this app is now joined to
-/// the server, effective once it restarts.
 #[tauri::command]
 pub async fn poll_pairing(link: tauri::State<'_, ServerLink>, address: String, request_id: String) -> Result<String, String> {
-    let address = normalize_address(&address)?;
-    let url = format!("http://{address}/api/pair/request/{}", urlencoding_path(&request_id));
-    let reply = tauri::async_runtime::spawn_blocking(move || http()?.get(url).send().map_err(|error| error.to_string()).and_then(answer))
-        .await
-        .map_err(|error| error.to_string())??;
+    let (manager, payload) = {
+        let pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
+        let session = pending.as_ref().filter(|s| s.address == address && s.request_id == request_id).ok_or("Start pairing again")?;
+        (session.manager.clone(), session.payload.clone())
+    };
+    let reply = manager.json("GET", &format!("/api/pair/request/{request_id}"), None).await.map_err(|e| e.to_string())?;
     let status = reply["status"].as_str().unwrap_or("expired").to_owned();
     if status == "approved" {
         let token = reply["token"].as_str().ok_or("The server approved but sent no token")?.to_owned();
         let server = JoinedServer {
-            id: reply["server"]["id"].as_str().unwrap_or_default().to_owned(),
-            name: reply["server"]["name"].as_str().unwrap_or("Ambra server").to_owned(),
-            address,
+            id: reply["server"]["id"].as_str().unwrap_or_default().into(), name: payload.name,
+            address: payload.local_addresses.first().map(|a| a.to_string()).unwrap_or_else(|| payload.public_key.to_string()),
+            public_key: Some(payload.public_key), local_addresses: payload.local_addresses, public_endpoint: payload.public_endpoint,
         };
-        link.change(|settings| {
-            settings.mode = Mode::Join;
-            settings.decided = true;
-            settings.server = Some(server);
-            settings.token = Some(token);
-        })?;
+        link.change(|settings| { settings.mode = Mode::Join; settings.decided = true; settings.server = Some(server); settings.token = Some(token); })?;
+        link.pairing.lock().map_err(|_| "Pairing unavailable")?.take();
     }
     Ok(status)
-}
-
-fn urlencoding_path(value: &str) -> String {
-    value.chars().filter(char::is_ascii_alphanumeric).collect()
 }
 
 /// Back to connecting to a separately started local server, once the app restarts.
@@ -449,12 +424,12 @@ mod tests {
         let mut settings = Settings::new();
         settings.mode = Mode::Join;
         settings.when_away = WhenAway::Fallback;
-        settings.server = Some(JoinedServer { id: "core".into(), name: "Music server".into(), address: "127.0.0.1:9".into() });
+        settings.server = Some(JoinedServer { id: "core".into(), name: "Music server".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None });
         settings.token = Some("paired-token".into());
         settings.save(&directory).unwrap();
-        let connection = ServerLink::start(directory.clone()).connection();
+        let connection = ServerLink::start(directory.clone()).unwrap().connection();
         assert_eq!(connection.base_url, "http://127.0.0.1:9");
-        assert_eq!(connection.token.as_deref(), Some("paired-token"));
+        assert_eq!(connection.token, None);
         assert!(!connection.fallback);
         assert_eq!(connection.when_away, WhenAway::Wait);
         std::fs::remove_file(directory.join(FILE_NAME)).unwrap();

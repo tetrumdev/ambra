@@ -1,8 +1,8 @@
-import Constants from "expo-constants";
 import * as SecureStore from "expo-secure-store";
 import { AppState } from "react-native";
 import { normalizePackages } from "./queueModel";
 import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
+import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { SessionClock } from "./sessionClock";
 
 /**
@@ -10,11 +10,9 @@ import { SessionClock } from "./sessionClock";
  * (server/src/session.rs), sending it commands, and registering this phone as an output.
  */
 
-export const SERVER_PORT = 38147;
 const ADDRESS_KEY = "ambra.server";
-/** Every address this server has answered at, the one in use first. */
-const ADDRESSES_KEY = "ambra.addresses";
-const IDENTITY_KEY = "ambra.serverIdentity";
+/** Public identity and endpoint hints from explicit pairing. */
+const PAYLOAD_KEY = "ambra.pairingPayload.v1";
 const TOKEN_KEY = "ambra.token";
 const CLIENT_KEY = "ambra.client";
 
@@ -67,45 +65,27 @@ type ArrivingView = Omit<SessionView, "queue"> & { queue?: SessionView["queue"] 
 export class Unpaired extends Error {}
 
 let baseUrl = "";
-let token: string | null = null;
-let addresses: string[] = [];
-/** Who the paired server is, so another address is only trusted if the same server answers there. */
-type Identity = { id: string; name: string; port: number };
-let identity: Identity | null = null;
-
-const parsed = <T>(text: string | null): T | null => {
-  try { return text ? JSON.parse(text) as T : null; } catch { return null; }
-};
-
-/** In development the server usually runs on the computer serving the app, so start there. */
-export function suggestedAddress() {
-  const host = Constants.expoConfig?.hostUri?.split(":")[0];
-  return host ? `${host}:${SERVER_PORT}` : "";
-}
-
-export function normalizeAddress(address: string) {
-  const trimmed = address.trim().replace(/\/+$/, "");
-  const withScheme = /^https?:\/\//.test(trimmed) ? trimmed : `http://${trimmed}`;
-  return /:\d+$/.test(withScheme) ? withScheme : `${withScheme}:${SERVER_PORT}`;
-}
+let pairingPayload: string | null = null;
 
 /** The server and token saved by an earlier pairing, if any. */
 export async function restore() {
-  const [address, saved, known, who] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, ADDRESSES_KEY, IDENTITY_KEY].map(key => SecureStore.getItemAsync(key)));
-  if (address) baseUrl = address;
-  token = saved;
-  identity = parsed<Identity>(who);
-  addresses = [...new Set([...(address ? [address] : []), ...(parsed<string[]>(known) ?? [])])];
-  if (address && saved && !identity) await identifyLegacyPairing(saved);
-  // Metro may now be reachable over Tailscale while the saved server address is still
-  // on home Wi-Fi. Resolve the paired server before opening long polls or sending presence.
-  if (address && saved && identity) await reconnect();
-  return { address: baseUrl || null, paired: !!(address && saved) };
+  const [address, saved, payload] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, PAYLOAD_KEY].map(key => SecureStore.getItemAsync(key)));
+  pairingPayload = payload;
+  if (!saved || !payload || !nativeNetworkAvailable) {
+    // Never silently pin a key based on the legacy random server ID.
+    baseUrl = "";
+    return { address: payload ?? address, paired: false };
+  }
+  const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: saved });
+  baseUrl = opened.baseUrl;
+  return { address: payload, paired: true };
 }
 
+export const networkStatus = () => networkCall<{ state: string; method?: string; error?: string }>("status");
+
 async function forget() {
-  token = null;
   await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await networkCall("close");
 }
 
 export async function clientId() {
@@ -118,9 +98,9 @@ export async function clientId() {
   return id;
 }
 
-/** `url` on this server with this device's token, for images. */
+/** A URL on the selected server's capability-protected native bridge. */
 export function serverUrl(path: string) {
-  return `${baseUrl}${path}${token ? `${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(token)}` : ""}`;
+  return `${baseUrl}${path}`;
 }
 
 /** Lists use the server's bounded thumbnail instead of decoding original album artwork. */
@@ -131,7 +111,7 @@ export function thumbnailArtwork(track: Track | null | undefined) {
 }
 
 // Saved queues hold server URLs as the saving computer knew them (desktop/src/api/serverConnection.ts).
-const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+(\/api\/[^"\\\s]*)/g;
+const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+(?:\/[a-f0-9]{64})?(\/api\/[^"\\\s]*)/g;
 const TOKEN_IN_QUERY = /([?&])access_token=[^&#"\\]*&?/;
 function rebased(text: string) {
   return text
@@ -151,92 +131,9 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   return parseTrackLyrics(await request<unknown>(`/api/lyrics?${query}`, { signal, timeoutMs: 30_000 }));
 }
 
-async function identify(address: string): Promise<Identity | null> {
-  const timeout = AbortSignal.timeout(3000);
-  try {
-    const info = await (await fetch(`${address}/api/server/info`, { signal: timeout })).json() as { service?: string; id?: string; name?: string; port?: number };
-    return info.service === "ambra" && info.id ? { id: info.id, name: info.name ?? "", port: info.port ?? SERVER_PORT } : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Older pairings saved only an address and token, so ID-based recovery cannot run yet. */
-async function identifyLegacyPairing(savedToken: string) {
-  const development = suggestedAddress();
-  // Metro supplies the running app's code and is already trusted with its credentials.
-  // Only the saved host and that development host may receive a legacy pairing's token.
-  const known = [...new Set([baseUrl, ...(development ? [normalizeAddress(development)] : [])])];
-  const found = await Promise.any(known.map(async address => {
-    const info = await identify(address);
-    if (!info) throw new Error("Not an Ambra server");
-    const response = await fetch(`${address}/api/endpoints`, {
-      headers: { Authorization: `Bearer ${savedToken}` }, signal: AbortSignal.timeout(3000),
-    });
-    if (!response.ok || !Array.isArray(await response.json())) throw new Error("Not this phone's paired server");
-    return { address, info };
-  })).catch(() => null);
-  if (!found) return;
-  identity = found.info;
-  await SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(identity));
-  await switchAddress(found.address);
-}
-
-/**
- * Where else the server might answer: saved addresses, the development host the phone
- * already reaches, and the machine's MagicDNS name. Each must prove the same server ID.
- */
-function candidates() {
-  const machine = identity?.name.toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
-  const development = suggestedAddress();
-  const developmentAddress = development ? normalizeAddress(development).replace(/:\d+$/, `:${identity?.port ?? SERVER_PORT}`) : "";
-  return [...new Set([baseUrl, ...addresses, developmentAddress, ...(machine ? [`http://${machine}:${identity!.port}`] : [])])].filter(Boolean);
-}
-
-async function switchAddress(address: string) {
-  baseUrl = address;
-  addresses = [address, ...addresses.filter(known => known !== address)].slice(0, 6);
-  // Artwork and media URLs were written against the old address.
-  if (view) {
-    view = JSON.parse(rebased(JSON.stringify(view))) as SessionView;
-    for (const listener of listeners) listener();
-  }
-  await Promise.all([SecureStore.setItemAsync(ADDRESS_KEY, address), SecureStore.setItemAsync(ADDRESSES_KEY, JSON.stringify(addresses))]);
-}
-
-let identifying = false;
-let reconnecting: Promise<void> | null = null;
-let probedAt = 0;
-/** After the server stops answering, switch to whichever known address the same server answers at first. */
-function reconnect() {
-  const id = identity?.id;
-  if (!id || Date.now() - probedAt < 3000) return reconnecting ?? Promise.resolve();
-  reconnecting ??= (async () => {
-    const found = await Promise.any(candidates().map(async address => {
-      if ((await identify(address))?.id !== id) throw new Error("Not this server");
-      return address;
-    })).catch(() => null);
-    // Throttle failed discovery, but let a newly failed route recover immediately even
-    // when it was healthy during startup (or the previous request).
-    probedAt = found ? 0 : Date.now();
-    if (found && found !== baseUrl) await switchAddress(found);
-  })().finally(() => { reconnecting = null; });
-  return reconnecting;
-}
-
+// Connection policy and retry live in Rust. A possibly delivered mutation is never replayed.
 async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
-  const address = baseUrl;
-  try {
-    return await send<T>(path, init);
-  } catch (error) {
-    // Only an unreachable server moves addresses; anything it answered stands.
-    if (init.signal?.aborted || error instanceof Unpaired || (error as { status?: number }).status !== undefined) throw error;
-    await reconnect();
-    if (init.signal?.aborted) throw error;
-    // A read is safe to repeat; a command might have reached the server, so it's left to the person.
-    if (baseUrl !== address && (init.method ?? "GET") === "GET") return send<T>(path, init);
-    throw error;
-  }
+  return send<T>(path, init);
 }
 
 async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
@@ -249,7 +146,7 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     const response = await fetch(`${baseUrl}${path}`, {
       ...init,
       signal: timeout.signal,
-      headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { ...(init.body ? { "Content-Type": "application/json" } : {}) },
     });
     if (response.status === 401) {
       await forget();
@@ -272,22 +169,15 @@ export type PairingStarted = { requestId: string; code: string };
 
 /** `name` is how the server lists this phone, e.g. in its outputs. */
 export async function requestPairing(address: string, name: string) {
-  baseUrl = normalizeAddress(address);
-  token = null;
-  // A new pairing may be a different server; nothing earlier stands in for it.
-  identity = null;
-  addresses = [];
-  const started = await request<PairingStarted>("/api/pair/request", {
-    method: "POST",
-    body: JSON.stringify({ clientId: await clientId(), clientName: name.slice(0, 64) }),
-    timeoutMs: 8000,
+  if (!address.trim().startsWith("ambra://pair/")) throw new Error("Paste the pairing link from ambra-server pair qr. Legacy addresses need re-pairing.");
+  pairingPayload = address.trim();
+  view = null;
+  for (const listener of listeners) listener();
+  const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload });
+  baseUrl = opened.baseUrl;
+  return request<PairingStarted>("/api/pair/request", {
+    method: "POST", body: JSON.stringify({ clientId: await clientId(), clientName: name.slice(0, 64) }), timeoutMs: 30_000,
   });
-  identity = await identify(baseUrl);
-  await Promise.all([
-    SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(identity)),
-    switchAddress(baseUrl),
-  ]);
-  return started;
 }
 
 /** Resolves once someone approves the code at the server. */
@@ -295,8 +185,11 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
   while (!signal.aborted) {
     const status = await request<{ status: string; token?: string }>(`/api/pair/request/${requestId}`, { signal });
     if (status.status === "approved" && status.token) {
-      token = status.token;
       await SecureStore.setItemAsync(TOKEN_KEY, status.token);
+      await SecureStore.setItemAsync(PAYLOAD_KEY, pairingPayload!);
+      const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload, token: status.token });
+      baseUrl = opened.baseUrl;
+      if (view) view = JSON.parse(rebased(JSON.stringify(view))) as SessionView;
       return;
     }
     if (status.status !== "pending") throw new Error(status.status === "denied" ? "The server refused this phone." : "The code expired.");
@@ -335,7 +228,7 @@ function accept(next: ArrivingView) {
 export async function follow(signal: AbortSignal) {
   let wake = new AbortController();
   // iOS suspends the app in the background; coming back asks again at once for the true position.
-  const subscription = AppState.addEventListener("change", state => { if (state === "active") wake.abort(); });
+  const subscription = AppState.addEventListener("change", state => { if (state === "active") { wake.abort(); void networkCall("resume").catch(() => {}); } });
   try {
     while (!signal.aborted) {
       const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}` : "";
@@ -346,16 +239,7 @@ export async function follow(signal: AbortSignal) {
       try {
         const next = await request<ArrivingView>(`/api/session${since}`, { signal: stop.signal, timeoutMs: 35_000 });
         if (!accept(next)) accept(await request<ArrivingView>("/api/session", { signal }));
-        // Phones paired before servers were identified learn it once, while the address still works.
-        if (!identity && !identifying) {
-          identifying = true;
-          void identify(baseUrl).then(found => {
-            identifying = false;
-            if (!found || identity) return;
-            identity = found;
-            void SecureStore.setItemAsync(IDENTITY_KEY, JSON.stringify(found));
-          });
-        }
+
       } catch (error) {
         if (error instanceof Unpaired) throw error;
         if (!wake.signal.aborted && !signal.aborted) await new Promise(resolve => setTimeout(resolve, 2000));
@@ -434,9 +318,9 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
       try {
         accept(await request<ArrivingView>("/api/session/queue", {
           method: "POST",
-          // Media URLs carry this phone's token in memory, never in shared saved state.
+          // Media URLs carry only an ephemeral bridge capability, removed from shared state.
           body: JSON.stringify({ base: current.queueRevision, queue, ...(play ? { playTrackId: queue.current?.globalTrackId } : {}) })
-            .replace(SAVED_SERVER_URL, url => url.replace(TOKEN_IN_QUERY, "$1").replace(/[?&]$/, "")),
+            .replace(SAVED_SERVER_URL, url => url.replace(TOKEN_IN_QUERY, "$1").replace(/[?&]$/, "").replace(/\/[a-f0-9]{64}(?=\/api\/)/, "")),
         }));
         return;
       } catch (error) {

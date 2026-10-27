@@ -1008,7 +1008,7 @@ pub fn run() {
         .setup(|app| {
             // Connecting never starts a server; the listener can explicitly start one from the UI.
             let data = persistent_data_directory(app.handle()).map_err(std::io::Error::other)?;
-            let link = server_link::ServerLink::start(data);
+            let link = server_link::ServerLink::start(data).map_err(std::io::Error::other)?;
             let connection = link.connection();
             let client_id = link.client_id();
             app.manage(link);
@@ -1059,6 +1059,7 @@ pub fn run() {
             display_wake::set_display_wake,
             playlist_export::export_playlist_csv,
             server_link::server_connection,
+            server_link::network_connection_status,
             server_link::discover_servers,
             server_link::start_pairing,
             server_link::poll_pairing,
