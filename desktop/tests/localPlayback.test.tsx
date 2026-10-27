@@ -76,12 +76,12 @@ test("native scan, local queue, persisted playlists and playback work with no se
   expect(container.textContent).toContain("Offline playlist");
   await act(async () => again.unmount());
 });
-test("server playlists use separate storage even when their IDs match a local playlist", async () => {
+test("connected playlists use one authoritative collection for display and every edit", async () => {
   const { hydrateServerState, flushServerState } = await import("../src/utils/serverState");
   const { ClientConnectionContext } = await import("../src/hooks/ClientConnectionContext");
   const { setServerForTesting } = await import("../src/api/serverConnection");
   const local = { version: 1, playlists: [{ id: "same", name: "Private local", trackIds: [] }], tracks: [] };
-  const remote = { version: 1, playlists: [{ id: "same", name: "Shared server", trackIds: [] }], tracks: [] };
+  const remote = { version: 1, playlists: [{ id: "same", name: "MEGA", trackIds: [] }, { id: "setlist", name: "Setlist", trackIds: [] }], tracks: [] };
   dom.localStorage.setItem("ambra.playlists.v1", JSON.stringify(local));
   const posts: { changes: Record<string, string> }[] = [];
   setServerForTesting("http://external:38147", null);
@@ -94,15 +94,30 @@ test("server playlists use separate storage even when their IDs match a local pl
   let store: ReturnType<typeof usePlaylists>;
   function PlaylistHarness() { store = usePlaylists(); return <div>{store.playlists.map(item => item.name).join(",")}</div>; }
   const container = document.createElement("div"); const root = createRoot(container);
-  const render = (connected: boolean) => <ClientConnectionContext.Provider value={{ connected, sharedPlayback: false, network: { state: connected ? "ConnectedLocal" : "Offline" }, setSharedPlayback: async () => {}, reconnect: () => {} }}><PlaylistHarness /></ClientConnectionContext.Provider>;
+  const render = (connected: boolean, sharedPlayback = false) => <ClientConnectionContext.Provider value={{ connected, sharedPlayback, network: { state: connected ? "ConnectedLocal" : "Offline" }, setSharedPlayback: async () => {}, reconnect: () => {} }}><PlaylistHarness /></ClientConnectionContext.Provider>;
   await act(async () => { root.render(render(true)); });
-  expect(container.textContent).toContain("Private local"); expect(container.textContent).toContain("Shared server (Server)");
-  const sharedId = store!.playlists.find(item => item.name === "Shared server (Server)")!.id;
-  expect(sharedId).not.toBe("same");
-  await act(async () => { expect(store!.rename(sharedId, "Changed on server")).toBe(true); });
+  expect(container.textContent).toBe("MEGA,Setlist");
+  expect(store!.playlists.map(item => item.id)).toEqual(["same", "setlist"]);
+  await act(async () => { root.render(render(true, true)); });
+  expect(container.textContent).toBe("MEGA,Setlist");
+  await act(async () => { expect(store!.rename("same", "Changed on server")).toBe(true); });
+  let created: string | null = null;
+  let duplicated: string | null = null;
+  await act(async () => {
+    created = store!.create("New playlist");
+    duplicated = store!.duplicate("Copy", []);
+  });
+  expect(created).toBeTruthy();
+  expect(duplicated).toBeTruthy();
+  expect(store!.playlists.map(item => item.id)).toContain(created!);
+  expect(store!.playlists.map(item => item.id)).toContain(duplicated!);
+  await act(async () => { expect(store!.deletePlaylist("setlist")).toBe(true); });
   await flushServerState();
   expect(posts).toHaveLength(1);
   expect(posts[0].changes["ambra.playlists.v1"]).toContain("Changed on server");
+  expect(posts[0].changes["ambra.playlists.v1"]).toContain("New playlist");
+  expect(posts[0].changes["ambra.playlists.v1"]).toContain("Copy");
+  expect(posts[0].changes["ambra.playlists.v1"]).not.toContain("Setlist");
   expect(dom.localStorage.getItem("ambra.playlists.v1")).toBe(JSON.stringify(local));
   await act(async () => { root.render(render(false)); });
   expect(container.textContent).toBe("Private local");

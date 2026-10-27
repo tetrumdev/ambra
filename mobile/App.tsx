@@ -1,14 +1,12 @@
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
 import { useEffect, useState } from "react";
-import { Text, View } from "react-native";
+import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Unpaired, follow, restore, networkStatus } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
-import { LocalLibraryScreen } from "./src/LocalLibraryScreen";
-import { Touchable } from "./src/Touchable";
 import { colors } from "./src/theme";
 import { usePhoneOutput } from "./src/usePhoneOutput";
 
@@ -21,9 +19,14 @@ export default function App() {
   ]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
-  const [screen, setScreen] = useState<"local" | "server">("local");
-  usePhoneOutput(screen === "server" && (saved?.paired ?? false));
-  useEffect(() => { void restore().then(setSaved).catch(error => { setNetworkError(String(error)); setSaved({ address: null, paired: false }); }); }, []);
+  usePhoneOutput(saved?.paired ?? false);
+  useEffect(() => {
+    let disposed = false;
+    void restore().then(value => { if (!disposed) setSaved(value); }).catch(error => {
+      if (!disposed) { setNetworkError(String(error)); setSaved({ address: null, paired: false }); }
+    });
+    return () => { disposed = true; };
+  }, []);
 
   useEffect(() => {
     if (!saved?.paired) return;
@@ -47,17 +50,11 @@ export default function App() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.black }}>
-      <SafeAreaProvider>
+      <SafeAreaProvider style={{ flex: 1 }}>
         <StatusBar style="light" />
-        <View style={{ flexDirection: "row", gap: 24, paddingHorizontal: 24, paddingTop: 60, paddingBottom: 16 }}>
-          <Touchable accessibilityRole="button" onPress={() => setScreen("local")}><Text style={{ color: "white" }}>Local music</Text></Touchable>
-          <Touchable accessibilityRole="button" onPress={() => setScreen("server")}><Text style={{ color: "white" }}>Server</Text></Touchable>
-        </View>
-        {screen === "server" && networkError && <Text accessibilityRole="alert" style={{ color: "white", padding: 24 }}>{networkError}. Local music remains available.</Text>}
-        {!fontsLoaded && !fontError ? <View /> : screen === "local" ? <LocalLibraryScreen /> : saved?.paired
-          ? <Player />
-          : <Pairing savedAddress={saved?.address ?? null} onPaired={() => setSaved(current => ({ address: current?.address ?? null, paired: true }))} />}
-
+        {!saved || (!fontsLoaded && !fontError) ? <View style={{ flex: 1 }} /> : saved.paired
+          ? <Player connectionError={networkError} />
+          : <Pairing savedAddress={saved.address} initialError={networkError} onPaired={() => { setNetworkError(null); setSaved(current => ({ address: current?.address ?? null, paired: true })); }} />}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
