@@ -128,7 +128,8 @@ export function letterHead({ segment, index, count }: LetterMotion, timeMs: numb
 /** Whether a held note is still breathing out after its line has ended. */
 export function releasing({ segment, emphasis }: LetterMotion, timeMs: number): boolean {
   "worklet";
-  return emphasis && segment.endMs !== null && timeMs < segment.endMs + WAVE_RELEASE_MS;
+  return emphasis && segment.startMs !== null && timeMs >= segment.startMs
+    && segment.endMs !== null && timeMs < segment.endMs + WAVE_RELEASE_MS;
 }
 
 function targets(letter: LetterMotion, timeMs: number, lineActive: boolean) {

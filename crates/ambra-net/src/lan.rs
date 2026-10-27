@@ -6,6 +6,7 @@ use std::{
 };
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio_util::sync::CancellationToken;
+use peeroxide_dht::address_policy::{is_native_interface, is_overlay};
 
 pub const DISCOVERY_PORT: u16 = 38148;
 pub const DISCOVERY_REQUEST: &[u8] = b"AMBRA-DISCOVER/1";
@@ -32,6 +33,7 @@ pub struct DiscoveredServer {
 }
 
 pub fn is_local(ip: IpAddr) -> bool {
+    if is_overlay(ip) { return false; }
     match ip {
         IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local(),
         IpAddr::V6(ip) => {
@@ -43,6 +45,7 @@ pub fn is_local(ip: IpAddr) -> bool {
                 || if_addrs::get_if_addrs()
                     .unwrap_or_default()
                     .iter()
+                    .filter(|i| is_native_interface(&i.name, i.ip()))
                     .any(|i| match &i.addr {
                         if_addrs::IfAddr::V6(local) => {
                             u128::from(ip) & u128::from(local.netmask)
@@ -57,6 +60,7 @@ pub fn is_local(ip: IpAddr) -> bool {
 pub fn broadcast_targets() -> Vec<SocketAddr> {
     let mut targets = vec![SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT))];
     for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+        if !is_native_interface(&interface.name, interface.ip()) { continue; }
         if let if_addrs::IfAddr::V4(ref addr) = interface.addr {
             if interface.is_loopback() {
                 continue;
@@ -86,6 +90,7 @@ fn ipv6_socket(port: u16, join: bool) -> Result<UdpSocket> {
     socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
     if join {
         for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+            if !is_native_interface(&interface.name, interface.ip()) { continue; }
             if let Some(index) = interface.index {
                 let _ = socket.join_multicast_v6(&MULTICAST_V6, index);
             }
@@ -96,6 +101,7 @@ fn ipv6_socket(port: u16, join: bool) -> Result<UdpSocket> {
 fn ipv6_targets() -> Vec<SocketAddr> {
     let mut targets = Vec::new();
     for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+        if !is_native_interface(&interface.name, interface.ip()) { continue; }
         if interface.is_loopback() {
             continue;
         }
@@ -229,6 +235,7 @@ pub fn local_addresses(port: u16) -> Vec<SocketAddr> {
         .unwrap_or_default()
         .iter()
         .filter(|i| !i.is_loopback())
+        .filter(|i| is_native_interface(&i.name, i.ip()))
         .filter(|i| is_local(i.ip()))
         .map(|i| SocketAddr::new(i.ip(), port))
         .take(16)

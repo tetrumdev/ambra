@@ -66,7 +66,7 @@ pub struct Status {
 pub struct ConnectionManager {
     pub selected: SelectedServer,
     identity: Identity,
-    token: Option<String>,
+    token: RwLock<Option<String>>,
     dht: hyperdht::Client,
     active: RwLock<Option<Arc<HttpConnection>>>,
     connecting: Mutex<()>,
@@ -94,7 +94,7 @@ impl ConnectionManager {
             dht: hyperdht::Client::new(identity.clone()),
             identity,
             selected,
-            token,
+            token: RwLock::new(token),
             active: RwLock::new(None),
             connecting: Mutex::new(()),
             status,
@@ -109,6 +109,7 @@ impl ConnectionManager {
         self.status.subscribe()
     }
     fn state(&self, state: ConnectionState, method: Option<Method>, error: Option<String>) {
+        tracing::info!(?state, ?method, server = %self.selected.public_key, ?error, "Native connection state");
         self.status.send_replace(Status {
             state,
             method,
@@ -164,7 +165,7 @@ impl ConnectionManager {
         self.state(ConnectionState::Authenticating, Some(method), None);
         let connection = HttpConnection::new(io, pump).await?;
         // No successful state until device authorization succeeds. Enrollment keeps Authenticating.
-        if let Some(token) = &self.token {
+        if let Some(token) = self.token.read().await.as_ref() {
             let response = connection
                 .request(
                     Request::builder()
@@ -214,10 +215,34 @@ impl ConnectionManager {
         }
     }
 
+    /// Promote enrollment on its existing encrypted session. Opening a second
+    /// DHT connection races the server's one-live-session-per-device rule.
+    pub async fn authorize(&self, token: String) -> Result<()> {
+        let connection = self.connect().await?;
+        let request = Request::builder().uri("/api/network/session")
+            .header(hyper::header::AUTHORIZATION, format!("Bearer {token}"))
+            .body(Body::empty())?;
+        let response = tokio::select! {
+            _ = self.cancel.cancelled() => return Err("Connection cancelled".into()),
+            result = tokio::time::timeout(Duration::from_secs(15), connection.request(request)) => result??,
+        };
+        if !response.status().is_success() {
+            return Err("Device authorization failed; pairing may have been revoked".into());
+        }
+        *self.token.write().await = Some(token);
+        let method = self.status().method.ok_or("Missing encrypted transport method")?;
+        self.state(match method {
+            Method::Lan => ConnectionState::ConnectedLocal,
+            Method::Pwnat => ConnectionState::ConnectedPwnat,
+            Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
+        }, Some(method), None);
+        Ok(())
+    }
+
     pub async fn request(&self, mut request: Request<Body>) -> Result<Response<Incoming>> {
         let connection = self.connect().await?;
         request.headers_mut().remove(hyper::header::AUTHORIZATION);
-        if let Some(token) = &self.token {
+        if let Some(token) = self.token.read().await.as_ref() {
             request.headers_mut().insert(
                 hyper::header::AUTHORIZATION,
                 format!("Bearer {token}").parse()?,

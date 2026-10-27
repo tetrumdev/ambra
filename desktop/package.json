@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "release": "../scripts/release.sh",
-    "test": "bun test tests/*.test.ts && bun test tests/discoverHome.test.tsx && bun test tests/localPlayback.test.tsx && bun test tests/clientStartup.test.tsx && bun test tests/artworkLoading.test.tsx"
+    "test": "bun test --isolate tests/*.test.ts && bun test tests/discoverHome.test.tsx && bun test tests/localPlayback.test.tsx && bun test tests/clientStartup.test.tsx && bun test tests/artworkLoading.test.tsx && bun test tests/artworkQuality.test.tsx && bun test tests/lyricsPerformance.test.tsx && bun test tests/pageNavigation.test.tsx && bun test tests/backgroundLighting.test.tsx && bun test tests/serviceSignIn.test.tsx && bun test tests/trackPlaybackMenu.test.tsx"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",

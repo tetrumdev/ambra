@@ -473,9 +473,12 @@ async fn write_frame<W: AsyncWrite + Unpin>(
     if len > MAX_MESSAGE_LEN {
         return Err(SecretStreamError::MessageTooLarge { len });
     }
-    let header = [len as u8, (len >> 8) as u8, (len >> 16) as u8];
-    w.write_all(&header).await?;
-    w.write_all(data).await?;
+    // UDX applies acknowledgement backpressure between writes. Sending the
+    // three-byte header separately adds a full WAN round trip to every frame.
+    let mut frame = Vec::with_capacity(3 + len);
+    frame.extend_from_slice(&[len as u8, (len >> 8) as u8, (len >> 16) as u8]);
+    frame.extend_from_slice(data);
+    w.write_all(&frame).await?;
     w.flush().await?;
     Ok(())
 }
@@ -544,6 +547,27 @@ mod tests {
             assert!(matches!(read_frame(&mut Cursor::new(bytes)).await, Err(SecretStreamError::UnexpectedEof)));
         }
         assert!(read_frame(&mut Cursor::new(Vec::<u8>::new())).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn complete_frame_is_queued_before_transport_acknowledgement() {
+        use std::{pin::Pin, task::{Context, Poll}};
+        // UDX waits for the previous write's ACK before accepting another write.
+        // Model that boundary: the first write must include a complete frame.
+        struct AckBoundary(Vec<u8>);
+        impl AsyncWrite for AckBoundary {
+            fn poll_write(mut self: Pin<&mut Self>, _: &mut Context<'_>, bytes: &[u8]) -> Poll<std::io::Result<usize>> {
+                if !self.0.is_empty() { return Poll::Pending; }
+                self.0.extend_from_slice(bytes);
+                Poll::Ready(Ok(bytes.len()))
+            }
+            fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> { Poll::Ready(Ok(())) }
+            fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> { Poll::Ready(Ok(())) }
+        }
+        let mut transport = AckBoundary(Vec::new());
+        tokio::time::timeout(std::time::Duration::from_millis(100), write_frame(&mut transport, b"WAN frame")).await.unwrap().unwrap();
+        let decoded = read_frame(&mut std::io::Cursor::new(transport.0)).await.unwrap().unwrap();
+        assert_eq!(decoded, b"WAN frame");
     }
 
     #[test]

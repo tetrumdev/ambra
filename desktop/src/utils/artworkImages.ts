@@ -79,35 +79,50 @@ export function cachedBigscreenArtwork(track: Track) {
 
 /** Whether the cached cover is final, or a fallback worth resolving again. */
 export function settledBigscreenArtwork(track: Track) {
-  return !provisionalBigscreenSources.has(bigscreenArtworkKey(track));
+  const key = bigscreenArtworkKey(track);
+  return bigscreenSources.has(key) && !provisionalBigscreenSources.has(key);
 }
 
 export function preloadBigscreenArtwork(track: Track) {
   const key = bigscreenArtworkKey(track);
   const source = bigscreenSources.get(key);
   if (source && !provisionalBigscreenSources.has(key))
-    return preloadArtwork(source, true).then(() => source).catch(() => null);
+    return preloadArtwork(source, true, { timeoutMs: 10_000 }).then(() => source).catch(() => {
+      provisionalBigscreenSources.add(key);
+      return null;
+    });
 
   const pending = bigscreenRequests.get(key);
   if (pending) return pending;
 
   const request = (async () => {
-    const source = track.provider === "local"
-      ? track.fullCover ?? track.cover
-      : (await highestQualityArtwork(track))?.url;
-    if (!source) return null;
-
-    await preloadArtwork(source, true);
+    const artwork = track.provider === "local" ? null : await highestQualityArtwork(track);
+    const candidates = [...new Set([
+      artwork?.url, source, track.fullCover, track.nativeCover, track.cover,
+    ].filter((url): url is string => !!url))];
+    let loaded: string | null = null;
+    for (const candidate of candidates) {
+      try {
+        await preloadArtwork(candidate, true, { timeoutMs: 10_000 });
+        loaded = candidate;
+        break;
+      } catch {
+        // A resolver outage or an unreachable alternative must not hide the original cover.
+      }
+    }
+    if (!loaded) return null;
+    const final = track.provider === "local" || (artwork && loaded === artwork.url
+      && (artwork.complete ?? artwork.url !== track.nativeCover));
     bigscreenSources.delete(key);
-    bigscreenSources.set(key, source);
-    if (track.provider !== "local" && source === track.nativeCover) provisionalBigscreenSources.add(key);
+    bigscreenSources.set(key, loaded);
+    if (!final) provisionalBigscreenSources.add(key);
     else provisionalBigscreenSources.delete(key);
     while (bigscreenSources.size > 12) {
       const oldest = bigscreenSources.keys().next().value!;
       bigscreenSources.delete(oldest);
       provisionalBigscreenSources.delete(oldest);
     }
-    return source;
+    return loaded;
   })().catch(() => null).finally(() => {
     if (bigscreenRequests.get(key) === request) {
       bigscreenRequests.delete(key);
