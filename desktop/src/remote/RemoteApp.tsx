@@ -7,6 +7,7 @@ import {
   neutralCoverSeparation,
   sampleCoverEdges,
   separateCollapsedPalette,
+  type CoverEdgeSamples,
 } from "../utils/backgroundPalette";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
 import type { Track } from "../types/music";
@@ -36,7 +37,7 @@ function artworkQuery(track: Track) {
 /** The bigscreen's swirl, colored from the cover. */
 function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
   const [palette, setPalette] = useState(blackPalette);
-  const [edges, setEdges] = useState<number[] | null | undefined>();
+  const [edges, setEdges] = useState<CoverEdgeSamples | null | undefined>();
   const query = track ? artworkQuery(track) : null;
   useEffect(() => {
     if (!query) return;

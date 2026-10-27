@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
 import { needsLyricsRetry } from "../types/lyrics";
@@ -239,7 +239,7 @@ function SweptText({ line, lang }: { line: LyricLine; lang?: string }) {
 }
 
 
-function LyricGroups({
+const LyricGroups = memo(function LyricGroups({
   lyrics,
   blocks,
   onSeek,
@@ -368,7 +368,7 @@ function LyricGroups({
       {credits}
     </div>
   );
-}
+});
 
 const sources = {
   amll: "AMLL TTML DB",
@@ -422,6 +422,12 @@ function SyncedLyrics({
   const [following, setFollowing] = useState(true);
   const wake = useRef<() => void>(() => {});
   const resume = useRef<() => void>(() => {});
+  // Player reports and menu state must not rebuild the song's word/letter tree.
+  const credits = useMemo(() => <LyricsCredits lyrics={lyrics} />, [lyrics]);
+  const seek = useCallback((seconds: number) => {
+    resume.current();
+    onSeek?.(seconds);
+  }, [onSeek]);
 
   useEffect(() => {
     wake.current();
@@ -908,15 +914,8 @@ function SyncedLyrics({
         <LyricGroups
           lyrics={lyrics}
           blocks={blocks}
-          credits={<LyricsCredits lyrics={lyrics} />}
-          onSeek={
-            onSeek
-              ? (seconds) => {
-                  resume.current();
-                  onSeek(seconds);
-                }
-              : undefined
-          }
+          credits={credits}
+          onSeek={onSeek ? seek : undefined}
         />
       </div>
       <LyricsControls onResume={following ? undefined : () => resume.current()}>

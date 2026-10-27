@@ -112,6 +112,7 @@ impl Holepuncher {
     pub fn update_remote(&mut self, punching: bool, firewall: u64, addresses: &[Ipv4Peer], verified_host: Option<&str>) {
         let mut remote_addrs = Vec::new();
         for addr in addresses {
+            if addr.host.parse().map_or(true, crate::address_policy::is_overlay) { continue; }
             let is_verified = verified_host == Some(addr.host.as_str())
                 || self.is_verified(&addr.host);
             remote_addrs.push(RemoteAddress {
@@ -142,7 +143,7 @@ impl Holepuncher {
         let mut out = Vec::new();
         if let Ok(ifs) = if_addrs::get_if_addrs() {
             for iface in ifs {
-                if iface.is_loopback() {
+                if iface.is_loopback() || !crate::address_policy::is_native_interface(&iface.name, iface.ip()) {
                     continue;
                 }
                 if let std::net::IpAddr::V4(v4) = iface.ip() {
@@ -191,7 +192,7 @@ impl Holepuncher {
     ) -> Vec<Ipv4Peer> {
         let mut out = Vec::new();
         if let Some(addrs) = nat_addresses {
-            out.extend(addrs.iter().cloned());
+            out.extend(addrs.iter().filter(|a| a.host.parse().is_ok_and(|ip| !crate::address_policy::is_overlay(ip))).cloned());
         }
         out.extend(Self::local_addresses(fallback_port));
         out
@@ -502,6 +503,7 @@ async fn run_recv_adapter(
     connected_flag: Arc<AtomicBool>,
 ) {
     while let Some(probe) = hp_rx.recv().await {
+        if crate::address_policy::is_overlay(probe.addr.ip()) { continue; }
         if is_initiator {
             if connected_flag
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
