@@ -12,6 +12,7 @@ import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
+import { isKeyboardMenuClick } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
@@ -113,7 +114,7 @@ function SongCards({
   onAction: OnAction;
 }) {
   const connected = useServiceAvailability();
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; openedWithKeyboard: boolean } | null>(
     null,
   );
   return (
@@ -131,6 +132,7 @@ function SongCards({
               // Keyboard presses have no pointer position.
               setMenu({
                 id: track.globalId,
+                openedWithKeyboard: isKeyboardMenuClick(event),
                 x: event.detail ? event.clientX : bounds.left,
                 y: event.detail ? event.clientY : bounds.bottom,
               });
@@ -166,6 +168,7 @@ function SongCards({
             xPos={menu.x}
             yPos={menu.y}
             trackId={menu.id}
+            openedWithKeyboard={menu.openedWithKeyboard}
             playTrack={(id) => onAction("play", tracks, id)}
             playStandalone={(id) => onAction("standalone", tracks, id)}
             addToQueue={(id) =>

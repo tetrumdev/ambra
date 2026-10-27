@@ -432,3 +432,41 @@ async fn reconnect_preserves_selected_identity_and_stable_bridge() {
     stop.cancel();
     restarted.await.unwrap().unwrap();
 }
+
+#[tokio::test]
+async fn tailscale_candidates_are_rejected_before_any_connection() {
+    let identity = Identity::generate().unwrap();
+    for address in ["100.106.252.60:38149", "[fd7a:115c:a1e0::f537:fc3d]:38149", "[::ffff:100.117.211.104]:38149"] {
+        let address: std::net::SocketAddr = address.parse().unwrap();
+        assert!(!lan::is_local(address.ip()));
+        let error = lan::connect(address, identity.public_key(), &identity).await.err().unwrap();
+        assert!(error.to_string().contains("local address"));
+        let mut payload = PairingPayload { version: 1, public_key: identity.public_key(), name: "Excluded".into(), local_addresses: vec![address], public_endpoint: None };
+        assert!(payload.encode().is_err());
+        payload.local_addresses.clear();
+        payload.public_endpoint = Some(address);
+        assert!(payload.encode().is_err());
+    }
+    assert!(lan::local_addresses(38149).iter().all(|a| !peeroxide_dht::address_policy::is_overlay(a.ip())));
+}
+
+#[tokio::test]
+async fn enrollment_authorizes_on_the_same_encrypted_connection() {
+    let (identity, address, cancel, task, _) = harness().await;
+    let manager = ConnectionManager::new(Identity::generate().unwrap(), SelectedServer {
+        public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None,
+    }, None);
+    let enrollment = manager.connect().await.unwrap();
+    assert_eq!(manager.status().state, ConnectionState::Authenticating);
+    assert!(manager.authorize("wrong-token".into()).await.is_err());
+    assert_eq!(manager.status().state, ConnectionState::Authenticating);
+    manager.authorize("fixture-token".into()).await.unwrap();
+    assert_eq!(manager.status().state, ConnectionState::ConnectedLocal);
+    assert!(Arc::ptr_eq(&enrollment, &manager.connect().await.unwrap()));
+    let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.unwrap();
+    let response = reqwest::Client::new().get(format!("{}/api/range", bridge.base_url)).send().await.unwrap();
+    assert!(response.status().is_success());
+    bridge.shutdown().await;
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+}

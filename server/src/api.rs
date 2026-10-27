@@ -3,6 +3,7 @@ mod discover;
 mod playlists;
 
 use crate::loudness::Loudness;
+use crate::browser_auth::{PendingLogin, SpotifyLogin};
 use crate::media_cache::MediaCache;
 use std::{
     collections::{HashMap, HashSet},
@@ -76,8 +77,9 @@ struct AppState {
     spotify: Arc<SyncRwLock<Option<SpotifyProvider>>>,
     spotify_login: Arc<Mutex<()>>,
     soloist: Arc<crate::soloist::Manager>,
-    pending_tidal_login: Arc<Mutex<Option<TidalLogin>>>,
-    pending_qobuz_login: Arc<Mutex<Option<QobuzLogin>>>,
+    pending_tidal_login: Arc<Mutex<Option<PendingLogin<TidalLogin>>>>,
+    pending_qobuz_login: Arc<Mutex<Option<PendingLogin<QobuzLogin>>>>,
+    pending_spotify_login: Arc<Mutex<Option<PendingLogin<SpotifyLogin>>>>,
     http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
     search_cache: Arc<RwLock<HashMap<SearchCacheKey, CachedSearchPage>>>,
@@ -162,6 +164,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         service_login: Arc::new(std::array::from_fn(|_| Mutex::new(()))),
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
+        pending_spotify_login: Arc::new(Mutex::new(None)),
         artwork: Arc::new(crate::artwork_cache::ArtworkCache::with_disk(
             http_client.clone(),
             crate::storage::cache_subdirectory("artwork"),
@@ -215,6 +218,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/{provider}/start", post(start_auth))
         .route("/api/auth/{provider}/complete", post(complete_auth))
+        .route("/api/auth/{provider}/cancel", post(cancel_auth))
         .route("/api/auth/{provider}/disconnect", post(disconnect_auth))
         .route("/api/library", get(library))
         .route("/api/providers/{provider}/playlists", get(playlists::list))
@@ -503,12 +507,53 @@ struct AuthStatusResponse {
 struct AuthStartResponse {
     status: &'static str,
     login_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    attempt_id: Option<String>,
 }
+
+impl AuthStartResponse {
+    fn connected() -> Self { Self { status: "connected", login_url: None, attempt_id: None } }
+}
+
+#[derive(Default, Deserialize)]
+struct AuthStartQuery { #[serde(default)] browser: bool }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CompleteAuthRequest {
     callback_url: String,
+    #[serde(default)]
+    attempt_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CancelAuthRequest { attempt_id: String }
+
+fn stage_login<T>(slot: &mut Option<PendingLogin<T>>, login: T, url: String, caller: &crate::access::Caller) -> Result<Json<AuthStartResponse>, ApiError> {
+    crate::browser_auth::ensure_available(slot, &caller.client_id).map_err(ApiError::bad_request)?;
+    let pending = PendingLogin::new(login, &url, caller.client_id.clone()).map_err(ApiError::bad_request)?;
+    let attempt_id = pending.id.clone();
+    *slot = Some(pending);
+    Ok(Json(AuthStartResponse { status: "callbackRequired", login_url: Some(url), attempt_id: Some(attempt_id) }))
+}
+
+fn take_login<T>(slot: &mut Option<PendingLogin<T>>, caller: &crate::access::Caller, request: &CompleteAuthRequest) -> Result<T, ApiError> {
+    let pending = slot.as_ref().ok_or_else(|| ApiError::bad_request("Start service sign-in before completing it"))?;
+    pending.check(&caller.client_id, request.attempt_id.as_deref()).map_err(ApiError::bad_request)?;
+    // Legacy server CLI callbacks may be bare codes. Browser attempts must match the actual redirect.
+    if request.attempt_id.is_some() || caller.client_id.is_some() {
+        pending.validate_callback(&request.callback_url).map_err(ApiError::bad_request)?;
+    }
+    Ok(slot.take().unwrap().login)
+}
+
+fn cancel_login<T>(slot: &mut Option<PendingLogin<T>>, caller: &crate::access::Caller, attempt_id: &str) -> Result<(), ApiError> {
+    if let Some(pending) = slot.as_ref() {
+        pending.check(&caller.client_id, Some(attempt_id)).map_err(ApiError::bad_request)?;
+        slot.take();
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -538,40 +583,31 @@ async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStat
 async fn start_auth(
     State(state): State<AppState>,
     Path(provider): Path<String>,
+    Query(query): Query<AuthStartQuery>,
+    Extension(caller): Extension<crate::access::Caller>,
 ) -> Result<Json<AuthStartResponse>, ApiError> {
     let _login = state.login_lock(&provider)?.lock().await;
     match provider.as_str() {
         "tidal" => {
             if state.tidal.get().is_some() {
-                return Ok(Json(AuthStartResponse {
-                    status: "connected",
-                    login_url: None,
-                }));
+                return Ok(Json(AuthStartResponse::connected()));
             }
             let (login, login_url) = TidalProvider::start_login().map_err(ApiError::upstream)?;
-            *state.pending_tidal_login.lock().await = Some(login);
-            Ok(Json(AuthStartResponse {
-                status: "callbackRequired",
-                login_url: Some(login_url),
-            }))
+            stage_login(&mut *state.pending_tidal_login.lock().await, login, login_url, &caller)
         }
         "qobuz" => {
             if state.qobuz.get().is_some() {
-                return Ok(Json(AuthStartResponse {
-                    status: "connected",
-                    login_url: None,
-                }));
+                return Ok(Json(AuthStartResponse::connected()));
             }
             let (login, login_url) = QobuzProvider::start_login()
                 .await
                 .map_err(ApiError::upstream)?;
-            *state.pending_qobuz_login.lock().await = Some(login);
-            Ok(Json(AuthStartResponse {
-                status: "callbackRequired",
-                login_url: Some(login_url),
-            }))
+            stage_login(&mut *state.pending_qobuz_login.lock().await, login, login_url, &caller)
         }
         "spotify" => {
+            if caller.client_id.is_some() && !query.browser {
+                return Err(ApiError::bad_request("Start browser sign-in from this device"));
+            }
             // Only one OAuth listener may own the callback port at a time.
             let _login = state.spotify_login.lock().await;
             let connected = match current_spotify(&state) {
@@ -579,6 +615,10 @@ async fn start_auth(
                 None => false,
             };
             if !connected {
+                if query.browser {
+                    let (login, url) = SpotifyProvider::start_browser_login().map_err(ApiError::upstream)?;
+                    return stage_login(&mut *state.pending_spotify_login.lock().await, login, url, &caller);
+                }
                 let was_disconnected = crate::service_auth::disconnected("spotify");
                 let provider = SpotifyProvider::authenticate_if_configured(true)
                     .await;
@@ -608,10 +648,7 @@ async fn start_auth(
                     .await
                     .retain(|key, _| key.provider != MusicProvider::Spotify);
             }
-            Ok(Json(AuthStartResponse {
-                status: "connected",
-                login_url: None,
-            }))
+            Ok(Json(AuthStartResponse::connected()))
         }
         _ => Err(ApiError::not_found(format!(
             "Unknown music service '{provider}'"
@@ -622,6 +659,7 @@ async fn start_auth(
 async fn complete_auth(
     State(state): State<AppState>,
     Path(provider): Path<String>,
+    Extension(caller): Extension<crate::access::Caller>,
     Json(request): Json<CompleteAuthRequest>,
 ) -> Result<Json<AuthStartResponse>, ApiError> {
     let _login = state.login_lock(&provider)?.lock().await;
@@ -630,33 +668,27 @@ async fn complete_auth(
     }
     match provider.as_str() {
         "tidal" => {
-            let login = state
-                .pending_tidal_login
-                .lock()
-                .await
-                .take()
-                .ok_or_else(|| ApiError::bad_request("Start Tidal sign-in before completing it"))?;
+            let login = take_login(&mut *state.pending_tidal_login.lock().await, &caller, &request)?;
             let provider = TidalProvider::complete_login(login, &request.callback_url)
                 .await
                 .map_err(ApiError::upstream)?;
             let _ = state.tidal.set(provider);
         }
         "qobuz" => {
-            let login = state
-                .pending_qobuz_login
-                .lock()
-                .await
-                .take()
-                .ok_or_else(|| ApiError::bad_request("Start Qobuz sign-in before completing it"))?;
+            let login = take_login(&mut *state.pending_qobuz_login.lock().await, &caller, &request)?;
             let provider = QobuzProvider::complete_login(login, &request.callback_url)
                 .await
                 .map_err(ApiError::upstream)?;
             let _ = state.qobuz.set(provider);
         }
         "spotify" => {
-            return Err(ApiError::bad_request(
-                "Spotify completes sign-in automatically",
-            ));
+            let _spotify = state.spotify_login.lock().await;
+            let login = take_login(&mut *state.pending_spotify_login.lock().await, &caller, &request)?;
+            let provider = SpotifyProvider::complete_browser_login(login, &request.callback_url).await.map_err(ApiError::upstream)?;
+            state.soloist.set_account(Some(provider.account_id()));
+            *state.spotify.write().unwrap_or_else(|error| error.into_inner()) = Some(provider);
+            state.search_cache.write().await.retain(|key, _| key.provider != MusicProvider::Spotify);
+            state.catalog_cache.write().await.retain(|key, _| key.provider != MusicProvider::Spotify);
         }
         _ => {
             return Err(ApiError::not_found(format!(
@@ -665,10 +697,18 @@ async fn complete_auth(
         }
     }
     state.discover.invalidate().await;
-    Ok(Json(AuthStartResponse {
-        status: "connected",
-        login_url: None,
-    }))
+    Ok(Json(AuthStartResponse::connected()))
+}
+
+async fn cancel_auth(State(state): State<AppState>, Path(provider): Path<String>, Extension(caller): Extension<crate::access::Caller>, Json(request): Json<CancelAuthRequest>) -> Result<StatusCode, ApiError> {
+    let _login = state.login_lock(&provider)?.lock().await;
+    match provider.as_str() {
+        "tidal" => cancel_login(&mut *state.pending_tidal_login.lock().await, &caller, &request.attempt_id)?,
+        "qobuz" => cancel_login(&mut *state.pending_qobuz_login.lock().await, &caller, &request.attempt_id)?,
+        "spotify" => cancel_login(&mut *state.pending_spotify_login.lock().await, &caller, &request.attempt_id)?,
+        _ => unreachable!(),
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn disconnect_auth(
@@ -681,6 +721,7 @@ async fn disconnect_auth(
     let _spotify_login = if provider == "spotify" { Some(state.spotify_login.lock().await) } else { None };
     if provider == "tidal" { state.pending_tidal_login.lock().await.take(); }
     if provider == "qobuz" { state.pending_qobuz_login.lock().await.take(); }
+    if provider == "spotify" { state.pending_spotify_login.lock().await.take(); }
     {
         let _credentials = crate::service_auth::credentials_guard();
         // Mark first: in-flight requests must not restore credentials after sign-out.
@@ -725,10 +766,18 @@ struct ArtworkQualityRequest {
     cover_url: String,
 }
 
+#[derive(Serialize)]
+struct ArtworkQualityResponse {
+    #[serde(flatten)]
+    artwork: ArtworkCandidate,
+    // Failed metadata or image probes must remain eligible for an upgrade.
+    complete: bool,
+}
+
 async fn resolve_artwork_quality(
     State(state): State<AppState>,
     Json(request): Json<ArtworkQualityRequest>,
-) -> Result<Json<ArtworkCandidate>, ApiError> {
+) -> Result<Json<ArtworkQualityResponse>, ApiError> {
     let provider = provider_slug(request.source_provider);
     if !trusted_artwork_url(provider, &request.cover_url) {
         return Err(ApiError::bad_request(
@@ -753,28 +802,27 @@ async fn resolve_artwork_quality(
         .get_mut(&cache_key)
     {
         cached.0 = Instant::now();
-        return Ok(Json(cached.1.clone()));
+        return Ok(Json(ArtworkQualityResponse { artwork: cached.1.clone(), complete: true }));
     }
-
-    let upc = if request.upc.as_deref().is_some_and(|upc| !upc.is_empty()) {
-        request.upc.clone()
-    } else if request.source_provider == MusicProvider::Tidal {
-        tidal_provider(&state)?
-            .album_upc(&request.album_id)
-            .await
-            .map_err(ApiError::upstream)?
-    } else {
-        None
-    };
 
     let alternative = async {
         let qobuz_url = if request.source_provider == MusicProvider::Qobuz {
             qobuz_max_artwork_url(&request.cover_url)
-        } else if let (Some(qobuz), Some(upc)) = (state.qobuz.get(), upc.as_deref()) {
-            qobuz
-                .exact_album_artwork_by_upc(upc)
-                .await
-                .map_err(|_| ())?
+        } else if let Some(qobuz) = state.qobuz.get() {
+            // UPC discovery only helps find an alternative. It must never prevent
+            // the source cover from loading, even when the source session expired.
+            let upc = if request.upc.as_deref().and_then(normalized_upc).is_some() {
+                request.upc.clone()
+            } else if request.source_provider == MusicProvider::Tidal {
+                state.tidal.get().ok_or(())?
+                    .album_upc(&request.album_id).await.map_err(|_| ())?
+            } else {
+                None
+            };
+            match upc {
+                Some(upc) => qobuz.exact_album_artwork_by_upc(&upc).await.map_err(|_| ())?,
+                None => None,
+            }
         } else {
             None
         };
@@ -793,23 +841,12 @@ async fn resolve_artwork_quality(
     };
     let (source_dimensions, qobuz) = tokio::join!(
         cached_artwork_dimensions(&state, &request.cover_url),
-        alternative,
+        tokio::time::timeout(Duration::from_secs(10), alternative),
     );
-    let complete = qobuz.is_ok();
-    let qobuz = qobuz.ok().flatten();
-    let source_dimensions = source_dimensions
-        .ok_or_else(|| ApiError::upstream("Could not inspect source artwork dimensions"))?;
-    let source = ArtworkCandidate {
-        provider: provider.to_owned(),
-        url: request.cover_url,
-        width: source_dimensions.0,
-        height: source_dimensions.1,
-        colors: Vec::new(),
-    };
-    let best = highest_resolution(source, qobuz);
+    let result = resolved_artwork(provider, request.cover_url, source_dimensions, qobuz.unwrap_or(Err(())));
 
     // Remembering a lookup that failed would pin the smaller cover until the server restarts.
-    if complete {
+    if result.complete {
         let mut cache = state.artwork_quality_cache.write().await;
         if cache.len() >= 512 {
             if let Some(oldest) = cache
@@ -820,9 +857,32 @@ async fn resolve_artwork_quality(
                 cache.remove(&oldest);
             }
         }
-        cache.insert(cache_key, (Instant::now(), best.clone()));
+        cache.insert(cache_key, (Instant::now(), result.artwork.clone()));
     }
-    Ok(Json(best))
+    Ok(Json(result))
+}
+
+fn resolved_artwork(
+    provider: &str,
+    cover_url: String,
+    source_dimensions: Option<(u32, u32)>,
+    alternative: Result<Option<ArtworkCandidate>, ()>,
+) -> ArtworkQualityResponse {
+    let complete = source_dimensions.is_some() && alternative.is_ok();
+    // A CDN refusing the server's dimension probe says nothing about whether the
+    // client can display the original image. Keep its URL, with unknown dimensions.
+    let (width, height) = source_dimensions.unwrap_or_default();
+    let source = ArtworkCandidate {
+        provider: provider.to_owned(),
+        url: cover_url,
+        width,
+        height,
+        colors: Vec::new(),
+    };
+    ArtworkQualityResponse {
+        artwork: highest_resolution(source, alternative.ok().flatten()),
+        complete,
+    }
 }
 
 #[derive(Deserialize)]
@@ -878,33 +938,7 @@ async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, 
         return Some(cached.1);
     }
 
-    const IMAGE_HEADER_LIMIT: usize = 256 * 1024;
-    let dimensions = async {
-        let mut response = state
-            .http_client
-            .get(url)
-            .header(RANGE, format!("bytes=0-{}", IMAGE_HEADER_LIMIT - 1))
-            .send()
-            .await
-            .ok()?;
-        if !response.status().is_success() {
-            return None;
-        }
-
-        let mut header = Vec::with_capacity(64 * 1024);
-        while header.len() < IMAGE_HEADER_LIMIT {
-            let Some(chunk) = response.chunk().await.ok()? else {
-                break;
-            };
-            let remaining = IMAGE_HEADER_LIMIT - header.len();
-            header.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
-            if image_dimensions(&header).is_some() {
-                break;
-            }
-        }
-        image_dimensions(&header)
-    }
-    .await;
+    let dimensions = probe_artwork_dimensions(&state.http_client, url).await;
 
     if let Some(dimensions) = dimensions {
         let mut cache = state.artwork_dimensions_cache.write().await;
@@ -919,6 +953,33 @@ async fn cached_artwork_dimensions(state: &AppState, url: &str) -> Option<(u32, 
         }
         cache.insert(url.to_owned(), (Instant::now(), dimensions));
         return Some(dimensions);
+    }
+    None
+}
+
+async fn probe_artwork_dimensions(client: &reqwest::Client, url: &str) -> Option<(u32, u32)> {
+    const IMAGE_HEADER_LIMIT: usize = 256 * 1024;
+    for attempt in 0..3 {
+        // Some CDNs reject Range requests even though the image itself is available.
+        // Retry with an ordinary GET, still bounding the bytes consumed and total time.
+        let dimensions = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut request = client.get(url);
+            if attempt == 0 {
+                request = request.header(RANGE, format!("bytes=0-{}", IMAGE_HEADER_LIMIT - 1));
+            }
+            let mut response = request.send().await.ok()?;
+            if !response.status().is_success() { return None; }
+            let mut header = Vec::with_capacity(64 * 1024);
+            while header.len() < IMAGE_HEADER_LIMIT {
+                let Some(chunk) = response.chunk().await.ok()? else { break; };
+                let remaining = IMAGE_HEADER_LIMIT - header.len();
+                header.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                if let Some(dimensions) = image_dimensions(&header) { return Some(dimensions); }
+            }
+            None
+        }).await.ok().flatten();
+        if dimensions.is_some() { return dimensions; }
+        if attempt < 2 { tokio::time::sleep(Duration::from_millis(150 * (attempt + 1))).await; }
     }
     None
 }
@@ -2579,6 +2640,60 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn artwork_failures_keep_usable_images_and_do_not_settle_the_quality_cache() {
+        let source_url = "https://resources.tidal.com/images/cover/1280x1280.jpg";
+        let alternative = super::ArtworkCandidate {
+            provider: "qobuz".into(), url: "https://static.qobuz.com/cover_max.jpg".into(),
+            width: 4000, height: 4000, colors: vec![],
+        };
+        // Optional metadata failures cannot discard a perfectly valid source.
+        let result = super::resolved_artwork("tidal", source_url.into(), Some((1280, 1280)), Err(()));
+        assert_eq!(result.artwork.url, source_url);
+        assert!(!result.complete);
+        // A source probe failure cannot discard a verified, higher-resolution alternative.
+        let result = super::resolved_artwork("tidal", source_url.into(), None, Ok(Some(alternative.clone())));
+        assert_eq!(result.artwork, alternative);
+        assert!(!result.complete);
+        // Even when probes fail, clients can still try the provider's original full-size URL.
+        let result = super::resolved_artwork("tidal", source_url.into(), None, Err(()));
+        assert_eq!(result.artwork.url, source_url);
+        assert_eq!(result.artwork.width, 0);
+        assert!(!result.complete);
+        let result = super::resolved_artwork("tidal", source_url.into(), Some((1280, 1280)), Ok(Some(alternative.clone())));
+        assert_eq!(result.artwork, alternative);
+        assert!(result.complete);
+    }
+
+    #[tokio::test]
+    async fn artwork_probe_recovers_from_cdn_502_and_range_rejection() {
+        use axum::{Router, extract::State, http::{HeaderMap, StatusCode}, routing::get};
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+        for failure in [StatusCode::BAD_GATEWAY, StatusCode::RANGE_NOT_SATISFIABLE] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let app = Router::new().route("/cover", get({
+                move |State(calls): State<Arc<AtomicUsize>>, headers: HeaderMap| async move {
+                    let attempt = calls.fetch_add(1, Ordering::SeqCst);
+                    if attempt == 0 {
+                        assert!(headers.contains_key("range"));
+                        return (failure, vec![]);
+                    }
+                    assert!(!headers.contains_key("range"));
+                    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+                    png.extend_from_slice(&4000_u32.to_be_bytes());
+                    png.extend_from_slice(&4000_u32.to_be_bytes());
+                    (StatusCode::OK, png)
+                }
+            })).with_state(calls.clone());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/cover", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+            assert_eq!(super::probe_artwork_dimensions(&reqwest::Client::new(), &url).await, Some((4000, 4000)));
+            assert_eq!(calls.load(Ordering::SeqCst), 2);
+            server.abort();
+        }
+    }
+
     #[test]
     fn provider_slots_can_disconnect_and_reconnect_without_a_server_restart() {
         let slot = super::ProviderSlot::new();

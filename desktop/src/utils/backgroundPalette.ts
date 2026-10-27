@@ -1,4 +1,5 @@
 import { swirlShares } from "./swirlProportions";
+import { linearChannel, perceptualColor } from "./perceptualColor";
 
 type Rgb = [number, number, number];
 
@@ -75,7 +76,11 @@ export type CoverSeparation = {
   edges: number[];
   // -1 darkens the background beside that zone, 1 lightens it.
   directions: number[];
+  /** Actual RGB boundary samples, in the same zone/side order as edges. */
+  colors?: number[];
 };
+
+export type CoverEdgeSamples = { luminances: number[]; colors: number[] };
 
 export const neutralCoverSeparation: CoverSeparation = {
   edges: Array(COVER_EDGE_ZONES * 4).fill(0.5),
@@ -111,11 +116,30 @@ export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
   return zones.map((sum, index) => counts[index] ? sum / counts[index] : 0.5);
 }
 
-const EDGE_SAMPLE_SIZE = 16;
+const EDGE_SAMPLE_SIZE = 64;
+
+/**
+ * Keep actual boundary colors instead of averaging a wide band into colors that
+ * may never occur on the edge. Contrast is tested per sample before any blending.
+ */
+export function coverEdgeSamples(pixels: ArrayLike<number>, size: number): CoverEdgeSamples {
+  const colors: number[] = [];
+  const luminances: number[] = [];
+  for (let zone = 0; zone < COVER_EDGE_ZONES; zone++) {
+    const along = Math.min(size - 1, Math.floor((zone + 0.5) * size / COVER_EDGE_ZONES));
+    for (const [x, y] of [[along, 0], [size - 1, along], [along, size - 1], [0, along]]) {
+      const offset = (y * size + x) * 4;
+      const rgb: Rgb = [pixels[offset] / 255, pixels[offset + 1] / 255, pixels[offset + 2] / 255];
+      colors.push(...rgb);
+      luminances.push(luminance(rgb));
+    }
+  }
+  return { luminances, colors };
+}
 
 // Reads how bright each side of the cover is. Covers the webview may not read
 // back (no CORS) resolve to null and fall back to the palette.
-export function sampleCoverEdges(source: string): Promise<number[] | null> {
+export function sampleCoverEdges(source: string): Promise<CoverEdgeSamples | null> {
   const image = new Image();
   image.crossOrigin = "anonymous";
   image.decoding = "async";
@@ -128,7 +152,7 @@ export function sampleCoverEdges(source: string): Promise<number[] | null> {
     if (!context) return null;
     context.drawImage(image, 0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
     const { data } = context.getImageData(0, 0, EDGE_SAMPLE_SIZE, EDGE_SAMPLE_SIZE);
-    return coverEdgeLuminances(data, EDGE_SAMPLE_SIZE);
+    return coverEdgeSamples(data, EDGE_SAMPLE_SIZE);
   }).catch(() => null);
 }
 
@@ -137,24 +161,35 @@ export function sampleCoverEdges(source: string): Promise<number[] | null> {
  * after any overlay drawn over the field but under the cover (1 = none).
  */
 export function coverSeparation(
-  edges: number[] | null,
+  edges: CoverEdgeSamples | number[] | null,
   colors: string[],
   weights: number[],
   coverDim = 1,
 ): CoverSeparation {
-  if (colors.length === 0) return neutralCoverSeparation;
+  if (colors.length === 0 || !edges) return neutralCoverSeparation;
   // The background shows each color in about its swirl share.
   const influence = swirlShares(weights.slice(0, colors.length));
   const background = coverDim * colors
     .slice(0, 4)
     .reduce((sum, color, index) => sum + luminance(parseColor(color)) * influence[index], 0);
   // Without a readable cover, its palette is the best guess for every edge.
-  const zones = edges?.length === COVER_EDGE_ZONES * 4
-    ? edges
-    : Array(COVER_EDGE_ZONES * 4).fill(background);
+  // A palette alone cannot tell whether a particular edge needs any treatment.
+  // Leave the field alone when the actual boundary is unavailable.
+  const samples = Array.isArray(edges) ? edges : edges.luminances;
+  if (samples.length !== COVER_EDGE_ZONES * 4) return neutralCoverSeparation;
+  const zones = samples;
   return {
     edges: zones,
-    directions: zones.map((edge) => {
+    colors: Array.isArray(edges) ? zones.flatMap(value => [value, value, value]) : edges.colors,
+    directions: zones.map((edge, index) => {
+      // Saturated colors can have low weighted luma while a primary channel is
+      // already near its ceiling. Darken those edges instead of clipping a lift.
+      const rgb = Array.isArray(edges) ? [edge, edge, edge] : edges.colors.slice(index * 3, index * 3 + 3);
+      const lightness = perceptualColor(rgb)[0];
+      const lightnessLimit = lightness > 0.0001
+        ? lightness * Math.cbrt(linearChannel(coverDim) / Math.max(0.000001, linearChannel(Math.max(...rgb))))
+        : Math.cbrt(linearChannel(coverDim));
+      if (lightnessLimit - lightness < 0.075) return -1;
       // Edges too near either extreme leave room to move only one way.
       if (edge < 0.14) return 1;
       if (edge > 0.86) return -1;

@@ -93,8 +93,8 @@ this migration cannot reconstruct deleted playlists.
 
 ## Server administration
 
-All hosting, network settings, QR generation, approval, denial, revocation, and provider
-administration run through `ambra-server`. Provider controls include:
+Hosting, network settings, QR generation, approval, denial, revocation, provider sign-out,
+and optional Spotify playback setup run through `ambra-server`. Provider controls include:
 
 ```sh
 ambra-server login spotify
@@ -113,8 +113,18 @@ ambra-server spotify status
 Callback URLs and Soloist API keys use hidden terminal input. Soloist setup requests consent
 for automatic server-managed downloads and updates. Quality selection is automatic; see
 [Spotify setup and platform limits](spotify-soloist.md). Clients display sanitized status.
-Provider administration requests, including legacy auth paths, are rejected over encrypted
-client connections. The server retains its existing cryptographic identity and authorization.
+Paired desktop clients can also sign in through Settings → Services. The app opens an isolated
+provider browser window and captures its exact callback URL automatically, without pasting codes
+or registering a global `ambra://` handler. Passwords stay in the provider page; the selected
+server exchanges the callback and keeps provider credentials and PKCE verifiers. Spotify's
+browser opens on the client computer, including when the server runs elsewhere. The existing
+server CLI sign-in flow remains available.
+
+Only authenticated paired clients may start, complete, or cancel a browser sign-in. Each pending
+attempt belongs to its initiating device, has a unique ID, and expires after ten minutes. Closing
+the sign-in window, leaving Services, or switching servers cancels client-side work; late callbacks
+cannot authorize another server. Other provider administration requests remain local to the server
+machine. The server retains its existing cryptographic identity and authorization.
 Release CI builds the server as a separate downloadable executable after verifying that the
 desktop distribution does not contain it.
 

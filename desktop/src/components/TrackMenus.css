@@ -70,6 +70,19 @@
     outline: none;
 }
 
+/* Explicit menu navigation avoids inheriting :focus-visible from a previous field
+   or first interaction. Pointer hover and keyboard focus never highlight two actions. */
+#trackPlaybackMenu:focus {
+    outline: none;
+}
+#trackPlaybackMenu .menuItem {
+    background-color: rgba(29, 29, 29, 0.7);
+}
+#trackPlaybackMenu[data-navigation="pointer"] .menuItem:hover,
+#trackPlaybackMenu[data-navigation="keyboard"] .menuItem:focus {
+    background-color: rgba(42, 42, 42, 0.7);
+}
+
 .menuIcon {
     width: 15px;
     height: 15px;

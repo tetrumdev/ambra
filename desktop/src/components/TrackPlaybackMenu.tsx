@@ -1,6 +1,6 @@
 import "./TrackMenus.css";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { MENU_WIDTH } from "../utils/trackMenu";
@@ -10,6 +10,7 @@ type TrackPlaybackMenuProps = {
   xPos: number;
   yPos: number;
   trackId: GlobalTrackId | null;
+  openedWithKeyboard?: boolean;
   playTrack?: (trackId: GlobalTrackId) => void;
   playStandalone: (trackId: GlobalTrackId) => void;
   addToQueue: (trackId: GlobalTrackId) => void;
@@ -21,6 +22,7 @@ export function TrackPlaybackMenu({
   xPos,
   yPos,
   trackId,
+  openedWithKeyboard = false,
   playTrack,
   playStandalone,
   addToQueue,
@@ -28,10 +30,13 @@ export function TrackPlaybackMenu({
 }: TrackPlaybackMenuProps) {
   const connected = useServiceAvailability();
   const menu = useRef<HTMLDivElement>(null);
+  const [keyboardNavigation, setKeyboardNavigation] = useState(openedWithKeyboard);
   useFadeOutOnUnmount(menu);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    // Pointer opens need focus for keyboard handling, but must not select an action.
+    const target = openedWithKeyboard ? menu.current?.querySelector<HTMLButtonElement>("button") : menu.current;
+    target?.focus({ preventScroll: true });
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
   if (trackId && !isTrackAvailable(trackId, connected)) return null;
@@ -41,14 +46,24 @@ export function TrackPlaybackMenu({
         ref={menu}
         id="trackPlaybackMenu"
         role="menu"
+        tabIndex={-1}
+        data-navigation={keyboardNavigation ? "keyboard" : "pointer"}
         aria-label="Track playback"
+        onPointerMove={(event) => {
+          setKeyboardNavigation(false);
+          // Pointer movement takes over from the last keyboard selection.
+          const item = (event.target as HTMLElement).closest<HTMLButtonElement>('button[role="menuitem"]');
+          item?.focus({ preventScroll: true });
+        }}
         onKeyDown={(event) => {
           if (event.key === "Escape" || event.key === "Tab") { onClose(); return; }
           if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
           event.preventDefault();
+          setKeyboardNavigation(true);
           const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
           const current = items.indexOf(document.activeElement as HTMLButtonElement);
           const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
+            : current < 0 ? (event.key === "ArrowUp" ? items.length - 1 : 0)
             : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
           items[next]?.focus();
         }}

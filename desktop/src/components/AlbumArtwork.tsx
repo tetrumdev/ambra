@@ -23,7 +23,11 @@ export function AlbumArtwork({ src, title, noun = "cover", resolveFull }: {
     requested.current = src;
     void resolveFull()
       .then(async (url) => {
-        if (!url || url === src) return;
+        if (!url) {
+          if (requested.current === src) requested.current = undefined;
+          return;
+        }
+        if (url === src) return;
         await preloadArtwork(url, true);
         setFull({ for: src, url });
       })

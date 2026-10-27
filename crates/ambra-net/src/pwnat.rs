@@ -241,7 +241,7 @@ pub async fn connect(
     let SocketAddr::V4(server) = server else {
         return Err("pwnat requires IPv4".into());
     };
-    if crate::lan::is_local((*server.ip()).into()) {
+    if crate::lan::is_local((*server.ip()).into()) || peeroxide_dht::address_policy::is_overlay((*server.ip()).into()) {
         return Err("pwnat requires a known public endpoint".into());
     }
     let raw = raw_socket()?;
@@ -294,7 +294,7 @@ pub async fn serve(
             },
             result = raw.recv_from(&mut buffer) => {
                 let (length, source) = result?;
-                if !crate::lan::is_local(source.ip()) && validate_time_exceeded(&buffer[..length], identity.public_key()) && recent.len() < 16 && !recent.contains_key(&source.ip()) {
+                if !crate::lan::is_local(source.ip()) && !peeroxide_dht::address_policy::is_overlay(source.ip()) && validate_time_exceeded(&buffer[..length], identity.public_key()) && recent.len() < 16 && !recent.contains_key(&source.ip()) {
                     recent.insert(source.ip(), ());
                     let target = SocketAddr::new(source.ip(), address.port());
                     for _ in 0..3 { let _ = punch.send_to(b"AMBRA-PUNCH/1", target).await; }
@@ -302,7 +302,7 @@ pub async fn serve(
             },
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             Some(incoming) = endpoint.accept() => {
-                if tasks.len() >= 64 { incoming.refuse(); continue; }
+                if peeroxide_dht::address_policy::is_overlay(incoming.remote_address().ip()) || tasks.len() >= 64 { incoming.refuse(); continue; }
                 let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone();
                 tasks.spawn(async move {
                     let setup = async {
