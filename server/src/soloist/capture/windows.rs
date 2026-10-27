@@ -1,13 +1,17 @@
 //! WASAPI process-loopback capture, restricted to Soloist's process tree.
 //!
-//! Windows' process-loopback API does not suppress the target's physical render.
-//! Keep the public capability closed until Soloist exposes a supported silent render
-//! route. Muting a session can mute its captured samples; muting an endpoint changes
-//! unrelated applications. Neither is an acceptable substitute for isolation.
+//! The optional server-only VB-CABLE driver provides a silent render endpoint.
+//! Soloist starts suspended and at zero volume. Per-process routing and a restrictive
+//! job are installed before it runs; capture never changes the physical audio defaults.
+#[path = "windows/pcm.rs"]
+mod pcm;
+#[path = "windows/route.rs"]
+mod route;
 use super::{
     super::{Error, ErrorCode},
     Capability,
 };
+use pcm::float_pcm;
 use std::{
     path::Path,
     sync::{
@@ -16,7 +20,7 @@ use std::{
         mpsc as sync_channel,
     },
     thread::JoinHandle,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{process::Command, sync::mpsc};
 use windows::{
@@ -26,31 +30,51 @@ use windows::{
             Com::StructuredStorage::{
                 PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
             },
-            Com::{
-                BLOB, COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize, IAgileObject,
-                IAgileObject_Impl,
-            },
+            Com::{BLOB, IAgileObject, IAgileObject_Impl},
+            Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED},
             Variant::VT_BLOB,
         },
     },
     core::{ComObject, HRESULT, Interface, Ref, implement},
 };
 
-const SUPPRESSION_UNAVAILABLE: &str = "Windows process loopback cannot suppress Soloist speaker playback. Soloist has no supported silent WASAPI output route. Lossless capture is disabled; Spotify uses librespot High.";
-
 pub fn capability() -> Capability {
-    Capability {
-        available: false,
-        reason: SUPPRESSION_UNAVAILABLE.into(),
+    let result = (|| {
+        route::check_platform()?;
+        let _apartment = route::Apartment::enter()?;
+        route::ProcessPolicy::open()?;
+        route::Route::discover()?.validate()
+    })();
+    match result {
+        Ok(()) => Capability { available: true, reason: "WASAPI process capture and a silent VB-CABLE route are available on this server. Runtime activation, routing, unity gain, and format are verified before audio delivery.".into() },
+        Err(error) => Capability { available: false, reason: error.message },
     }
+}
+pub(crate) fn driver_present() -> bool {
+    route::Apartment::enter().is_ok_and(|_apartment| route::Route::discover().is_ok())
+}
+pub(crate) fn configure_driver() -> Result<(), Error> {
+    route::check_platform()?;
+    let _apartment = route::Apartment::enter()?;
+    route::Route::discover()?.configure()
+}
+pub(crate) fn ensure_platform() -> Result<(), Error> {
+    route::check_platform()
+}
+pub(crate) fn audio_defaults() -> Result<Vec<(i32, i32, String)>, Error> {
+    route::audio_defaults()
+}
+pub(crate) fn restore_audio_defaults(defaults: &[(i32, i32, String)]) -> Result<(), Error> {
+    route::restore_audio_defaults(defaults)
 }
 fn unavailable(message: &str) -> Error {
     Error::new(ErrorCode::CaptureUnavailable, message)
 }
-fn native_error(_: windows::core::Error) -> Error {
-    unavailable(
-        "WASAPI process capture failed. Requires Windows build 20348 or newer, an interactive audio session, and supported 44,100 Hz stereo capture; retry playback.",
-    )
+fn native_error(error: windows::core::Error) -> Error {
+    unavailable(&format!(
+        "Windows audio API failed (HRESULT 0x{:08X}). Requires Windows build 20348 or newer, an audio session, and the configured server VB-CABLE route; Spotify uses High.",
+        error.code().0 as u32,
+    ))
 }
 
 pub struct Capture {
@@ -58,6 +82,7 @@ pub struct Capture {
     cancelled: Arc<AtomicBool>,
     delivering: Arc<AtomicBool>,
     failure: Arc<Mutex<Option<Error>>>,
+    route_ready: Arc<AtomicBool>,
     receiver: mpsc::Receiver<Vec<u8>>,
     sender: Option<mpsc::Sender<Vec<u8>>>,
     worker: Option<JoinHandle<()>>,
@@ -67,8 +92,9 @@ pub struct Capture {
 impl Capture {
     pub async fn start(_root: &Path) -> Result<Self, Error> {
         // Check before the caller launches Soloist. Never permit audible preroll.
-        if !capability().available {
-            return Err(unavailable(SUPPRESSION_UNAVAILABLE));
+        let capability = capability();
+        if !capability.available {
+            return Err(unavailable(&capability.reason));
         }
         let (sender, receiver) = mpsc::channel(8);
         Ok(Self {
@@ -76,6 +102,7 @@ impl Capture {
             cancelled: Arc::new(AtomicBool::new(false)),
             delivering: Arc::new(AtomicBool::new(false)),
             failure: Arc::new(Mutex::new(None)),
+            route_ready: Arc::new(AtomicBool::new(false)),
             sender: Some(sender),
             receiver,
             worker: None,
@@ -83,11 +110,10 @@ impl Capture {
             offset: 0,
         })
     }
-    pub fn route(&self, _command: &mut Command) {}
+    pub fn route(&self, command: &mut Command) {
+        command.creation_flags(CREATE_SUSPENDED.0 | CREATE_NO_WINDOW.0);
+    }
     pub async fn target(&mut self, pid: u32) -> Result<(), Error> {
-        if !capability().available {
-            return Err(unavailable(SUPPRESSION_UNAVAILABLE));
-        }
         if pid == 0 || self.pid.is_some() {
             return Err(unavailable("Invalid or duplicate WASAPI process target"));
         }
@@ -98,9 +124,13 @@ impl Capture {
         let cancelled = self.cancelled.clone();
         let delivering = self.delivering.clone();
         let failure = self.failure.clone();
+        let route_ready = self.route_ready.clone();
         let (ready, received) = tokio::sync::oneshot::channel();
         self.worker = Some(std::thread::spawn(move || {
-            if let Err(error) = capture_process(pid, &cancelled, &delivering, &sender, ready) {
+            if let Err(error) =
+                capture_process(pid, &cancelled, &delivering, &route_ready, &sender, ready)
+            {
+                route_ready.store(false, Ordering::Release);
                 *failure.lock().unwrap() = Some(error);
             }
         }));
@@ -141,6 +171,7 @@ impl Capture {
             return Err(error);
         }
         Ok(self.pid == Some(pid)
+            && self.route_ready.load(Ordering::Acquire)
             && self
                 .worker
                 .as_ref()
@@ -180,7 +211,18 @@ impl Capture {
         self.receiver.close();
         self.sender.take();
         if let Some(worker) = self.worker.take() {
-            let _ = tokio::task::spawn_blocking(move || worker.join()).await;
+            // A wedged native audio call must not block the shared session's fallback.
+            // Runtime stops the owned process first; cancellation also releases the job
+            // when a stalled native call returns.
+            let _ = tokio::time::timeout(Duration::from_secs(2), async {
+                while !worker.is_finished() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await;
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
         }
         self.pending.clear();
         self.pid = None;
@@ -215,14 +257,6 @@ impl IActivateAudioInterfaceCompletionHandler_Impl for Activation_Impl {
         Ok(())
     }
 }
-struct Apartment;
-impl Drop for Apartment {
-    fn drop(&mut self) {
-        unsafe {
-            CoUninitialize();
-        }
-    }
-}
 struct RunningClient(IAudioClient);
 impl Drop for RunningClient {
     fn drop(&mut self) {
@@ -236,14 +270,16 @@ fn capture_process(
     pid: u32,
     cancelled: &AtomicBool,
     delivering: &AtomicBool,
+    route_ready: &AtomicBool,
     sender: &mpsc::Sender<Vec<u8>>,
     ready: tokio::sync::oneshot::Sender<Result<(), Error>>,
 ) -> Result<(), Error> {
     unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED)
-            .ok()
-            .map_err(native_error)?;
-        let _apartment = Apartment;
+        let _apartment = route::Apartment::enter()?;
+        let route = route::Route::discover()?;
+        route.validate()?;
+        let target = route::Target::confine(pid)?;
+        route.set_process(pid)?;
         let mut parameters = Box::new(AUDIOCLIENT_ACTIVATION_PARAMS {
             ActivationType: AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK,
             Anonymous: AUDIOCLIENT_ACTIVATION_PARAMS_0 {
@@ -319,9 +355,24 @@ fn capture_process(
         let capture: IAudioCaptureClient = client.GetService().map_err(native_error)?;
         client.Start().map_err(native_error)?;
         let _running = RunningClient(client);
+        target.resume(pid)?;
         let _ = ready.send(Ok(()));
         let mut received_audio = false;
+        let mut checked = Instant::now() - Duration::from_secs(1);
+        let mut checked_delivering = false;
         while !cancelled.load(Ordering::Acquire) {
+            let delivery = delivering.load(Ordering::Acquire);
+            if (checked.elapsed() >= Duration::from_millis(50) || delivery != checked_delivering)
+                && target.running()?
+            {
+                let verified = route.verify(pid, delivery)?;
+                route_ready.store(verified, Ordering::Release);
+                if delivery && !verified {
+                    return Err(unavailable("Soloist lost its silent Windows audio route."));
+                }
+                checked_delivering = delivery;
+                checked = Instant::now();
+            }
             if capture.GetNextPacketSize().map_err(native_error)? == 0 {
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
@@ -335,7 +386,7 @@ fn capture_process(
             // Copy at most 32 KiB per packet into a bounded channel. Never block the
             // audio engine while holding its buffer. ReleaseBuffer runs on every path.
             let copied = (|| {
-                if !delivering.load(Ordering::Acquire) {
+                if !delivery {
                     return Ok(Vec::new());
                 }
                 if frames as usize > 32_768 / 8 {
@@ -366,40 +417,24 @@ fn capture_process(
     }
 }
 
-fn float_pcm(samples: &[f32]) -> Result<Vec<u8>, Error> {
-    let mut result = Vec::with_capacity(samples.len() * 4);
-    for &sample in samples {
-        if !sample.is_finite() {
-            return Err(unavailable("WASAPI returned nonfinite PCM"));
-        }
-        let value = (f64::from(sample).clamp(-1.0, 1.0) * 2_147_483_648.0)
-            .round()
-            .clamp(i32::MIN as f64, i32::MAX as f64) as i32;
-        result.extend_from_slice(&value.to_le_bytes());
-    }
-    Ok(result)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn suppression_requirement_prevents_lossless_advertisement() {
-        assert!(!capability().available);
-        assert!(capability().reason.contains("speaker"));
-    }
-    #[test]
-    fn float_format_conversion_preserves_sign_and_clips() {
-        let bytes = float_pcm(&[-1.0, 0.0, 0.5, 1.0, 2.0]).unwrap();
-        let values: Vec<_> = bytes
-            .chunks_exact(4)
-            .map(|b| i32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        assert_eq!(values, [i32::MIN, 0, 1 << 30, i32::MAX, i32::MAX]);
-        assert!(float_pcm(&[f32::NAN]).is_err());
+    fn supported_capability_requires_an_installed_and_configured_driver() {
+        let status = capability();
+        if status.available {
+            assert!(driver_present());
+        }
+        assert!(!status.reason.is_empty());
     }
     #[tokio::test]
     async fn unsupported_capture_fails_before_launch() {
-        assert!(Capture::start(Path::new(".")).await.is_err());
+        if !capability().available {
+            assert!(Capture::start(Path::new(".")).await.is_err());
+        }
     }
 }
+#[cfg(test)]
+#[path = "windows/native_tests.rs"]
+mod native_tests;

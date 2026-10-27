@@ -11,8 +11,10 @@ selected shared output, rather than synchronized playback across several outputs
 
 Spotify uses librespot for its primary integration and automatic High playback. Optional
 server-owned Soloist rendering automatically prefers Lossless when ready. Linux private
-PulseAudio capture and macOS process taps are implemented; Windows capture remains disabled
-until silent rendering is supported. Audio forwarding stays disabled in distributable builds.
+PulseAudio capture, macOS process taps, and Windows WASAPI process capture are implemented.
+Windows requires an optional signed VB-CABLE driver installed and configured only on the server
+to provide a silent virtual output. Missing capture support retains High. Soloist works in normal server builds, including
+release builds, after server setup and pairing; no development build or runtime opt-in is required.
 See [Soloist setup and verification](spotify-soloist.md) for consent, automatic downloads,
 updates, platform limitations, and tests. Clients contain no Soloist administration.
 
