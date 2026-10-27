@@ -90,7 +90,7 @@ function MiniProgress({ view, duration }: { view: SessionView | null; duration: 
   return <View style={styles.miniProgress}><Animated.View style={[styles.miniFill, style]} /></View>;
 }
 
-export function Player() {
+export function Player({ connectionError = null }: { connectionError?: string | null }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const layout = playerLayout(width, height, insets.top, insets.bottom);
@@ -264,7 +264,7 @@ export function Player() {
     coverFrame.current = { x: lyricsOpen ? 30 : (width - size) / 2, y: lyricsOpen ? layout.coverTop : layout.coverTop + (layout.coverSize - size) / 2, size };
   }, [layout.coverSize, layout.coverTop, width, playing, lyricsOpen]);
 
-  const shownError = error ?? view?.error;
+  const shownError = error ?? view?.error ?? connectionError;
   const shownArtist = (!expanded && shownError) || (track?.artist ?? (expanded
     ? (view && !view.output ? "Choose an output below" : " ")
     : view?.output?.deviceName ?? "Choose an output"));

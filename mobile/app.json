@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.quantium.ambra.remote",
-      "buildNumber": "3",
+      "buildNumber": "5",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio"

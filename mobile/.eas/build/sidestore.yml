@@ -3,6 +3,14 @@ build:
   steps:
     - eas/checkout
     - eas/install_node_modules
+    - run:
+        name: Build native Rust networking
+        command: |
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          fi
+          . "$HOME/.cargo/env"
+          bash scripts/build-network.sh ios
     - eas/prebuild
     - run:
         name: Install iOS dependencies
