@@ -20,7 +20,8 @@ Existing internal lossy tiers remain available to other callers.
 
 Lossless becomes preferred automatically when lossless support is enabled, a compatible
 unexpired binary is installed, the key and matching paired Spotify account are present,
-the capture backend is available, and the development forwarding gate permits playback.
+and the capture backend is available. Soloist playback is supported in normal server
+builds, including release builds; no feature flag or environment opt-in is required.
 Installing, downloading, unpaired, expired, incompatible, or failed capture states use High.
 A valid existing build remains usable while its replacement downloads.
 
@@ -50,12 +51,16 @@ Captured S32LE PCM does **not** prove Spotify delivered 24-bit or even lossless 
 Run these commands in a terminal on the independently running server:
 
 ```sh
+ambra-server start
 ambra-server login spotify
 ambra-server spotify soloist setup
 ambra-server spotify status
-ambra-server spotify soloist key
 ambra-server spotify soloist pair
 ```
+
+The standard `bun run server:install` command installs a release server with Soloist
+support. No separate development build is needed. Soloist itself remains a separate,
+consented direct download from Spotify; it is never bundled in Ambra distributions.
 
 `setup` explains direct downloads and automatic maintenance, links Spotify's conditions,
 and requests explicit consent. Declining leaves ordinary High playback available. After
@@ -64,6 +69,31 @@ prompt; `key` also supports entering it later. Once status shows installation co
 run `pair`. Open the official Spotify application on the same network, using the same
 Spotify account, and select **Ambra Soloist Pairing**. Pairing has a five-minute deadline.
 No backend or quality switch follows pairing.
+
+On Windows, `setup` separately offers an optional signed VB-CABLE driver. Declining this
+offer leaves Spotify and all other server functions available; Spotify uses High until a
+lossless route is ready. To install or configure the driver later, run this command in a
+terminal on the Windows server:
+
+```powershell
+ambra-server spotify soloist driver setup
+```
+
+The CLI requests explicit consent to download/install the driver and dedicate its base
+`CABLE Input`/`CABLE Output` endpoints to Ambra. It downloads a fixed, hash-verified package
+directly from [VB-Audio](https://vb-audio.com/Cable/), validates the installer publisher and
+driver catalog with Windows Authenticode, and opens the vendor installer with a Windows
+administrator approval prompt. Complete the vendor's Install Driver action and reboot the
+server. If configuration must finish after reboot, run the command again; an existing
+driver is configured without downloading or reinstalling it.
+
+Setup configures 44,100 Hz stereo with at least 24-bit precision and disables Windows
+`Listen to this device` monitoring on the virtual capture endpoint. Stop applications
+using the cable before setup; Ambra refuses to reconfigure an active cable. Physical
+audio defaults are preserved, including restoration if the vendor installer selects its
+new cable as default. Driver installation is never attempted by background maintenance,
+ordinary playback, a remote client, or a client installer. Driver updates/uninstallation
+remain administrator actions through the vendor; automatic Soloist updates remain separate.
 
 Other commands:
 
@@ -74,7 +104,7 @@ ambra-server spotify soloist sign-out    # Remove pairing/key; disable optional 
 ambra-server spotify soloist disable     # Disable lossless and revoke future download consent
 ```
 
-There is no manual executable path, install, refresh, quality, or backend command/API.
+There is no manual Soloist executable path, binary install, refresh, quality, or backend command/API.
 Legacy settings import the configured executable into managed storage when validation
 succeeds. The original executable remains untouched. Old backend selection migrates to
 lossless enablement, but **never** grants download consent. Keys, sessions, playlists,
@@ -151,12 +181,31 @@ Windows x86-64 includes native WASAPI process-tree loopback using
 `ActivateAudioInterfaceAsync`, `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`,
 `PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE`, `IAudioClient`, and `IAudioCaptureClient`.
 The implementation negotiates Float32 stereo at 44,100 Hz, converts to S32LE, bounds its
-queue, and cleans up COM resources. It requires Windows build 20348 or newer and an audio session.
-**Windows lossless remains disabled:** process loopback does not suppress physical rendering,
-and Soloist exposes no supported silent WASAPI output route. Session muting cannot be assumed
-to preserve captured PCM; muting the global endpoint would affect unrelated audio. The server
-fails before launching Soloist and uses High. This is an unresolved platform requirement.
-No third-party virtual drivers or global audio changes are introduced.
+queue, and cleans up COM resources. It requires Windows build 20348 or newer, an audio
+session, and the optional server-only VB-CABLE driver configured as described above.
+
+The driverless investigation found no supported Soloist Windows output-selection/silent
+route in its documented CLI. Microsoft's process-loopback API captures a process tree
+without suppressing physical rendering. Session muting can affect captured samples, and
+muting the physical endpoint affects unrelated applications. Ambra therefore uses a
+virtual endpoint as the silent destination and process loopback as the isolated capture.
+It does not capture a microphone or the system mix.
+
+Soloist starts suspended and at volume zero. The server confines it to a kill-on-close
+Windows job with one process, configures only its per-application output preferences,
+activates process capture, and resumes it. This prevents an unverified helper process
+from rendering outside the private route. Before raising Soloist's volume, the server
+requires an active session on the virtual endpoint and no active session on a physical
+endpoint. Audio delivery also requires unity session/channel gain, stereo format, and
+disabled Listen monitoring. Route checks continue during playback; changes, discontinuity,
+activation failures, invalid PCM, or bounded-queue overflow stop the renderer and fall back.
+The server never mutes a physical endpoint or changes unrelated applications' routing.
+
+Windows per-application routing and endpoint format configuration use private Windows
+policy interfaces also used by EarTrumpet. Ambra accepts only the known interface IDs
+and verifies the actual route rather than trusting a successful setter. An unavailable
+interface fails closed to High. Native Windows playback and speaker-silence validation
+must still be performed on a Windows server; compilation is not playback evidence.
 
 All capture implementations remain under `server/src/soloist/capture/`. The shared interface
 covers initialization, process targeting, route verification, bounded reads, cancellation,
@@ -172,24 +221,27 @@ This does not establish permission to forward Spotify PCM to remote clients. Rev
 [Developer Terms](https://developer.spotify.com/terms) and
 [Developer Policy](https://developer.spotify.com/policy) before distribution or commercial use.
 
-The existing forwarding gate remains intact. Distributable/release builds always use High
-through librespot. Only a debug development server built with
-`--features experimental-soloist-forwarding` **and** started with
-`AMBRA_EXPERIMENTAL_SOLOIST_FORWARDING=1` can attempt Soloist forwarding. Neither consent
-nor a client setting bypasses this gate. The restriction does not disable librespot,
-Qobuz, Tidal, local music, catalog access, or other server features.
+Normal server builds, including release builds, can use Soloist after server setup and
+pairing. The former development-only feature, build-profile check, and environment
+opt-in have been removed. Disabling optional lossless support selects High through
+librespot. Missing or failed capture, an unavailable or expired build, missing credentials,
+or a mismatched account also retains High. Windows additionally requires its optional
+server-only driver and verified silent route. Enabling release playback does not establish permission
+to redistribute Soloist or forward Spotify PCM.
 
 ## Verification
 
 Account-free tests cover automatic quality, stream pinning, controlled fallback, history,
 consent/migration, archive validation, expiry/exit 10, compatibility, rollback, process
 ownership, authorization, and bounded PCM. Native macOS callback tests cover conversion,
-channel layouts, alignment, and overflow. Windows code is cross-checked for compilation;
-this is not a Windows playback test. Linux parser tests also run on macOS.
+channel layouts, alignment, and overflow. Windows PCM conversion tests also run on macOS.
+Windows backend, CLI, installer integration, and test code are cross-checked for compilation;
+this is not a Windows playback test. Linux parser tests also run on macOS. The independent
+server CI is configured to test normal release builds on Windows, macOS, and Linux without special flags.
 
 ```sh
 cargo test --manifest-path server/Cargo.toml
-cargo test --manifest-path server/Cargo.toml --features experimental-soloist-forwarding
+cargo test --manifest-path server/Cargo.toml --release normal_build_selects_soloist_after_setup_and_preserves_readiness_checks
 cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 bun run --cwd desktop test
 bun run --cwd mobile test
@@ -216,6 +268,17 @@ The ignored Linux synthetic test requires PulseAudio tools and a Linux host:
 cargo test --manifest-path server/Cargo.toml linux_private_sink_captures_synthetic_pcm_without_hardware -- --ignored --nocapture
 ```
 
+On a Windows server with the optional driver installed, configured, and rebooted, this
+opt-in test exercises suspended process routing, exact synthetic stereo PCM, and cleanup
+without Spotify credentials:
+
+```powershell
+cargo test --manifest-path server/Cargo.toml --release windows_virtual_route_captures_exact_pcm -- --ignored --nocapture
+```
+
+Do not run all ignored tests indiscriminately: the Windows render fixture is an internal
+child of this test. Native tests do not download or install the driver automatically.
+
 Real-account playback, physical speaker silence, unrelated-audio isolation, long-run memory,
 permission prompts, device changes, and network recovery require native integration tests.
 Do not claim those tests passed from fixture or compilation results. No native Spotify
@@ -227,4 +290,8 @@ References: [Spotify Soloist](https://developer.spotify.com/documentation/solois
 [Music Assistant](https://github.com/music-assistant/server/tree/dev/music_assistant/providers/spotify_connect/soloist),
 [private PulseAudio reference](https://github.com/music-assistant/server/blob/dev/music_assistant/helpers/pulse_capture.py),
 [Microsoft process loopback sample](https://learn.microsoft.com/en-us/samples/microsoft/windows-classic-samples/applicationloopbackaudio-sample/),
+[Windows session volume controls](https://learn.microsoft.com/en-us/windows/win32/coreaudio/session-volume-controls),
+[Soloist audio output](https://developer.spotify.com/documentation/soloist/concepts/overview),
+[EarTrumpet policy interfaces](https://github.com/File-New-Project/EarTrumpet/tree/master/EarTrumpet/Interop/MMDeviceAPI),
+[VB-CABLE downloads](https://vb-audio.com/Cable/),
 [Apple process taps](https://developer.apple.com/documentation/coreaudio/capturing-system-audio-with-core-audio-taps).

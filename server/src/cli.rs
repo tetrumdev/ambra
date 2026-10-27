@@ -39,6 +39,7 @@ USAGE:
     ambra-server spotify soloist setup       Consent to automatic downloads and updates
     ambra-server spotify soloist pair|reset|check|sign-out
     ambra-server spotify soloist key         Enter a personal API key without echo
+    ambra-server spotify soloist driver setup   Optional Windows server audio driver
     ambra-server spotify soloist disable     Disable optional lossless support
     ambra-server help                          This message
 
@@ -116,6 +117,7 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
         ["services", "status"] => pretty(local("GET", "/api/auth/status", None).await?),
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
         ["spotify", "soloist", "setup"] => setup_soloist().await,
+        ["spotify", "soloist", "driver", "setup"] => setup_windows_driver().await,
         ["spotify", "soloist", "disable"] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": false, "downloadConsent": false}))).await?),
         ["spotify", "soloist", action @ ("pair" | "reset" | "check" | "sign-out")] => pretty(local("POST", &format!("/api/local/spotify/soloist/{action}"), None).await?),
         ["spotify", "soloist", "key"] => {
@@ -164,18 +166,10 @@ async fn login_spotify() -> Result<String, String> {
 }
 
 async fn setup_soloist() -> Result<String, String> {
-    use std::io::{IsTerminal, Write};
-    if !std::io::stdin().is_terminal() {
-        return Err("Run Soloist setup in a terminal on the server to grant download and update consent".into());
-    }
     println!("Optional Soloist lossless support downloads Spotify's executable directly to this independent server and maintains automatic updates. Never redistribute that executable.");
     println!("Review Spotify's conditions: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates");
-    println!("Release builds retain the Spotify PCM forwarding restriction. Regular High playback remains available.");
-    print!("Consent to server-managed Soloist downloads and automatic updates? [y/N] ");
-    std::io::stdout().flush().map_err(|e| e.to_string())?;
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
-    if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+    println!("Soloist playback is supported in normal server builds. Regular High playback remains available when Soloist is not ready.");
+    if !consent("Consent to server-managed Soloist downloads and automatic updates? [y/N] ")? {
         return Ok("No consent granted. Spotify continues at High through librespot.".into());
     }
     local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": true, "downloadConsent": true}))).await?;
@@ -184,7 +178,49 @@ async fn setup_soloist() -> Result<String, String> {
     if !key.trim().is_empty() {
         local("POST", "/api/local/spotify/playback", Some(json!({"apiKey": key}))).await?;
     }
-    Ok("Check `ambra-server spotify status`. When installed, run `ambra-server spotify soloist pair`, then select Ambra Soloist Pairing in Spotify with the same account. Lossless becomes preferred automatically when capture and forwarding are available; otherwise High continues.".into())
+    #[cfg(target_os = "windows")]
+    if !crate::soloist::windows_driver::configured() {
+        match setup_windows_driver().await {
+            Ok(message) => println!("{message}"),
+            Err(error) => println!("Optional Windows capture setup did not complete: {error}. Spotify continues at High."),
+        }
+    }
+    Ok("Check `ambra-server spotify status`. When installed, run `ambra-server spotify soloist pair`, then select Ambra Soloist Pairing in Spotify with the same account. Lossless becomes preferred automatically when setup and capture are ready; otherwise High continues.".into())
+}
+
+fn consent(prompt: &str) -> Result<bool, String> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err("Run this setup command in a terminal on the server machine to grant consent".into());
+    }
+    print!("{prompt}");
+    std::io::stdout().flush().map_err(|e| e.to_string())?;
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
+    Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+}
+
+#[cfg(target_os = "windows")]
+async fn setup_windows_driver() -> Result<String, String> {
+    let status = local("GET", "/api/spotify/playback/status", None).await?;
+    if status["effectiveRenderer"] == "soloist"
+        && matches!(status["state"].as_str(), Some("playing" | "buffering")) {
+        return Err("Pause shared Spotify playback before configuring the server audio driver".into());
+    }
+    println!("Optional Windows lossless capture uses the signed VB-CABLE driver on Ambra Server only. No client installs or hosts it.");
+    println!("Vendor downloads and license: {}", crate::soloist::windows_driver::DOWNLOADS);
+    println!("This dedicates the CABLE Input/Output endpoints to this server: 44,100 Hz stereo and no Listen monitoring. Existing cable settings may change; physical audio defaults are unchanged. Windows requests administrator approval for driver installation; a reboot is required.");
+    if !consent("Download/install the optional driver if missing and configure this server's virtual cable? [y/N] ")? {
+        return Ok("No driver setup consent granted. Spotify continues at High unless an existing lossless route is ready.".into());
+    }
+    let message = crate::soloist::windows_driver::install().await.map_err(|error| error.message)?;
+    local("POST", "/api/local/spotify/soloist/check", None).await?;
+    Ok(message)
+}
+
+#[cfg(not(target_os = "windows"))]
+async fn setup_windows_driver() -> Result<String, String> {
+    Err("The optional audio driver is needed only on a Windows Ambra Server".into())
 }
 
 fn local_url(path: &str) -> String {
