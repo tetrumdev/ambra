@@ -85,6 +85,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
         event.preventDefault();
         const end = current.duration > 0 ? Math.max(0, current.duration - 1) : Infinity;
         const positionSeconds = Math.min(end, Math.max(0, clock.get() + step));
+        clock.setRunning(false);
         clock.set(positionSeconds);
         void coreCommand("seek", { positionSeconds }).catch(() => {});
       } else if (acceptsPlaybackShortcut(event)) {
@@ -149,6 +150,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       void coreCommand("next").catch(() => {});
     },
     seek: (time: number) => {
+      clock.setRunning(false);
       clock.set(time);
       void coreCommand("seek", { positionSeconds: time }).catch(() => {});
     },

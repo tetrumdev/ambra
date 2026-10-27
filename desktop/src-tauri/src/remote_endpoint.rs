@@ -22,7 +22,7 @@ use crate::native_audio::{self, NativeAudioPlayer};
 /// Often while playing, so the core hears of a song ending or moving on promptly.
 const REPORT_PLAYING: Duration = Duration::from_millis(500);
 const REPORT_IDLE: Duration = Duration::from_secs(1);
-const DEVICES_EVERY: u32 = 5;
+const DEVICES_EVERY: Duration = Duration::from_secs(5);
 const COMMANDS_WAIT_SECONDS: u64 = 25;
 /// How often the engine is looked at between reports, for a change the core must hear of at once.
 const WATCH_EVERY: Duration = Duration::from_millis(20);
@@ -40,10 +40,11 @@ struct Agent {
     instance_id: String,
     /// The URL each source was sent as, by the URL it plays as here.
     sent_as: Mutex<HashMap<String, String>>,
+    device_report: Mutex<Value>,
 }
 
 #[derive(Default)]
-pub struct SharedOutput(tokio::sync::Mutex<Option<[tauri::async_runtime::JoinHandle<()>; 2]>>);
+pub struct SharedOutput(tokio::sync::Mutex<Option<[tauri::async_runtime::JoinHandle<()>; 3]>>);
 
 /// Only an explicit shared session may report or control this device's player.
 #[tauri::command]
@@ -70,13 +71,13 @@ pub async fn stop_shared_output(app: &AppHandle) {
     }
 }
 
-fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<[tauri::async_runtime::JoinHandle<()>; 2], String> {
+fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<[tauri::async_runtime::JoinHandle<()>; 3], String> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(COMMANDS_WAIT_SECONDS + 10)).build().map_err(|error| error.to_string())?;
     let mut instance = [0_u8; 16];
     getrandom::fill(&mut instance).expect("the operating system's random source is available");
     let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
-    let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, instance_id, sent_as: Mutex::new(HashMap::new()) });
-    Ok([tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(serve(agent))])
+    let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, instance_id, sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})) });
+    Ok([tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent))])
 }
 
 impl Agent {
@@ -148,21 +149,30 @@ fn urlencoding(value: &str) -> String {
         .collect()
 }
 
+async fn refresh_devices(agent: std::sync::Arc<Agent>) {
+    loop {
+        let player = agent.app.state::<NativeAudioPlayer>();
+        let mut body = json!({});
+        if let Ok(devices) = native_audio::list_native_audio_devices(player.clone()).await {
+            body["devices"] = serde_json::to_value(devices).unwrap_or(json!([]));
+        }
+        if let Ok(settings) = native_audio::native_audio_settings(player).await {
+            body["selectedDeviceId"] = Value::String(settings.selected_output_id);
+        }
+        if let Ok(mut report) = agent.device_report.lock() { *report = body; }
+        tokio::time::sleep(DEVICES_EVERY).await;
+    }
+}
+
 async fn report(agent: std::sync::Arc<Agent>) {
-    let mut beat = 0_u32;
     let mut round_trips = VecDeque::<Duration>::with_capacity(ROUND_TRIPS_KEPT);
     loop {
         let player = agent.app.state::<NativeAudioPlayer>();
-        let mut body = json!({ "name": agent.name, "instanceId": agent.instance_id });
-        if beat % DEVICES_EVERY == 0 {
-            if let Ok(devices) = native_audio::list_native_audio_devices(player.clone()).await {
-                body["devices"] = serde_json::to_value(devices).unwrap_or(json!([]));
-            }
-            if let Ok(settings) = native_audio::native_audio_settings(player.clone()).await {
-                body["selectedDeviceId"] = Value::String(settings.selected_output_id.clone());
-            }
-        }
-        beat = beat.wrapping_add(1);
+        // Device queries use the audio worker and may wait behind a seek. Heartbeats
+        // must continue independently, including while that worker prepares audio.
+        let mut body = agent.device_report.lock().map(|report| report.clone()).unwrap_or_else(|_| json!({}));
+        body["name"] = json!(agent.name);
+        body["instanceId"] = json!(agent.instance_id);
         // Sampled last, so the position is as fresh as it can be when it leaves.
         let mut status = native_audio::native_audio_status(player.clone())
             .await

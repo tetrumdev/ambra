@@ -167,7 +167,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     () => libraryQueueContext(library.tracks),
     [library.tracks, connectedServices],
   );
-  // The listener explicitly chooses local or shared queue authority. Root remounts only when that choice changes.
+  // Root restores the playback mode and remounts when its queue authority changes.
   const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
   const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);

@@ -3,6 +3,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { forDeviceStorage, fromDeviceStorage } from "../api/serverConnection";
 
 export const persistentKeys = new Set([
+  "ambra.shared-playback.v1",
   "ambra.audio-settings.v1", "ambra.local-ownership.v1", "ambra.preferences", "ambra.ui-preferences.v1", "ambra.device-view.v1", "ambra.current-screen",
   "ambra.playlists.v1", "ambra.queue.v1", "ambra.playback.v1", "ambra.listening-history.v1",
   "ambra.library-order.v1", "ambra.removed-library-tracks.v1", "ambra.album-versions.v1",

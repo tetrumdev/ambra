@@ -8,7 +8,7 @@
 //! The core plays through one output on one of the apps using this server: it tells that app
 //! what to load and play (`endpoints.rs`), follows its reports, moves to the next song when
 //! one ends, and counts each play in the listening history. Nothing about playback depends on
-//! any app's window being open.
+//! a controller's window being open; losing the selected audio output pauses the session.
 
 use std::{
     sync::{Arc, Mutex as SyncMutex, OnceLock},
@@ -297,6 +297,27 @@ impl Core {
         self.wake.notify_one();
     }
 
+    fn pause_disconnected_output(&self) {
+        let mut transport = self.transport();
+        let changed = transport.playing || transport.buffering || transport.loaded.is_some()
+            || transport.pending_play.is_some() || transport.pending_seek.is_some();
+        // Hold the last confirmed (or explicitly sought) position, without counting
+        // the time since the vanished output's last report as audible playback.
+        transport.position_at = Some(Instant::now());
+        transport.playing = false;
+        transport.buffering = false;
+        transport.loaded = None;
+        transport.queued_next = None;
+        transport.pending_play = None;
+        transport.pending_seek = None;
+        transport.report_after = None;
+        drop(transport);
+        if changed {
+            self.save_transport();
+            self.changed();
+        }
+    }
+
     pub(crate) fn save_transport(&self) {
         let saved = {
             let transport = self.transport();
@@ -520,6 +541,7 @@ async fn play_track(core: &Core, track_id: &str) {
         transport.generation += 1;
         transport.set_position(0.0);
         transport.playing = true;
+        transport.buffering = true;
         transport.error = None;
     }
     drop(transport);
@@ -564,6 +586,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
             let position = transport.position_now();
             transport.set_position(position);
             transport.playing = playing;
+            transport.buffering = playing;
             transport.pending_play = Some(playing);
             if playing {
                 transport.error = None;
@@ -576,6 +599,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
             let mut transport = core.transport();
             transport.set_position(position_seconds);
             transport.pending_seek = Some(position_seconds);
+            transport.buffering = transport.playing;
             drop(transport);
             core.changed();
             Ok(())
@@ -589,6 +613,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
             let rewound = !restart && core.change_queue(|queue| { let moved = rewind(queue); Ok((moved, moved)) }).await.unwrap_or(false);
             let mut transport = core.transport();
             transport.set_position(0.0);
+            transport.buffering = transport.playing;
             if !rewound {
                 transport.pending_seek = Some(0.0);
             } else {
@@ -601,6 +626,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
         Command::Stop => {
             let mut transport = core.transport();
             transport.playing = false;
+            transport.buffering = false;
             transport.pending_play = Some(false);
             transport.set_position(0.0);
             drop(transport);
@@ -653,6 +679,7 @@ async fn skip(core: &Core, forward: bool) -> Result<(), String> {
         let mut transport = core.transport();
         transport.generation += 1;
         transport.set_position(0.0);
+        transport.buffering = transport.playing;
         drop(transport);
         core.changed();
     }
@@ -664,6 +691,7 @@ async fn skip(core: &Core, forward: bool) -> Result<(), String> {
 async fn drive(core: Shared) {
     let mut state_changes = core.state.subscribe();
     let mut saved_at = Instant::now();
+    let mut position_reported_at = Instant::now();
     loop {
         tokio::select! {
             _ = core.wake.notified() => {}
@@ -685,6 +713,11 @@ async fn drive(core: Shared) {
         if saved_at.elapsed() >= Duration::from_secs(5) {
             core.save_transport();
             saved_at = Instant::now();
+        }
+        if position_reported_at.elapsed() >= Duration::from_secs(1) {
+            let running = { let transport = core.transport(); transport.playing && !transport.buffering };
+            if running { core.changed(); }
+            position_reported_at = Instant::now();
         }
     }
 }
@@ -735,12 +768,30 @@ async fn step(core: &Core) -> Result<(), String> {
     // Let the first finish, then explicitly load the next occurrence.
     if next.as_deref() == Some(canonical_source.as_str()) { next = None; }
     let Some((status, reported_at, _, endpoint_instance)) = core.endpoints.status(&endpoint).await else {
-        // Keep the last confirmed position and play intent, not a clock that keeps
-        // advancing while the output app is gone. The server itself is still online.
+        core.pause_disconnected_output();
         if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
-        core.transport().buffering = true;
         return Err(format!("Audio output {} is offline", output.endpoint_name));
     };
+
+    let empty_engine = {
+        let transport = core.transport();
+        // Older outputs lack instance IDs, but a fresh idle engine also proves
+        // that the previous playback process is gone.
+        endpoint_instance.is_none()
+            && transport.loaded.is_some()
+            && transport.report_after.is_none_or(|after| reported_at >= after)
+            && status.get("currentSource").is_some_and(Value::is_null)
+            && status["buffering"] == false
+            && status["ended"] != true
+            && status["error"].is_null()
+    };
+    let restarted = core.transport().loaded.as_ref().is_some_and(|loaded|
+        loaded.endpoint_id == endpoint && loaded.endpoint_instance != endpoint_instance);
+    // Reopening faster than the presence timeout is still a disconnect. Reload
+    // paused rather than carrying the old process's play intent into the new one.
+    if restarted || empty_engine {
+        core.pause_disconnected_output();
+    }
 
     let mut source = canonical_source.clone();
     let mut live = false;
@@ -794,15 +845,6 @@ async fn step(core: &Core) -> Result<(), String> {
 
     let (wanted, needs_device, position, autoplay, needs_load) = {
         let transport = core.transport();
-        // Older apps do not send instanceId. A fresh, idle, empty engine also proves
-        // the cached load is gone; never mistake an old report or a load error for this.
-        let empty_engine = endpoint_instance.is_none()
-            && transport.loaded.is_some()
-            && transport.report_after.is_none_or(|after| reported_at >= after)
-            && status.get("currentSource").is_some_and(Value::is_null)
-            && status["buffering"] == false
-            && status["ended"] != true
-            && status["error"].is_null();
         let wanted = Loaded { endpoint_id: endpoint.clone(), endpoint_instance: endpoint_instance.clone(), device_id: output.device_id.clone(), source: source.clone(), track_source: canonical_source.clone(), live, generation: transport.generation };
         let needs_device = empty_engine || transport.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_id != endpoint || loaded.endpoint_instance != endpoint_instance || loaded.device_id != output.device_id);
         // A different song always starts at zero; a changed output resumes the same song.
@@ -853,9 +895,6 @@ async fn step(core: &Core) -> Result<(), String> {
     };
     if let Some(seek) = pending_seek {
         core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek })).await?;
-        if core.transport().playing {
-            core.endpoints.call(&endpoint, "play_native_audio", json!({})).await?;
-        }
     }
     if let Some(playing) = pending_play {
         let command = if playing { "play_native_audio" } else { "pause_native_audio" };
@@ -924,7 +963,7 @@ async fn step(core: &Core) -> Result<(), String> {
         if let Some(duration) = status["duration"].as_f64().filter(|duration| *duration > 0.0) {
             transport.duration = duration;
         }
-        transport.buffering = buffering && transport.playing;
+        transport.buffering = transport.playing && (buffering || !engine_playing && !ended);
         transport.error = status["error"].as_str().map(str::to_owned);
         transport.audio_quality = status["audioQuality"].clone();
         if track["provider"] == "spotify" {
@@ -965,6 +1004,7 @@ async fn step(core: &Core) -> Result<(), String> {
             transport.loaded = None;
         } else {
             transport.generation += 1;
+            transport.buffering = transport.playing;
         }
         drop(transport);
         core.changed();
