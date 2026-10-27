@@ -11,7 +11,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
  */
 export type ServerLinkMode = "host" | "join";
 export type WhenServerAway = "wait" | "fallback";
-export type JoinedServer = { id: string; name: string; address: string };
+export type JoinedServer = { id: string; name: string; address: string; publicKey?: string | null };
 export type ServerConnection = {
   mode: ServerLinkMode;
   baseUrl: string;
@@ -32,7 +32,7 @@ let token: string | null = null;
 
 const TOKEN_PARAMETER = "access_token";
 // A server URL as saved in JSON: plain http, an explicit port, and an /api/ path.
-const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+\/api\/[^"\\\s]*/g;
+const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+(?:\/[a-f0-9]{64})?\/api\/[^"\\\s]*/g;
 const TOKEN_IN_QUERY = /([?&])access_token=[^&#"\\]*&?/;
 
 function withoutToken(url: string) {
@@ -70,7 +70,7 @@ export function fromStorage<T extends string | null>(text: T): T {
 
 /** Text to save: server URLs keep their address but lose the token. */
 export function forStorage(text: string) {
-  return text.includes(TOKEN_PARAMETER) ? text.replace(SAVED_SERVER_URL, withoutToken) : text;
+  return text.replace(SAVED_SERVER_URL, url => withoutToken(url).replace(/\/[a-f0-9]{64}(?=\/api\/)/, ""));
 }
 
 let fetchWrapped = false;

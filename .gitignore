@@ -79,3 +79,11 @@ CLAUDE.md
 CLAUDE.local.md
 GEMINI.md
 .github/copilot-instructions.md
+
+# Shared Rust networking/native mobile build output
+/crates/*/target/
+/mobile/modules/ambra-network/ios/AmbraNetwork.xcframework/
+/mobile/modules/ambra-network/android/src/main/jniLibs/
+/mobile/modules/ambra-network/android/src/main/cpp/rust/
+/vendor/*/target/
+/vendor/*/Cargo.lock

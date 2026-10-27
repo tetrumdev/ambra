@@ -18,6 +18,8 @@ pub struct PairedClient {
     pub name: String,
     pub token_sha256: String,
     pub paired_at_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<ambra_net::PublicKey>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -29,9 +31,17 @@ pub struct ServerConfig {
     pub bind: String,
     #[serde(default = "enabled")]
     pub discovery: bool,
+    #[serde(default = "enabled")]
+    pub p2p: bool,
+    #[serde(default = "secure_port")]
+    pub secure_port: u16,
+    #[serde(default)]
+    pub public_endpoint: Option<SocketAddr>,
     #[serde(default)]
     pub paired_clients: Vec<PairedClient>,
 }
+
+fn secure_port() -> u16 { 38149 }
 
 fn enabled() -> bool {
     true
@@ -44,6 +54,9 @@ impl ServerConfig {
             name: machine_name(),
             bind: DEFAULT_BIND.into(),
             discovery: true,
+            p2p: true,
+            secure_port: secure_port(),
+            public_endpoint: None,
             paired_clients: Vec::new(),
         }
     }
@@ -219,7 +232,7 @@ mod tests {
             id: "c1".into(),
             name: "Laptop".into(),
             token_sha256: token_hash("secret"),
-            paired_at_ms: 0,
+            paired_at_ms: 0, public_key: None,
         });
         assert_eq!(config.client_for_token("secret").unwrap().name, "Laptop");
         assert!(config.client_for_token("Secret").is_none());

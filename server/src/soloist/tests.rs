@@ -350,13 +350,18 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
             id: "output".into(),
             name: "Output".into(),
             token_sha256: crate::server_config::token_hash("paired-output-token"),
-            paired_at_ms: 0,
+            paired_at_ms: 0, public_key: None,
         });
     let access = crate::access::AccessPolicy::from_env(crate::network::Network::new(config));
     let app: Router = router(manager.clone()).layer(middleware::from_fn_with_state(
         access,
         crate::access::enforce,
-    ));
+    )).layer(middleware::from_fn(|mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+        if request.headers().get("host").is_some_and(|h| h == "192.168.1.2:38147") {
+            request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) });
+        }
+        next.run(request).await
+    }));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {

@@ -1,0 +1,8 @@
+{
+  "name": "ambra-network-reference-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Development-only public HyperDHT interoperability checks; never bundled with Ambra",
+  "license": "GPL-3.0-only",
+  "dependencies": { "hyperdht": "6.34.1" }
+}

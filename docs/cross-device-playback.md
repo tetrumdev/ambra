@@ -1,5 +1,7 @@
 # Shared server playback
 
+Native clients now use encrypted Rust networking and pinned server identities. Legacy address-only pairings require explicit re-pairing. See [native networking setup and validation](networking/README.md) for QR pairing, CLI diagnostics, platform support, and current limitations.
+
 Each server owns one queue, playback position, listening history and selected audio output.
 Every connected app controls and displays that same session. Apps expose their audio devices
 to the server and execute its audio commands. Choosing another output moves the current song

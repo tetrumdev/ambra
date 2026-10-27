@@ -40,10 +40,19 @@ struct PendingPairing {
     /// Set once approved; handed to the client on its next poll, then forgotten.
     token: Option<String>,
     denied: bool,
+    client_key: Option<ambra_net::PublicKey>,
 }
 
 pub struct Network {
     pub config: RwLock<ServerConfig>,
+    pub identity: ambra_net::Identity,
+    pub secure_listening: RwLock<Option<SocketAddr>>,
+    pub dht_status: ambra_net::hyperdht::SharedStatus,
+    pub pwnat_status: RwLock<Option<String>>,
+    pub lan_error: RwLock<Option<String>>,
+    pub discovery_error: RwLock<Option<String>>,
+    pub changed: tokio::sync::Notify,
+    pub authenticated_sessions: RwLock<HashMap<String, Vec<std::sync::Weak<()>>>>,
     pending: Mutex<HashMap<String, PendingPairing>>,
     /// The address actually listened on, which an environment override may have changed.
     pub listening: RwLock<Option<SocketAddr>>,
@@ -52,16 +61,30 @@ pub struct Network {
 pub type SharedNetwork = Arc<Network>;
 
 impl Network {
-    pub fn new(config: ServerConfig) -> SharedNetwork {
+    #[cfg(test)]
+    pub fn new(config: ServerConfig) -> SharedNetwork { Self::with_identity(config, ambra_net::Identity::generate().unwrap()) }
+
+    pub fn with_identity(config: ServerConfig, identity: ambra_net::Identity) -> SharedNetwork {
         Arc::new(Self {
             config: RwLock::new(config),
+            identity,
+            secure_listening: RwLock::new(None),
+            dht_status: Arc::new(RwLock::new(Default::default())),
+            pwnat_status: RwLock::new(None),
+            lan_error: RwLock::new(None),
+            discovery_error: RwLock::new(None),
+            changed: tokio::sync::Notify::new(),
+            authenticated_sessions: RwLock::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             listening: RwLock::new(None),
         })
     }
 
-    pub fn paired_client_id(&self, token: &str) -> Option<String> {
-        self.config.read().ok()?.client_for_token(token).map(|client| client.id.clone())
+    pub fn paired_client_id(&self, token: &str, peer_key: Option<ambra_net::PublicKey>) -> Option<String> {
+        // One read lock makes token validity, revocation and identity binding one decision.
+        let config = self.config.read().ok()?;
+        let client = config.client_for_token(token)?;
+        client.public_key.is_none_or(|key| Some(key) == peer_key).then(|| client.id.clone())
     }
 
     fn update(&self, change: impl FnOnce(&mut ServerConfig) -> Result<(), String>) -> Result<ServerConfig, String> {
@@ -70,6 +93,7 @@ impl Network {
         change(&mut next)?;
         next.save()?;
         *config = next.clone();
+        self.changed.notify_one();
         Ok(next)
     }
 }
@@ -88,6 +112,7 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 pub fn public_router<S: Clone + Send + Sync + 'static>(network: SharedNetwork) -> Router<S> {
     Router::new()
         .route("/api/server/info", get(info))
+        .route("/api/network/session", get(authenticated_session))
         .route("/api/pair/request", post(request_pairing))
         .route("/api/pair/request/{request_id}", get(pairing_status))
         .with_state(network)
@@ -96,6 +121,8 @@ pub fn public_router<S: Clone + Send + Sync + 'static>(network: SharedNetwork) -
 /// Routes only the server machine may call (see `access::LOCAL_ONLY_PREFIX`).
 pub fn local_router<S: Clone + Send + Sync + 'static>(network: SharedNetwork) -> Router<S> {
     Router::new()
+        .route("/api/local/network", get(network_status))
+        .route("/api/local/pairing/qr", get(pairing_payload))
         .route("/api/local/pairing", get(list_pairing))
         .route("/api/local/pairing/approve", post(approve))
         .route("/api/local/pairing/deny", post(deny))
@@ -122,6 +149,8 @@ pub struct ServerInfo {
     pub version: &'static str,
     pub port: u16,
     pub on_network: bool,
+    pub public_key: ambra_net::PublicKey,
+    pub secure_port: Option<u16>,
 }
 
 pub fn server_info(network: &Network) -> ServerInfo {
@@ -134,6 +163,8 @@ pub fn server_info(network: &Network) -> ServerInfo {
         version: VERSION,
         port: address.port(),
         on_network: !address.ip().is_loopback(),
+        public_key: network.identity.public_key(),
+        secure_port: network.secure_listening.read().ok().and_then(|a| a.map(|a| a.port())),
     }
 }
 
@@ -159,15 +190,23 @@ fn expire(pending: &mut HashMap<String, PendingPairing>) {
 async fn request_pairing(
     State(network): State<SharedNetwork>,
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<SocketAddr>,
+    remote: Option<axum::Extension<ambra_net::transport::RemotePeer>>,
     Json(request): Json<PairingRequest>,
 ) -> Response {
     if !valid_client_field(&request.client_id, 64) || !valid_client_field(&request.client_name, 64) {
         return error(StatusCode::BAD_REQUEST, "A client ID and name of at most 64 characters are required");
     }
+    let client_key = remote.map(|remote| remote.0.public_key);
+    if client_key.is_none() && !peer.ip().is_loopback() {
+        return error(StatusCode::UPGRADE_REQUIRED, "Pair over the native encrypted transport using the server pairing link");
+    }
     let mut pending = network.pending.lock().await;
     expire(&mut pending);
+    if pending.values().any(|p| p.peer == peer.ip().to_string() && p.requested.elapsed() < Duration::from_secs(2)) {
+        return error(StatusCode::TOO_MANY_REQUESTS, "Wait before requesting another pairing code");
+    }
     // A client asking again replaces its earlier request, so retries don't fill the list.
-    pending.retain(|_, pairing| pairing.client_id != request.client_id);
+    pending.retain(|_, pairing| pairing.client_id != request.client_id || pairing.client_key != client_key);
     if pending.len() >= MAX_PENDING {
         return error(StatusCode::TOO_MANY_REQUESTS, "Too many devices are waiting to pair; try again later");
     }
@@ -189,17 +228,19 @@ async fn request_pairing(
             requested: Instant::now(),
             token: None,
             denied: false,
+            client_key,
         },
     );
     Json(json!({ "requestId": request_id, "code": code, "expiresInSeconds": PAIRING_EXPIRES.as_secs() })).into_response()
 }
 
-async fn pairing_status(State(network): State<SharedNetwork>, Path(request_id): Path<String>) -> Response {
+async fn pairing_status(State(network): State<SharedNetwork>, Path(request_id): Path<String>, remote: Option<axum::Extension<ambra_net::transport::RemotePeer>>) -> Response {
     let mut pending = network.pending.lock().await;
     expire(&mut pending);
     let Some(pairing) = pending.get(&request_id).cloned() else {
         return Json(json!({ "status": "expired" })).into_response();
     };
+    if pairing.client_key != remote.map(|r| r.0.public_key) { return error(StatusCode::FORBIDDEN, "Pairing belongs to another encrypted device identity"); }
     if pairing.denied {
         pending.remove(&request_id);
         return Json(json!({ "status": "denied" })).into_response();
@@ -276,6 +317,7 @@ async fn approve(State(network): State<SharedNetwork>, Json(body): Json<CodeBody
         name: pairing.client_name.clone(),
         token_sha256: token_hash(&token),
         paired_at_ms: now_ms(),
+        public_key: pairing.client_key,
     };
     let saved = network.update(|config| {
         // Pairing again replaces the device's old token.
@@ -342,6 +384,7 @@ struct ConfigView {
     bind: String,
     listening: Option<String>,
     discovery: bool,
+    p2p: bool,
     paired_clients: usize,
     path: String,
 }
@@ -354,6 +397,7 @@ fn config_view(network: &Network) -> ConfigView {
         bind: config.bind,
         listening: network.listening.read().ok().and_then(|address| *address).map(|address| address.to_string()),
         discovery: config.discovery,
+        p2p: config.p2p,
         paired_clients: config.paired_clients.len(),
         path: ServerConfig::path().display().to_string(),
     }
@@ -368,6 +412,8 @@ struct ConfigChange {
     name: Option<String>,
     bind: Option<String>,
     discovery: Option<bool>,
+    p2p: Option<bool>,
+    public_endpoint: Option<SocketAddr>,
 }
 
 async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<ConfigChange>) -> Response {
@@ -379,6 +425,8 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
         if let Some(bind) = &change.bind {
             config.bind = crate::server_config::parse_bind(bind)?.to_string();
         }
+        if let Some(p2p) = change.p2p { config.p2p = p2p; }
+        if let Some(endpoint) = change.public_endpoint { config.public_endpoint = Some(endpoint); }
         if let Some(discovery) = change.discovery {
             config.discovery = discovery;
         }
@@ -387,5 +435,68 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
     match result {
         Ok(_) => Json(config_view(&network)).into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
+    }
+}
+
+async fn authenticated_session(caller: axum::Extension<crate::access::Caller>) -> Json<serde_json::Value> {
+    Json(json!({ "clientId": caller.0.client_id }))
+}
+
+async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json::Value> {
+    let config = network.config.read().unwrap_or_else(|p| p.into_inner());
+    let dht = network.dht_status.read().unwrap_or_else(|p| p.into_inner()).clone();
+    Json(json!({
+        "running": true, "discovery": config.discovery, "p2p": config.p2p,
+        "publicKey": network.identity.public_key(),
+        "listening": *network.listening.read().unwrap_or_else(|p| p.into_inner()),
+        "secureListening": *network.secure_listening.read().unwrap_or_else(|p| p.into_inner()),
+        "hyperdht": dht, "pwnat": ambra_net::pwnat::capability(),
+        "pwnatError": *network.pwnat_status.read().unwrap_or_else(|p| p.into_inner()),
+        "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
+        "discoveryError": *network.discovery_error.read().unwrap_or_else(|p| p.into_inner()),
+        "pairedDevices": config.paired_clients.len(),
+        "authenticatedConnectedDevices": network.authenticated_sessions.read().map(|sessions| sessions.iter().filter(|(id, sessions)| config.paired_clients.iter().any(|c| &c.id == *id) && sessions.iter().any(|s| s.strong_count() > 0)).count()).unwrap_or(0),
+        "dataRelay": false,
+    }))
+}
+
+async fn pairing_payload(State(network): State<SharedNetwork>) -> Response {
+    let info = server_info(&network);
+    if !info.on_network { return error(StatusCode::BAD_REQUEST, "Enable LAN sharing before pairing another device"); }
+    let config = network.config.read().unwrap_or_else(|p| p.into_inner());
+    let payload = ambra_net::pairing::PairingPayload {
+        version: 1, public_key: info.public_key, name: info.name,
+        local_addresses: info.secure_port.map(ambra_net::lan::local_addresses).unwrap_or_default(),
+        public_endpoint: config.public_endpoint,
+    };
+    match payload.encode() {
+        Ok(link) => {
+            let svg = qrcode::QrCode::new(link.as_bytes()).map(|code| code.render::<qrcode::render::svg::Color>().min_dimensions(256, 256).build()).ok();
+            Json(json!({ "payload": link, "publicKey": payload.public_key, "svg": svg })).into_response()
+        },
+        Err(error) => error_response(error.to_string()),
+    }
+}
+fn error_response(message: String) -> Response { error(StatusCode::INTERNAL_SERVER_ERROR, message) }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[tokio::test]
+    async fn enrollment_polling_requires_the_same_key_and_expiry_removes_the_request() {
+        let network = Network::new(ServerConfig::load_default_for_tests());
+        let key = ambra_net::Identity::generate().unwrap().public_key();
+        network.pending.lock().await.insert("handle".into(), PendingPairing {
+            code: "123456".into(), client_id: "client".into(), client_name: "Device".into(), peer: "test".into(), requested: Instant::now(), token: None, denied: false, client_key: Some(key),
+        });
+        let peer = |key| Some(axum::Extension(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1".parse().unwrap(), session: Arc::new(()) }));
+        let stranger = ambra_net::Identity::generate().unwrap().public_key();
+        assert_eq!(pairing_status(State(network.clone()), Path("handle".into()), peer(stranger)).await.status(), StatusCode::FORBIDDEN);
+        assert!(network.pending.lock().await.contains_key("handle"));
+        network.pending.lock().await.get_mut("handle").unwrap().requested = Instant::now() - PAIRING_EXPIRES;
+        let response = pairing_status(State(network.clone()), Path("handle".into()), peer(key)).await;
+        let bytes = axum::body::to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["status"], "expired");
+        assert!(network.pending.lock().await.is_empty());
     }
 }

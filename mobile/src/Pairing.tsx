@@ -1,15 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import Constants from "expo-constants";
+import { CameraView, useCameraPermissions } from "expo-camera";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native";
-import { awaitPairing, requestPairing, suggestedAddress, type PairingStarted } from "./client";
+import { awaitPairing, requestPairing, type PairingStarted } from "./client";
 import { Swirl } from "./Swirl";
 import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
 export function Pairing({ savedAddress, onPaired }: { savedAddress: string | null; onPaired: () => void }) {
-  const [address, setAddress] = useState(() => savedAddress?.replace(/^https?:\/\//, "") || suggestedAddress());
+  const [address, setAddress] = useState(() => savedAddress?.startsWith("ambra://pair/") ? savedAddress : "");
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
@@ -52,11 +55,16 @@ export function Pairing({ savedAddress, onPaired }: { savedAddress: string | nul
             <Text style={styles.secondaryText}>Cancel</Text>
           </Touchable>
         </> : <>
-          <Text style={styles.body}>The address of the Ambra server on your network, or its Tailscale name or IP to reach it from anywhere.</Text>
+          <Text style={styles.body}>Paste the server pairing link from ambra-server pair qr. Approve the six-digit code on that server.</Text>
+          {scanning && permission?.granted && <CameraView style={{ height: 240, width: "100%" }} barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+            onBarcodeScanned={({ data }) => { if (data.startsWith("ambra://pair/")) { setAddress(data); setScanning(false); } else setError("This QR code is not an Ambra pairing link."); }} />}
+          <Touchable accessibilityRole="button" onPress={() => void (async () => { const next = permission?.granted ? permission : await requestPermission(); if (next.granted) setScanning(value => !value); else setError("Allow camera access to scan, or paste the pairing link."); })()} style={styles.secondary}>
+            <Text style={styles.secondaryText}>{scanning ? "Close camera" : "Scan server QR code"}</Text>
+          </Touchable>
           <TextInput
             value={address}
             onChangeText={setAddress}
-            placeholder={`192.168.1.20:38147`}
+            placeholder="ambra://pair/…"
             placeholderTextColor="rgba(255, 255, 255, 0.35)"
             autoCapitalize="none"
             autoCorrect={false}

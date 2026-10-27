@@ -23,10 +23,8 @@ test -d "$app"
 test -f "$app/main.jsbundle"
 test ! -d "$app/PlugIns"
 /usr/libexec/PlistBuddy -c 'Print UIBackgroundModes' "$app/Info.plist" | grep -q audio
-# iOS 17+ requires explicit IP exceptions; the local-network flag alone is insufficient.
-for range in 100.64.0.0/10 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
-  /usr/libexec/PlistBuddy -c "Print :NSAppTransportSecurity:NSExceptionDomains:$range:NSExceptionAllowsInsecureHTTPLoads" "$app/Info.plist" | grep -qx true
-done
+# Native Rust networking uses a private loopback HTTP bridge. No VPN/IP-range exceptions.
+/usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$app/Info.plist" | grep -qx true
 
 # Preserve embedded frameworks in the IPA.
 ditto "$app" "$output/Payload/Ambra.app"

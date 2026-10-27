@@ -9,6 +9,8 @@ default = []
 experimental-soloist-forwarding = []
 
 [dependencies]
+ambra-net = { path = "../crates/ambra-net" }
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 axum = "0.8.9"
 base64 = "0.22.1"
 bytes = "1"
@@ -57,3 +59,7 @@ vergen = "=9.0.6"
 
 [patch.crates-io]
 librespot-core = { path = "vendor/librespot-core" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

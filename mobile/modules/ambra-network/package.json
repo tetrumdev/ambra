@@ -1,0 +1,7 @@
+{
+  "name": "ambra-network",
+  "version": "0.1.0",
+  "main": "src/index.ts",
+  "private": true,
+  "peerDependencies": { "expo": "*", "expo-modules-core": "*" }
+}

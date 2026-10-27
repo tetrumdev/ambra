@@ -243,12 +243,13 @@ mod tests {
         let mut config = crate::server_config::ServerConfig::load_default_for_tests();
         config.paired_clients.push(crate::server_config::PairedClient {
             id: "test-device".into(), name: "Laptop".into(),
-            token_sha256: crate::server_config::token_hash("test-token"), paired_at_ms: 1,
+            token_sha256: crate::server_config::token_hash("test-token"), paired_at_ms: 1, public_key: None,
         });
         let policy = crate::access::AccessPolicy::from_env(crate::network::Network::new(config));
         // With no ConnectInfo these requests take the paired-device path, even on loopback.
         let app: Router = routes(Arc::new(Library { root, state, lock: Mutex::new(()) }))
-            .layer(axum::middleware::from_fn_with_state(policy, crate::access::enforce));
+            .layer(axum::middleware::from_fn_with_state(policy, crate::access::enforce))
+            .layer(axum::Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
