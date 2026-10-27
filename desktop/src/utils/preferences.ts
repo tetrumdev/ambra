@@ -327,7 +327,7 @@ function loadLocalPreferences(): AppPreferences {
 
 /**
  * Where this device left off, kept on it alone: another device opening the same server starts
- * where it left off, not here. Settings stay in `preferencesKey`, on the server, for every device.
+ * where it left off, not here. Settings and playback remain owned by this device.
  */
 function withDeviceView(preferences: AppPreferences): AppPreferences {
   try {
@@ -359,7 +359,7 @@ export function savePreferences(preferences: AppPreferences) {
     const { version, search } = preferences;
     const { screen, playerView, navigation, playlistGroups, ...settings } = preferences.ui;
     setPersistentItem(preferencesKey, JSON.stringify({ version, ui: settings }));
-    localStorage.setItem(deviceViewKey, JSON.stringify({ version, ui: { screen, playerView, navigation, playlistGroups }, search }));
+    setPersistentItem(deviceViewKey, JSON.stringify({ version, ui: { screen, playerView, navigation, playlistGroups }, search }));
   } catch (error) {
     console.warn("Could not save preferences:", error);
   }

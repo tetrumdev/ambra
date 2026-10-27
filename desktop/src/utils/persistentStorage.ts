@@ -1,22 +1,13 @@
-import { getServerItem, serverStateKeys, setServerItem } from "./serverState";
+import { notifyLocalStorage } from "./storageEvents";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { forStorage, fromStorage } from "../api/serverConnection";
+import { forDeviceStorage, fromDeviceStorage } from "../api/serverConnection";
 
-const restoreKeys = new Set([
-  "ambra.preferences",
-  "ambra.ui-preferences.v1",
-  "ambra.current-screen",
-  "ambra.playlists.v1",
-  "ambra.streaming-library.v1",
-  "ambra.removed-library-tracks.v1",
-  "ambra.library-order.v1",
-  "ambra.queue.v1",
-]);
-// Old server-owned keys are read only for migration and retained for rollback.
-const persistentKeys = new Set([
-  "ambra.ui-preferences.v1",
-  "ambra.current-screen",
-  "ambra.streaming-library.v1",
+export const persistentKeys = new Set([
+  "ambra.audio-settings.v1", "ambra.local-ownership.v1", "ambra.preferences", "ambra.ui-preferences.v1", "ambra.device-view.v1", "ambra.current-screen",
+  "ambra.playlists.v1", "ambra.queue.v1", "ambra.playback.v1", "ambra.listening-history.v1",
+  "ambra.library-order.v1", "ambra.removed-library-tracks.v1", "ambra.album-versions.v1",
+  "ambra.lyrics-sync.v1", "ambra.lyrics-autosync.v2", "ambra.lyrics-autosync-samples.v1",
+  "ambra.lyrics-autosync-noticed.v1", "ambra.dsp-presets.v1", "ambra.streaming-library.v1",
 ]);
 const revisionKey = "ambra.persistence.updated-at-ms";
 
@@ -78,24 +69,24 @@ function installHideFlush() {
   if (hideFlushInstalled || typeof document === "undefined") return;
   hideFlushInstalled = true;
   const flushWhenHidden = () => {
-    if (document.visibilityState === "hidden") flushPersistentState();
+    if (document.visibilityState === "hidden") void flushPersistentState().catch(() => {});
   };
   document.addEventListener("visibilitychange", flushWhenHidden);
-  window.addEventListener("pagehide", () => flushPersistentState());
+  window.addEventListener("pagehide", () => { void flushPersistentState().catch(() => {}); });
 }
 
 function scheduleFlush() {
   if (!hydrated || flushTimer !== undefined) return;
-  flushTimer = setTimeout(flushPersistentState, writeDelayMs);
+  flushTimer = setTimeout(() => { void flushPersistentState().catch(() => {}); }, writeDelayMs);
 }
 
 /** Send every pending change to the backend now. Safe to call at any time. */
-export function flushPersistentState() {
+export function flushPersistentState(): Promise<void> {
   if (flushTimer !== undefined) {
     clearTimeout(flushTimer);
     flushTimer = undefined;
   }
-  if (!hydrated || !storageAvailable() || dirtyKeys.size === 0) return;
+  if (!hydrated || !storageAvailable() || dirtyKeys.size === 0) return writeChain;
 
   const changes: Record<string, string | null> = {};
   for (const key of dirtyKeys) changes[key] = localStorage.getItem(key);
@@ -105,8 +96,13 @@ export function flushPersistentState() {
     changes,
   };
   writeChain = writeChain
-    .then(() => backend.save(patch))
-    .catch((error) => console.warn("Could not save Ambra state:", error));
+    .catch(() => {}).then(() => backend.save(patch))
+    .catch((error) => {
+      for (const key of Object.keys(changes)) dirtyKeys.add(key);
+      console.warn("Could not save Ambra state:", error);
+      throw error;
+    });
+  return writeChain;
 }
 
 /**
@@ -116,6 +112,7 @@ export function flushPersistentState() {
  */
 export function hydratePersistentStorage(): Promise<boolean> {
   hydration ??= (async () => {
+    let restored = false;
     if (!storageAvailable()) {
       hydrated = true;
       return false;
@@ -124,6 +121,7 @@ export function hydratePersistentStorage(): Promise<boolean> {
     try {
       const localUpdatedAt = localRevision();
       const saved = await backend.load(localUpdatedAt);
+      restored = true;
 
       if (saved === null) {
         // Nothing durable yet: seed it from whatever this WebView has.
@@ -150,17 +148,24 @@ export function hydratePersistentStorage(): Promise<boolean> {
       // The durable copy wins. Discard pre-hydration writes, which were derived
       // from the older state that was just replaced.
       dirtyKeys.clear();
-      for (const key of restoreKeys) {
+      for (const key of persistentKeys) {
         const value = saved.values[key];
         if (typeof value === "string") localStorage.setItem(key, value);
-        else localStorage.removeItem(key);
+        // Old mirrors do not know newly local keys. New mirrors also describe deletions.
+        else if (saved.values["ambra.local-ownership.v1"] === "1") localStorage.removeItem(key);
       }
       localStorage.setItem(revisionKey, String(saved.updatedAtMs));
       return true;
     } catch (error) {
-      throw new Error(`Could not restore local state for migration: ${String(error)}`);
+      console.warn("Could not restore local state; using this device’s stored copy:", error);
+      return false;
     } finally {
       hydrated = true;
+      if (restored && localStorage.getItem("ambra.local-ownership.v1") !== "1") {
+        localStorage.setItem("ambra.local-ownership.v1", "1");
+        for (const key of persistentKeys) if (localStorage.getItem(key) !== null) dirtyKeys.add(key);
+        localStorage.setItem(revisionKey, String(Date.now()));
+      }
       if (dirtyKeys.size > 0) scheduleFlush();
     }
   })().catch(error => {
@@ -179,26 +184,26 @@ function markChanged(key: string) {
   scheduleFlush();
 }
 
-// Saved server URLs are moved onto this run's server as they're read (api/serverConnection.ts).
+// Device state keeps its original URLs. Only explicitly server-owned snapshots are rebased.
 export function getPersistentItem(key: string) {
-  return fromStorage(serverStateKeys.has(key) ? getServerItem(key) : localStorage.getItem(key));
+  return fromDeviceStorage(localStorage.getItem(key));
 }
 
 export function setPersistentItem(key: string, savedValue: string) {
-  const value = forStorage(savedValue);
-  if (serverStateKeys.has(key)) return setServerItem(key, value);
+  const value = forDeviceStorage(savedValue);
   const canTrack = persistentKeys.has(key) && storageAvailable();
   // Rewriting an identical value would bump the revision and trigger a backend
   // write for no reason; providers and effects do this routinely on startup.
   if (canTrack && localStorage.getItem(key) === value) return;
   localStorage.setItem(key, value);
   if (canTrack) markChanged(key);
+  notifyLocalStorage(key);
 }
 
 export function removePersistentItem(key: string) {
-  if (serverStateKeys.has(key)) return setServerItem(key, null);
   const canTrack = persistentKeys.has(key) && storageAvailable();
   if (canTrack && localStorage.getItem(key) === null) return;
   localStorage.removeItem(key);
   if (canTrack) markChanged(key);
+  notifyLocalStorage(key);
 }

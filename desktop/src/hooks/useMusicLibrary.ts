@@ -29,9 +29,7 @@ import {
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
-import { subscribeRemoteChanges } from "../utils/serverState";
-import { importLocalMusic, loadLocalMusic } from "../api/localMusic";
-import { serverConnection } from "../api/serverConnection";
+import { loadLocalMusic } from "../api/localMusic";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
@@ -99,7 +97,7 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
   ];
 }
 
-export function useMusicLibrary(localOnly: boolean): MusicLibrary {
+export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): MusicLibrary {
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
   const savedLibraryOrder = useRef(libraryOrder);
   useEffect(() => {
@@ -110,35 +108,21 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
     catch (error) { console.warn("Could not save library ordering:", error); }
   }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
+  const [sharedLocalTracks, setSharedLocalTracks] = useState<Track[]>([]);
   const [serverTracks, setServerTracks] = useState<Track[]>(
     () => localOnly ? [] : loadCachedServerTracks(),
   );
   const [removedTrackIds, setRemovedTrackIds] = useState(
     loadRemovedLibraryTrackIds,
   );
-  // Reordering and removals on other devices show up here as they're saved. What arrives
-  // is already saved, so it's marked as such rather than written back.
-  useEffect(() => subscribeRemoteChanges(keys => {
-    if (keys.has("ambra.library-order.v1")) {
-      const next = loadLibraryOrder();
-      savedLibraryOrder.current = next;
-      setLibraryOrder(next);
-    }
-    if (keys.has("ambra.removed-library-tracks.v1")) {
-      const next = loadRemovedLibraryTrackIds();
-      savedRemovedTrackIds.current = next;
-      setRemovedTrackIds(next);
-    }
-  }), []);
   const [isLocalLoading, setIsLocalLoading] = useState(true);
   const [isServerLoading, setIsServerLoading] = useState(!localOnly);
   const [isLocalCacheLoading, setIsLocalCacheLoading] = useState(true);
-  const [isStreamingCacheLoading, setIsStreamingCacheLoading] = useState(!localOnly);
   const [isServerReachable, setIsServerReachable] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
-  const catalogTracks = useMemo(() => [...serverTracks, ...localTracks], [serverTracks, localTracks]);
+  const catalogTracks = useMemo(() => [...(localOnly ? [] : [...serverTracks, ...sharedLocalTracks]), ...(sharedPlayback ? [] : localTracks)], [serverTracks, sharedLocalTracks, localTracks, localOnly, sharedPlayback]);
   const tracks = useMemo(
     () =>
       orderLibraryTracks(catalogTracks, libraryOrder)
@@ -186,15 +170,12 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
           return cached;
         });
       })
-      .catch((reason) => console.warn("Could not load the streaming library cache:", reason))
-      .finally(() => {
-        if (!cancelled) setIsStreamingCacheLoading(false);
-      });
+      .catch((reason) => console.warn("Could not load the streaming library cache:", reason));
 
     // Thumbnails are generated in the background after a scan; pick them up as
     // they land without rescanning the disk.
     let stopListening: (() => void) | undefined;
-    if (isTauri() && localOnly) {
+    if (isTauri()) {
       void listen("local-library-updated", () => {
         void invoke<ScannedTrack[]>("load_cached_music")
           .then((updated) => {
@@ -214,10 +195,6 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
 
     let hasCachedLibrary = false;
     const loadLocalTracks = async (): Promise<Track[] | null> => {
-      if (!localOnly) {
-        try { return await loadLocalMusic(controller.signal); }
-        finally { if (!cancelled) setIsLocalCacheLoading(false); }
-      }
       try {
         if (!isTauri()) return [];
         const cachedTracks = await invoke<ScannedTrack[]>("load_cached_music");
@@ -286,30 +263,23 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
     };
   }, [localOnly]);
 
-  // Every app reads the server's library. Only the host automatically imports its old
-  // Music/Ambra folder; joining never mixes in the joining computer's previous library.
   useEffect(() => {
     if (localOnly) return;
     let disposed = false;
     let refreshing = false;
+    const controller = new AbortController();
     const refresh = async () => {
       if (refreshing) return;
       refreshing = true;
       try {
-        const tracks = await loadLocalMusic();
-        if (!disposed) setLocalTracks(current => reconcileTracks(current, tracks));
-      } catch { /* Retain the last confirmed library while the server reconnects. */ }
+        const tracks = await loadLocalMusic(controller.signal);
+        if (!disposed) setSharedLocalTracks(current => reconcileTracks(current, tracks));
+      } catch { /* The device library stays available while the server is away. */ }
       finally { refreshing = false; }
     };
+    void refresh();
     const timer = setInterval(() => void refresh(), 5000);
-    window.addEventListener("focus", refresh);
-    const importTimer = isTauri() && serverConnection && (serverConnection.mode === "host" || serverConnection.fallback)
-      ? setTimeout(() => {
-        void importLocalMusic().then(tracks => {
-          if (!disposed) setLocalTracks(current => reconcileTracks(current, tracks));
-        }).catch(reason => { if (!disposed) setError(String(reason)); });
-      }, LOCAL_RESCAN_DELAY_MS) : undefined;
-    return () => { disposed = true; clearInterval(timer); clearTimeout(importTimer); window.removeEventListener("focus", refresh); };
+    return () => { disposed = true; controller.abort(); clearInterval(timer); };
   }, [localOnly]);
 
   const addAlbum = useCallback(async (url: string) => {
@@ -402,7 +372,7 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
     setIsLocalLoading(true);
     setError(null);
     try {
-      const loadedTracks = localOnly ? (await invoke<ScannedTrack[]>("scan_music")).map(localTrack) : await importLocalMusic();
+      const loadedTracks = (await invoke<ScannedTrack[]>("scan_music")).map(localTrack);
       setLocalTracks((current) =>
         reconcileTracks(current, loadedTracks),
       );
@@ -434,10 +404,8 @@ export function useMusicLibrary(localOnly: boolean): MusicLibrary {
     tracks,
     catalogTracks,
     isLoading,
-    isRestoring: isLocalCacheLoading || isStreamingCacheLoading
-      || (localTracks.length === 0 && isLocalLoading)
-      || (serverTracks.length === 0 && isServerLoading),
-    isServerReachable,
+    isRestoring: isLocalCacheLoading || (localTracks.length === 0 && isLocalLoading),
+    isServerReachable: !localOnly && isServerReachable,
     error,
     isAddingAlbum,
     addAlbumError,

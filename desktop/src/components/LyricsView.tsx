@@ -8,7 +8,7 @@ import type { LyricMotion } from "../utils/preferences";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import { recordSyncSample } from "../utils/lyricsAutoTuning";
 import { detectLyricOffset, firstAutoSyncNotice, lyricAutoSyncKey, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
-import { subscribeRemoteChanges } from "../utils/serverState";
+import { subscribeLocalStorage } from "../utils/storageEvents";
 import {
   lyricSyncKey,
   lyricSyncOverride,
@@ -1128,15 +1128,14 @@ export function LyricsView({
   ]);
 
   const timed = lyrics?.status === "lyrics" && lyrics.sync !== "none";
-  // LyricsView remounts per track, so the saved choice is read once, then followed as other
-  // devices change it, so every screen's lyrics move together.
+  // Lyric timing choices and analysis remain local to this device.
   const [override, setOverride] = useState<LyricSyncOverride | undefined>(
     () => track ? lyricSyncOverride(track.globalId) : undefined,
   );
   const [remoteAnalyses, setRemoteAnalyses] = useState(0);
-  useEffect(() => subscribeRemoteChanges(keys => {
-    if (track && keys.has(lyricSyncKey)) setOverride(lyricSyncOverride(track.globalId));
-    if (keys.has(lyricAutoSyncKey)) setRemoteAnalyses(count => count + 1);
+  useEffect(() => subscribeLocalStorage(key => {
+    if (track && key === lyricSyncKey) setOverride(lyricSyncOverride(track.globalId));
+    if (key === lyricAutoSyncKey) setRemoteAnalyses(count => count + 1);
   }), [track?.globalId]);
   const updateOverride = (next: LyricSyncOverride) => {
     if (!track) return;

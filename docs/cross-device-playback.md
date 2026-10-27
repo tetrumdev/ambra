@@ -2,33 +2,28 @@
 
 Native clients now use encrypted Rust networking and pinned server identities. Legacy address-only pairings require explicit re-pairing. See [native networking setup and validation](networking/README.md) for QR pairing, CLI diagnostics, platform support, and current limitations.
 
-Each server owns one queue, playback position, listening history and selected audio output.
-Every connected app controls and displays that same session. Apps expose their audio devices
-to the server and execute its audio commands. Choosing another output moves the current song
-and position there. This currently supports one selected output, rather than synchronized
-playback across several outputs at once.
+Each server owns its shared queue, playback position, shared listening history, and selected
+output. Desktop clients normally keep their own local queue and playback. Enable **Shared
+playback session** in Settings → Server to control the shared session and expose this device's
+output. Mobile's Server tab retains the existing shared player; Local music uses its own queue.
+Choosing another shared output moves the server's song and position there. This supports one
+selected shared output, rather than synchronized playback across several outputs at once.
 
 Spotify keeps librespot as its default backend. The optional, experimental Soloist backend
 runs on the server and can provide isolated Linux PCM capture to an updated desktop output.
 Audio forwarding is disabled in distributable builds. See [Soloist setup and verification](spotify-soloist.md)
 for the development gate, platform limits, pairing, and manual Linux test procedure.
 
-Opening the app never automatically starts a server. It connects to a previously selected server or, before one
-has been selected, tries an already running local server at `127.0.0.1:38147`. If that is
-unavailable it shows a connection screen with LAN discovery and manual address entry.
-Pair once with your chosen server; later launches remember it and wait for it when offline.
-There is no automatic fallback to a different server.
+Opening the app restores local settings, playlists, and playback first. A saved pairing reconnects
+in the background through the Rust connection manager. An unavailable server leaves the local
+player visible. No server is selected implicitly, and clients never start a server.
 
-The server shares itself on the LAN by default. Join from the connection screen or Settings
-→ Server, then approve the pairing code on the host. Joining adopts the server's saved state;
-the joining computer's old library is not automatically imported.
+Connect through Settings → Server → Connect to Ambra Server. LAN discovery, manual addresses,
+and server-generated `ambra://pair/` links use encrypted pairing. Approve the code with
+`ambra-server pair approve <code>` on the server machine. Joining, switching, and disconnecting
+preserve device files, playlists, history, and settings. See [ownership and migration](local-clients.md).
 
-## Install and start the server
-
-In the app's connection screen, choose **Start server on this computer**. The bundled server
-starts in the background and the app connects to it. On Windows the server has a small
-native system tray icon with a **Stop server** menu item. It has no webview or app window.
-You can close the app window and the server continues running.
+## Install and start the independent server
 
 From the repository, install the standalone command once:
 
@@ -45,7 +40,7 @@ ambra-server start
 ```
 
 The command returns after the background server starts; the terminal can be closed.
-Use `ambra-server stop`, Settings → Server → Stop server, or the tray menu to stop it.
+Use `ambra-server stop` or the tray menu to stop it.
 `ambra-server serve` is available for foreground diagnostics and headless use.
 With no arguments the command shows help. Configuration, accounts and imported music use
 the user's application-data directories, independently of the terminal's current directory.
@@ -68,8 +63,7 @@ updating the desktop app does not start or stop the server. An app acting as an 
 output must keep running to play sound.
 
 If the selected output app exits, the server keeps the queue and last reported playback
-position. Reopening that app reloads the current song at that position and clears the
-output-offline warning automatically. A paused song stays paused; reconnecting does not
+position. Reopening that app and selecting its shared playback mode reloads the shared song at that position. A paused song stays paused; reconnecting does not
 advance the queue or count another play. Output availability is separate from server availability.
 
 The background process runs a versioned copy of the server executable from the server's
@@ -79,7 +73,7 @@ server processes from opening the same library concurrently.
 
 ## Disconnecting a music service
 
-Settings → Services → Disconnect signs the service out of this Ambra server for every
+`ambra-server logout spotify|tidal|qobuz` signs the selected service out of this server for every
 connected device. It deletes Ambra's saved credentials and pending login, drops the active
 session, and prevents automatic reauthorization after restart (including environment tokens).
 It does not delete playlists in the service account or change native Ambra playlists.

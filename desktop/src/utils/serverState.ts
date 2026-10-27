@@ -1,7 +1,8 @@
+import { flushPersistentState } from "./persistentStorage";
 import { serverBaseUrl } from "../api/server";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { serverConnection } from "../api/serverConnection";
+
 
 /**
  * State the server keeps for every device that uses it. Writes are per key: another
@@ -23,22 +24,13 @@ export const serverStateKeys = new Set([
   "ambra.lyrics-autosync-noticed.v1",
   "ambra.dsp-presets.v1",
 ]);
-// Kept locally before they moved to the server; each is uploaded once if the server lacks it.
-const formerlyLocalKeys = [
-  "ambra.ui-preferences.v1",
-  "ambra.album-versions.v1",
-  "ambra.lyrics-sync.v1",
-  "ambra.lyrics-autosync.v2",
-  "ambra.lyrics-autosync-samples.v1",
-  "ambra.lyrics-autosync-noticed.v1",
-];
 // Settings and the playing position follow whoever changed them last. For a library or
 // playlist, a change made elsewhere meanwhile is kept, and this device's is set aside.
 const latestWins = new Set([
   "ambra.queue.v1",
   "ambra.playback.v1",
   "ambra.dsp-presets.v1",
-  ...formerlyLocalKeys,
+
 ]);
 // Seen on the other screens as they're made: lyric timing, so every device's lyrics move
 // together, and settings, which other devices apply as they arrive.
@@ -56,9 +48,6 @@ type Changes = Record<string, string | null>;
 type Patch = { revision: number; writeId: string; changes: Changes; bases: Record<string, number> };
 type Status = { ready: boolean; pending: boolean; error: string | null; conflict: boolean };
 const values = new Map<string, string>();
-// Before server hydration, local playback uses a temporary session. Never send
-// these values to the server or mix them into a later server snapshot.
-const localValues = new Map<string, string>();
 const pending = new Map<string, string | null>();
 // The revision each pending key's edit started from. Other devices' changes heard meanwhile
 // advance `revision`, but not what this device had seen of that key.
@@ -145,43 +134,13 @@ function applyChanges(changes: unknown, atRevision: unknown) {
   }
 }
 
-// Local keys remain untouched as frozen rollback copies. Only an uninitialized
-// server accepts an import; opening another client never merges its old state.
+// Shared state is loaded only after optional connection succeeds. Never upload device state.
 export function hydrateServerState(): Promise<void> {
   hydration ??= (async () => {
-    let saved = await load();
-    const importLegacy = !serverConnection || serverConnection.mode === "host" || serverConnection.fallback;
-    if (saved.revision === 0 && importLegacy) {
-      const changes: Record<string, string> = {};
-      for (const key of serverStateKeys) {
-        const legacy = localStorage.getItem(key);
-        if (legacy !== null) changes[key] = legacy;
-      }
-      const preferences = JSON.parse(localStorage.getItem("ambra.preferences") ?? "null") as { playback?: unknown } | null;
-      if (preferences?.playback !== undefined) {
-        changes["ambra.playback.v1"] = JSON.stringify(preferences.playback);
-      }
-      try {
-        await request({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: 0, writeId: crypto.randomUUID(), changes }) });
-      } catch (error) {
-        // A concurrent import already established the server's authoritative copy.
-        if (!(error instanceof StateRequestError && error.conflict)) throw error;
-      }
-      saved = await load();
-    }
+    const saved = await load();
     values.clear();
     for (const [key, value] of Object.entries(saved.values)) values.set(key, value);
-    localValues.clear();
     revision = saved.revision;
-    // Settings that used to stay on this device move to the server the first time.
-    for (const key of importLegacy ? formerlyLocalKeys : []) {
-      const local = localStorage.getItem(key);
-      if (!values.has(key) && local !== null) {
-        values.set(key, local);
-        pending.set(key, local);
-        pendingBase.set(key, revision);
-      }
-    }
     publish({ ready: true, error: null, conflict: false });
     if (pending.size > 0) scheduleSave(0);
     followServerState();
@@ -219,7 +178,7 @@ function followServerState() {
 }
 
 export function getServerItem(key: string) {
-  return (status.ready ? values : localValues).get(key) ?? null;
+  return status.ready ? values.get(key) ?? null : null;
 }
 
 export function reloadServerState() {
@@ -242,12 +201,8 @@ function scheduleSave(delay = 750) {
 }
 
 export function setServerItem(key: string, value: string | null) {
-  if (!status.ready) {
-    if (value === null) localValues.delete(key);
-    else localValues.set(key, value);
-    publish({});
-    return;
-  }
+  if (!status.ready) throw new Error("Connect to the server before editing shared data.");
+  if (!serverStateKeys.has(key)) throw new Error("Unsupported server state key.");
   if (status.conflict) throw new Error(status.error ?? "Reload server state before editing.");
   if ((values.get(key) ?? null) === value) return;
   if (value === null) values.delete(key);
@@ -374,6 +329,7 @@ export function installServerStateLifecycle() {
       closing = true;
       saveLatest();
       try {
+        await flushPersistentState();
         await flushServerState();
         await appWindow.destroy();
       } catch { /* Leave the window open with the save error visible. */ }

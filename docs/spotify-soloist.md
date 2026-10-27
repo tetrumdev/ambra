@@ -213,15 +213,14 @@ Run without Spotify credentials:
 cargo test --manifest-path server/Cargo.toml
 cargo test --manifest-path server/Cargo.toml --features experimental-soloist-forwarding
 cargo clippy --manifest-path server/Cargo.toml --all-targets --features experimental-soloist-forwarding
-TAURI_CONFIG='{"bundle":{"externalBin":[]}}' cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
+cargo test --manifest-path desktop/src-tauri/Cargo.toml --lib
 bun install --cwd mobile --frozen-lockfile
 bun test desktop/tests
 bun run --cwd desktop build
 ```
 
-The Tauri override is only for a checkout without a generated bundled server sidecar.
-Normal release builds generate that sidecar through the existing build scripts. Native
-fixture tests require a C compiler (`cc`). Fixtures simulate version, pairing persistence,
+Desktop distributions contain only the client. The server is built and distributed separately.
+Native fixture tests require a C compiler (`cc`). Fixtures simulate version, pairing persistence,
 invalid keys, and expiration without Spotify. Mock WebSockets test acknowledgements
 separately from asynchronous events. HTTP tests exercise fragmented delivery, precise
 PCM conversion, and missing END. Session tests exercise stale reports and history across

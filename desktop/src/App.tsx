@@ -1,3 +1,4 @@
+import { isDeviceTrack } from "./utils/nativeAudioSource";
 import "./App.css";
 import "./components/EntityView.css";
 import { EntityView, type EntityPage, type EntityAction } from "./components/EntityView";
@@ -39,10 +40,8 @@ import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
 import {
   loadPreferences,
-  preferencesKey,
   savePlayback,
   savePreferences,
-  withSyncedSettings,
   type AppScreen,
 } from "./utils/preferences";
 import type { GlobalTrackId, Playlist, Track } from "./types/music";
@@ -80,7 +79,6 @@ import { isTrackAvailable, useServiceAvailability } from "./hooks/useServiceAvai
 import "./components/UnavailableTracks.css";
 import { useCorePlayer } from "./hooks/useCorePlayer";
 import { useCoreQueue } from "./hooks/useCoreQueue";
-import { serverStateStatus, subscribeRemoteChanges } from "./utils/serverState";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { useLyricsRest } from "./hooks/useLyricsRest";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
@@ -94,19 +92,16 @@ async function setWindowFullscreen(fullscreen: boolean) {
 /** How long playback may stop before the display is allowed to sleep again. */
 const DISPLAY_WAKE_RELEASE_DELAY_MS = 5_000;
 
-function App({ localOnly }: { localOnly: boolean }) {
+function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
   const connectedServices = useServiceAvailability();
-  const [preferences, setPreferences] = useState(() => {
-    const saved = loadPreferences();
-    return localOnly ? { ...saved, ui: { ...saved.ui, screen: "library" as const } } : saved;
-  });
+  const [preferences, setPreferences] = useState(loadPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
   useAutomaticUpdateChecks();
-  const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(localOnly ? null : preferences.ui.navigation?.entity ?? null);
+  const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(preferences.ui.navigation?.entity ?? null);
   const browseCache = useRef(new Map<string, EntityPage>());
   const [browseTracks, setBrowseTracks] = useState<Track[]>([]);
   const rememberTracks = useCallback((tracks: Track[]) => setBrowseTracks(current => {
@@ -117,13 +112,13 @@ function App({ localOnly }: { localOnly: boolean }) {
     return [...known.values()];
   }), []);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
-    localOnly ? null : preferences.ui.navigation?.playlistId ?? null,
+    preferences.ui.navigation?.playlistId ?? null,
   );
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
   const [librarySection, setLibrarySection] =
-    useState<LibrarySection>(localOnly ? "tracks" : preferences.ui.navigation?.section ?? "overview");
+    useState<LibrarySection>(preferences.ui.navigation?.section ?? "overview");
   const [collectionSorts, setCollectionSorts] = useState<
     Record<string, TrackSort>
   >({});
@@ -157,7 +152,7 @@ function App({ localOnly }: { localOnly: boolean }) {
       window.removeEventListener("online", refreshSearchProviders);
     };
   }, [refreshSearchProviders, localOnly]);
-  const library = useMusicLibrary(localOnly);
+  const library = useMusicLibrary(localOnly, sharedPlayback);
   const search = useTrackSearch(localOnly ? "" : searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>(
@@ -166,15 +161,14 @@ function App({ localOnly }: { localOnly: boolean }) {
     for (const track of search.knownTracks) {
       tracksById.set(track.globalId, track);
     }
-    return [...tracksById.values()];
-  }, [listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
+    return [...tracksById.values()].filter(track => !sharedPlayback || !isDeviceTrack(track));
+  }, [sharedPlayback, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   const queueContext = useMemo(
     () => libraryQueueContext(library.tracks),
     [library.tracks, connectedServices],
   );
-  // With a server, its core plays for every device and this app is one of its remotes;
-  // an offline session plays here. Fixed for the life of this App.
-  const [usingCore] = useState(() => !localOnly && serverStateStatus().ready);
+  // The listener explicitly chooses local or shared queue authority. Root remounts only when that choice changes.
+  const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
   const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
   const playbackTracks = useMemo(() => {
@@ -184,8 +178,8 @@ function App({ localOnly }: { localOnly: boolean }) {
     for (const entry of [...queue.historyEntries, ...queue.entries]) {
       tracksById.set(entry.track.globalId, entry.track);
     }
-    return [...tracksById.values()];
-  }, [availableTracks, queue.entries, queue.historyEntries]);
+    return [...tracksById.values()].filter(track => !localOnly || isDeviceTrack(track));
+  }, [availableTracks, queue.entries, queue.historyEntries, localOnly]);
   // Which way the queue last moved, so the player cover slides in from that side.
   const skipDirectionRef = useRef({ direction: 1, at: 0 });
   const skipDirection = useCallback(() =>
@@ -331,7 +325,7 @@ function App({ localOnly }: { localOnly: boolean }) {
     ...preferences,
     ui: {
       ...preferences.ui,
-      navigation: localOnly ? preferences.ui.navigation : {
+      navigation: {
         playerReturnScreen: playerReturnScreenRef.current,
         queueReturnScreen: queueReturnScreenRef.current,
         entity: browseEntity,
@@ -343,6 +337,7 @@ function App({ localOnly }: { localOnly: boolean }) {
   }), [preferences, localOnly, browseEntity, selectedPlaylistId, librarySection, settingsTab]);
   const latestSessionRef = useRef({ preferences: sessionPreferences, player, usingCore });
   latestSessionRef.current = { preferences: sessionPreferences, player, usingCore };
+  useEffect(() => { onPlaybackRelease?.(() => latestSessionRef.current.player.release()); }, [onPlaybackRelease]);
   const [activeScrollElement, setActiveScrollElement] =
     useState<HTMLDivElement | null>(null);
   const scrollPositionsRef = useRef(new Map<string, number>());
@@ -765,11 +760,6 @@ function App({ localOnly }: { localOnly: boolean }) {
   useEffect(() => {
     savePreferences(sessionPreferences);
   }, [sessionPreferences]);
-  // Settings changed on another device apply here at once; where this device is stays its own.
-  useEffect(() => subscribeRemoteChanges(keys => {
-    if (keys.has(preferencesKey)) setPreferences(withSyncedSettings);
-  }), []);
-
   // Saved straight from the clock, so playing never rerenders the app: every 5 s while playing, exactly while paused.
   useEffect(() => {
     if (!player.isSessionRestored || usingCore) return;
