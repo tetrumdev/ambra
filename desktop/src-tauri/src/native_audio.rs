@@ -123,9 +123,9 @@ pub struct NativeAudioStatus {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioDevice {
-    id: String,
-    name: String,
-    is_default: bool,
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) is_default: bool,
 }
 
 enum WorkerCommand {
@@ -1054,6 +1054,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 // Resume from the audible position on Play, without reopening a paused or failed song.
                 self.defer_stream(position);
             }
+        }
+        if let Some(app) = &self.event_app {
+            let _ = app.emit("native-audio-settings-changed", &self.audio_settings);
         }
         Ok(())
     }
