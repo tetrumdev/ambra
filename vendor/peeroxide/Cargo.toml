@@ -7,7 +7,7 @@ rust-version = "1.85"
 repository = "https://github.com/Rightbracket/peeroxide"
 [dependencies]
 peeroxide-dht = { path = "../peeroxide-dht" }
-libudx = "=1.7.3"
+libudx = { version = "=1.7.3", path = "../libudx" }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 thiserror = "2"

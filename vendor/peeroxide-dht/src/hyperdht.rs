@@ -1455,7 +1455,8 @@ impl HyperDhtHandle {
             router.validate_handshake_reply(&reply_value, relay, &resp.from)?
         };
 
-        let remote_payload = nw.recv(&hs_result.noise)?;
+        let mut remote_payload = nw.recv(&hs_result.noise)?;
+        remote_payload.addresses4.retain(|a| a.host.parse().is_ok_and(|ip| !crate::address_policy::is_overlay(ip)));
         let nw_result = nw.finalize()?;
 
         if remote_payload.error != 0 {
@@ -2047,7 +2048,8 @@ pub async fn establish_stream_with_socket(
         result.server_address.port,
     );
 
-    tracing::debug!(local_id = result.local_stream_id, remote_id, %addr, "establishing UDX stream");
+    if crate::address_policy::is_overlay(addr.ip()) { return Err(HyperDhtError::FirewallRejected); }
+    tracing::info!(local_id = result.local_stream_id, remote_id, %addr, "establishing direct UDX stream (application relay disabled)");
     let socket = if let Some(s) = shared_socket {
         s
     } else {

@@ -24,6 +24,8 @@ const DEFAULT_TTL: u32 = 64;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SocketPoolError {
+    #[error("overlay endpoint excluded")]
+    OverlayExcluded,
     #[error("udx error: {0}")]
     Udx(#[from] libudx::UdxError),
     #[error("invalid address: {0}")]
@@ -117,6 +119,7 @@ impl SocketRef {
     }
 
     pub fn send_holepunch(&self, addr: SocketAddr, low_ttl: bool) -> Result<()> {
+        if crate::address_policy::is_overlay(addr.ip()) { return Err(SocketPoolError::OverlayExcluded); }
         let ttl = if low_ttl { HOLEPUNCH_TTL } else { DEFAULT_TTL };
         self.socket.set_ttl(ttl)?;
         self.socket.send_to(HOLEPUNCH_MSG, addr)?;

@@ -59,6 +59,8 @@
 
 // ─── Always-public modules (documented) ──────────────────────────────────────
 
+pub mod address_policy;
+
 /// Blind relay for proxying encrypted traffic between peers behind restrictive NATs.
 pub mod blind_relay;
 /// BLAKE2b hashing, Ed25519 signing, and namespace derivation helpers.

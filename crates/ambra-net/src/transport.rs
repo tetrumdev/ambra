@@ -85,7 +85,12 @@ pub fn adapt<T: Io + 'static>(
             write.shutdown().await?;
             Ok::<_, crate::Error>(())
         };
-        tokio::select! { _ = stop.cancelled() => {}, _ = async { tokio::try_join!(upload, download) } => {} }
+        tokio::select! {
+            _ = stop.cancelled() => {},
+            result = async { tokio::try_join!(upload, download) } => {
+                if let Err(error) = result { tracing::debug!(error = ?error, "Encrypted stream pump closed"); }
+            }
+        }
         stop.cancel();
     });
     (
@@ -134,7 +139,10 @@ impl HttpConnection {
         let closed = CancellationToken::new();
         let stop = closed.clone();
         let task = tokio::spawn(async move {
-            tokio::select! { _ = stop.cancelled() => {}, _ = connection => {} }
+            tokio::select! {
+                _ = stop.cancelled() => {},
+                result = connection => { if let Err(error) = result { tracing::debug!(error = ?error, "HTTP/2 client connection closed"); } }
+            }
             stop.cancel();
         });
         Ok(Arc::new(Self {
