@@ -30,7 +30,10 @@ function bigscreenArtworkKey(track: Track) {
   ].join(":");
 }
 
-export function preloadArtwork(url: string, large = false) {
+export function preloadArtwork(url: string, large = false, options: {
+  fetchPriority?: HTMLImageElement["fetchPriority"];
+  timeoutMs?: number;
+} = {}) {
   const cache = large ? fullSize : thumbnails;
   const cached = cache.get(url);
   if (cached) {
@@ -40,14 +43,26 @@ export function preloadArtwork(url: string, large = false) {
   }
   const image = new Image();
   image.decoding = "async";
+  image.fetchPriority = options.fetchPriority ?? "auto";
   image.src = url;
-  const request = image.decode().then(() => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const decoded = image.decode();
+  const ready = options.timeoutMs === undefined ? decoded : Promise.race([
+    decoded,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        image.src = "";
+        reject(new Error("Artwork loading timed out"));
+      }, options.timeoutMs);
+    }),
+  ]);
+  const request = ready.then(() => {
     if (!large && cache.get(url) === request) readyThumbnails.add(url);
     return image;
   }).catch((error) => {
     if (cache.get(url) === request) cache.delete(url);
     throw error;
-  });
+  }).finally(() => { clearTimeout(timer); });
   cache.set(url, request);
   while (cache.size > (large ? 3 : 192)) {
     const oldest = cache.keys().next().value!;

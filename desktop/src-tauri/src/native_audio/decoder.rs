@@ -109,7 +109,27 @@ impl DecodedSource {
     }
 }
 pub(super) fn is_live_source(source: &str) -> bool {
-    is_http_source(source) && source_path(source).starts_with("/api/playback/live/")
+    live_stream_id(source).is_some()
+}
+
+/// Live URLs may be direct server URLs or include the native bridge's per-process capability.
+pub(super) fn live_stream_id(source: &str) -> Option<String> {
+    let url = Url::parse(source).ok()?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return None;
+    }
+    let path = url.path();
+    let api_path = if let Some(path) = path.strip_prefix("/api/") {
+        path
+    } else {
+        let (capability, path) = path.strip_prefix('/')?.split_once('/')?;
+        if capability.len() != 64 || !capability.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return None;
+        }
+        path.strip_prefix("api/")?
+    };
+    let id = api_path.strip_prefix("playback/live/")?;
+    (!id.is_empty() && !id.contains('/')).then(|| id.to_owned())
 }
 
 struct FileDecodedSource {

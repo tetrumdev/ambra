@@ -112,7 +112,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     return [...known.values()];
   }), []);
   const [selectedPlaylistId, setSelectedPlaylistId] = useState<string | null>(
-    preferences.ui.navigation?.playlistId ?? null,
+    preferences.ui.navigation?.playlistId?.replace(/^ambra-server-playlist:[^:]+:/, "") ?? null,
   );
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");

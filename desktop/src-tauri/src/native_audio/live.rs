@@ -19,12 +19,7 @@ pub(super) struct LivePcm {
 }
 impl LivePcm {
     pub fn open(source: String, position: f64) -> Result<Self, String> {
-        let url = reqwest::Url::parse(&source).map_err(|_| "Invalid live PCM URL")?;
-        let expected_id = url
-            .path()
-            .strip_prefix("/api/playback/live/")
-            .ok_or("Invalid live PCM URL")?
-            .to_owned();
+        let expected_id = super::decoder::live_stream_id(&source).ok_or("Invalid live PCM URL")?;
         let mut source = HttpStream::open(source)?;
         let info = StreamInfo::read(&mut source)
             .map_err(|error| format!("Live PCM initialization failed: {error}"))?;
@@ -215,6 +210,16 @@ impl Drop for HttpStream {
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn live_source_urls_select_the_live_decoder() {
+        use super::super::decoder::is_live_source;
+        let id = "0123456789abcdef0123456789abcdef";
+        let capability = "a".repeat(64);
+        assert!(is_live_source(&format!("http://127.0.0.1:38147/api/playback/live/{id}")));
+        assert!(is_live_source(&format!("http://127.0.0.1:49152/{capability}/api/playback/live/{id}?access_token=test")));
+        assert!(!is_live_source("http://127.0.0.1:49152/api/providers/qobuz/tracks/1/stream"));
+        assert!(!is_live_source("http://127.0.0.1:49152/unrelated/api/playback/live/stream"));
+    }
     fn serve(complete: bool) -> (String, std::thread::JoinHandle<()>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -235,10 +240,15 @@ mod tests {
             socket
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
-            let mut request = [0; 4096];
-            let size = socket.read(&mut request).unwrap();
+            let mut request = Vec::new();
+            while !request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                let mut chunk = [0; 4096];
+                let size = socket.read(&mut chunk).unwrap();
+                assert!(size > 0 && request.len() + size <= 16 * 1024);
+                request.extend_from_slice(&chunk[..size]);
+            }
             assert!(
-                !String::from_utf8_lossy(&request[..size])
+                !String::from_utf8_lossy(&request)
                     .to_ascii_lowercase()
                     .contains("range:")
             );
@@ -264,6 +274,9 @@ mod tests {
             for part in body.chunks(3) {
                 socket.write_all(part).unwrap();
             }
+            // Finish the response without resetting a connection that still has unread request bytes.
+            socket.shutdown(std::net::Shutdown::Write).unwrap();
+            let _ = std::io::copy(&mut socket, &mut std::io::sink());
         });
         (format!("http://{address}/api/playback/live/{id}"), thread)
     }
@@ -284,6 +297,18 @@ mod tests {
             ]
         );
         assert!(live.decode_next().unwrap().is_none());
+        server.join().unwrap();
+    }
+    #[test]
+    fn native_decoder_reads_live_capture_through_a_bridge_url_without_ranges() {
+        let (url, server) = serve(true);
+        let capability = "a".repeat(64);
+        let url = url.replace("/api/", &format!("/{capability}/api/"));
+        let mut decoder = super::super::decoder::DecodedSource::open_at(url, 30.0).unwrap();
+        assert_eq!(decoder.audio_quality().codec, "pcm_s32le");
+        assert_eq!(decoder.duration_seconds(), 120.0);
+        assert_eq!(decoder.decode_next().unwrap().unwrap().len(), 4);
+        assert!(decoder.decode_next().unwrap().is_none());
         server.join().unwrap();
     }
     #[test]

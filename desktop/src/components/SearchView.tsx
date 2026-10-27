@@ -179,6 +179,7 @@ function SearchResult({
         </button>
         <div className="searchResultArtwork">
           <TrackArtwork
+            preferProviderThumbnail
             className="searchResultCover"
             track={track}
             alt={`${track.album} album cover`}

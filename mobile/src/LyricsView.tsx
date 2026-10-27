@@ -6,7 +6,8 @@ import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useFrameCallba
 import { scheduleOnRN } from "react-native-worklets";
 import { needsLyricsRetry, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
 import { lyricActive } from "../../desktop/src/utils/lyricsTiming";
-import { refreshSession, sessionView, sessionViewAge, type SessionView, type Track } from "./client";
+import { sessionViewAge, type SessionView, type Track } from "./client";
+import { refreshLyricPlayback } from "./lyricsPlayback";
 import { focusBlock, lyricBlocks, lyricSeekSeconds, lyricWordRuns, type LyricBlock, type LyricRow } from "./lyricsModel";
 import { useLyrics } from "./useLyrics";
 import { lyricPositionMs, nudgeLyricSync } from "./lyricSync";
@@ -62,7 +63,7 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
   useEffect(() => {
     if (!active || !foreground) return;
     const abort = new AbortController();
-    void refreshSession(abort.signal, { clock: "recent" }).catch(() => {});
+    void refreshLyricPlayback(abort.signal).catch(() => {});
     return () => abort.abort();
   }, [active, foreground]);
   useEffect(() => () => resyncAbort.current?.abort(), []);
@@ -84,12 +85,12 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
     resyncAbort.current?.abort();
     const abort = new AbortController();
     resyncAbort.current = abort;
-    await refreshSession(abort.signal, { clock: "force" });
-    if (abort.signal.aborted) return;
-    const fresh = sessionView();
+    const playback = await refreshLyricPlayback(abort.signal, true);
+    if (!playback) return;
+    const fresh = playback.view;
     if (fresh?.queue.current?.globalTrackId !== trackId) return;
     held.current = null;
-    const report = { time: lyricPositionMs(fresh, sessionViewAge(), duration, offset), wall: Date.now(), end: (duration || 86_400) * 1000 + offset, playing: !!fresh?.playing && !fresh.buffering };
+    const report = { time: lyricPositionMs(fresh, playback.ageSeconds, duration, offset), wall: Date.now(), end: (duration || 86_400) * 1000 + offset, playing: !!fresh?.playing && !fresh.buffering };
     sample.set(report);
     time.set(report.time);
     initialized.set(false);

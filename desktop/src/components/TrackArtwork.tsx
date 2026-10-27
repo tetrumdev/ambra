@@ -5,21 +5,24 @@ import type { Track } from "../types/music";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { cachedPlaylistArtwork } from "../utils/playlistArtworkCache";
 import { observeNearbyArtwork } from "../utils/nearbyArtwork";
+import { providerThumbnail } from "../utils/providerThumbnail";
 
 type TrackArtworkProps = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {
   track: Track;
+  preferProviderThumbnail?: boolean;
 };
 
-export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArtworkProps) {
+export function TrackArtwork({ track, preferProviderThumbnail = false, onError, onLoad, ...imageProps }: TrackArtworkProps) {
   const thumbnail = thumbnailArtwork(track);
-  const key = `${track.globalId}:${thumbnail}`;
+  const primary = preferProviderThumbnail ? providerThumbnail(track.nativeCover ?? track.cover) : thumbnail;
+  const key = `${track.globalId}:${primary}`;
   const [resolved, setResolved] = useState<{ key: string; src: string } | null>(null);
-  const src = resolved?.key === key ? resolved.src : cachedArtwork(thumbnail) ? thumbnail : whiteArtwork;
+  const src = resolved?.key === key ? resolved.src : cachedArtwork(primary) ? primary : whiteArtwork;
   const imageRef = useRef<HTMLImageElement>(null);
   const [nearby, setNearby] = useState(imageProps.loading === "eager");
   const candidates = useMemo(
-    () => [...new Set([thumbnail, track.cover].filter(source => source && source !== whiteArtwork))],
-    [thumbnail, track.cover],
+    () => [...new Set([primary, thumbnail, track.cover].filter(source => source && source !== whiteArtwork))],
+    [primary, thumbnail, track.cover],
   );
 
   useEffect(() => {
@@ -33,11 +36,15 @@ export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArt
     let cancelled = false;
 
     void (async () => {
-      const cached = await cachedPlaylistArtwork(thumbnail);
+      // Search starts public CDN requests immediately; a pending offline-cache write must not delay them.
+      const cached = preferProviderThumbnail ? null : await cachedPlaylistArtwork(thumbnail);
       const sources = cached ? [cached, ...candidates] : candidates;
       for (const candidate of sources) {
         try {
-          await preloadArtwork(candidate);
+          await preloadArtwork(candidate, false, {
+            fetchPriority: imageProps.fetchPriority,
+            timeoutMs: preferProviderThumbnail ? 3000 : undefined,
+          });
           if (!cancelled) setResolved({ key, src: candidate });
           return;
         } catch {
@@ -56,7 +63,7 @@ export function TrackArtwork({ track, onError, onLoad, ...imageProps }: TrackArt
     })();
 
     return () => { cancelled = true; };
-  }, [candidates, key, nearby, thumbnail, track]);
+  }, [candidates, key, nearby, thumbnail, track, preferProviderThumbnail, imageProps.fetchPriority]);
 
   return <img ref={imageRef} loading="lazy" decoding="async" {...imageProps} src={src}
     onLoad={onLoad}

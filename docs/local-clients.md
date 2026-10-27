@@ -15,9 +15,10 @@ files only when explicitly invoked; scanning and pairing never invoke it.
 
 The independent server owns provider credentials, provider libraries and playlists, shared
 music, server playlists, shared playback, synchronized server state, pairing, and authorization.
-Desktop presents local and server playlists together. Server playlist IDs are qualified by the
-verified server identity and their names display “(Server)”. Edits to those playlists write to
-the server. Creating or duplicating a local playlist is an explicit local operation. Private
+Desktop presents one playlist collection with its original names and IDs. While connected,
+the server's collection is authoritative for display and all playlist operations, including
+creation, duplication, and metadata refresh. Playback mode does not change that collection.
+Without a connection, standalone playlists remain available in device storage. Private
 file paths cannot enter a server playlist or shared queue, and shared output commands reject
 private device file sources.
 
@@ -64,8 +65,9 @@ This migration performs no destructive cleanup:
   new mirrors. Missing new keys in an old mirror do not erase WebView values. Missing keys in a
   complete new mirror represent intentional deletions. First migration seeds all existing local
   values into the native mirror. The native writer commits the ownership marker after those values.
-- Existing server snapshots remain on their server. They are presented separately and never
-  overwrite the local playlist key. No empty server is seeded from client state.
+- Existing server snapshots remain on their server and never overwrite the local playlist key.
+  A connected client shows that authoritative collection without duplicating stale device copies.
+  No empty server is seeded from client state.
 - Old unqualified provider cache files remain on disk for rollback. New caches have a separate
   directory per verified server. Credentials and client identity files retain their formats.
 - Saved legacy `host` and `fallback` settings remain readable. They no longer select or launch
