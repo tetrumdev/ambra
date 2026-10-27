@@ -22,7 +22,8 @@ use std::{
     },
 };
 
-pub const PERSISTENT_STATE_KEYS: [&str; 20] = [
+pub const PERSISTENT_STATE_KEYS: [&str; 21] = [
+    "ambra.shared-playback.v1",
     "ambra.local-ownership.v1",
     "ambra.preferences",
     "ambra.ui-preferences.v1",

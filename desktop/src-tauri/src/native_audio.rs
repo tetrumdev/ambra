@@ -504,6 +504,8 @@ struct PlaybackEngine<O: AudioOutput> {
     end_preload_started_at: Option<Instant>,
     output_drain_deadline: Option<Instant>,
     pcm: VecDeque<f64>,
+    /// Raw samples submitted to the device but not yet heard, retained for releasing a paused output.
+    output_history: VecDeque<f64>,
     spec: Option<StreamSpec>,
     next_source: Option<QueuedSource>,
     ready_next: Option<(String, PreparedSource)>,
@@ -680,6 +682,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             end_preload_started_at: None,
             output_drain_deadline: None,
             pcm: VecDeque::new(),
+            output_history: VecDeque::new(),
             spec: None,
             next_source: None,
             ready_next: None,
@@ -1583,6 +1586,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             };
             if frames > 0 {
                 let consumed_samples = frames * spec.channels;
+                self.output_history.extend(self.pcm.iter().take(consumed_samples).copied());
                 self.pcm.drain(..consumed_samples);
                 if using_gain_buffer {
                     self.gain_buffer_offset += consumed_samples;
@@ -1594,6 +1598,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 }
                 self.rendered_frames = self.rendered_frames.saturating_add(frames as u64);
                 let queued_frames = output.queued_frames()? as u64;
+                let queued_samples = (queued_frames as usize).saturating_mul(spec.channels);
+                if self.output_history.len() > queued_samples {
+                    self.output_history.drain(..self.output_history.len() - queued_samples);
+                }
                 let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
                 let current_time =
                     self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
@@ -1782,20 +1790,17 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         }
         self.output = None;
         self.rendering = false;
-        self.decoder = None;
-        self.pcm.clear();
+        // Give up the device without re-downloading or seeking the song. Samples
+        // still queued in its ring return ahead of the decoder's existing PCM.
+        let queued_samples = (queued_frames as usize).saturating_mul(spec.channels).min(self.output_history.len());
+        let mut pending = self.output_history.split_off(self.output_history.len() - queued_samples);
+        pending.append(&mut self.pcm);
+        self.pcm = pending;
         self.reset_gain_buffer();
         self.position_base = position_seconds;
         self.rendered_frames = 0;
-        let source = self
-            .current_source
-            .clone()
-            .ok_or_else(|| "No native audio track is loaded".to_owned())?;
-        let prepared = prepare_source_at(source, position_seconds)?;
-        let audio_quality = self.install_prepared(prepared)?;
         update_status(&self.status, |status| {
             status.current_time = position_seconds;
-            status.audio_quality = Some(audio_quality);
             status.is_playing = false;
             status.buffering = false;
         });
@@ -1885,6 +1890,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn reset_gain_buffer(&mut self) {
+        self.output_history.clear();
         self.end_preload_started_at = None;
         self.output_drain_deadline = None;
         self.gain_buffer.clear();
