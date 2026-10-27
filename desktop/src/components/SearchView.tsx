@@ -12,7 +12,7 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
-import { MENU_WIDTH } from "../utils/trackMenu";
+import { MENU_WIDTH, isKeyboardMenuClick } from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
@@ -49,6 +49,7 @@ type OpenMenu = {
   y: number;
   /** Where the collection menu opens upward from near the bottom. */
   flipY?: number;
+  openedWithKeyboard?: boolean;
 };
 
 type SearchResultProps = {
@@ -275,6 +276,7 @@ export function SearchView({
     event.preventDefault();
     setOpenMenu({
       kind: "playback",
+      openedWithKeyboard: isKeyboardMenuClick(event),
       trackId,
       x: event.clientX,
       y: event.clientY,
@@ -309,6 +311,7 @@ export function SearchView({
           xPos={openMenu.x}
           yPos={openMenu.y}
           trackId={openMenu.trackId}
+          openedWithKeyboard={openMenu.openedWithKeyboard}
           playStandalone={playStandalone}
           addToQueue={addToQueue}
           playNext={playNext}

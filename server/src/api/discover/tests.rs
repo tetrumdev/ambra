@@ -316,6 +316,7 @@ fn state(directory: &std::path::Path) -> AppState {
         soloist: crate::soloist::tests::manager(directory, false),
         pending_tidal_login: Arc::new(Mutex::new(None)),
         pending_qobuz_login: Arc::new(Mutex::new(None)),
+        pending_spotify_login: Arc::new(Mutex::new(None)),
         http_client: client.clone(),
         library_entries: Arc::new(RwLock::new(Vec::new())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),

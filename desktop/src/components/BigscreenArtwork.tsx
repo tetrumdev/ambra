@@ -7,6 +7,7 @@ import {
 } from "../api/server";
 import {
   cachedBigscreenArtwork,
+  preloadArtwork,
   preloadBigscreenArtwork,
   settledBigscreenArtwork,
 } from "../utils/artworkImages";
@@ -17,6 +18,7 @@ import {
   sampleCoverEdges,
   separateCollapsedPalette,
   type CoverSeparation,
+  type CoverEdgeSamples,
 } from "../utils/backgroundPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
@@ -120,20 +122,36 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
       show(cached, key);
       if (settledBigscreenArtwork(track)) return;
       // A fallback cover stays up while a larger one is looked for again.
-      void preloadBigscreenArtwork(track).then((source) => {
-        if (!cancelled && source && source !== cached) show(source, key);
-      });
-      return () => { cancelled = true; };
     }
     // Hold the last cover briefly instead of flashing a blank, then let the thumbnail stand in.
-    const timer = setTimeout(() => { if (!cancelled) show(thumbnailArtwork(track), key); }, COVER_WAIT_MS);
-    void preloadBigscreenArtwork(track).then((source) => {
+    let displayed = !!cached;
+    let resolving = true;
+    const timer = setTimeout(() => {
+      if (!cancelled && !displayed) show(thumbnailArtwork(track), key);
+    }, COVER_WAIT_MS);
+    // Load the provider's full image alongside the optional cross-service lookup.
+    // A slow or failed resolver must never leave a working full-size cover unused.
+    const native = track.fullCover ?? track.nativeCover ?? track.cover;
+    if (!cached) void preloadArtwork(native, true, { timeoutMs: 10_000 }).then(() => {
+      if (!cancelled && resolving) { displayed = true; show(native, key); }
+    }).catch(() => {});
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+    const resolve = async () => {
+      const source = await preloadBigscreenArtwork(track);
+      if (cancelled) return;
       clearTimeout(timer);
-      if (!cancelled) show(source ?? thumbnailArtwork(track), key);
-    });
+      if (source) { resolving = false; displayed = true; show(source, key); }
+      else if (!displayed) show(thumbnailArtwork(track), key);
+      if (!settledBigscreenArtwork(track)) {
+        retry = setTimeout(() => { void resolve(); }, [1000, 3000, 10_000, 30_000][Math.min(attempt++, 3)]);
+      }
+    };
+    void resolve();
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      clearTimeout(retry);
     };
   }, [key, show]);
 
@@ -170,7 +188,7 @@ export function BackgroundArtwork({ track, active, animate, playing, coverId = "
     colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK],
     weights: [1, 0, 0, 0],
   });
-  const [edges, setEdges] = useState<number[] | null | undefined>();
+  const [edges, setEdges] = useState<CoverEdgeSamples | null | undefined>();
   // Recomputed when the view's overlay changes, so both views separate the cover by what is visible.
   const separation = useMemo<CoverSeparation>(
     () => edges === undefined
