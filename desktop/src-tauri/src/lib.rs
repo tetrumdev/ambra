@@ -30,7 +30,6 @@ mod cover_thumbnails;
 mod display_wake;
 mod keyboard;
 mod library_index;
-mod local_server;
 mod local_import;
 mod media_controls;
 mod native_audio;
@@ -163,8 +162,14 @@ fn save_library_index(path: &Path, entries: &[IndexEntry<Track>]) -> Result<(), 
     write_file_atomic(path, &encoded)
 }
 
+fn server_cache_path(app: &tauri::AppHandle, name: &str) -> Result<PathBuf, String> {
+    let key = app.state::<server_link::ServerLink>().connection().server
+        .and_then(|server| server.public_key).ok_or("No verified server selected")?;
+    Ok(cache_directory(app)?.join("servers").join(key.to_string()).join(name))
+}
+
 fn streaming_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    cache_directory(app).map(|directory| directory.join("streaming-library.json"))
+    server_cache_path(app, "streaming-library.json")
 }
 
 // The streaming-library cache is a copy of what the Ambra server already owns, so
@@ -191,7 +196,7 @@ async fn save_streaming_cache(app: tauri::AppHandle, json: String) -> Result<(),
 }
 
 fn service_playlist_cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    cache_directory(app).map(|directory| directory.join("service-playlists.json"))
+    server_cache_path(app, "service-playlists.json")
 }
 
 // Streaming-service playlists are copies of what each service owns, cached for the
@@ -1005,19 +1010,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_update::PendingUpdate::default())
         .manage(display_wake::DisplayWake::default())
+        .manage(remote_endpoint::SharedOutput::default())
         .setup(|app| {
-            // Connecting never starts a server; the listener can explicitly start one from the UI.
+            // The client never starts a server. Its optional bridge is separate from local playback.
             let data = persistent_data_directory(app.handle()).map_err(std::io::Error::other)?;
             let link = server_link::ServerLink::start(data).map_err(std::io::Error::other)?;
-            let connection = link.connection();
-            let client_id = link.client_id();
             app.manage(link);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
-            // This computer's outputs, for the other devices using the same server.
-            remote_endpoint::start(app.handle().clone(), connection.base_url, connection.token, client_id, connection.client_name);
+            // Shared output starts only when the listener explicitly selects a shared session.
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1049,7 +1052,6 @@ pub fn run() {
             native_audio::set_native_audio_settings,
             native_audio::native_dsp_status,
             native_audio::import_dsp_impulse,
-            native_audio::sync_dsp_impulses,
             native_audio::lyric_offset::detect_lyric_offset,
             media_controls::set_native_media_metadata,
             media_controls::set_native_media_playback,
@@ -1058,6 +1060,7 @@ pub fn run() {
             app_update::install_update,
             display_wake::set_display_wake,
             playlist_export::export_playlist_csv,
+            remote_endpoint::set_shared_output,
             server_link::server_connection,
             server_link::network_connection_status,
             server_link::discover_servers,
@@ -1065,10 +1068,8 @@ pub fn run() {
             server_link::poll_pairing,
             server_link::leave_server,
             server_link::set_server_link_decided,
-            server_link::clear_local_state,
             server_link::restart_app,
             local_import::import_local_music,
-            local_server::start_local_server
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

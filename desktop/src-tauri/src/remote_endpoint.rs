@@ -42,16 +42,33 @@ struct Agent {
     sent_as: Mutex<HashMap<String, String>>,
 }
 
-pub fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) {
-    let Ok(client) = reqwest::Client::builder().timeout(Duration::from_secs(COMMANDS_WAIT_SECONDS + 10)).build() else {
-        return;
-    };
+#[derive(Default)]
+pub struct SharedOutput(tokio::sync::Mutex<Option<[tauri::async_runtime::JoinHandle<()>; 2]>>);
+
+/// Only an explicit shared session may report or control this device's player.
+#[tauri::command]
+pub async fn set_shared_output(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let state = app.state::<SharedOutput>();
+    let mut tasks = state.0.lock().await;
+    if let Some(previous) = tasks.take() {
+        for task in previous { task.abort(); let _ = task.await; }
+    }
+    if enabled {
+        let link = app.state::<crate::server_link::ServerLink>();
+        let connection = link.connection();
+        if connection.server.is_none() { return Err("No paired server selected".into()); }
+        *tasks = Some(start(app.clone(), connection.base_url, connection.token, connection.client_id, connection.client_name)?);
+    }
+    Ok(())
+}
+
+fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<[tauri::async_runtime::JoinHandle<()>; 2], String> {
+    let client = reqwest::Client::builder().timeout(Duration::from_secs(COMMANDS_WAIT_SECONDS + 10)).build().map_err(|error| error.to_string())?;
     let mut instance = [0_u8; 16];
     getrandom::fill(&mut instance).expect("the operating system's random source is available");
     let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
     let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, instance_id, sent_as: Mutex::new(HashMap::new()) });
-    tauri::async_runtime::spawn(report(agent.clone()));
-    tauri::async_runtime::spawn(serve(agent));
+    Ok([tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(serve(agent))])
 }
 
 impl Agent {
@@ -219,8 +236,17 @@ async fn serve(agent: std::sync::Arc<Agent>) {
     }
 }
 
+fn server_media_source(source: &str) -> bool {
+    source.starts_with("/api/") || source.starts_with("http://") || source.starts_with("https://")
+}
+
 /// Only what the server asks for; the rest of the app stays private.
 async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String> {
+    for key in ["source", "nextSource", "expectedSource"] {
+        if let Some(source) = args[key].as_str() {
+            if !server_media_source(source) { return Err("Shared playback cannot read private device files".into()); }
+        }
+    }
     let player = agent.app.state::<NativeAudioPlayer>();
     let number = |key: &str| args[key].as_f64().ok_or_else(|| format!("`{key}` is missing"));
     match command {
@@ -286,6 +312,14 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_output_never_accepts_private_device_files() {
+        for source in ["/Users/listener/Music/private.flac", "file:///private.flac", "asset://localhost/private.flac", r"C:\Music\private.flac"] {
+            assert!(!server_media_source(source));
+        }
+        assert!(server_media_source("/api/music/local/files/shared.flac"));
+    }
 
     #[test]
     fn sources_move_onto_this_apps_server_with_its_token() {

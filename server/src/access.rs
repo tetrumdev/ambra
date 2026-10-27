@@ -159,7 +159,7 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     let local = remote_peer.is_none() && peer_is_loopback && headers.get(HOST).is_none_or(|host| loopback_host(host.as_bytes()));
     let path = request.uri().path().to_owned();
 
-    if path.starts_with(LOCAL_ONLY_PREFIX) {
+    if path.starts_with(LOCAL_ONLY_PREFIX) || (path.starts_with("/api/auth/") && path != "/api/auth/status") {
         return if local {
             next.run(request).await
         } else {
@@ -305,6 +305,7 @@ mod tests {
         });
         let app = Router::new().route("/api/local/config", get(|| async { "admin" }))
             .route("/api/music", get(|| async { "audio" }))
+            .route("/api/auth/tidal/start", axum::routing::post(|| async { "provider admin" }))
             .layer(middleware::from_fn_with_state(AccessPolicy::from_env(network.clone()), enforce));
         let request = |path: &str, peer_key: Option<ambra_net::PublicKey>, token: &str| {
             let mut request = Request::builder().uri(path).header(HOST, "localhost").header(AUTHORIZATION, format!("Bearer {token}"))
@@ -313,6 +314,7 @@ mod tests {
             if let Some(key) = peer_key { request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1234".parse().unwrap(), session: std::sync::Arc::new(()) }); }
             request
         };
+        assert_eq!(app.clone().oneshot(request("/api/auth/tidal/start", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(app.clone().oneshot(request("/api/local/config", Some(device_key), "valid")).await.unwrap().status(), StatusCode::FORBIDDEN);
         assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "valid")).await.unwrap().status(), StatusCode::OK);
         assert_eq!(app.clone().oneshot(request("/api/music", Some(device_key), "wrong")).await.unwrap().status(), StatusCode::UNAUTHORIZED);

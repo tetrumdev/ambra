@@ -11,6 +11,8 @@
     "expo-build-properties": "~58.0.11",
     "expo-camera": "~58.0.12",
     "expo-constants": "~58.0.13",
+    "expo-document-picker": "~58.0.4",
+    "expo-file-system": "~58.0.11",
     "expo-font": "~58.0.10",
     "expo-gl": "~58.0.3",
     "expo-haptics": "~58.0.7",
@@ -28,6 +30,7 @@
     "react-native-worklets": "0.13.0"
   },
   "devDependencies": {
+    "@types/bun": "^1.4.4",
     "@types/react": "~19.3.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~58.0.4",
@@ -42,7 +45,8 @@
     "lint": "expo lint",
     "network:ios": "bash scripts/build-network.sh ios",
     "network:android": "bash scripts/build-network.sh android",
-    "eas-build-post-install": "bash scripts/build-network.sh \"${EAS_BUILD_PLATFORM}\""
+    "eas-build-post-install": "bash scripts/build-network.sh \"${EAS_BUILD_PLATFORM}\"",
+    "test": "bun test tests"
   },
   "private": true,
   "patchedDependencies": {

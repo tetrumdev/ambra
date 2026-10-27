@@ -4,14 +4,23 @@
 
 The <i><b>perfect</b></i> music player built with performance in mind.
 
-## Running the server
+## Local playback and optional servers
 
-Open Ambra and choose **Start server on this computer**, or install the standalone command
-once with `bun run server:install` and run `ambra-server start` from any directory.
-The server runs in the background with a native Windows tray icon; closing the app or
-terminal keeps it running. Stop it from the tray, Settings → Server, or `ambra-server stop`.
-Other computers can discover and pair with that server. Opening Ambra never automatically
-starts a new server. See [cross-device playback](docs/cross-device-playback.md) and [native networking, setup, validation, and current limitations](docs/networking/README.md).
+Desktop Ambra opens as a local music player. Add files to `Music/Ambra`, then scan them in
+Settings → Local. Local playlists, queues, history, playback, DSP, and device settings do not
+require a server. Mobile opens its local library and imports files from the system file picker.
+
+For streaming services and shared libraries, install the independent Rust server with
+`bun run server:install`, then run `ambra-server start`. Desktop and mobile never bundle or
+start this executable. Stop it through its tray menu or `ambra-server stop`.
+
+Connect through desktop Settings → Server → Connect to Ambra Server, or mobile's Server tab.
+Run `ambra-server pair qr` on the server and approve the client's six-digit code through the
+server CLI. Local data stays on the client. Shared playback is an explicit session choice.
+
+See [client/server ownership and migration](docs/local-clients.md),
+[cross-device playback](docs/cross-device-playback.md), and
+[native networking](docs/networking/README.md).
 
 ## To-Do
 <b>For Initial Release</b>

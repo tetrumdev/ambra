@@ -31,11 +31,18 @@ USAGE:
     ambra-server pair approve <code>           Let the device showing <code> use the server
     ambra-server pair deny <code>              Refuse a device's request
     ambra-server pair revoke <device>          Unpair a device, by name or ID
-    ambra-server login spotify                 Sign in with librespot, optionally pair Soloist
+    ambra-server login spotify|tidal|qobuz     Sign in on the server machine
+    ambra-server login complete tidal|qobuz    Enter the callback URL securely
+    ambra-server logout spotify|tidal|qobuz    Remove a server provider account
+    ambra-server services status               Provider connection status
     ambra-server spotify status                Sanitized playback backend status
     ambra-server spotify backend librespot|soloist
     ambra-server spotify soloist pair|reset|check|sign-out
     ambra-server spotify soloist key           Enter a personal API key without echo
+    ambra-server spotify soloist quality normal|high|very_high|lossless
+    ambra-server spotify soloist checks on|off
+    ambra-server spotify soloist fallback never|librespot_before_start
+    ambra-server spotify soloist executable <absolute-path>
     ambra-server spotify soloist install <absolute-path>
     ambra-server help                          This message
 
@@ -98,6 +105,23 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
             Ok(format!("{}\n{}\nApprove the six-digit code after the device connects.", code.render::<char>().quiet_zone(true).module_dimensions(2, 1).build(), payload))
         },
         ["login", "spotify"] => login_spotify().await,
+        ["login", provider @ ("tidal" | "qobuz")] => {
+            let reply = local("POST", &format!("/api/auth/{provider}/start"), None).await?;
+            if let Some(url) = reply["loginUrl"].as_str() {
+                Ok(format!("Open {url}\nAfter signing in, run `ambra-server login complete {provider}` and paste the callback URL."))
+            } else { Ok(format!("{provider} connected.")) }
+        },
+        ["login", "complete", provider @ ("tidal" | "qobuz")] => {
+            let callback = rpassword::prompt_password("Callback URL (hidden): ").map_err(|_| "Could not read the callback URL securely")?;
+            local("POST", &format!("/api/auth/{provider}/complete"), Some(json!({ "callbackUrl": callback }))).await?;
+            Ok(format!("{provider} connected on the server."))
+        },
+        ["logout", provider @ ("spotify" | "tidal" | "qobuz")] => pretty(local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?),
+        ["services", "status"] => pretty(local("GET", "/api/auth/status", None).await?),
+        ["spotify", "soloist", "quality", quality @ ("normal" | "high" | "very_high" | "lossless")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "quality": quality }))).await?),
+        ["spotify", "soloist", "checks", enabled @ ("on" | "off")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "updateChecks": *enabled == "on" }))).await?),
+        ["spotify", "soloist", "fallback", fallback @ ("never" | "librespot_before_start")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "fallback": fallback }))).await?),
+        ["spotify", "soloist", "executable", path] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "executable": path }))).await?),
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
         ["spotify", "backend", backend @ ("librespot" | "soloist")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "backend": backend }))).await?),
         ["spotify", "soloist", action @ ("pair" | "reset" | "check" | "sign-out")] => pretty(local("POST", &format!("/api/local/spotify/soloist/{action}"), None).await?),
@@ -154,7 +178,7 @@ async fn login_spotify() -> Result<String, String> {
     println!("Generate a personal key: https://developer.spotify.com/dashboard/soloist");
     println!("Audio capture currently requires Linux. Release builds do not forward Spotify audio.");
     let key = rpassword::prompt_password("Personal Soloist API key (hidden; leave empty to finish later): ").map_err(|_| "Could not read the key securely from the terminal")?;
-    if key.trim().is_empty() { return Ok("Soloist selected. Finish setup in Services on the server machine, or run `ambra-server spotify soloist key`.".into()); }
+    if key.trim().is_empty() { return Ok("Soloist selected. Run `ambra-server spotify soloist key`.".into()); }
     local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
     let status = local("GET", "/api/spotify/playback/status", None).await?;
     if status["state"] == "not_installed" { return Ok("Key saved. Install Soloist, then run `ambra-server spotify soloist install /absolute/path/to/soloist` and `ambra-server spotify soloist pair`.".into()); }

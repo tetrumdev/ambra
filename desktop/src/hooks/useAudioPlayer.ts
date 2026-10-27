@@ -61,6 +61,8 @@ export type AudioPlayer = {
   audioDecks: AudioDeckController;
   playTrack: (trackId: string, preparedTrack?: Track) => void;
   clear: () => void;
+  /** Finish this controller’s pending commands before another owner uses the audio engine. */
+  release: () => Promise<void>;
   /** Puts this player's own song back in the engine, paused where it was, after another device used it. */
   reclaim: () => void;
 };
@@ -102,6 +104,7 @@ export function useAudioPlayer(
   const deckGenerationsRef = useRef<[number, number]>([0, 0]);
   const currentTrackIdRef = useRef<string | null>(null);
   const nativePlayIntentRef = useRef(false);
+  const releasedRef = useRef(false);
   const nativeCommandsRef = useRef(new NativePlaybackCommands(invoke));
   const initialPlaybackRef = useRef(initialPlayback);
   const restoreStartedRef = useRef(false);
@@ -261,6 +264,7 @@ export function useAudioPlayer(
 
   const loadNativeTrack = useCallback(
     (track: Track, positionSeconds: number, autoplay: boolean) => {
+      if (releasedRef.current) return;
       const nextTrack = queueNavigationRef.current.peekNext();
       const loadGeneration = nativeLoadGenerationRef.current + 1;
       nativeLoadGenerationRef.current = loadGeneration;
@@ -294,6 +298,7 @@ export function useAudioPlayer(
   );
 
   const acceptNativeAdvance = useCallback((currentSource: string | null) => {
+    if (releasedRef.current) return false;
     const advancedTrack = trackForNativeAudioAdvance(
       queueNavigationRef.current.peekNext(),
       currentSource,
@@ -345,6 +350,7 @@ export function useAudioPlayer(
 
   const switchToTrack = useCallback(
     (requestedIndex: number, shouldPlay: boolean) => {
+      if (releasedRef.current) return;
       const library = tracksRef.current;
       if (library.length === 0) return;
 
@@ -413,6 +419,7 @@ export function useAudioPlayer(
 
   const seek = useCallback(
     (time: number) => {
+      if (releasedRef.current) return;
       if (usesNativeAudio) {
         setCurrentTime(time);
         void nativeCommandsRef.current.run("seek_native_audio", { positionSeconds: time }).catch(
@@ -435,6 +442,7 @@ export function useAudioPlayer(
   );
 
   const playActive = useCallback(() => {
+    if (releasedRef.current) return;
     if (usesNativeAudio) {
       nativePlayIntentRef.current = true;
       setPlaybackError(null);
@@ -451,6 +459,7 @@ export function useAudioPlayer(
   }, [requestDeckPlayback, usesNativeAudio]);
 
   const pauseActive = useCallback(() => {
+    if (releasedRef.current) return;
     if (usesNativeAudio) {
       clock.setRunning(false);
       nativePlayIntentRef.current = false;
@@ -726,7 +735,7 @@ export function useAudioPlayer(
 
   const queuedNextTrackId = queueNavigation.nextTrack?.globalId ?? null;
   useEffect(() => {
-    if (!currentTrack) return;
+    if (!currentTrack || releasedRef.current) return;
 
     const nextTrack = queueNavigationRef.current.peekNext();
     if (usesNativeAudio) {
@@ -764,6 +773,7 @@ export function useAudioPlayer(
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const poll = async () => {
+      if (releasedRef.current) return;
       const statusGeneration = nativeLoadGenerationRef.current;
       const commandRevision = nativeCommandsRef.current.revision;
       if (
@@ -776,7 +786,7 @@ export function useAudioPlayer(
 
       try {
         const playback = await invoke<NativeAudioStatus>("native_audio_status");
-        if (disposed) return;
+        if (disposed || releasedRef.current) return;
 
         if (
           !nativeCommandsRef.current.acceptsStatus(commandRevision) ||
@@ -874,7 +884,7 @@ export function useAudioPlayer(
 
   useEffect(
     () => () => {
-      if (usesNativeAudio) {
+      if (usesNativeAudio && !releasedRef.current) {
         void nativeCommandsRef.current.run("queue_native_audio", { source: null }).catch(() => {});
         void nativeCommandsRef.current.run("pause_native_audio").catch(() => {});
       }
@@ -1101,6 +1111,15 @@ export function useAudioPlayer(
   return {
     playTrack,
     clear: stopPlayback,
+    release: async () => {
+      releasedRef.current = true;
+      nativeLoadGenerationRef.current++;
+      clock.setRunning(false);
+      if (usesNativeAudio) {
+        await nativeCommandsRef.current.run("queue_native_audio", { source: null });
+        await nativeCommandsRef.current.run("pause_native_audio");
+      } else { releaseDeck(0); releaseDeck(1); }
+    },
     reclaim: () => {
       const track = tracksRef.current.find(item => item.globalId === currentTrackIdRef.current);
       setIsPlaying(false);

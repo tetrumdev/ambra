@@ -9,7 +9,9 @@
 $ErrorActionPreference = 'Stop'
 $prefix = 'Ambra development'
 
-$programs = @(Join-Path $env:APPDATA 'com.quantium.ambra\data\server-bin\ambra-server.exe')
+$server = (Get-Command ambra-server -ErrorAction SilentlyContinue).Source
+$programs = @()
+if ($server) { $programs += $server }
 $bun = (Get-Command bun -ErrorAction SilentlyContinue).Source
 if ($bun) { $programs += $bun }
 # `bun run` puts a node.exe shim in front of PATH, so Metro listens as that program.
@@ -21,7 +23,7 @@ function Get-ProgramRules {
   $byName = @{}
   Get-NetFirewallRule -Direction Inbound | ForEach-Object { $byName[$_.Name] = $_ }
   Get-NetFirewallApplicationFilter -All | Where-Object {
-    $_.Program -like '*\com.quantium.ambra\data\server-bin\*ambra-server.exe' -or
+    ($server -and $_.Program -eq $server) -or
       $_.Program -like '*\bun-node-*\node.exe' -or ($bun -and $_.Program -eq $bun)
   } | ForEach-Object { if ($byName[$_.InstanceID]) { [pscustomobject]@{ Rule = $byName[$_.InstanceID]; Program = $_.Program } } }
 }

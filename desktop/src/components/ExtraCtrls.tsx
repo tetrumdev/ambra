@@ -1,3 +1,4 @@
+import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { isTauri } from "@tauri-apps/api/core";
 import {
   Fragment,
@@ -56,7 +57,9 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const [audioMenuOpen, setAudioMenuOpen] = useState(false);
   // With a server, its core picks the output from every computer's; the volume lives on the
   // computer that output belongs to.
-  const core = useSyncExternalStore(subscribeCore, coreView);
+  const shared = useClientConnection().sharedPlayback;
+  const sharedCore = useSyncExternalStore(subscribeCore, coreView);
+  const core = shared ? sharedCore : null;
   const coreOutput = core?.output ?? null;
   const target = coreOutput && coreOutput.endpointId !== serverConnection?.clientId ? coreOutput : null;
   const endpoints = useEndpoints(audioMenuOpen && core !== null, true);

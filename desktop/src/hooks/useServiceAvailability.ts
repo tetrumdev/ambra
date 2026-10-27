@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { serviceAuthStatus, type ServiceAuthStatus, type StreamingProvider } from "../api/server";
+import { isDeviceTrack } from "../utils/nativeAudioSource";
+import { serverConnection, serverOnline } from "../api/serverConnection";
 import type { Track } from "../types/music";
 
 let status: ServiceAuthStatus | null = null;
@@ -45,6 +47,9 @@ export function useServiceAvailability() {
 }
 
 export function isTrackAvailable(track: Track | string, connected = status) {
+  const device = typeof track !== "string" ? isDeviceTrack(track) : track.startsWith("local:") && !track.startsWith("local:server:");
+  if (serverConnection && !device && (!serverOnline || !serverConnection.server)) return false;
+  if (typeof track !== "string" && track.serverIdentity && track.serverIdentity !== serverConnection?.server?.publicKey) return false;
   const provider = typeof track === "string" ? track.split(":", 1)[0] : track.provider;
   return !connected || !["tidal", "qobuz", "spotify"].includes(provider) || connected[provider as StreamingProvider];
 }

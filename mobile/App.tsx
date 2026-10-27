@@ -7,6 +7,8 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Unpaired, follow, restore, networkStatus } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
+import { LocalLibraryScreen } from "./src/LocalLibraryScreen";
+import { Touchable } from "./src/Touchable";
 import { colors } from "./src/theme";
 import { usePhoneOutput } from "./src/usePhoneOutput";
 
@@ -19,7 +21,8 @@ export default function App() {
   ]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
-  usePhoneOutput(saved?.paired ?? false);
+  const [screen, setScreen] = useState<"local" | "server">("local");
+  usePhoneOutput(screen === "server" && (saved?.paired ?? false));
   useEffect(() => { void restore().then(setSaved).catch(error => { setNetworkError(String(error)); setSaved({ address: null, paired: false }); }); }, []);
 
   useEffect(() => {
@@ -46,10 +49,15 @@ export default function App() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.black }}>
       <SafeAreaProvider>
         <StatusBar style="light" />
-        {networkError && <Text accessibilityRole="alert" style={{ color: "white", padding: 24 }}>{networkError}</Text>}
-        {!saved || (!fontsLoaded && !fontError) ? <View /> : saved.paired
+        <View style={{ flexDirection: "row", gap: 24, paddingHorizontal: 24, paddingTop: 60, paddingBottom: 16 }}>
+          <Touchable accessibilityRole="button" onPress={() => setScreen("local")}><Text style={{ color: "white" }}>Local music</Text></Touchable>
+          <Touchable accessibilityRole="button" onPress={() => setScreen("server")}><Text style={{ color: "white" }}>Server</Text></Touchable>
+        </View>
+        {screen === "server" && networkError && <Text accessibilityRole="alert" style={{ color: "white", padding: 24 }}>{networkError}. Local music remains available.</Text>}
+        {!fontsLoaded && !fontError ? <View /> : screen === "local" ? <LocalLibraryScreen /> : saved?.paired
           ? <Player />
-          : <Pairing savedAddress={saved.address} onPaired={() => setSaved(current => ({ address: current?.address ?? null, paired: true }))} />}
+          : <Pairing savedAddress={saved?.address ?? null} onPaired={() => setSaved(current => ({ address: current?.address ?? null, paired: true }))} />}
+
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

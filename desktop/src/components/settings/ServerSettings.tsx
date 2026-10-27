@@ -1,353 +1,149 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useState } from "react";
-import { serverBaseUrl, serverConnection } from "../../api/serverConnection";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { serverConnection } from "../../api/serverConnection";
+import { useClientConnection } from "../../hooks/ClientConnectionContext";
+import { flushPersistentState } from "../../utils/persistentStorage";
+import { flushServerState } from "../../utils/serverState";
 import { SettingRow, Toggle } from "./SettingsControls";
 
 type Discovered = { id: string; name: string; version: string; address: string };
-type Pairing = { pending: { code: string; clientName: string; address: string; ageSeconds: number }[]; paired: { id: string; name: string; pairedAtMs: number }[] };
-type LocalConfig = { id: string; name: string; bind: string; listening: string | null; discovery: boolean; p2p: boolean };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
 
-const sharedWithNetwork = (address: string | null) => Boolean(address) && !/^(127\.|localhost|\[::1\])/.test(address!);
-const spacedCode = (code: string) => `${code.slice(0, 3)} ${code.slice(3)}`;
-
-async function local<T>(path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`${serverBaseUrl}/api/local/${path}`, body === undefined ? undefined : {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  const value = await response.json().catch(() => null) as (T & { error?: string }) | null;
-  if (!response.ok) throw new Error(value?.error ?? `The server answered ${response.status}`);
-  return value as T;
-}
-
-/** The server's own ID, so this machine never offers to join itself. */
-async function ownServerId() {
-  try {
-    const response = await fetch(`${serverBaseUrl}/api/server/info`, { signal: AbortSignal.timeout(2000) });
-    return ((await response.json()) as { id?: string }).id ?? null;
-  } catch { return null; }
-}
-
-/** Replaces this machine's library, playlists and settings with the server's, then restarts into it. */
-async function adoptServer() {
-  await invoke("clear_local_state");
-  localStorage.clear();
+/** Applying a new connection preserves all device state. Native bridges reopen on restart. */
+async function applyConnection() {
+  window.dispatchEvent(new Event("ambra:save-session"));
+  await flushPersistentState();
   await invoke("restart_app");
 }
 
-/**
- * Pairs with a server: asks it, shows the code to approve there, and waits. Joining wipes
- * this machine's own library and settings, so it is confirmed first.
- */
 function JoinFlow({ server, onCancel }: { server: { name: string; address: string }; onCancel: () => void }) {
-  const [confirmed, setConfirmed] = useState(false);
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
   const [error, setError] = useState<string | null>(null);
-
+  const started = useRef<Promise<PairingStarted> | null>(null);
   useEffect(() => {
-    if (!confirmed) return;
     let disposed = false;
-    void invoke<PairingStarted>("start_pairing", { address: server.address })
-      .then(started => { if (!disposed) setPairing(started); })
+    started.current ??= invoke<PairingStarted>("start_pairing", { address: server.address });
+    void started.current.then(value => { if (!disposed) setPairing(value); })
       .catch(reason => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; };
-  }, [confirmed, server.address]);
-
+  }, [server.address]);
   useEffect(() => {
     if (!pairing) return;
     let disposed = false;
+    let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       try {
         const status = await invoke<string>("poll_pairing", { address: pairing.address, requestId: pairing.requestId });
         if (disposed) return;
-        if (status === "approved") await adoptServer();
+        if (status === "approved") await applyConnection();
         else if (status === "denied") setError(`${pairing.serverName} refused this device.`);
         else if (status === "expired") setError("The pairing request expired. Try again.");
         else timer = setTimeout(poll, 1500);
-      } catch (reason) {
-        if (!disposed) setError(String(reason));
-      }
+      } catch (reason) { if (!disposed) setError(String(reason)); }
     };
-    let timer = setTimeout(poll, 1500);
+    timer = setTimeout(poll, 1500);
     return () => { disposed = true; clearTimeout(timer); };
   }, [pairing]);
-
-  if (!confirmed) return <div className="serverJoin" role="group" aria-label={`Join ${server.name}`}>
-    <p><strong>Join {server.name}?</strong> This computer's library, playlists, history and settings will be replaced by {server.name}'s,
-      and stay in sync with it from then on. Local music files and this computer's audio devices are kept.</p>
-    <div className="serverJoinActions">
-      <button type="button" className="settingsPill settingsPillPrimary" onClick={() => setConfirmed(true)}>Join and replace</button>
-      <button type="button" className="settingsLink" onClick={onCancel}>Cancel</button>
-    </div>
-  </div>;
-
   return <div className="serverJoin" role="status">
     {error ? <p className="settingsError">{error}</p> : pairing ? <>
-      <p>Approve this device on <strong>{pairing.serverName}</strong>: open Ambra there and go to Settings → Server, or run</p>
+      <p>Approve this device on <strong>{pairing.serverName}</strong> using its server CLI:</p>
       <code className="serverJoinCommand">ambra-server pair approve {pairing.code}</code>
-      <p className="serverJoinCode" aria-label={`Code ${pairing.code}`}>{spacedCode(pairing.code)}</p>
-      <p className="settingsMuted">Waiting for approval…</p>
+      <p className="serverJoinCode" aria-label={`Code ${pairing.code}`}>{pairing.code.slice(0, 3)} {pairing.code.slice(3)}</p>
+      <p className="settingsMuted">Waiting for approval. Your local library and playlists stay on this device.</p>
     </> : <p className="settingsMuted">Asking {server.name}…</p>}
-    <div className="serverJoinActions"><button type="button" className="settingsLink" onClick={onCancel}>{error ? "Close" : "Cancel"}</button></div>
+    <button type="button" className="settingsLink" onClick={onCancel}>{error ? "Close" : "Cancel"}</button>
   </div>;
 }
 
-function FindServers({ ownId }: { ownId: string | null }) {
-  const [servers, setServers] = useState<Discovered[] | null>(null);
+function FindServers() {
+  const [servers, setServers] = useState<Discovered[]>([]);
   const [searching, setSearching] = useState(false);
   const [address, setAddress] = useState("");
+  const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState<{ name: string; address: string } | null>(null);
   const search = useCallback(async () => {
     setSearching(true);
-    try { setServers((await invoke<Discovered[]>("discover_servers", { timeoutMs: 1500 })).filter(server => server.id !== ownId)); }
-    catch { setServers([]); }
+    try { setServers(await invoke<Discovered[]>("discover_servers", { timeoutMs: 1500 })); }
+    catch (reason) { setError(String(reason)); }
     finally { setSearching(false); }
-  }, [ownId]);
+  }, []);
   useEffect(() => { void search(); }, [search]);
-
-  if (joining) return <JoinFlow server={joining} onCancel={() => setJoining(null)} />;
+  const join = () => { if (address.trim()) setJoining({ name: address.trim(), address: address.trim() }); };
+  if (joining) return <JoinFlow key={joining.address} server={joining} onCancel={() => setJoining(null)} />;
   return <>
-    {servers?.map(server => <SettingRow key={server.id} label={server.name} hint={`${server.address} · version ${server.version}`}>
-      <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Join</button>
+    {servers.map(server => <SettingRow key={server.id} label={server.name} hint={`${server.address} · version ${server.version}`}>
+      <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Connect</button>
     </SettingRow>)}
-    {servers?.length === 0 && <p className="settingsMuted">No other Ambra servers answered on this network.</p>}
-    <SettingRow label="Server address" hint="Type its local IP address or paste its public pairing link">
+    {!servers.length && !searching && <p className="settingsMuted">No Ambra servers answered on this network.</p>}
+    <SettingRow label="Server address or pairing link" hint="Enter an IP address, hostname, or ambra://pair/ link from the server QR code.">
       <span className="settingsFieldRow">
-        <input className="serverAddressInput" aria-label="Server address" placeholder="192.168.1.20" value={address}
-          onChange={event => setAddress(event.currentTarget.value)}
-          onKeyDown={event => { if (event.key === "Enter" && address.trim()) setJoining({ name: address.trim(), address: address.trim() }); }} />
-        <button type="button" className="settingsPill" disabled={!address.trim()} onClick={() => setJoining({ name: address.trim(), address: address.trim() })}>Join</button>
+        <input className="serverAddressInput" aria-label="Server address or pairing link" placeholder="ambra://pair/… or music.local" value={address}
+          onChange={event => setAddress(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter") join(); }} />
+        <button type="button" className="settingsPill" disabled={!address.trim()} onClick={join}>Connect</button>
       </span>
     </SettingRow>
-    <div className="serverJoinActions"><button type="button" className="settingsLink" disabled={searching} onClick={() => void search()}>{searching ? "Searching…" : "Search again"}</button></div>
+    <SettingRow label="Import pairing link" hint="Import a text file containing the server-generated pairing link.">
+      <input aria-label="Import pairing link" type="file" accept="text/plain,.txt" onChange={event => {
+        const file = event.currentTarget.files?.[0];
+        if (file) void file.text().then(text => {
+          if (!text.trim().startsWith("ambra://pair/")) throw new Error("Choose a file containing an Ambra pairing link.");
+          setAddress(text.trim());
+        }).catch(reason => setError(String(reason)));
+      }} />
+    </SettingRow>
+    {error && <p className="settingsError" role="alert">{error}</p>}
+    <button type="button" className="settingsLink" disabled={searching} onClick={() => void search()}>{searching ? "Searching…" : "Search again"}</button>
   </>;
 }
 
-/** The server running on this computer: sharing, pairing requests and paired devices. */
-function HostSettings({ active }: { active: boolean }) {
-  const [config, setConfig] = useState<LocalConfig | null>(null);
-  const [pairing, setPairing] = useState<Pairing>({ pending: [], paired: [] });
-  const [error, setError] = useState<string | null>(null);
-  const [joining, setJoining] = useState(false);
-  const [qr, setQr] = useState<{ payload: string; publicKey: string; svg: string } | null>(null);
-
-  const refresh = useCallback(async () => {
-    try {
-      const [nextConfig, nextPairing] = await Promise.all([local<LocalConfig>("config"), local<Pairing>("pairing")]);
-      setConfig(nextConfig);
-      setPairing(nextPairing);
-      setError(null);
-    } catch (reason) { setError(`Couldn't reach this computer's server. ${String(reason)}`); }
-  }, []);
-  // Requests appear within a couple of seconds while the tab is open.
-  useEffect(() => {
-    if (!active) return;
-    void refresh();
-    const timer = setInterval(() => void refresh(), 2000);
-    return () => clearInterval(timer);
-  }, [active, refresh]);
-
-  const act = async (path: string, body: unknown) => {
-    try { await local(path, body); await refresh(); }
-    catch (reason) { setError(String(reason)); }
-  };
-  const shared = sharedWithNetwork(config?.bind ?? null);
-  const restartNeeded = config !== null && config.listening !== null && config.bind !== config.listening;
-
-  return <>
-    {error && <p className="settingsError" role="alert">{error}</p>}
-    <div className="settingsGroup">
-      <h2>This computer</h2>
-      <SettingRow label="Name" hint="What other devices see">
-        <input className="serverNameInput" aria-label="Server name" key={config?.name} defaultValue={config?.name ?? ""} maxLength={64} disabled={!config}
-          onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }}
-          onBlur={event => { const name = event.currentTarget.value.trim(); if (config && name && name !== config.name) void act("config", { name }); }} />
-      </SettingRow>
-      <SettingRow label="Share with your network" hint={shared ? "Paired devices can use your library, accounts and outputs" : "Only this computer can use the server"}>
-        <Toggle label="Share with your network" checked={shared} disabled={!config} onChange={on => void act("config", { bind: on ? "lan" : "local" })} />
-      </SettingRow>
-      {restartNeeded && <p className="settingsMuted">The server listens on {config!.listening} until you stop and start it again.</p>}
-      <SettingRow label="Background server" hint="Keeps running in the system tray after you close Ambra">
-        <button type="button" className="settingsPill" onClick={() => void (async () => { try { await local("stop", {}); await new Promise(resolve => setTimeout(resolve, 500)); window.location.reload(); } catch (reason) { setError(String(reason)); } })()}>Stop server</button>
-      </SettingRow>
-    </div>
-    <div className="settingsGroup">
-      <h2>Native networking</h2>
-      <SettingRow label="Remote P2P" hint="Direct connections through pwnat or HyperDHT; unreachable servers stay offline">
-        <Toggle label="Remote P2P" checked={config?.p2p ?? false} disabled={!config} onChange={on => void act("config", { p2p: on })} />
-      </SettingRow>
-      <SettingRow label="Pair another device" hint="Share this public link, then approve its six-digit code below">
-        <button type="button" className="settingsPill" onClick={() => void local<{ payload: string; publicKey: string; svg: string }>("pairing/qr").then(setQr).catch(reason => setError(String(reason)))}>Show QR code</button>
-      </SettingRow>
-      {qr && <div className="serverJoin">
-        <img width={256} height={256} src={`data:image/svg+xml,${encodeURIComponent(qr.svg)}`} alt="Ambra server pairing QR code" />
-        <p className="settingsMuted">Public identity: <code style={{ overflowWrap: "anywhere" }}>{qr.publicKey}</code></p>
-        <input aria-label="Public pairing link" readOnly value={qr.payload} onFocus={event => event.currentTarget.select()} style={{ width: "100%" }} />
-      </div>}
-    </div>
-    <div className="settingsGroup">
-      <h2>Devices</h2>
-      {pairing.pending.map(request => <SettingRow key={request.code} label={`${request.clientName} wants to join`} hint={`Code ${spacedCode(request.code)} · ${request.address}`}>
-        <span className="settingsFieldRow">
-          <button type="button" className="settingsPill settingsPillPrimary" onClick={() => void act("pairing/approve", { code: request.code })}>Approve</button>
-          <button type="button" className="settingsLink" onClick={() => void act("pairing/deny", { code: request.code })}>Deny</button>
-        </span>
-      </SettingRow>)}
-      {pairing.paired.map(device => <SettingRow key={device.id} label={device.name} hint={`Paired ${new Date(device.pairedAtMs).toLocaleDateString()}`}>
-        <button type="button" className="settingsLink" onClick={() => void act("pairing/revoke", { client: device.id })}>Remove</button>
-      </SettingRow>)}
-      {!pairing.pending.length && !pairing.paired.length && <p className="settingsMuted">
-        {shared ? "No other devices yet. Open Ambra on another computer on this network and join this one." : "Share with your network to let other devices join."}
-      </p>}
-    </div>
-    <div className="settingsGroup">
-      <h2>Use another server</h2>
-      {joining ? <FindServers ownId={config?.id ?? null} /> : <SettingRow label="Join a server on your network" hint="This computer then uses that server's library and settings">
-        <button type="button" className="settingsPill" onClick={() => setJoining(true)}>Find servers</button>
-      </SettingRow>}
-    </div>
-  </>;
-}
-
-function JoinedSettings() {
-  const connection = serverConnection!;
-  const server = connection.server!;
-  const [network, setNetwork] = useState<{ state: string; method?: string; error?: string } | null>(null);
-  const [leaving, setLeaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (connection.fallback) return;
-    let disposed = false;
-    const check = async () => {
-      try {
-        const status = await invoke<{ state: string; method?: string; error?: string }>("network_connection_status");
-        if (!disposed) setNetwork(status);
-      } catch { if (!disposed) setNetwork({ state: "Offline" }); }
-    };
-    void check();
-    const timer = setInterval(() => void check(), 5000);
-    return () => { disposed = true; clearInterval(timer); };
-  }, [connection.fallback]);
-
-  const leave = async () => {
-    try {
-      await invoke("leave_server");
-      await adoptServer();
-    } catch (reason) { setError(String(reason)); }
-  };
-
-  return <>
-    {error && <p className="settingsError" role="alert">{error}</p>}
-    <div className="settingsGroup">
-      <h2>Server</h2>
-      <SettingRow label={server.name} hint={server.address}>
-        <span className="settingsChip" data-state={network?.state.startsWith("Connected") ? "connected" : "away"}>
-          {network?.state ?? "Checking…"}
-        </span>
-      </SettingRow>
-      {server.publicKey && <p className="settingsMuted">Public identity: <code style={{ overflowWrap: "anywhere" }}>{server.publicKey}</code></p>}
-      {network?.method && <p className="settingsMuted">Connection method: {network.method}</p>}
-      {network?.error && <p className="settingsError" role="status">{network.error}</p>}
-      <p className="settingsMuted">Ambra remembers this server and waits for it when unavailable. You can also start a local server from the connection screen.</p>
-    </div>
-    <div className="settingsGroup">
-      <h2>Leave</h2>
-      {leaving ? <div className="serverJoin" role="group" aria-label="Leave server">
-        <p>This computer will look for a separately running local server or let you choose another server. {server.name} keeps everything.</p>
-        <div className="serverJoinActions">
-          <button type="button" className="settingsPill" onClick={() => void leave()}>Leave and restart</button>
-          <button type="button" className="settingsLink" onClick={() => setLeaving(false)}>Cancel</button>
-        </div>
-      </div> : <SettingRow label={`Stop using ${server.name}`} hint="Choose another server">
-        <button type="button" className="settingsPill" onClick={() => setLeaving(true)}>Leave server</button>
-      </SettingRow>}
-    </div>
-  </>;
+/** Optional connection screen. Local playback remains mounted behind this settings panel. */
+export function ServerSetup({ onBack }: { onBack: () => void }) {
+  return <div className="serverSetup">
+    <h2>Connect to Ambra Server</h2>
+    <p className="settingsMuted">Connect to an independently running server for streaming, shared libraries, and shared playback. Local music works without one.</p>
+    <FindServers />
+    <button type="button" className="settingsLink" onClick={onBack}>Back to local player settings</button>
+  </div>;
 }
 
 export function ServerSettings({ active }: { active: boolean }) {
-  const connection = serverConnection;
+  const { connected, network, sharedPlayback, setSharedPlayback, reconnect } = useClientConnection();
+  const [setup, setSetup] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const server = serverConnection?.server;
+  const disconnect = async () => {
+    try {
+      // Shared edits must be saved before changing their destination.
+      await flushServerState();
+      await setSharedPlayback(false);
+      await invoke("leave_server");
+      await applyConnection();
+    } catch (reason) { setError(String(reason)); }
+  };
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
-    {!connection ? <p className="settingsMuted">Sharing a server between devices needs the desktop app.</p>
-      : connection.mode === "join" && connection.server ? <JoinedSettings />
-      : <HostSettings active={active} />}
+    {error && <p className="settingsError" role="alert">{error}</p>}
+    {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <div className="settingsGroup">
+      {server ? <>
+        <SettingRow label={server.name} hint={server.address}>
+          <span className="settingsChip" data-state={connected ? "connected" : "away"}>{connected ? "Connected" : "Disconnected"}</span>
+        </SettingRow>
+        <p className="settingsMuted">Active transport: {connected ? network.method ?? network.state : "Offline"}</p>
+        {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
+        <SettingRow label="Shared playback session" hint="Control the server queue and share this device’s output. Turn off to play your private local queue.">
+          <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
+        </SettingRow>
+        <div className="serverJoinActions">
+          <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
+          <button type="button" className="settingsPill" onClick={() => void disconnect()}>Disconnect</button>
+          <button type="button" className="settingsPill" onClick={() => {
+            void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
+          }}>Choose another server</button>
+        </div>
+      </> : <>
+        <p className="settingsMuted">No server connected. Local music, playlists, queues, and settings stay on this device.</p>
+        <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Connect to Ambra Server</button>
+      </>}
+    </div>}
   </>;
-}
-
-/** Available before server state loads, so a new device can find and pair with a server. */
-export function ServerSetup({ loading, onReconnect }: { loading: boolean; onReconnect: () => void }) {
-  const server = serverConnection?.server;
-  const [starting, setStarting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const start = async () => {
-    setStarting(true); setError(null);
-    try {
-      await invoke("start_local_server");
-      if (serverConnection?.mode === "join") await invoke("leave_server");
-      await invoke("restart_app");
-    } catch (reason) { setError(String(reason)); setStarting(false); }
-  };
-  return <section className="settingsView serverSetup">
-    <header className="serverSetupHeader">
-      <h1 className="settingsTitle">{server ? `Can't reach ${server.name}` : "Connect to a server"}</h1>
-      <p className="settingsMuted">{server
-        ? "Make sure it's turned on. Legacy pairings need the server pairing link to verify its public identity."
-        : "Your library, playlists and accounts live on an Ambra server. Run one here, or join one already on your network."}</p>
-    </header>
-    {server && <div className="serverSetupCard">
-      <div className="serverSetupCardText">
-        <h2>{server.name}</h2>
-        <p className="settingsMuted">{server.address}</p>
-      </div>
-      <button type="button" className="settingsPill settingsPillPrimary" disabled={loading} onClick={onReconnect}>{loading ? "Connecting…" : "Try again"}</button>
-    </div>}
-    <div className="serverSetupCard">
-      <div className="serverSetupCardText">
-        <h2>Start a server here</h2>
-        <p className="settingsMuted">It runs in the background, so this window can be closed. Stop it from its tray icon.</p>
-      </div>
-      {isTauri() && <button type="button" className="settingsPill settingsPillPrimary" disabled={starting} onClick={() => void start()}>{starting ? "Starting…" : "Start server"}</button>}
-      <p className="serverSetupTerminal settingsMuted">
-        Or run <code className="serverJoinCommand">ambra-server start</code> in a terminal, then
-        <button type="button" className="settingsLink" disabled={loading} onClick={onReconnect}>{loading ? "connecting…" : "connect"}</button>
-      </p>
-      {error && <p className="settingsError" role="alert">{error}</p>}
-    </div>
-    {serverConnection && <div className="serverSetupCard serverSetupFind">
-      <div className="serverSetupCardText"><h2>Join a server on your network</h2></div>
-      <FindServers ownId={null} />
-    </div>}
-  </section>;
-}
-
-/** On first launch, offers to join a server already running elsewhere on the network. */
-export function ServerOffer() {
-  const [found, setFound] = useState<Discovered | null>(null);
-  const [joining, setJoining] = useState(false);
-  useEffect(() => {
-    const connection = serverConnection;
-    if (!connection || connection.mode !== "host" || connection.decided) return;
-    let disposed = false;
-    void (async () => {
-      const [ownId, servers] = await Promise.all([ownServerId(), invoke<Discovered[]>("discover_servers", { timeoutMs: 2000 }).catch(() => [])]);
-      const other = servers.find(server => server.id !== ownId);
-      if (disposed) return;
-      if (other) setFound(other);
-      else void invoke("set_server_link_decided").catch(() => {});
-    })();
-    return () => { disposed = true; };
-  }, []);
-  if (!found) return null;
-  const dismiss = () => { setFound(null); void invoke("set_server_link_decided").catch(() => {}); };
-  return <div className="serverOffer" role="dialog" aria-label="Join a server on your network">
-    {joining ? <JoinFlow server={found} onCancel={dismiss} /> : <>
-      <p><strong>{found.name}</strong> is running Ambra on your network. Join it to share its library, playlists, accounts and outputs?</p>
-      <div className="serverJoinActions">
-        <button type="button" className="settingsPill settingsPillPrimary" onClick={() => setJoining(true)}>Join…</button>
-        <button type="button" className="settingsLink" onClick={dismiss}>Use the local server</button>
-      </div>
-    </>}
-  </div>;
 }

@@ -5,12 +5,12 @@
   "identifier": "com.quantium.ambra",
   "build": {
     "beforeDevCommand": {
-      "script": "bun ../scripts/build-server-sidecar.ts && bun run dev",
+      "script": "bun run dev",
       "cwd": ".."
     },
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": {
-      "script": "bun ../scripts/build-server-sidecar.ts && bun run build",
+      "script": "bun run build",
       "cwd": ".."
     },
     "frontendDist": "../dist"
@@ -67,7 +67,6 @@
   },
   "bundle": {
     "active": true,
-    "externalBin": ["binaries/ambra-server"],
     "targets": "all",
     "icon": [
       "icons/macIcon.png",

@@ -160,5 +160,6 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     },
     clear: () => { void coreCommand("stop").catch(() => {}); },
     reclaim: noDeck,
+    release: async () => {},
   };
 }
