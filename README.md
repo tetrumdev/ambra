@@ -8,7 +8,14 @@ AMBRA is an open-source music player for audiophiles, music lovers, and everyday
 
 ## Screenshots
 
+### Lyrics
+<img width="2560" height="1440" alt="7b883d18-1e17-4ee0-aa21-23a53b205f09" src="https://github.com/user-attachments/assets/0c5ae64e-53ad-4c66-8c70-744ae68852d7" />
 
+### Playlist
+<img width="2559" height="1439" alt="image" src="https://github.com/user-attachments/assets/f59cd9d6-74f3-4979-8ab9-db97ae304472" />
+
+### Search
+<img width="2328" height="1174" alt="image" src="https://github.com/user-attachments/assets/48165221-9540-4336-8088-06cc7d02fdcd" />
 
 ## To-Do
 <b>For Initial Release</b>
