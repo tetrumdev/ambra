@@ -58,6 +58,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "if-addrs",
+ "libc",
  "libudx",
  "peeroxide",
  "peeroxide-dht",
