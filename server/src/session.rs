@@ -56,7 +56,6 @@ struct Loaded {
     source: String,
     track_source: String,
     live: bool,
-    configured_soloist: bool,
     generation: u64,
 }
 
@@ -696,13 +695,13 @@ async fn step(core: &Core) -> Result<(), String> {
     let queue = core.queue().await;
     let (current, mut next) = current_and_next(&queue);
     let Some(output) = core.transport().output.clone() else {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
         return Ok(());
     };
     let endpoint = output.endpoint_id.clone();
 
     let Some((track, canonical_source)) = current else {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
         // Nothing to play: the output stops if it was playing something.
         let was_loaded = core.transport().loaded.take().is_some();
         if was_loaded {
@@ -717,7 +716,7 @@ async fn step(core: &Core) -> Result<(), String> {
         return Ok(());
     };
     if crate::service_auth::disconnected(track["provider"].as_str().unwrap_or("")) {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
         let was_loaded = {
             let mut transport = core.transport();
             let loaded = transport.loaded.take().is_some();
@@ -738,66 +737,59 @@ async fn step(core: &Core) -> Result<(), String> {
     let Some((status, reported_at, _, endpoint_instance)) = core.endpoints.status(&endpoint).await else {
         // Keep the last confirmed position and play intent, not a clock that keeps
         // advancing while the output app is gone. The server itself is still online.
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
         core.transport().buffering = true;
         return Err(format!("Audio output {} is offline", output.endpoint_name));
     };
 
-    {
-        let transport = core.transport();
-        let configured = track["provider"] == "spotify" && core.spotify_playback.as_ref().is_some_and(|manager| manager.backend() == crate::soloist::PlaybackBackend::Soloist);
-        if transport.failed_live_load.as_ref().is_some_and(|failed| failed.track_source == canonical_source && failed.generation == transport.generation && failed.endpoint_id == endpoint && failed.device_id == output.device_id && failed.endpoint_instance == endpoint_instance && failed.configured_soloist == configured) { return Ok(()); }
-    }
     let mut source = canonical_source.clone();
     let mut live = false;
-    let mut configured_soloist = false;
     let mut live_position = None;
     if let Some(manager) = &core.spotify_playback {
-        let selected = track["provider"] == "spotify" && manager.backend() == crate::soloist::PlaybackBackend::Soloist;
-        configured_soloist = selected;
-        let (generation, playing, position, seek, existing_live, existing_fallback, restarted) = {
+        let (generation, playing, position, seek, pinned, restarted, failed) = {
             let transport = core.transport();
             let same = transport.loaded.as_ref().filter(|loaded| loaded.track_source == canonical_source && loaded.generation == transport.generation);
-            (transport.generation, transport.playing, if transport.loaded.as_ref().is_some_and(|loaded| loaded.track_source != canonical_source) { 0.0 } else { transport.position_now() }, transport.pending_seek.is_some(),
-                same.is_some_and(|loaded| loaded.live), same.is_some_and(|loaded| !loaded.live && loaded.configured_soloist), same.is_some_and(|loaded| loaded.endpoint_instance != endpoint_instance))
+            let restart = same.is_some_and(|loaded| loaded.endpoint_instance != endpoint_instance || loaded.endpoint_id != endpoint || loaded.device_id != output.device_id);
+            let seek = transport.pending_seek.is_some();
+            let failed = transport.failed_live_load.as_ref().is_some_and(|failed| failed.track_source == canonical_source && failed.generation == transport.generation && failed.endpoint_id == endpoint && failed.device_id == output.device_id && failed.endpoint_instance == endpoint_instance);
+            (transport.generation, transport.playing, if transport.loaded.as_ref().is_some_and(|loaded| loaded.track_source != canonical_source) { 0.0 } else { transport.position_now() }, seek,
+                same.filter(|_| !restart && !seek).map(|loaded| loaded.live), restart, failed)
         };
-        if selected && !existing_fallback {
-            let readiness = if status["livePcmV1"] != true {
-                Err("This output does not support Ambra live PCM. Update the desktop output app or select librespot.".to_owned())
-            } else if existing_live { Ok(()) } else { manager.readiness().map_err(|error| error.to_string()) };
-            match readiness {
-                Ok(()) => live = true,
-                Err(_) if manager.fallback() == crate::soloist::Fallback::LibrespotBeforeStart && !existing_live => {}
-                Err(error) => {
+        // Renderer changes only at a track, seek, resume, or output initialization boundary.
+        // A failed live stream retries through the existing session at its saved position.
+        live = track["provider"] == "spotify" && !failed && pinned.unwrap_or_else(|| status["livePcmV1"] == true && manager.readiness().is_ok());
+        if live && !playing {
+            let was_loaded = core.transport().loaded.take().is_some();
+            if was_loaded { let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await; }
+            manager.pause().await;
+            let mut transport = core.transport();
+            transport.pending_play = None; transport.pending_seek = None;
+            transport.buffering = false;
+            transport.duration = track["durationSeconds"].as_f64().unwrap_or(0.0);
+            return Ok(());
+        }
+        if live {
+            match manager.reserve(track["providerTrackId"].as_str().ok_or("Spotify track ID is missing")?, generation, &endpoint, position, track["durationSeconds"].as_f64().unwrap_or(0.0), seek || restarted).await {
+                Ok(info) => {
+                    live_position = Some(info.start_position_seconds);
+                    source = crate::soloist::Manager::live_source(&info);
+                    next = None;
+                },
+                Err(_) => {
+                    // Reserve failed before a stream opened. Stop the old renderer before fallback.
                     manager.stop_playback().await;
-                    // A backend change must not leave the previous renderer audible.
                     let loaded = core.transport().loaded.take();
                     if let Some(loaded) = loaded {
                         let _ = core.endpoints.call(&loaded.endpoint_id, "pause_native_audio", json!({})).await;
                     }
-                    return Err(error);
+                    live_position = Some(position);
+                    live = false;
                 }
-            }
-            if live && !playing {
-                let was_loaded = core.transport().loaded.take().is_some();
-                if was_loaded { let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await; }
-                manager.pause().await;
-                let mut transport = core.transport();
-                transport.pending_play = None; transport.pending_seek = None;
-                transport.buffering = false;
-                transport.duration = track["durationSeconds"].as_f64().unwrap_or(0.0);
-                return Ok(());
-            }
-            if live {
-                let info = manager.reserve(track["providerTrackId"].as_str().ok_or("Spotify track ID is missing")?, generation, &endpoint, position, track["durationSeconds"].as_f64().unwrap_or(0.0), seek || restarted).await.map_err(|error| error.to_string())?;
-                live_position = Some(info.start_position_seconds);
-                source = crate::soloist::Manager::live_source(&info);
-                next = None;
             }
         }
         if !live { manager.stop_playback().await; }
-        // A future Soloist track must not be preloaded through the librespot file route.
-        if manager.backend() == crate::soloist::PlaybackBackend::Soloist && queue["upcoming"].as_array().and_then(|items| items.first()).and_then(|item| track_of(&queue, item)).is_some_and(|track| track["provider"] == "spotify") { next = None; }
+        // Optional lossless resolves its renderer at the next-track boundary.
+        if manager.lossless_enabled() && queue["upcoming"].as_array().and_then(|items| items.first()).and_then(|item| track_of(&queue, item)).is_some_and(|track| track["provider"] == "spotify") { next = None; }
     }
 
     let (wanted, needs_device, position, autoplay, needs_load) = {
@@ -811,7 +803,7 @@ async fn step(core: &Core) -> Result<(), String> {
             && status["buffering"] == false
             && status["ended"] != true
             && status["error"].is_null();
-        let wanted = Loaded { endpoint_id: endpoint.clone(), endpoint_instance: endpoint_instance.clone(), device_id: output.device_id.clone(), source: source.clone(), track_source: canonical_source.clone(), live, configured_soloist, generation: transport.generation };
+        let wanted = Loaded { endpoint_id: endpoint.clone(), endpoint_instance: endpoint_instance.clone(), device_id: output.device_id.clone(), source: source.clone(), track_source: canonical_source.clone(), live, generation: transport.generation };
         let needs_device = empty_engine || transport.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_id != endpoint || loaded.endpoint_instance != endpoint_instance || loaded.device_id != output.device_id);
         // A different song always starts at zero; a changed output resumes the same song.
         let changed_song = transport.loaded.as_ref().is_some_and(|loaded| loaded.track_source != canonical_source);
@@ -830,8 +822,15 @@ async fn step(core: &Core) -> Result<(), String> {
             if live {
                 if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
                 core.transport().failed_live_load = Some(wanted);
+                core.transport().loaded = None;
+                core.transport().position = position;
+                core.transport().position_at = None;
             }
             return Err(error);
+        }
+        if let Some(manager) = &core.spotify_playback {
+            if track["provider"] == "spotify" { manager.report_renderer(live); }
+            else { manager.clear_effective_renderer(); }
         }
         let mut transport = core.transport();
         transport.loaded = Some(wanted);
@@ -899,6 +898,21 @@ async fn step(core: &Core) -> Result<(), String> {
         return Ok(());
     }
 
+    if track["provider"] == "spotify" {
+        if let Some(manager) = &core.spotify_playback { manager.report_renderer(live); }
+        if live && status["error"].is_string() {
+            // Stop and retry the same generation. No queue advance and no new history entry.
+            if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+            let loaded = core.transport().loaded.take();
+            let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            let mut transport = core.transport();
+            transport.position = status["currentTime"].as_f64().unwrap_or(transport.position);
+            transport.position_at = None;
+            transport.failed_live_load = loaded;
+            transport.buffering = true;
+            return Ok(());
+        }
+    }
     let ended = status["ended"].as_bool().unwrap_or(false);
     let engine_playing = status["isPlaying"].as_bool().unwrap_or(false);
     let buffering = status["buffering"].as_bool().unwrap_or(false);
@@ -916,6 +930,8 @@ async fn step(core: &Core) -> Result<(), String> {
         if track["provider"] == "spotify" {
             if !transport.audio_quality.is_object() { transport.audio_quality = json!({}); }
             transport.audio_quality["playbackBackend"] = json!(if live { "soloist" } else { "librespot" });
+            transport.audio_quality["requestedQuality"] = json!(if live { "lossless" } else { "high" });
+            if let Some(manager) = &core.spotify_playback { transport.audio_quality["preferredQuality"] = json!(manager.status().preferred_quality); }
             if live { transport.audio_quality["sourceFormatVerified"] = json!(false); }
         }
         let after = (transport.buffering, transport.error.clone(), transport.duration, transport.audio_quality.clone());
@@ -1374,30 +1390,85 @@ mod driver_tests {
     }
 
     #[tokio::test]
-    async fn unavailable_soloist_pauses_old_renderer_and_fallback_is_explicit() {
-        use crate::soloist::{PlaybackBackend, Fallback, tests::configure_backend};
+    async fn automatic_upgrade_waits_for_next_track_and_unsupported_output_uses_high() {
+        use crate::soloist::tests::configure_enabled;
         let h = Harness::start_backend(true).await;
         let manager = h.core.spotify_playback.as_ref().unwrap();
-        configure_backend(manager, PlaybackBackend::Librespot, Fallback::Never).await;
+        configure_enabled(manager, false).await;
+        h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [spotify_track("a", "0123456789abcdefghijkl"), spotify_track("b", "1123456789abcdefghijkl")] } })).await;
+        h.wait_for_command("load_native_audio").await;
+        eventually!("High loaded", h.core.transport().loaded.as_ref().is_some_and(|l| !l.live));
+        let canonical = h.core.transport().loaded.as_ref().unwrap().source.clone();
+        assert!(h.core.transport().queued_next.as_ref().is_some_and(|next| next.is_some()), "ordinary lossy playback retains preloading");
+        h.report(json!({ "currentSource": canonical, "currentTime": 10.0, "duration": 200.0, "isPlaying": true, "buffering": false, "livePcmV1": true })).await;
+        eventually!("play counted", h.history().await.is_some());
+        let history = h.history().await;
+        configure_enabled(manager, true).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(!h.core.transport().loaded.as_ref().unwrap().live);
+        assert_eq!(h.history().await, history);
+        h.post("/api/session/command", json!({ "action": "next" })).await;
+        let live = latest_live(&h, None).await;
+        h.report(json!({ "currentSource": live, "currentTime": 20.0, "duration": 200.0, "isPlaying": true, "buffering": false, "livePcmV1": true })).await;
+        eventually!("Lossless selected", h.core.transport().audio_quality["requestedQuality"] == "lossless");
+        // An output restart is a safe initialization boundary; old outputs need no live support.
+        *h.instance.lock().unwrap() = Some("unsupported-output".into());
+        h.report(json!({ "currentSource": null, "isPlaying": false, "buffering": false, "livePcmV1": false })).await;
+        eventually!("unsupported output fallback", h.core.transport().loaded.as_ref().is_some_and(|l| !l.live));
+    }
+
+    #[tokio::test]
+    async fn soloist_installation_failure_never_reloads_playing_librespot() {
+        use crate::soloist::tests::{configure_enabled, fail_installation};
+        let h = Harness::start_backend(true).await;
+        let manager = h.core.spotify_playback.as_ref().unwrap();
+        configure_enabled(manager, false).await;
         h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
         h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [spotify_track("a", "0123456789abcdefghijkl")] } })).await;
-        h.wait_for_command("load_native_audio").await;
-        eventually!("initial renderer loaded", h.core.transport().loaded.is_some());
-        let canonical = h.core.transport().loaded.as_ref().unwrap().source.clone();
-        h.report(json!({ "currentSource": canonical, "currentTime": 10.0, "duration": 200.0, "isPlaying": true, "buffering": false, "livePcmV1": false })).await;
-        eventually!("original play counted", h.history().await.is_some());
+        eventually!("Librespot loaded", h.core.transport().loaded.as_ref().is_some_and(|l| !l.live));
+        let source = h.core.transport().loaded.as_ref().unwrap().source.clone();
+        h.report(json!({ "currentSource": source, "currentTime": 25.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        eventually!("history counted", h.history().await.is_some());
         let history = h.history().await;
-        configure_backend(manager, PlaybackBackend::Soloist, Fallback::Never).await;
-        h.wait_for_command("pause_native_audio").await;
-        eventually!("capability error", h.core.transport().error.as_ref().is_some_and(|error| error.contains("does not support")));
-        assert!(!h.received.lock().unwrap().iter().any(|(_, args)| args["source"].as_str().is_some_and(|source| source.starts_with("/api/playback/live/"))));
-        configure_backend(manager, PlaybackBackend::Soloist, Fallback::LibrespotBeforeStart).await;
-        eventually!("explicit fallback load", h.core.transport().loaded.as_ref().is_some_and(|loaded| loaded.configured_soloist && !loaded.live));
-        h.report(json!({ "currentSource": canonical, "currentTime": 11.0, "duration": 200.0, "isPlaying": true, "buffering": false, "livePcmV1": false })).await;
-        eventually!("actual renderer reported", h.core.transport().audio_quality["playbackBackend"] == "librespot");
+        let generation = h.core.transport().generation;
+        let loads = h.received.lock().unwrap().iter().filter(|(command, _)| command == "load_native_audio").count();
+        configure_enabled(manager, true).await;
+        fail_installation(manager).await;
+        h.report(json!({ "currentSource": source, "currentTime": 26.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        eventually!("Librespot continues", h.core.transport().position >= 26.0);
+        {
+            let transport = h.core.transport();
+            let loaded = transport.loaded.as_ref().unwrap();
+            assert!(!loaded.live);
+            assert_eq!(loaded.source, source);
+            assert_eq!(transport.generation, generation);
+            assert!(transport.playing);
+            assert_eq!(transport.audio_quality["requestedQuality"], "high");
+        }
+        assert_eq!(h.received.lock().unwrap().iter().filter(|(command, _)| command == "load_native_audio").count(), loads);
         assert_eq!(h.history().await, history);
-        configure_backend(manager, PlaybackBackend::Librespot, Fallback::Never).await;
-        eventually!("default renderer restored", h.core.transport().loaded.as_ref().is_some_and(|loaded| !loaded.configured_soloist && !loaded.live));
+        assert_eq!(h.queue().await["current"]["globalTrackId"], "a");
+    }
+
+    #[tokio::test]
+    async fn capture_failure_retries_high_without_queue_or_history_duplication() {
+        let h = Harness::start_backend(true).await;
+        h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [spotify_track("a", "0123456789abcdefghijkl")] } })).await;
+        let live = latest_live(&h, None).await;
+        h.report(json!({ "currentSource": live, "currentTime": 25.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        eventually!("history counted", h.history().await.is_some());
+        let history = h.history().await;
+        let generation = h.core.transport().generation;
+        h.report(json!({ "currentSource": live, "currentTime": 26.0, "isPlaying": false, "buffering": false, "error": "Capture interrupted" })).await;
+        eventually!("High recovery loaded", h.core.transport().loaded.as_ref().is_some_and(|l| !l.live));
+        let canonical = h.core.transport().loaded.as_ref().unwrap().source.clone();
+        h.report(json!({ "currentSource": canonical, "currentTime": 27.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false, "error": null })).await;
+        eventually!("truthful fallback quality", h.core.transport().audio_quality["requestedQuality"] == "high");
+        assert_eq!(h.core.transport().generation, generation);
+        assert_eq!(h.history().await, history);
+        assert_eq!(h.queue().await["current"]["globalTrackId"], "a");
     }
 
 }

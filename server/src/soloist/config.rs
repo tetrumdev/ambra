@@ -31,46 +31,38 @@ impl Quality {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum Fallback {
-    #[default]
-    Never,
-    LibrespotBeforeStart,
-}
-
-/// Additive configuration; credentials are never serialized into this file or status.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+/// Server-owned consent. Legacy paths are read only to import existing installations.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
-    pub backend: PlaybackBackend,
-    pub executable: Option<PathBuf>,
-    pub quality: Quality,
-    pub update_checks: bool,
-    pub fallback: Fallback,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            backend: PlaybackBackend::Librespot,
-            executable: None,
-            quality: Quality::Lossless,
-            update_checks: true,
-            fallback: Fallback::Never,
-        }
-    }
+    pub lossless_enabled: bool,
+    pub download_consent: bool,
+    #[serde(alias = "executable", skip_serializing_if = "Option::is_none")]
+    pub migration_executable: Option<PathBuf>,
 }
 
 impl Config {
     pub fn load(path: &std::path::Path) -> Result<Self, String> {
         match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map_err(|_| "Invalid Soloist settings; repair spotify-playback.json".into()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self {
-                update_checks: true,
-                ..Self::default()
-            }),
+            Ok(bytes) => {
+                let mut value: serde_json::Value =
+                    serde_json::from_slice(&bytes).map_err(|_| {
+                        "Invalid Soloist settings; repair spotify-playback.json".to_owned()
+                    })?;
+                if let Some(fields) = value.as_object_mut() {
+                    if let Some(backend) = fields.remove("backend") {
+                        fields
+                            .entry("losslessEnabled")
+                            .or_insert(serde_json::json!(backend == "soloist"));
+                    }
+                    for old in ["quality", "updateChecks", "fallback"] {
+                        fields.remove(old);
+                    }
+                }
+                serde_json::from_value(value)
+                    .map_err(|_| "Invalid Soloist settings; repair spotify-playback.json".into())
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(_) => Err("Could not read Soloist settings".into()),
         }
     }
@@ -113,12 +105,10 @@ impl ApiKey {
 mod tests {
     use super::*;
     #[test]
-    fn old_settings_and_defaults_keep_librespot() {
-        let config: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(config.backend, PlaybackBackend::Librespot);
-        assert_eq!(config.quality, Quality::Lossless);
-        assert_eq!(config.fallback, Fallback::Never);
-        assert!(serde_json::from_str::<Config>(r#"{"automaticUpdates":true}"#).is_err());
+    fn defaults_require_explicit_download_consent() {
+        let config = Config::default();
+        assert!(!config.lossless_enabled);
+        assert!(!config.download_consent);
     }
     #[test]
     fn key_is_redacted_before_truncation() {

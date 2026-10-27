@@ -103,18 +103,12 @@ pub fn locate(configured: Option<&Path>) -> Result<PathBuf, Error> {
                 "Soloist executable path must be absolute",
             ));
         }
-        None => std::env::var_os("PATH")
-            .and_then(|paths| {
-                std::env::split_paths(&paths)
-                    .map(|dir| dir.join(format!("soloist{}", std::env::consts::EXE_SUFFIX)))
-                    .find(|path| path.is_file())
-            })
-            .ok_or_else(|| {
-                Error::new(
-                    ErrorCode::NotInstalled,
-                    "Soloist is not installed; download it from Spotify's official downloads page",
-                )
-            })?,
+        None => {
+            return Err(Error::new(
+                ErrorCode::NotInstalled,
+                "Soloist is not installed; enable optional lossless support on the server",
+            ));
+        }
     };
     path.canonicalize()
         .map_err(|_| Error::new(ErrorCode::NotInstalled, "Soloist executable was not found"))
@@ -240,6 +234,17 @@ mod tests {
         assert!(build.needs_refresh(build.refresh_at));
         assert!(Build::parse("other 1.3.7 build 1787077868").is_err());
         assert!(Build::parse("soloist 1.3.7 build nonsense").is_err());
+    }
+    #[test]
+    fn current_official_version_output_retains_build_lifecycle() {
+        let build = Build::parse(
+            "soloist 1.3.10.20 build 1793102484 (20261027) (g19412df6ea) (macos/aarch64)",
+        )
+        .unwrap();
+        assert_eq!(build.version, "1.3.10.20");
+        assert_eq!(build.build_timestamp, 1793102484);
+        assert_eq!(build.refresh_at, 1793102484 + 76 * DAY);
+        assert_eq!(build.expires_at, 1793102484 + 90 * DAY);
     }
     #[test]
     fn supported_platforms_are_explicit() {
