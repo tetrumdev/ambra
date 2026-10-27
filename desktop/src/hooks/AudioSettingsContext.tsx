@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { defaultAudioSettings, loadAudioSettings, saveAudioSettings, type AudioSettings, type NativeAudioDevice } from "../utils/audioSettings";
 export type AudioSettingsApi = {
   native: boolean;
@@ -42,6 +43,18 @@ export function AudioSettingsProvider({ children, api = desktopApi }: { children
     return operation;
   }, [api]);
   useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (!api.native || !isTauri()) return;
+    let disposed = false;
+    const stops: (() => void)[] = [];
+    const reload = () => { if (!disposed) void refresh(); };
+    void listen<AudioSettings>("native-audio-settings-changed", ({ payload }) => {
+      if (!disposed) { latest.current = payload; setSettings(payload); setError(null); }
+    }).then(stop => { if (disposed) stop(); else stops.push(stop); });
+    void listen("native-audio-devices-changed", reload).then(stop => { if (disposed) stop(); else stops.push(stop); });
+    window.addEventListener("focus", reload);
+    return () => { disposed = true; stops.forEach(stop => stop()); window.removeEventListener("focus", reload); };
+  }, [api, refresh]);
   const update = useCallback((change: (current: AudioSettings) => AudioSettings): Promise<boolean> => {
     const operation = chain.current.then(async () => {
       setSaving(true);
