@@ -9,12 +9,14 @@
     "expo-audio": "58.0.10",
     "expo-blur": "~58.0.5",
     "expo-build-properties": "~58.0.11",
+    "expo-camera": "~58.0.12",
     "expo-constants": "~58.0.13",
     "expo-font": "~58.0.10",
     "expo-gl": "~58.0.3",
     "expo-haptics": "~58.0.7",
     "expo-image": "~58.0.17",
     "expo-linear-gradient": "~58.0.3",
+    "expo-modules-core": "~58.0.26",
     "expo-secure-store": "~58.0.2",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
@@ -34,10 +36,13 @@
   "scripts": {
     "start": "expo start",
     "start:tailscale": "bun scripts/start-tailscale.cjs",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "network:ios": "bash scripts/build-network.sh ios",
+    "network:android": "bash scripts/build-network.sh android",
+    "eas-build-post-install": "bash scripts/build-network.sh \"${EAS_BUILD_PLATFORM}\""
   },
   "private": true,
   "patchedDependencies": {

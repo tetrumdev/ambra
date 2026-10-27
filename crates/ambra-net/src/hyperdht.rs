@@ -1,0 +1,169 @@
+use crate::{Identity, PublicKey, Result, transport};
+use libudx::UdxRuntime;
+use peeroxide_dht::hyperdht::{self, HyperDhtConfig, HyperDhtHandle};
+use std::{sync::Arc, time::Duration};
+use tokio::{sync::Mutex, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
+
+/// One lazy client node per manager, never one node per API call.
+pub struct Client {
+    identity: Identity,
+    node: Mutex<Option<Node>>,
+}
+struct Node {
+    runtime: UdxRuntime,
+    handle: HyperDhtHandle,
+    task: JoinHandle<std::result::Result<(), peeroxide_dht::hyperdht::HyperDhtError>>,
+    executor: tokio::runtime::Handle,
+}
+impl Drop for Node {
+    fn drop(&mut self) {
+        // Destroy the node before aborting its owner: dropping JoinHandle alone detaches children.
+        let handle = self.handle.clone();
+        let abort = self.task.abort_handle();
+        self.executor.spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_secs(2), handle.destroy()).await;
+            abort.abort();
+        });
+    }
+}
+impl Client {
+    pub fn new(identity: Identity) -> Self {
+        Self {
+            identity,
+            node: Mutex::new(None),
+        }
+    }
+    pub async fn connect(
+        &self,
+        key: PublicKey,
+    ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
+        let mut node = self.node.lock().await;
+        if node.is_none() {
+            let runtime = UdxRuntime::new()?;
+            let (task, handle, _events) =
+                hyperdht::spawn(&runtime, HyperDhtConfig::with_public_bootstrap()).await?;
+            *node = Some(Node {
+                runtime,
+                handle,
+                task,
+                executor: tokio::runtime::Handle::current(),
+            });
+        }
+        let node = node.as_ref().ok_or("DHT failed to initialize")?;
+        node.handle.bootstrapped().await?;
+        let mut options = peeroxide_dht::hyperdht::ConnectOpts::default();
+        options.local_connection = false;
+        let connection = node
+            .handle
+            .connect_with_options(
+                &self.identity.key_pair(),
+                key.0,
+                &[],
+                &node.runtime,
+                options,
+            )
+            .await?;
+        if connection.remote_public_key != key.0 || connection.remote_addr.is_none() {
+            return Err("DHT identity or direct endpoint missing".into());
+        }
+        // Vendored connect rejects relay_through before it can open a data stream.
+        let socket = connection.socket.clone();
+        Ok(transport::adapt(connection.stream, Some(Box::new(socket))))
+    }
+    pub async fn shutdown(&self) {
+        if let Some(node) = self.node.lock().await.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(2), node.handle.destroy()).await;
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    pub running: bool,
+    pub announced: bool,
+    pub error: Option<String>,
+}
+pub type SharedStatus = Arc<std::sync::RwLock<Status>>;
+
+/// Upstream acceptor handles passive NAT rounds. No client topic swarm is started.
+pub async fn serve(
+    identity: Identity,
+    app: axum::Router,
+    status: SharedStatus,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let mut config = peeroxide::SwarmConfig::with_public_bootstrap();
+    config.key_pair = Some(identity.key_pair());
+    config.max_peers = 64;
+    config.max_parallel = 2;
+    config.local_connection = false;
+    config.relay_through = None;
+    config.relay_address = None;
+    let (task, swarm, mut incoming) = peeroxide::spawn(config).await?;
+    if let Ok(mut status) = status.write() {
+        status.running = true;
+    }
+    let target = peeroxide_dht::crypto::hash(&identity.public_key().0);
+    swarm.dht().register_server(&target);
+    let dht = swarm.dht().clone();
+    let key_pair = identity.key_pair();
+    let announcement_status = status.clone();
+    let announcement_cancel = cancel.clone();
+    let announce = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! { _ = announcement_cancel.cancelled() => break, _ = interval.tick() => {} }
+            let operation = async {
+                dht.bootstrapped().await?;
+                let result = dht.announce(target, &key_pair, &[]).await?;
+                if result.closest_nodes.is_empty() {
+                    return Err("No DHT node acknowledged the announcement".into());
+                }
+                Ok::<_, crate::Error>(())
+            };
+            let result = tokio::select! { _ = announcement_cancel.cancelled() => break, result = tokio::time::timeout(Duration::from_secs(30), operation) => result };
+            if let Ok(mut status) = announcement_status.write() {
+                status.announced = matches!(result, Ok(Ok(())));
+                status.error = match result {
+                    Ok(Ok(())) => None,
+                    Ok(Err(error)) => Some(error.to_string()),
+                    Err(_) => Some("Public DHT announcement timed out".into()),
+                };
+            }
+        }
+    });
+    let mut tasks = tokio::task::JoinSet::new();
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
+            connection = incoming.recv() => {
+                let Some(connection) = connection else { break; };
+                if tasks.len() >= 64 { swarm.release_peer(connection.peer.remote_public_key).await; continue; }
+                let peer = transport::RemotePeer { public_key: PublicKey(connection.peer.remote_public_key), address: "192.0.2.1:0".parse()?, session: Arc::new(()) };
+                let socket = connection.peer.socket.clone();
+                let (io, pump) = transport::adapt(connection.peer.stream, Some(Box::new(socket)));
+                let app = app.clone(); let cancel = cancel.clone(); let swarm = swarm.clone(); let key = peer.public_key;
+                tasks.spawn(async move { if let Err(error) = transport::serve(io, pump, peer, app, cancel).await { eprintln!("HyperDHT HTTP session closed: {error}"); } swarm.release_peer(key.0).await; });
+            }
+        }
+    }
+    tasks.shutdown().await;
+    announce.abort();
+    swarm.dht().unregister_server(&target);
+    let _ = tokio::time::timeout(
+        Duration::from_millis(500),
+        swarm.dht().unannounce(target, &identity.key_pair()),
+    )
+    .await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), swarm.destroy()).await;
+    task.abort();
+    if let Ok(mut status) = status.write() {
+        status.running = false;
+        status.announced = false;
+    }
+    Ok(())
+}

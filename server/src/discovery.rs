@@ -1,40 +1,13 @@
-//! Answers clients looking for an Ambra server on the local network.
-//!
-//! A client broadcasts `DISCOVERY_REQUEST` to UDP port `DISCOVERY_PORT`; each server replies
-//! to the sender with its `ServerInfo` as JSON. Nothing secret is sent: using the server
-//! still needs pairing.
-
-use std::net::SocketAddr;
-
-use tokio::net::UdpSocket;
-
+//! Server configuration controls the shared native LAN discovery responder.
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 use crate::network::{SharedNetwork, server_info};
-
-pub const DISCOVERY_PORT: u16 = 38148;
-pub const DISCOVERY_REQUEST: &[u8] = b"AMBRA-DISCOVER/1";
-
-pub async fn run(network: SharedNetwork) {
-    let socket = match UdpSocket::bind(SocketAddr::from(([0, 0, 0, 0], DISCOVERY_PORT))).await {
-        Ok(socket) => socket,
-        Err(error) => {
-            eprintln!("Network discovery is off: could not listen on UDP {DISCOVERY_PORT}: {error}");
-            return;
-        }
-    };
-    let mut buffer = [0_u8; 64];
-    loop {
-        let Ok((length, sender)) = socket.recv_from(&mut buffer).await else {
-            continue;
-        };
-        if &buffer[..length] != DISCOVERY_REQUEST {
-            continue;
-        }
-        let enabled = network.config.read().map(|config| config.discovery).unwrap_or(false);
-        if !enabled {
-            continue;
-        }
-        if let Ok(reply) = serde_json::to_vec(&server_info(&network)) {
-            let _ = socket.send_to(&reply, sender).await;
-        }
-    }
+pub async fn run(network: SharedNetwork, cancel: CancellationToken) {
+    let diagnostics = network.clone();
+    let advertisement = Arc::new(move || {
+        if !network.config.read().ok()?.discovery { return None; }
+        let info = server_info(&network);
+        Some(ambra_net::lan::Advertisement { service: "ambra".into(), id: info.id, name: info.name, version: info.version.into(), port: info.port, public_key: Some(info.public_key), secure_port: info.secure_port })
+    });
+    if let Err(error) = ambra_net::lan::serve_discovery(advertisement, cancel).await { *diagnostics.discovery_error.write().unwrap_or_else(|p| p.into_inner()) = Some(error.to_string()); eprintln!("LAN discovery stopped: {error}"); }
 }

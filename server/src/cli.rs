@@ -22,6 +22,11 @@ USAGE:
     ambra-server config set bind <address>     Where to listen: lan, local, an IP, or IP:port
     ambra-server config set name <name>        The name clients see
     ambra-server config set discovery on|off   Whether clients on the network can find it
+    ambra-server network status|diagnose         Native listeners and sanitized network diagnostics
+    ambra-server network identity                Public cryptographic server identity
+    ambra-server network endpoint <IP:port>       Public hint for the next QR/pwnat attempt
+    ambra-server network p2p on|off               Enable or disable remote direct networking
+    ambra-server pair qr                          Public QR pairing link (requires running server)
     ambra-server pair list                     Devices waiting to pair, and paired devices
     ambra-server pair approve <code>           Let the device showing <code> use the server
     ambra-server pair deny <code>              Refuse a device's request
@@ -71,6 +76,27 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
     match words.as_slice() {
         ["help" | "--help" | "-h"] => Ok(HELP.into()),
         ["status"] => status().await,
+        ["network", "status" | "diagnose"] => match local("GET", "/api/local/network", None).await {
+            Ok(status) => pretty(status),
+            Err(error) if not_running(&error) => Ok(error),
+            Err(error) => Err(error),
+        },
+        ["network", "identity"] => {
+            let identity = ambra_net::Identity::load_or_create(&crate::storage::config_path("network-identity.key")).map_err(|e| e.to_string())?;
+            Ok(identity.public_key().to_string())
+        },
+        ["network", "p2p", enabled @ ("on" | "off")] => config_set(json!({ "p2p": *enabled == "on" })).await,
+        ["network", "endpoint", endpoint] => {
+            let endpoint = endpoint.parse::<std::net::SocketAddr>().map_err(|_| "Use a public IP:port")?;
+            if ambra_net::lan::is_local(endpoint.ip()) || endpoint.port() == 0 { return Err("Use a public IP:port".into()); }
+            config_set(json!({ "publicEndpoint": endpoint })).await
+        },
+        ["pair", "qr"] => {
+            let response = local("GET", "/api/local/pairing/qr", None).await?;
+            let payload = response["payload"].as_str().ok_or("No pairing payload")?;
+            let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
+            Ok(format!("{}\n{}\nApprove the six-digit code after the device connects.", code.render::<char>().quiet_zone(true).module_dimensions(2, 1).build(), payload))
+        },
         ["login", "spotify"] => login_spotify().await,
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
         ["spotify", "backend", backend @ ("librespot" | "soloist")] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({ "backend": backend }))).await?),
@@ -213,14 +239,14 @@ async fn config_show() -> Result<String, String> {
         Err(error) if not_running(&error) => {
             let config = ServerConfig::load();
             json!({
-                "name": config.name, "bind": config.bind, "listening": null, "discovery": config.discovery,
+                "name": config.name, "bind": config.bind, "listening": null, "discovery": config.discovery, "p2p": config.p2p,
                 "pairedClients": config.paired_clients.len(), "path": ServerConfig::path().display().to_string(),
             })
         }
         Err(error) => return Err(error),
     };
     Ok(format!(
-        "name:       {}\nbind:       {}{}\ndiscovery:  {}\npaired:     {} device(s)\nfile:       {}",
+        "name:       {}\nbind:       {}{}\ndiscovery:  {}\np2p:        {}\npaired:     {} device(s)\nfile:       {}",
         config["name"].as_str().unwrap_or("?"),
         config["bind"].as_str().unwrap_or("?"),
         match config["listening"].as_str() {
@@ -229,6 +255,7 @@ async fn config_show() -> Result<String, String> {
             None => " (not running)".into(),
         },
         if config["discovery"] == true { "on" } else { "off" },
+        if config["p2p"] == true { "on" } else { "off" },
         config["pairedClients"],
         config["path"].as_str().unwrap_or("?"),
     ))
@@ -247,6 +274,8 @@ async fn config_set(change: Value) -> Result<String, String> {
                 validate_name(name)?;
                 config.name = name.trim().to_owned();
             }
+            if let Some(p2p) = change["p2p"].as_bool() { config.p2p = p2p; }
+            if let Some(endpoint) = change["publicEndpoint"].as_str() { config.public_endpoint = Some(endpoint.parse().map_err(|_| "Invalid public endpoint")?); }
             if let Some(discovery) = change["discovery"].as_bool() {
                 config.discovery = discovery;
             }

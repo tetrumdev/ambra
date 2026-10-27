@@ -5,7 +5,7 @@ import { SettingRow, Toggle } from "./SettingsControls";
 
 type Discovered = { id: string; name: string; version: string; address: string };
 type Pairing = { pending: { code: string; clientName: string; address: string; ageSeconds: number }[]; paired: { id: string; name: string; pairedAtMs: number }[] };
-type LocalConfig = { id: string; name: string; bind: string; listening: string | null; discovery: boolean };
+type LocalConfig = { id: string; name: string; bind: string; listening: string | null; discovery: boolean; p2p: boolean };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
 
 const sharedWithNetwork = (address: string | null) => Boolean(address) && !/^(127\.|localhost|\[::1\])/.test(address!);
@@ -111,7 +111,7 @@ function FindServers({ ownId }: { ownId: string | null }) {
       <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Join</button>
     </SettingRow>)}
     {servers?.length === 0 && <p className="settingsMuted">No other Ambra servers answered on this network.</p>}
-    <SettingRow label="Server address" hint="If it isn't found, type its IP address">
+    <SettingRow label="Server address" hint="Type its local IP address or paste its public pairing link">
       <span className="settingsFieldRow">
         <input className="serverAddressInput" aria-label="Server address" placeholder="192.168.1.20" value={address}
           onChange={event => setAddress(event.currentTarget.value)}
@@ -129,6 +129,7 @@ function HostSettings({ active }: { active: boolean }) {
   const [pairing, setPairing] = useState<Pairing>({ pending: [], paired: [] });
   const [error, setError] = useState<string | null>(null);
   const [joining, setJoining] = useState(false);
+  const [qr, setQr] = useState<{ payload: string; publicKey: string; svg: string } | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -171,6 +172,20 @@ function HostSettings({ active }: { active: boolean }) {
       </SettingRow>
     </div>
     <div className="settingsGroup">
+      <h2>Native networking</h2>
+      <SettingRow label="Remote P2P" hint="Direct connections through pwnat or HyperDHT; unreachable servers stay offline">
+        <Toggle label="Remote P2P" checked={config?.p2p ?? false} disabled={!config} onChange={on => void act("config", { p2p: on })} />
+      </SettingRow>
+      <SettingRow label="Pair another device" hint="Share this public link, then approve its six-digit code below">
+        <button type="button" className="settingsPill" onClick={() => void local<{ payload: string; publicKey: string; svg: string }>("pairing/qr").then(setQr).catch(reason => setError(String(reason)))}>Show QR code</button>
+      </SettingRow>
+      {qr && <div className="serverJoin">
+        <img width={256} height={256} src={`data:image/svg+xml,${encodeURIComponent(qr.svg)}`} alt="Ambra server pairing QR code" />
+        <p className="settingsMuted">Public identity: <code style={{ overflowWrap: "anywhere" }}>{qr.publicKey}</code></p>
+        <input aria-label="Public pairing link" readOnly value={qr.payload} onFocus={event => event.currentTarget.select()} style={{ width: "100%" }} />
+      </div>}
+    </div>
+    <div className="settingsGroup">
       <h2>Devices</h2>
       {pairing.pending.map(request => <SettingRow key={request.code} label={`${request.clientName} wants to join`} hint={`Code ${spacedCode(request.code)} · ${request.address}`}>
         <span className="settingsFieldRow">
@@ -197,7 +212,7 @@ function HostSettings({ active }: { active: boolean }) {
 function JoinedSettings() {
   const connection = serverConnection!;
   const server = connection.server!;
-  const [reachable, setReachable] = useState<boolean | null>(null);
+  const [network, setNetwork] = useState<{ state: string; method?: string; error?: string } | null>(null);
   const [leaving, setLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -206,9 +221,9 @@ function JoinedSettings() {
     let disposed = false;
     const check = async () => {
       try {
-        const response = await fetch(`${serverBaseUrl}/api/server/info`, { signal: AbortSignal.timeout(3000) });
-        if (!disposed) setReachable(response.ok);
-      } catch { if (!disposed) setReachable(false); }
+        const status = await invoke<{ state: string; method?: string; error?: string }>("network_connection_status");
+        if (!disposed) setNetwork(status);
+      } catch { if (!disposed) setNetwork({ state: "Offline" }); }
     };
     void check();
     const timer = setInterval(() => void check(), 5000);
@@ -227,10 +242,13 @@ function JoinedSettings() {
     <div className="settingsGroup">
       <h2>Server</h2>
       <SettingRow label={server.name} hint={server.address}>
-        <span className="settingsChip" data-state={connection.fallback ? "away" : reachable === false ? "away" : "connected"}>
-          {connection.fallback ? "Not in use" : reachable === null ? "Checking…" : reachable ? "Connected" : "Unavailable"}
+        <span className="settingsChip" data-state={network?.state.startsWith("Connected") ? "connected" : "away"}>
+          {network?.state ?? "Checking…"}
         </span>
       </SettingRow>
+      {server.publicKey && <p className="settingsMuted">Public identity: <code style={{ overflowWrap: "anywhere" }}>{server.publicKey}</code></p>}
+      {network?.method && <p className="settingsMuted">Connection method: {network.method}</p>}
+      {network?.error && <p className="settingsError" role="status">{network.error}</p>}
       <p className="settingsMuted">Ambra remembers this server and waits for it when unavailable. You can also start a local server from the connection screen.</p>
     </div>
     <div className="settingsGroup">
@@ -275,7 +293,7 @@ export function ServerSetup({ loading, onReconnect }: { loading: boolean; onReco
     <header className="serverSetupHeader">
       <h1 className="settingsTitle">{server ? `Can't reach ${server.name}` : "Connect to a server"}</h1>
       <p className="settingsMuted">{server
-        ? "Make sure it's turned on and connected to this network, or set up another server below."
+        ? "Make sure it's turned on. Legacy pairings need the server pairing link to verify its public identity."
         : "Your library, playlists and accounts live on an Ambra server. Run one here, or join one already on your network."}</p>
     </header>
     {server && <div className="serverSetupCard">

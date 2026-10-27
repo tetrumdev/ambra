@@ -19,27 +19,12 @@
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true,
           "NSExceptionDomains": {
-            "100.64.0.0/10": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "fd7a:115c:a1e0::/48": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "10.0.0.0/8": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "172.16.0.0/12": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "192.168.0.0/16": {
-              "NSExceptionAllowsInsecureHTTPLoads": true
-            },
-            "ts.net": {
-              "NSIncludesSubdomains": true,
+            "127.0.0.1": {
               "NSExceptionAllowsInsecureHTTPLoads": true
             }
           }
-        }
+        },
+        "NSCameraUsageDescription": "Ambra scans your server pairing QR code."
       }
     },
     "android": {
@@ -53,7 +38,9 @@
       "permissions": [
         "android.permission.MODIFY_AUDIO_SETTINGS",
         "android.permission.FOREGROUND_SERVICE",
-        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
     "web": {
@@ -80,7 +67,15 @@
           }
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Ambra scans your server pairing QR code.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ]
     ],
     "backgroundColor": "#000000",
     "extra": {
