@@ -48,7 +48,7 @@ pub struct Network {
     pub identity: ambra_net::Identity,
     pub secure_listening: RwLock<Option<SocketAddr>>,
     pub dht_status: ambra_net::hyperdht::SharedStatus,
-    pub pwnat_status: RwLock<Option<String>>,
+    pub pwnat_status: ambra_net::pwnat::SharedStatus,
     pub lan_error: RwLock<Option<String>>,
     pub discovery_error: RwLock<Option<String>>,
     pub changed: tokio::sync::Notify,
@@ -70,7 +70,7 @@ impl Network {
             identity,
             secure_listening: RwLock::new(None),
             dht_status: Arc::new(RwLock::new(Default::default())),
-            pwnat_status: RwLock::new(None),
+            pwnat_status: Arc::new(RwLock::new(Default::default())),
             lan_error: RwLock::new(None),
             discovery_error: RwLock::new(None),
             changed: tokio::sync::Notify::new(),
@@ -385,6 +385,8 @@ struct ConfigView {
     listening: Option<String>,
     discovery: bool,
     p2p: bool,
+    pwnat: bool,
+    public_endpoint: Option<SocketAddr>,
     paired_clients: usize,
     path: String,
 }
@@ -398,6 +400,8 @@ fn config_view(network: &Network) -> ConfigView {
         listening: network.listening.read().ok().and_then(|address| *address).map(|address| address.to_string()),
         discovery: config.discovery,
         p2p: config.p2p,
+        pwnat: config.pwnat,
+        public_endpoint: config.public_endpoint,
         paired_clients: config.paired_clients.len(),
         path: ServerConfig::path().display().to_string(),
     }
@@ -408,12 +412,19 @@ async fn show_config(State(network): State<SharedNetwork>) -> Json<ConfigView> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ConfigChange {
     name: Option<String>,
     bind: Option<String>,
     discovery: Option<bool>,
     p2p: Option<bool>,
-    public_endpoint: Option<SocketAddr>,
+    pwnat: Option<bool>,
+    #[serde(default, alias = "public_endpoint", deserialize_with = "endpoint_change")]
+    public_endpoint: Option<Option<SocketAddr>>,
+}
+
+fn endpoint_change<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Option<SocketAddr>>, D::Error> {
+    Option::<SocketAddr>::deserialize(deserializer).map(Some)
 }
 
 async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<ConfigChange>) -> Response {
@@ -426,7 +437,8 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
             config.bind = crate::server_config::parse_bind(bind)?.to_string();
         }
         if let Some(p2p) = change.p2p { config.p2p = p2p; }
-        if let Some(endpoint) = change.public_endpoint { config.public_endpoint = Some(endpoint); }
+        if let Some(pwnat) = change.pwnat { config.pwnat = pwnat; }
+        if let Some(endpoint) = change.public_endpoint { config.public_endpoint = endpoint; }
         if let Some(discovery) = change.discovery {
             config.discovery = discovery;
         }
@@ -445,13 +457,15 @@ async fn authenticated_session(caller: axum::Extension<crate::access::Caller>) -
 async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json::Value> {
     let config = network.config.read().unwrap_or_else(|p| p.into_inner());
     let dht = network.dht_status.read().unwrap_or_else(|p| p.into_inner()).clone();
+    let pwnat = network.pwnat_status.read().unwrap_or_else(|p| p.into_inner()).clone();
     Json(json!({
-        "running": true, "discovery": config.discovery, "p2p": config.p2p,
+        "running": true, "discovery": config.discovery, "p2p": config.p2p, "pwnatEnabled": config.pwnat,
         "publicKey": network.identity.public_key(),
         "listening": *network.listening.read().unwrap_or_else(|p| p.into_inner()),
         "secureListening": *network.secure_listening.read().unwrap_or_else(|p| p.into_inner()),
         "hyperdht": dht, "pwnat": ambra_net::pwnat::capability(),
-        "pwnatError": *network.pwnat_status.read().unwrap_or_else(|p| p.into_inner()),
+        "pwnatStatus": pwnat,
+        "pwnatError": pwnat.error,
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
         "discoveryError": *network.discovery_error.read().unwrap_or_else(|p| p.into_inner()),
         "pairedDevices": config.paired_clients.len(),
@@ -467,7 +481,7 @@ async fn pairing_payload(State(network): State<SharedNetwork>) -> Response {
     let payload = ambra_net::pairing::PairingPayload {
         version: 1, public_key: info.public_key, name: info.name,
         local_addresses: info.secure_port.map(ambra_net::lan::local_addresses).unwrap_or_default(),
-        public_endpoint: config.public_endpoint,
+        public_endpoint: config.public_endpoint.or_else(|| network.pwnat_status.read().ok().and_then(|s| s.public_endpoint)),
     };
     match payload.encode() {
         Ok(link) => {
@@ -482,6 +496,16 @@ fn error_response(message: String) -> Response { error(StatusCode::INTERNAL_SERV
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn endpoint_cli_field_and_optional_pwnat_are_deserialized() {
+        let change: ConfigChange = serde_json::from_value(json!({ "publicEndpoint": "8.8.8.8:38149", "pwnat": true })).unwrap();
+        assert_eq!(change.public_endpoint.unwrap().unwrap().to_string(), "8.8.8.8:38149");
+        assert_eq!(change.pwnat, Some(true));
+        let clear: ConfigChange = serde_json::from_value(json!({ "publicEndpoint": null })).unwrap();
+        assert_eq!(clear.public_endpoint, Some(None));
+        let absent: ConfigChange = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(absent.public_endpoint, None);
+    }
     #[tokio::test]
     async fn enrollment_polling_requires_the_same_key_and_expiry_removes_the_request() {
         let network = Network::new(ServerConfig::load_default_for_tests());

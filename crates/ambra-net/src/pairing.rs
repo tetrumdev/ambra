@@ -51,12 +51,7 @@ impl PairingPayload {
         {
             return Err("Invalid local endpoint hint".into());
         }
-        if self
-            .public_endpoint
-            .is_some_and(|a| crate::lan::is_local(a.ip()) || peeroxide_dht::address_policy::is_overlay(a.ip()) || a.ip().is_unspecified() || a.ip().is_multicast() || a.port() == 0)
-        {
-            return Err("Invalid public endpoint hint".into());
-        }
+        if let Some(endpoint) = self.public_endpoint { crate::pwnat::validate_endpoint(endpoint)?; }
         Ok(())
     }
 }
