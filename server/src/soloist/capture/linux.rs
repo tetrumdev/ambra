@@ -1,30 +1,29 @@
 //! A per-run private PulseAudio server: no hardware modules, no host PipeWire socket.
-use super::{
+use super::super::{
     Error, ErrorCode,
     process::{Process, bounded_output},
 };
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
 use tokio::process::Command;
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Capability {
-    pub available: bool,
-    pub reason: String,
-}
-
+use super::{Capability, private_directory};
 pub fn capability() -> Capability {
-    if !cfg!(target_os = "linux") {
-        return Capability { available: false, reason: "Server PCM capture currently requires Linux. Core Audio process taps and WASAPI application loopback are not implemented; binary management and pairing remain available.".into() };
-    }
     let available = ["pulseaudio", "pactl"]
         .into_iter()
         .all(|name| executable(name).is_some());
-    Capability { available, reason: if available { "Private PulseAudio S32LE stereo capture is available; routing is verified at stream startup." } else { "Install pulseaudio and pulseaudio-utils (pactl) on the Linux server." }.into() }
+    Capability {
+        available,
+        reason: if available {
+            "Private PulseAudio capture available; route verified at startup."
+        } else {
+            "Install pulseaudio and pulseaudio-utils on server."
+        }
+        .into(),
+    }
 }
 fn executable(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
@@ -32,17 +31,6 @@ fn executable(name: &str) -> Option<PathBuf> {
             .map(|dir| dir.join(name))
             .find(|path| path.is_file())
     })
-}
-
-pub fn private_directory(path: &Path) -> Result<(), Error> {
-    std::fs::create_dir_all(path).map_err(Error::io)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .map_err(Error::io)?;
-    }
-    Ok(())
 }
 
 pub struct Capture {
@@ -158,6 +146,9 @@ impl Capture {
             return Err(error);
         }
         Ok(capture)
+    }
+    pub async fn target(&mut self, _pid: u32) -> Result<(), Error> {
+        Ok(())
     }
     pub fn route(&self, command: &mut Command) {
         command

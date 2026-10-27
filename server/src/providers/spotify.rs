@@ -92,6 +92,7 @@ pub struct PreparedSpotifyStream {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // Preserve the existing explicit lossy tiers; automatic selection uses High.
 enum SpotifyQuality {
     Kbps96,
     Kbps160,
@@ -916,14 +917,8 @@ fn spotify_track_ids_from_search(search_result: &serde_json::Value) -> Vec<Strin
 }
 
 fn configured_quality() -> SpotifyQuality {
-    match env::var("AMBRA_SPOTIFY_QUALITY")
-        .unwrap_or_else(|_| "320".to_owned())
-        .trim()
-    {
-        "96" => SpotifyQuality::Kbps96,
-        "160" => SpotifyQuality::Kbps160,
-        _ => SpotifyQuality::Kbps320,
-    }
+    // Automatic fallback is Spotify High (160 kbps), independent of legacy backend settings.
+    SpotifyQuality::Kbps160
 }
 
 fn stream_bytes_per_second(format: AudioFileFormat) -> usize {
@@ -1347,6 +1342,13 @@ mod tests {
     fn validates_base62_spotify_ids() {
         assert!(validate_spotify_id("album", "4aawyAB9vmqN3uQ7FjRGTy").is_ok());
         assert!(validate_spotify_id("album", "not-an-id").is_err());
+    }
+
+    #[test]
+    fn automatic_fallback_prefers_high_while_other_lossy_tiers_remain_supported() {
+        assert_eq!(configured_quality().preferred_formats()[0], AudioFileFormat::OGG_VORBIS_160);
+        assert_eq!(SpotifyQuality::Kbps96.preferred_formats()[0], AudioFileFormat::OGG_VORBIS_96);
+        assert_eq!(SpotifyQuality::Kbps320.preferred_formats()[0], AudioFileFormat::OGG_VORBIS_320);
     }
 
     #[test]

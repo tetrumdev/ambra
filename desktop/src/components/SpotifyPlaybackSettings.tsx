@@ -11,9 +11,9 @@ export function SpotifyPlaybackSettings({ active, connected }: { active: boolean
     const timer = setInterval(refresh, 3000);
     return () => { disposed = true; clearInterval(timer); };
   }, [active, connected]);
-  return <section className="settingsGroup" aria-label="Spotify playback backend">
+  return <section className="settingsGroup" aria-label="Spotify playback">
     <h2>Spotify playback</h2>
-    {connected && status && <p role="status">{status.backend}: {status.state.replace(/_/g, " ")}. Requested quality: {status.requestedQuality}.</p>}
+    {connected && status && <p role="status">Preferred: {status.preferredQuality ?? status.requestedQuality}. Current renderer: {status.effectiveRenderer ?? "idle"}. {status.state.replace(/_/g, " ")}.</p>}
     <p className="settingsMuted">Manage playback, Soloist installation, and pairing with <code>ambra-server spotify</code> on the server.</p>
   </section>;
 }

@@ -14,11 +14,7 @@ pub(crate) fn manager(directory: &Path, ready: bool) -> Arc<Manager> {
     };
     paths.prepare().unwrap();
     let config = Config {
-        backend: if ready {
-            PlaybackBackend::Soloist
-        } else {
-            PlaybackBackend::Librespot
-        },
+        lossless_enabled: ready,
         ..Config::default()
     };
     Arc::new(Manager {
@@ -27,25 +23,43 @@ pub(crate) fn manager(directory: &Path, ready: bool) -> Arc<Manager> {
         health: RwLock::new((State::Ready, None, None)),
         expected_account: RwLock::new(Some("fixture".into())),
         operation: Mutex::new(()),
+        maintenance: Mutex::new(()),
+        force_update: AtomicBool::new(false),
+        effective_renderer: RwLock::new(None),
+        capture_error: RwLock::new(None),
         active: SyncMutex::new(None),
         shutdown: CancellationToken::new(),
         test_ready: ready,
     })
 }
 
-pub(crate) async fn configure_backend(
-    manager: &Manager,
-    backend: PlaybackBackend,
-    fallback: Fallback,
-) {
+pub(crate) async fn configure_enabled(manager: &Manager, enabled: bool) {
     manager
         .configure(SettingsChange {
-            backend: Some(backend),
-            fallback: Some(fallback),
+            lossless_enabled: Some(enabled),
             ..SettingsChange::default()
         })
         .await
         .unwrap();
+}
+
+pub(crate) async fn fail_installation(manager: &Manager) {
+    // Persist a recent failure to exercise real maintenance without contacting Spotify.
+    crate::server_config::write_private(
+        &manager.paths.install.join("managed.json"),
+        &serde_json::to_vec(&json!({
+            "lastCheck": binary::now(),
+            "lastError": "Soloist download failed; previous build and pairing are preserved"
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    manager.config.write().unwrap().download_consent = true;
+    manager.refresh().await;
+    let status = manager.status();
+    assert_eq!(status.backend, PlaybackBackend::Librespot);
+    assert_eq!(status.preferred_quality, Quality::High);
+    assert_eq!(status.error.unwrap().code, ErrorCode::UpdateFailed);
 }
 fn directory() -> PathBuf {
     let directory = std::env::temp_dir().join(format!(
@@ -74,6 +88,10 @@ fn fixture() -> PathBuf {
             let directory = directory();
             let binary = directory.join("soloist");
             let result = std::process::Command::new("cc")
+                .arg(format!(
+                    "-DAMBRA_FIXTURE_BUILD_TIMESTAMP={}",
+                    binary::now() - 86_400
+                ))
                 .arg(concat!(
                     env!("CARGO_MANIFEST_DIR"),
                     "/tests/fixtures/soloist.c"
@@ -198,15 +216,18 @@ async fn native_pairing_persists_across_restart_update_and_sign_out() {
     )
     .unwrap();
     let settings = Config {
-        executable: Some(binary.clone()),
+        migration_executable: Some(binary.clone()),
         ..Config::default()
     };
     settings.save(&manager.paths.settings).unwrap();
-    assert_eq!(
-        Config::load(&manager.paths.settings).unwrap().backend,
-        PlaybackBackend::Librespot
+    assert!(
+        !Config::load(&manager.paths.settings)
+            .unwrap()
+            .lossless_enabled
     );
-    manager.install(&binary).await.unwrap();
+    updater::migrate(&manager.paths.install, &binary)
+        .await
+        .unwrap();
     assert_eq!(
         std::fs::read(
             manager
@@ -218,19 +239,24 @@ async fn native_pairing_persists_across_restart_update_and_sign_out() {
         before
     );
     assert_eq!(manager.paths.key().unwrap().expose(), key.expose());
-    let installed = manager.config().executable.unwrap();
+    let installed = updater::installed(&manager.paths.install).unwrap();
     assert!(installed.starts_with(&manager.paths.install));
     let failed = root.join("not-a-binary");
     std::fs::write(&failed, "invalid").unwrap();
-    assert!(manager.install(&failed).await.is_err());
-    assert_eq!(manager.config().executable, Some(installed));
+    assert!(
+        updater::migrate(&manager.paths.install, &failed)
+            .await
+            .is_err()
+    );
+    assert_eq!(updater::installed(&manager.paths.install), Some(installed));
     manager.disconnect().await.unwrap();
     assert!(!manager.paths.paired());
     assert!(!manager.paths.key.exists());
-    assert_eq!(manager.backend(), PlaybackBackend::Librespot);
-    assert_eq!(
-        Config::load(&manager.paths.settings).unwrap().backend,
-        PlaybackBackend::Librespot
+    assert_eq!(manager.status().backend, PlaybackBackend::Librespot);
+    assert!(
+        !Config::load(&manager.paths.settings)
+            .unwrap()
+            .lossless_enabled
     );
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -280,31 +306,6 @@ async fn invalid_key_diagnostic_survives_exit_without_a_newline() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn failed_refresh_preserves_selected_binary_and_clears_updating() {
-    let root = directory();
-    let manager = manager(&root, false);
-    let old = fixture();
-    manager.config.write().unwrap().executable = Some(old.clone());
-    // Simulate an unusable settings destination after binary validation/staging.
-    std::fs::create_dir(&manager.paths.settings).unwrap();
-    let error = manager.install(&old).await.unwrap_err();
-    assert_eq!(error.code, ErrorCode::UpdateFailed);
-    assert_eq!(manager.config().executable, Some(old));
-    assert_eq!(manager.health.read().unwrap().0, State::Error);
-    assert!(
-        std::fs::read_dir(&manager.paths.install)
-            .unwrap()
-            .all(|entry| !entry
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".staging-"))
-    );
-    std::fs::remove_dir_all(root).unwrap();
-}
-
 #[tokio::test]
 async fn missing_binary_does_not_inherit_previous_build_expiration() {
     let root = directory();
@@ -315,7 +316,7 @@ async fn missing_binary_does_not_inherit_previous_build_expiration() {
         expires_at: 2,
         refresh_at: 1,
     });
-    manager.config.write().unwrap().executable = Some(root.join("missing-soloist"));
+    manager.config.write().unwrap().migration_executable = Some(root.join("missing-soloist"));
     manager.refresh().await;
     let status = manager.status();
     assert_eq!(status.state, State::NotInstalled);
@@ -350,18 +351,33 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
             id: "output".into(),
             name: "Output".into(),
             token_sha256: crate::server_config::token_hash("paired-output-token"),
-            paired_at_ms: 0, public_key: None,
+            paired_at_ms: 0,
+            public_key: None,
         });
     let access = crate::access::AccessPolicy::from_env(crate::network::Network::new(config));
-    let app: Router = router(manager.clone()).layer(middleware::from_fn_with_state(
-        access,
-        crate::access::enforce,
-    )).layer(middleware::from_fn(|mut request: axum::extract::Request, next: axum::middleware::Next| async move {
-        if request.headers().get("host").is_some_and(|h| h == "192.168.1.2:38147") {
-            request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) });
-        }
-        next.run(request).await
-    }));
+    let app: Router = router(manager.clone())
+        .layer(middleware::from_fn_with_state(
+            access,
+            crate::access::enforce,
+        ))
+        .layer(middleware::from_fn(
+            |mut request: axum::extract::Request, next: axum::middleware::Next| async move {
+                if request
+                    .headers()
+                    .get("host")
+                    .is_some_and(|h| h == "192.168.1.2:38147")
+                {
+                    request
+                        .extensions_mut()
+                        .insert(ambra_net::transport::RemotePeer {
+                            public_key: ambra_net::Identity::generate().unwrap().public_key(),
+                            address: "192.0.2.2:1".parse().unwrap(),
+                            session: std::sync::Arc::new(()),
+                        });
+                }
+                next.run(request).await
+            },
+        ));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
@@ -396,7 +412,7 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
         "/api/local/spotify/playback",
         "/api/local/spotify/soloist/pair",
         "/api/local/spotify/soloist/reset",
-        "/api/local/spotify/soloist/install",
+        "/api/local/spotify/soloist/check",
         "/api/local/spotify/soloist/sign-out",
     ] {
         assert_eq!(
@@ -432,5 +448,139 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
         StatusCode::METHOD_NOT_ALLOWED
     );
     task.abort();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_quality_covers_capability_lifecycle() {
+    let select = |state, binary, key, pairing, capture| {
+        preferred_lossless(true, state, binary, key, pairing, capture, true)
+    };
+    for state in [
+        State::NotInstalled,
+        State::Downloading,
+        State::Expired,
+        State::Error,
+        State::UnsupportedPlatform,
+    ] {
+        assert!(!select(state, true, true, true, true), "{state:?}");
+    }
+    assert!(!select(State::PairingRequired, true, true, false, true));
+    assert!(!select(State::ApiKeyRequired, true, false, true, true));
+    assert!(!select(State::Ready, false, true, true, true));
+    assert!(!select(State::Ready, true, true, true, false));
+    for state in [
+        State::Ready,
+        State::Playing,
+        State::Paused,
+        State::Buffering,
+        State::Updating,
+    ] {
+        assert!(select(state, true, true, true, true), "{state:?}");
+    }
+    assert!(!preferred_lossless(
+        true,
+        State::Ready,
+        true,
+        true,
+        true,
+        true,
+        false
+    ));
+    assert!(!preferred_lossless(
+        false,
+        State::Ready,
+        true,
+        true,
+        true,
+        true,
+        true
+    ));
+    // Recovery is current capability, never a stored backend preference.
+    assert!(select(State::Ready, true, true, true, true));
+}
+
+#[tokio::test]
+async fn legacy_settings_migrate_without_granting_consent_or_losing_pairing() {
+    let root = directory();
+    let manager = manager(&root, false);
+    std::fs::write(&manager.paths.settings, br#"{"backend":"soloist","quality":"very_high","fallback":"never","updateChecks":true,"executable":null}"#).unwrap();
+    let config = Config::load(&manager.paths.settings).unwrap();
+    assert!(config.lossless_enabled);
+    assert!(!config.download_consent);
+    config.save(&manager.paths.settings).unwrap();
+    let saved = std::fs::read_to_string(&manager.paths.settings).unwrap();
+    for removed in [
+        "backend",
+        "quality",
+        "fallback",
+        "updateChecks",
+        "executable",
+    ] {
+        assert!(!saved.contains(removed));
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn removed_manual_controls_reject_requests() {
+    let root = directory();
+    let manager = manager(&root, false);
+    for body in [
+        r#"{"executable":"/tmp/soloist"}"#,
+        r#"{"backend":"soloist"}"#,
+        r#"{"quality":"very_high"}"#,
+    ] {
+        assert!(serde_json::from_str::<SettingsChange>(body).is_err());
+    }
+    assert_eq!(manager.status().backend, PlaybackBackend::Librespot);
+    assert!(manager.active.lock().unwrap().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn local_inspection_cannot_clear_capture_failure_or_claim_lossless() {
+    let root = directory();
+    let manager = manager(&root, true);
+    let info = manager
+        .reserve("0123456789abcdefghijkl", 1, "output", 0.0, 120.0, false)
+        .await
+        .unwrap();
+    manager.state_for_stream(
+        &info.stream_id,
+        State::Error,
+        Some(Error::new(
+            ErrorCode::CaptureUnavailable,
+            "Permission denied",
+        )),
+    );
+    manager.health.write().unwrap().0 = State::Ready;
+    assert!(!manager.status().capture.available);
+    assert_eq!(manager.status().preferred_quality, Quality::High);
+    manager.state_for_stream(&info.stream_id, State::Playing, None);
+    assert!(manager.capture_error.read().unwrap().is_none());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pairing_exit_ten_requests_automatic_refresh_without_losing_key() {
+    let root = directory();
+    let manager = manager(&root, false);
+    updater::migrate(&manager.paths.install, &fixture())
+        .await
+        .unwrap();
+    crate::server_config::write_private(&manager.paths.key, b"fixture-expired-key").unwrap();
+    manager.pair().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while manager.health.read().unwrap().0 != State::Expired {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(manager.force_update.load(Ordering::Acquire));
+    assert!(manager.paths.key.exists());
+    manager.stop().await;
     std::fs::remove_dir_all(root).unwrap();
 }

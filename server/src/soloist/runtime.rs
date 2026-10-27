@@ -99,6 +99,7 @@ impl Runtime {
             self.process.as_ref().unwrap().child.id().ok_or_else(|| {
                 Error::new(ErrorCode::ProcessFailed, "Soloist exited during startup")
             })?;
+        self.capture.as_mut().unwrap().target(pid).await?;
         let client =
             control::Client::start(paths.session.clone(), self.control_cancel.child_token());
         let mut observed = client.observed.clone();
@@ -409,7 +410,11 @@ fn soloist_command(binary: &std::path::Path, key: &ApiKey, paths: &Paths) -> Com
             "--cache-size",
             "512",
             "--initial-volume",
-            "100",
+            if cfg!(target_os = "linux") {
+                "100"
+            } else {
+                "0"
+            },
             "--ws",
             "127.0.0.1:0",
         ]);
