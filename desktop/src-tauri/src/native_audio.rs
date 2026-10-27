@@ -2004,3 +2004,45 @@ fn lock_status(status: &Arc<Mutex<PlaybackStatus>>) -> std::sync::MutexGuard<'_,
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
+
+#[cfg(test)]
+mod cross_network_tests {
+    use super::*;
+
+    /// Opt-in hardware test using an isolated, explicitly paired desktop profile.
+    #[test]
+    #[ignore = "requires AMBRA_P2P_TEST_DESKTOP_DATA and AMBRA_P2P_TEST_AUDIO_ID on a real network"]
+    fn paired_desktop_streams_audio_through_native_output() {
+        let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_ansi(false).try_init();
+        let directory = std::env::var_os("AMBRA_P2P_TEST_DESKTOP_DATA").expect("isolated desktop data directory");
+        let file = std::env::var("AMBRA_P2P_TEST_AUDIO_ID").expect("uploaded WAV content ID");
+        assert!(file.ends_with(".wav") && file.len() == 68 && file[..64].bytes().all(|c| c.is_ascii_hexdigit()));
+        let link = crate::server_link::ServerLink::start(directory.into()).unwrap();
+        let source = format!("{}/api/music/local/files/{file}", link.connection().base_url);
+        let (command_tx, command_rx) = unbounded();
+        let status = Arc::new(Mutex::new(PlaybackStatus::default()));
+        let worker_status = status.clone();
+        let worker = thread::spawn(move || PlaybackWorker::new(command_rx, worker_status, None).run());
+        let player = NativeAudioPlayer { command_tx, status, worker: Mutex::new(Some(worker)) };
+        request(&player.command_tx, |reply| WorkerCommand::Load { source, next_source: None, position_seconds: 0.0, autoplay: true, reply }).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(40);
+        loop {
+            {
+                let status = player.status.lock().unwrap();
+                assert!(status.error.is_none(), "native audio error: {:?}", status.error);
+                if status.current_time >= 3.0 {
+                    let quality = status.audio_quality.as_ref().expect("decoded audio format");
+                    assert_eq!(quality.sample_rate_hz, 44_100);
+                    assert_eq!(quality.channels, 2);
+                    println!("PASS desktop native output: position={:.3}s sample_rate={} channels={}", status.current_time, quality.sample_rate_hz, quality.channels);
+                    break;
+                }
+            }
+            assert!(Instant::now() < deadline, "desktop native output did not advance");
+            thread::sleep(Duration::from_millis(100));
+        }
+        request(&player.command_tx, |reply| WorkerCommand::Pause { reply }).unwrap();
+        drop(player);
+        drop(link);
+    }
+}

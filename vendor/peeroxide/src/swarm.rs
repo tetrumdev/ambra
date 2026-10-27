@@ -956,6 +956,7 @@ impl SwarmActor {
             let _ = reply_tx.send(None); return;
         }
         let initial_client_address = peer_address.clone().unwrap_or_else(|| from.clone());
+        if initial_client_address.host.parse().map_or(true, peeroxide_dht::address_policy::is_overlay) { let _ = reply_tx.send(None); return; }
         let is_forwarded = peer_address.is_some();
 
         if is_forwarded {
@@ -1318,6 +1319,7 @@ impl SwarmActor {
         // through an mpsc channel rather than awaiting anything inline.
         let event_tx = self.passive_hp_event_tx.clone();
         udx_stream.set_firewall_hook(&socket, remote_id, move |_sock, port, ip| {
+            if peeroxide_dht::address_policy::is_overlay(ip) { return false; }
             let addr = SocketAddr::new(ip, port);
             let _ = event_tx.send(PassiveHolepunchEvent::Punched {
                 id: holepunch_id,
@@ -1563,7 +1565,7 @@ impl SwarmActor {
                         }
                     };
 
-                    let conn = PeerConnection::new(ss, remote_pk, entry.udx_socket, None);
+                    let conn = PeerConnection::with_remote_addr(ss, remote_pk, addr, entry.udx_socket, None);
                     let swarm_conn = SwarmConnection {
                         peer: conn,
                         is_initiator: false,
@@ -1636,7 +1638,12 @@ async fn create_server_connection(
         })?;
 
     let stream = runtime.create_stream(local_stream_id).await?;
-    stream.set_firewall_hook(&socket, remote_id, |_, _, _| true)?;
+    let (endpoint_tx, endpoint_rx) = oneshot::channel();
+    stream.set_firewall_hook(&socket, remote_id, move |_, port, ip| {
+        if peeroxide_dht::address_policy::is_overlay(ip) { return false; }
+        let _ = endpoint_tx.send(SocketAddr::new(ip, port));
+        true
+    })?;
 
     let async_stream = stream.into_async_stream();
     let ss = SecretStream::from_session(
@@ -1650,7 +1657,8 @@ async fn create_server_connection(
     .await
     .map_err(|e| SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::SecretStream(e)))?;
 
-    let conn = PeerConnection::new(ss, noise_result.remote_public_key, socket, None);
+    let endpoint = endpoint_rx.await.map_err(|_| SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::ChannelClosed))?;
+    let conn = PeerConnection::with_remote_addr(ss, noise_result.remote_public_key, endpoint, socket, None);
     Ok((conn, runtime))
 }
 

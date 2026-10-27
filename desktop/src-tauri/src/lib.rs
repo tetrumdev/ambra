@@ -1004,6 +1004,7 @@ fn startup_elapsed_ms() -> u64 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).with_ansi(false).try_init();
     let _ = PROCESS_STARTED.set(Instant::now());
     let app = tauri::Builder::default()
         .plugin(window_bounds::init())
