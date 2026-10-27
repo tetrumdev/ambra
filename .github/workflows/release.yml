@@ -47,6 +47,7 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: desktop
       - uses: tauri-apps/tauri-action@v0
+        id: desktop-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Signs the update bundles the app's updater verifies against the public key in tauri.conf.json.
@@ -63,3 +64,21 @@ jobs:
           releaseBody: See the assets below to download AMBRA for macOS (.dmg) or Windows (.exe).
           releaseDraft: true
           prerelease: false
+
+      - name: Verify desktop distribution excludes the server
+        shell: bash
+        run: python scripts/check-client-package.py desktop/src-tauri/target/${{ matrix.target }}/release/bundle
+      - name: Build independent server
+        shell: bash
+        run: cargo build --manifest-path server/Cargo.toml --locked --release --target ${{ matrix.target }}
+      - name: Upload independent server
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ steps.desktop-release.outputs.releaseId }}
+        run: |
+          suffix=""
+          if [[ "${{ matrix.platform }}" == windows-* ]]; then suffix=".exe"; fi
+          asset="ambra-server-${{ matrix.target }}$suffix"
+          cp "server/target/${{ matrix.target }}/release/ambra-server$suffix" "$asset"
+          gh api --method POST "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$asset" --header "Content-Type: application/octet-stream" --input "$asset"

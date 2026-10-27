@@ -22,7 +22,8 @@ use std::{
     },
 };
 
-pub const PERSISTENT_STATE_KEYS: [&str; 8] = [
+pub const PERSISTENT_STATE_KEYS: [&str; 20] = [
+    "ambra.local-ownership.v1",
     "ambra.preferences",
     "ambra.ui-preferences.v1",
     "ambra.current-screen",
@@ -31,6 +32,10 @@ pub const PERSISTENT_STATE_KEYS: [&str; 8] = [
     "ambra.removed-library-tracks.v1",
     "ambra.library-order.v1",
     "ambra.queue.v1",
+    "ambra.device-view.v1", "ambra.playback.v1", "ambra.listening-history.v1",
+    "ambra.album-versions.v1", "ambra.lyrics-sync.v1", "ambra.lyrics-autosync.v2",
+    "ambra.lyrics-autosync-samples.v1", "ambra.lyrics-autosync-noticed.v1", "ambra.dsp-presets.v1",
+    "ambra.service-playlists.v1", "ambra.audio-settings.v1",
 ];
 const MAX_VALUE_BYTES: usize = 64 * 1024 * 1024;
 const STATE_DIRECTORY: &str = "desktop-state";
@@ -182,13 +187,7 @@ pub fn load(
 
 pub fn save(data_dir: &Path, patch: StatePatch) -> Result<(), String> {
     for (key, value) in &patch.changes {
-        // Legacy keys remain readable for migration/rollback, never writable.
-        if !matches!(
-            key.as_str(),
-            "ambra.ui-preferences.v1" | "ambra.current-screen" | "ambra.streaming-library.v1"
-        ) {
-            return Err(format!("The server now owns this desktop-state key: {key}"));
-        }
+        check_key(key)?;
         if value
             .as_ref()
             .is_some_and(|value| value.len() > MAX_VALUE_BYTES)
@@ -215,6 +214,8 @@ pub fn save(data_dir: &Path, patch: StatePatch) -> Result<(), String> {
     }
 
     for (key, value) in &patch.changes {
+        // A complete-mirror marker must never become visible before the migration's values.
+        if key == "ambra.local-ownership.v1" { continue; }
         let path = key_path(&directory, key);
         match value {
             Some(value) => write_atomic(&path, value.as_bytes())?,
@@ -227,8 +228,41 @@ pub fn save(data_dir: &Path, patch: StatePatch) -> Result<(), String> {
             },
         }
     }
+    if let Some(Some(marker)) = patch.changes.get("ambra.local-ownership.v1") {
+        write_atomic(&key_path(&directory, "ambra.local-ownership.v1"), marker.as_bytes())?;
+    }
     write_atomic(
         &directory.join(REVISION_FILE),
         patch.updated_at_ms.to_string().as_bytes(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn restoring_device_ownership_preserves_legacy_data_and_retries() {
+        let directory = std::env::temp_dir().join(format!("ambra-local-state-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        let legacy = serde_json::json!({ "version": 1, "updatedAtMs": 1, "values": {
+            "ambra.playlists.v1": "old playlists", "ambra.queue.v1": "old queue", "ambra.preferences": "old settings"
+        }});
+        fs::write(directory.join(LEGACY_FILE), legacy.to_string()).unwrap();
+        assert_eq!(load(&directory, None).unwrap().unwrap().values.unwrap()["ambra.playlists.v1"], "old playlists");
+        for _ in 0..2 {
+            save(&directory, StatePatch { updated_at_ms: 2, changes: BTreeMap::from([
+                ("ambra.queue.v1".into(), Some("local queue".into())),
+                ("ambra.playback.v1".into(), Some("local position".into())),
+                ("ambra.listening-history.v1".into(), Some("local history".into())),
+                ("ambra.local-ownership.v1".into(), Some("1".into())),
+            ]) }).unwrap();
+        }
+        let restored = load(&directory, None).unwrap().unwrap().values.unwrap();
+        assert_eq!(restored["ambra.playlists.v1"], "old playlists");
+        assert_eq!(restored["ambra.queue.v1"], "local queue");
+        assert_eq!(restored["ambra.listening-history.v1"], "local history");
+        assert_eq!(fs::read_to_string(directory.join(LEGACY_FILE)).unwrap(), legacy.to_string());
+        assert!(save(&directory, StatePatch { updated_at_ms: 3, changes: BTreeMap::from([("../outside".into(), Some("bad".into()))]) }).is_err());
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

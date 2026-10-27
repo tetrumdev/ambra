@@ -6,6 +6,10 @@ async fn main() -> ambra_net::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let payload = PairingPayload::decode(args.get(1).ok_or("Pass pairing link")?)?;
     let file_id = args.get(2).ok_or("Pass synthetic audio SHA-256 filename")?;
+    if args.iter().any(|argument| argument == "--discover") {
+        let servers = ambra_net::lan::discover(Duration::from_secs(2)).await?;
+        assert!(servers.iter().any(|server| server.info.public_key == Some(payload.public_key)), "Independent server did not answer native discovery");
+    }
     let identity = Identity::generate()?;
     let selected = SelectedServer {
         public_key: payload.public_key,
@@ -17,6 +21,18 @@ async fn main() -> ambra_net::Result<()> {
     println!("CODE {}", started["code"].as_str().ok_or("Missing code")?);
     std::io::stdout().flush()?;
     let handle = started["requestId"].as_str().ok_or("Missing handle")?;
+    if args.iter().any(|argument| argument == "--deny") {
+        tokio::time::timeout(Duration::from_secs(15), async {
+            loop {
+                let status = enrollment.json("GET", &format!("/api/pair/request/{handle}"), None).await?;
+                if status["status"] == "denied" { break Ok::<_, ambra_net::Error>(()); }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }).await??;
+        enrollment.cancel.cancel();
+        println!("PASS server-owned pairing denial");
+        return Ok(());
+    }
     let token = tokio::time::timeout(Duration::from_secs(15), async {
         loop {
             let status = enrollment

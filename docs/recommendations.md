@@ -130,7 +130,7 @@ the artist table per request. Compact UUIDs, integer Wikidata IDs, and normalize
 alias tables avoid duplicated strings and unnecessary indexes.
 
 Rust embeds the compressed asset and manifest using `include_bytes!` and
-`include_str!`. Consequently desktop sidecars, standalone server binaries, and
+`include_str!`. Consequently standalone server binaries and
 `cargo install --path server --locked` all contain exactly the same metadata.
 On first useful Discover request, a blocking worker validates/decompresses the
 asset into AMBRA's existing cache directory, keyed by its content digest. It

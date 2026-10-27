@@ -2,11 +2,11 @@ import { forStorage, fromStorage, serverBaseUrl } from "./serverConnection";
 import type { QueueState } from "../utils/queueNavigation";
 import { parseQueueSnapshot, queueSnapshot, resolveQueueSnapshot, type PersistedQueue } from "../utils/queueStorage";
 import { localMusicTrack } from "./localMusic";
-import { getPersistentItem } from "../utils/persistentStorage";
+import { getServerItem } from "../utils/serverState";
 import type { AudioQuality, Track } from "../types/music";
 import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
 import { invokeOn } from "../utils/playbackTarget";
-import { nativeAudioSource } from "../utils/nativeAudioSource";
+import { nativeAudioSource, isDeviceTrack } from "../utils/nativeAudioSource";
 
 /**
  * The server's core decides what plays for every device (server/src/session.rs). This is
@@ -139,7 +139,7 @@ export function coreCommand(action: string, details: Record<string, unknown> = {
 
 /** The queue as the server has it, with this app's copies of its songs where it knows them. */
 export function coreQueue(tracks: Track[]): QueueState & { revision: number } {
-  const snapshot = view?.queue ?? parseQueueSnapshot(getPersistentItem(QUEUE_KEY));
+  const snapshot = view?.queue ?? parseQueueSnapshot(getServerItem(QUEUE_KEY));
   const revision = (snapshot as { revision?: number } | null)?.revision ?? 0;
   return { ...(snapshot ? resolveQueueSnapshot(snapshot, tracks) : { history: [], current: null, upcoming: [] }), revision };
 }
@@ -156,6 +156,9 @@ export function coreChangeQueue(tracks: () => Track[], change: (state: QueueStat
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = coreQueue(tracks());
       const next = change(current);
+      if ([...next.history, ...(next.current ? [next.current] : []), ...next.upcoming].some(item => isDeviceTrack(item.track))) {
+        throw new Error("Private device files cannot enter the shared queue. Use local playback or explicitly import them into the server library.");
+      }
       const queue = JSON.parse(forStorage(JSON.stringify(queueSnapshot(next.history, next.current, next.upcoming))));
       try {
         accept(await request<CoreView>("/api/session/queue", { base: current.revision, queue, playTrackId: job.playTrackId }));

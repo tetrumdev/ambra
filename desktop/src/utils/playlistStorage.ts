@@ -63,9 +63,9 @@ export function addPlaylistTrack(snapshot: PlaylistSnapshot, playlistId: string,
   };
 }
 
-export function savePlaylistSnapshot(snapshot: PlaylistSnapshot): PlaylistSnapshot {
+export function savePlaylistSnapshot(snapshot: PlaylistSnapshot, write = setPersistentItem): PlaylistSnapshot {
   const used = new Set(snapshot.playlists.flatMap(playlist => playlist.trackIds));
   const saved = { ...snapshot, tracks: snapshot.tracks.filter(track => used.has(track.globalId)) };
-  setPersistentItem(PLAYLIST_STORAGE_KEY, JSON.stringify(saved));
+  write(PLAYLIST_STORAGE_KEY, JSON.stringify(saved));
   return saved;
 }
