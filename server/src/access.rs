@@ -189,11 +189,17 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         return (StatusCode::UNAUTHORIZED, "Pair this device with the server first").into_response();
     };
     if let Some(peer) = &remote_peer {
-        if let Ok(mut sessions) = policy.network.authenticated_sessions.write() {
-            sessions.retain(|_, active| { active.retain(|s| s.strong_count() > 0); !active.is_empty() });
-            let active = sessions.entry(client_id.clone()).or_default();
-            let session = Arc::downgrade(&peer.session);
-            if !active.iter().any(|s| s.ptr_eq(&session)) { active.push(session); }
+        let Ok(mut sessions) = policy.network.authenticated_sessions.write() else {
+            return (StatusCode::SERVICE_UNAVAILABLE, "Session registry unavailable").into_response();
+        };
+        let generation = peer.session.generation();
+        if peer.session.is_closed() || sessions.get(&client_id).is_some_and(|(current, _)| *current > generation) {
+            return (StatusCode::CONFLICT, "Encrypted session superseded; reconnect").into_response();
+        }
+        if let Some((_, previous)) = sessions.insert(client_id.clone(), (generation, Arc::downgrade(&peer.session))) {
+            if let Some(previous) = previous.upgrade() {
+                if !Arc::ptr_eq(&previous, &peer.session) { previous.close(); }
+            }
         }
     }
     request.extensions_mut().insert(Caller { client_id: Some(client_id) });
@@ -265,7 +271,7 @@ mod tests {
                 Json(serde_json::json!({ "uri": uri.to_string(), "token": credential.map(|Extension(token)| token.0), "client_id": caller.0.client_id }))
             },
         )).layer(middleware::from_fn_with_state(policy, enforce))
-            .layer(Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) }));
+            .layer(Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(ambra_net::transport::Session::default()) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -318,7 +324,7 @@ mod tests {
             let mut request = Request::builder().method(if path.starts_with("/api/auth/") { "POST" } else { "GET" }).uri(path).header(HOST, "localhost").header(AUTHORIZATION, format!("Bearer {token}"))
                 .header("x-forwarded-for", "127.0.0.1").header("x-ambra-local", "true").body(Body::empty()).unwrap();
             request.extensions_mut().insert(ConnectInfo::<SocketAddr>("127.0.0.1:1234".parse().unwrap()));
-            if let Some(key) = peer_key { request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1234".parse().unwrap(), session: std::sync::Arc::new(()) }); }
+            if let Some(key) = peer_key { request.extensions_mut().insert(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1234".parse().unwrap(), session: std::sync::Arc::new(ambra_net::transport::Session::default()) }); }
             request
         };
         assert_eq!(app.clone().oneshot(request("/api/auth/tidal/start", Some(device_key), "valid")).await.unwrap().status(), StatusCode::OK);
@@ -345,4 +351,45 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod session_reconnect_tests {
+    use super::*;
+    use axum::{Router, body::Body, middleware, routing::get};
+    use tower::ServiceExt;
+    use ambra_net::transport::{RemotePeer, Session};
+
+    #[tokio::test]
+    async fn only_newer_authorized_session_supersedes_old_session() {
+        let key = ambra_net::Identity::generate().unwrap().public_key();
+        let network = crate::network::Network::new(crate::server_config::ServerConfig::load_default_for_tests());
+        network.config.write().unwrap().paired_clients.push(crate::server_config::PairedClient {
+            id: "device".into(), name: "Device".into(), token_sha256: crate::server_config::token_hash("valid"), paired_at_ms: 0, public_key: Some(key),
+        });
+        let app = Router::new().route("/api/music", get(|| async { "audio" }))
+            .layer(middleware::from_fn_with_state(AccessPolicy::from_env(network.clone()), enforce));
+        let old = Arc::new(Session::default());
+        let new = Arc::new(Session::default());
+        let request = |session: Arc<Session>, token: &str, public_key| {
+            let mut request = Request::builder().uri("/api/music").header(AUTHORIZATION, format!("Bearer {token}"))
+                .body(Body::empty()).unwrap();
+            request.extensions_mut().insert(RemotePeer { public_key, address: "192.0.2.2:1234".parse().unwrap(), session });
+            request
+        };
+        assert_eq!(app.clone().oneshot(request(old.clone(), "valid", key)).await.unwrap().status(), StatusCode::OK);
+        assert_eq!(app.clone().oneshot(request(new.clone(), "wrong", key)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert!(!old.is_closed());
+        let stranger = ambra_net::Identity::generate().unwrap().public_key();
+        assert_eq!(app.clone().oneshot(request(new.clone(), "valid", stranger)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+        assert!(!old.is_closed());
+        assert_eq!(app.clone().oneshot(request(new.clone(), "valid", key)).await.unwrap().status(), StatusCode::OK);
+        assert!(old.is_closed());
+        assert!(!new.is_closed());
+        assert_eq!(app.clone().oneshot(request(old.clone(), "valid", key)).await.unwrap().status(), StatusCode::CONFLICT);
+        drop(old);
+        assert_eq!(app.clone().oneshot(request(new.clone(), "valid", key)).await.unwrap().status(), StatusCode::OK);
+        network.config.write().unwrap().paired_clients.clear();
+        assert_eq!(app.oneshot(request(new, "valid", key)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
+    }
 }

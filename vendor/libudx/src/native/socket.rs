@@ -62,22 +62,36 @@ impl UdpSocket {
         ttl: Option<u32>,
     ) -> std::io::Result<usize> {
         loop {
-            self.socket.writable().await?;
-            let result = {
-                let default_ttl = self.default_ttl.lock().unwrap_or_else(|e| e.into_inner());
-                // Reapply the default even if an earlier restoration failed.
-                self.socket.set_ttl(ttl.unwrap_or(*default_ttl))?;
-                let result = self.socket.try_send_to(data, addr);
-                if ttl.is_some() {
-                    self.socket.set_ttl(*default_ttl)?;
-                }
-                result
-            };
-            match result {
+            self.writable().await?;
+            match self.try_send_to_with_ttl(data, addr, ttl) {
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
                 result => return result,
             }
         }
+    }
+
+    async fn writable(&self) -> std::io::Result<()> {
+        self.socket.writable().await
+    }
+
+    fn try_send_to(&self, data: &[u8], addr: SocketAddr) -> std::io::Result<usize> {
+        self.try_send_to_with_ttl(data, addr, None)
+    }
+
+    fn try_send_to_with_ttl(
+        &self,
+        data: &[u8],
+        addr: SocketAddr,
+        ttl: Option<u32>,
+    ) -> std::io::Result<usize> {
+        let default_ttl = self.default_ttl.lock().unwrap_or_else(|e| e.into_inner());
+        // Every send holds the same lock, including UDX data and TTL probes.
+        self.socket.set_ttl(ttl.unwrap_or(*default_ttl))?;
+        let result = self.socket.try_send_to(data, addr);
+        if ttl.is_some() {
+            self.socket.set_ttl(*default_ttl)?;
+        }
+        result
     }
 }
 
@@ -329,12 +343,31 @@ impl UdxSocket {
 
     fn send_datagram(&self, data: &[u8], addr: SocketAddr, ttl: Option<u32>) -> Result<()> {
         let udp = self.inner.udp_arc()?;
-        let data = data.to_vec();
-        tokio::spawn(async move {
-            if let Err(error) = udp.send_to_with_ttl(&data, addr, ttl).await {
-                tracing::warn!(%addr, %error, "UDP datagram send failed");
+        match udp.try_send_to_with_ttl(data, addr, ttl) {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let data = data.to_vec();
+                tokio::spawn(async move {
+                    if let Err(error) = udp.send_to_with_ttl(&data, addr, ttl).await {
+                        tracing::warn!(%addr, %error, "UDP datagram send failed");
+                    }
+                });
+                Ok(())
             }
-        });
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Wait for send readiness without allocating a background task.
+    pub async fn writable(&self) -> Result<()> {
+        self.inner.udp_arc()?.writable().await?;
+        Ok(())
+    }
+
+    /// Send immediately without allocating a task. The caller handles backpressure.
+    /// This also permits scoped TTL changes without racing a deferred send.
+    pub fn try_send_to(&self, data: &[u8], addr: SocketAddr) -> Result<()> {
+        self.inner.udp_arc()?.try_send_to(data, addr)?;
         Ok(())
     }
 

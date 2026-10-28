@@ -71,12 +71,16 @@ pub struct Holepuncher {
     /// idempotent no-ops. Also consulted by `destroy()` so an Aborted
     /// event isn't emitted on top of a Connected one.
     connected_flag: Arc<AtomicBool>,
+    connected_notify: Arc<tokio::sync::Notify>,
 
     /// Handles to every spawned recv-adapter task: one per socket in
     /// `self.sockets` (the primary socket plus every birthday-attack
     /// socket opened by `open_birthday_sockets`). `destroy()` aborts all
     /// of them so cleanup is bounded and no task outlives the Holepuncher.
     recv_tasks: Vec<JoinHandle<()>>,
+    started: std::time::Instant,
+    probes_sent: u32,
+    socket_peak: usize,
 }
 
 impl Holepuncher {
@@ -88,15 +92,18 @@ impl Holepuncher {
         remote_firewall: u64,
         event_tx: mpsc::UnboundedSender<HolepunchEvent>,
     ) -> Result<Self, crate::socket_pool::SocketPoolError> {
-        let mut socket = pool.acquire(runtime).await?;
-
         let connected_flag = Arc::new(AtomicBool::new(false));
-        let recv_task = spawn_recv_adapter_for_socket(
-            &mut socket,
-            is_initiator,
-            event_tx.clone(),
-            Arc::clone(&connected_flag),
-        );
+        let connected_notify = Arc::new(tokio::sync::Notify::new());
+        let flag = connected_flag.clone();
+        let notify = connected_notify.clone();
+        let tx = event_tx.clone();
+        let socket = pool
+            .acquire_with_probe_handler(runtime, move |probe, socket| {
+                if handle_probe(probe, socket, is_initiator, &tx, &flag) {
+                    notify.notify_one();
+                }
+            })
+            .await?;
 
         Ok(Self {
             nat: Nat::new(firewalled),
@@ -111,7 +118,11 @@ impl Holepuncher {
             socket_callback: None,
             event_tx,
             connected_flag,
-            recv_tasks: recv_task.into_iter().collect(),
+            connected_notify,
+            recv_tasks: Vec::new(),
+            started: std::time::Instant::now(),
+            probes_sent: 0,
+            socket_peak: 1,
         })
     }
 
@@ -318,7 +329,7 @@ impl Holepuncher {
         if local >= FIREWALL_RANDOM && remote == FIREWALL_CONSISTENT {
             self.open_birthday_sockets(pool, runtime, &verified_addr)
                 .await;
-            if self.punching {
+            if self.punching && !self.done() {
                 self.keep_alive_random_nat(&verified_addr).await;
             }
             return true;
@@ -339,11 +350,11 @@ impl Holepuncher {
 
     async fn consistent_probe(&mut self) {
         if !self.is_initiator {
-            sleep(Duration::from_secs(1)).await;
+            self.pause(Duration::from_secs(1)).await;
         }
 
         for tries in 0..10 {
-            if !self.punching {
+            if !self.punching || self.done() {
                 break;
             }
 
@@ -356,12 +367,12 @@ impl Holepuncher {
                     Err(_) => continue,
                 };
                 if let Some(socket) = self.sockets.first() {
-                    let _ = socket.send_holepunch(target, false);
+                    self.probes_sent += u32::from(socket.send_holepunch(target, false).is_ok());
                 }
             }
 
-            if self.punching {
-                sleep(Duration::from_secs(1)).await;
+            if self.punching && !self.done() {
+                self.pause(Duration::from_secs(1)).await;
             }
         }
 
@@ -370,7 +381,7 @@ impl Holepuncher {
 
     async fn random_probes(&mut self, remote_addr: &Ipv4Peer) {
         for _ in 0..1750 {
-            if !self.punching {
+            if !self.punching || self.done() {
                 break;
             }
 
@@ -380,11 +391,11 @@ impl Holepuncher {
                 Err(_) => continue,
             };
             if let Some(socket) = self.sockets.first() {
-                let _ = socket.send_holepunch(target, false);
+                self.probes_sent += u32::from(socket.send_holepunch(target, false).is_ok());
             }
 
-            if self.punching {
-                sleep(Duration::from_millis(20)).await;
+            if self.punching && !self.done() {
+                self.pause(Duration::from_millis(20)).await;
             }
         }
 
@@ -403,30 +414,42 @@ impl Holepuncher {
             Err(_) => return,
         };
 
-        while self.punching && self.sockets.len() < BIRTHDAY_SOCKETS {
-            match pool.acquire(runtime).await {
-                Ok(mut socket) => {
+        while self.punching && !self.done() && self.sockets.len() < BIRTHDAY_SOCKETS {
+            let flag = self.connected_flag.clone();
+            let notify = self.connected_notify.clone();
+            let tx = self.event_tx.clone();
+            let initiator = self.is_initiator;
+            match pool
+                .acquire_with_probe_handler(runtime, move |probe, socket| {
+                    if handle_probe(probe, socket, initiator, &tx, &flag) {
+                        notify.notify_one();
+                    }
+                })
+                .await
+            {
+                Ok(socket) => {
+                    if self.done() {
+                        break;
+                    }
                     if let Some(callback) = &self.socket_callback {
                         if let Err(error) = callback(&socket.socket) {
                             tracing::debug!(%error, "birthday candidate registration stopped");
                             break;
                         }
                     }
-                    let _ = socket.send_holepunch(target, true);
-                    // Cover this birthday socket's probe stream with its own
-                    // recv-adapter task so a probe landing on it (rather than
-                    // the primary socket) still fires `Connected`.
-                    if let Some(handle) = spawn_recv_adapter_for_socket(
-                        &mut socket,
-                        self.is_initiator,
-                        self.event_tx.clone(),
-                        Arc::clone(&self.connected_flag),
-                    ) {
-                        self.recv_tasks.push(handle);
-                    }
+                    self.probes_sent += u32::from(socket.send_holepunch(target, true).is_ok());
                     self.sockets.push(socket);
+                    self.socket_peak = self.socket_peak.max(self.sockets.len());
+                    // bind() may be immediately ready. Let receive tasks observe
+                    // success before allocating the entire birthday window.
+                    if self.sockets.len() % 16 == 0 {
+                        tokio::task::yield_now().await;
+                    }
                 }
-                Err(_) => break,
+                Err(error) => {
+                    tracing::warn!(%error, sockets = self.sockets.len(), "Birthday socket allocation stopped");
+                    break;
+                }
             }
         }
     }
@@ -438,13 +461,13 @@ impl Holepuncher {
             Err(_) => return,
         };
 
-        sleep(Duration::from_millis(100)).await;
+        self.pause(Duration::from_millis(100)).await;
 
         let mut i = 0;
         let mut low_ttl_rounds: u32 = 1;
 
         for _ in 0..1750 {
-            if !self.punching {
+            if !self.punching || self.done() {
                 break;
             }
 
@@ -454,12 +477,13 @@ impl Holepuncher {
             }
 
             if let Some(socket) = self.sockets.get(i) {
-                let _ = socket.send_holepunch(target, low_ttl_rounds > 0);
+                self.probes_sent +=
+                    u32::from(socket.send_holepunch(target, low_ttl_rounds > 0).is_ok());
             }
             i += 1;
 
-            if self.punching {
-                sleep(Duration::from_millis(20)).await;
+            if self.punching && !self.done() {
+                self.pause(Duration::from_millis(20)).await;
             }
         }
 
@@ -491,17 +515,30 @@ impl Holepuncher {
         let socket = socket_ref.socket.clone();
         self.connected = true;
         self.punching = false;
+        self.connected_flag.store(true, Ordering::Release);
+        self.connected_notify.notify_one();
 
         let _ = self
             .event_tx
             .send(HolepunchEvent::Connected { addr, socket });
     }
 
+    async fn pause(&self, duration: Duration) {
+        if self.done() {
+            return;
+        }
+        tokio::select! { _ = sleep(duration) => {}, _ = self.connected_notify.notified() => {} }
+    }
+
     fn done(&self) -> bool {
-        self.destroyed || self.connected
+        self.destroyed || self.connected || self.connected_flag.load(Ordering::Acquire)
     }
 
     fn auto_destroy(&mut self) {
+        if self.connected_flag.load(Ordering::Acquire) {
+            self.connected = true;
+            self.punching = false;
+        }
         if !self.connected {
             self.destroy();
         }
@@ -511,6 +548,15 @@ impl Holepuncher {
         if self.destroyed {
             return;
         }
+        tracing::debug!(
+            elapsed_ms = self.started.elapsed().as_millis(),
+            local_firewall = self.nat.firewall,
+            remote_firewall = self.remote_firewall,
+            socket_peak = self.socket_peak,
+            probes_sent = self.probes_sent,
+            probe_received = self.connected_flag.load(Ordering::Acquire),
+            "Holepunch resources released"
+        );
         self.destroyed = true;
         self.punching = false;
         self.sockets.clear();
@@ -532,6 +578,34 @@ impl Drop for Holepuncher {
     }
 }
 
+fn handle_probe(
+    probe: ProbeEvent,
+    socket: &UdxSocket,
+    is_initiator: bool,
+    event_tx: &mpsc::UnboundedSender<HolepunchEvent>,
+    connected_flag: &AtomicBool,
+) -> bool {
+    if crate::address_policy::is_overlay(probe.addr.ip()) {
+        return false;
+    }
+    if is_initiator {
+        if connected_flag
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            let _ = event_tx.send(HolepunchEvent::Connected {
+                addr: probe.addr,
+                socket: socket.clone(),
+            });
+            return true;
+        }
+    } else {
+        let _ = socket.try_send_to(&[0u8], probe.addr);
+    }
+    false
+}
+
+#[cfg(test)]
 /// Take ownership of `socket_ref`'s holepunch-probe receiver and spawn a
 /// [`run_recv_adapter`] task for it, sharing the same `connected_flag` and
 /// `event_tx` as every other socket belonging to the same [`Holepuncher`].
@@ -560,6 +634,7 @@ fn spawn_recv_adapter_for_socket(
     )))
 }
 
+#[cfg(test)]
 async fn run_recv_adapter(
     mut hp_rx: mpsc::UnboundedReceiver<ProbeEvent>,
     socket: UdxSocket,
@@ -568,32 +643,8 @@ async fn run_recv_adapter(
     connected_flag: Arc<AtomicBool>,
 ) {
     while let Some(probe) = hp_rx.recv().await {
-        if crate::address_policy::is_overlay(probe.addr.ip()) {
-            continue;
-        }
-        if is_initiator {
-            if connected_flag
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-            {
-                tracing::info!(
-                    target: "peeroxide::_events::holepunch::probe_received",
-                    addr = %probe.addr,
-                    "holepuncher(initiator): probe received, firing Connected"
-                );
-                let _ = event_tx.send(HolepunchEvent::Connected {
-                    addr: probe.addr,
-                    socket,
-                });
-                return;
-            }
-        } else {
-            tracing::info!(
-                target: "peeroxide::_events::holepunch::passive_reflected",
-                addr = %probe.addr,
-                "holepuncher(passive): probe received, reflecting"
-            );
-            let _ = socket.send_to(&[0u8], probe.addr);
+        if handle_probe(probe, &socket, is_initiator, &event_tx, &connected_flag) {
+            return;
         }
     }
 }
@@ -1082,5 +1133,134 @@ mod recv_adapter_tests {
         let result = Holepuncher::select_punch_addresses(None, 5678);
         let expected = Holepuncher::local_addresses(5678);
         assert_eq!(result, expected, "None nat.addresses → local only");
+    }
+}
+
+#[cfg(test)]
+mod allocation_benchmark {
+    use super::*;
+    #[tokio::test]
+    async fn bounded_birthday_allocation_benchmark() {
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let pool = SocketPool::new("127.0.0.1".into());
+        let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let remote = Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port: receiver.local_addr().unwrap().port(),
+        };
+        for round in 0..12 {
+            let (events, _rx) = mpsc::unbounded_channel();
+            let mut puncher =
+                Holepuncher::new(&pool, &runtime, true, true, FIREWALL_CONSISTENT, events)
+                    .await
+                    .unwrap();
+            puncher.punching = true;
+            let start = std::time::Instant::now();
+            puncher
+                .open_birthday_sockets(&pool, &runtime, &remote)
+                .await;
+            println!(
+                "ALLOCATION round={} sockets={} tasks={} elapsed_us={}",
+                round,
+                puncher.sockets.len(),
+                tokio::runtime::Handle::current()
+                    .metrics()
+                    .num_alive_tasks(),
+                start.elapsed().as_micros()
+            );
+            assert_eq!(puncher.sockets.len(), BIRTHDAY_SOCKETS);
+            puncher.destroy();
+            tokio::task::yield_now().await;
+        }
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn random_probes_stop_on_receive_and_drop_releases_sockets() {
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let pool = SocketPool::new("127.0.0.1".into());
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let mut puncher = Holepuncher::new(&pool, &runtime, true, true, FIREWALL_RANDOM, events)
+            .await
+            .unwrap();
+        let address = puncher
+            .primary_socket()
+            .unwrap()
+            .socket
+            .local_addr()
+            .await
+            .unwrap();
+        let sender = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        sender.send_to(&[0], address).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        puncher.punching = true;
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            puncher.random_probes(&Ipv4Peer {
+                host: "127.0.0.1".into(),
+                port: 1234,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(puncher.probes_sent, 0);
+        assert!(puncher.done());
+        drop(puncher);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        let rebound = tokio::net::UdpSocket::bind(address)
+            .await
+            .expect("cancelled puncher must release its UDP binding");
+        drop(rebound);
+    }
+
+    #[tokio::test]
+    async fn birthday_allocation_stops_after_probe_without_reducing_failed_window() {
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let pool = SocketPool::new("127.0.0.1".into());
+        let (events, mut rx) = mpsc::unbounded_channel();
+        let mut puncher =
+            Holepuncher::new(&pool, &runtime, true, true, FIREWALL_CONSISTENT, events)
+                .await
+                .unwrap();
+        let primary = puncher
+            .primary_socket()
+            .unwrap()
+            .socket
+            .local_addr()
+            .await
+            .unwrap();
+        let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let remote = Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port: receiver.local_addr().unwrap().port(),
+        };
+        let reply = tokio::spawn(async move {
+            let mut bytes = [0; 32];
+            receiver.recv_from(&mut bytes).await.unwrap();
+            receiver.send_to(&[0], primary).await.unwrap();
+        });
+        puncher.punching = true;
+        puncher
+            .open_birthday_sockets(&pool, &runtime, &remote)
+            .await;
+        tokio::time::timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            puncher.sockets.len() < BIRTHDAY_SOCKETS,
+            "allocation ignored received probe"
+        );
+        reply.await.unwrap();
+        drop(puncher);
     }
 }

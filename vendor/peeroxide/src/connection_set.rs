@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 pub(crate) struct ConnectionInfo {
     pub is_initiator: bool,
+    pub generation: u64,
 }
 
 pub(crate) struct ConnectionSet {
@@ -31,6 +32,17 @@ impl ConnectionSet {
         self.by_public_key.remove(public_key).is_some()
     }
 
+    pub fn remove_generation(&mut self, public_key: &[u8; 32], generation: u64) -> bool {
+        if self
+            .by_public_key
+            .get(public_key)
+            .is_some_and(|info| info.generation == generation)
+        {
+            return self.remove(public_key);
+        }
+        false
+    }
+
     pub fn len(&self) -> usize {
         self.by_public_key.len()
     }
@@ -45,7 +57,10 @@ mod tests {
         let mut set = ConnectionSet::new();
         let pk = [1u8; 32];
         assert!(!set.has(&pk));
-        set.add(pk, ConnectionInfo { is_initiator: true });
+        set.add(pk, ConnectionInfo { is_initiator: true,
+                generation: 1,
+            },
+        );
         assert!(set.has(&pk));
         assert_eq!(set.len(), 1);
     }
@@ -54,17 +69,47 @@ mod tests {
     fn remove() {
         let mut set = ConnectionSet::new();
         let pk = [2u8; 32];
-        set.add(pk, ConnectionInfo { is_initiator: false });
+        set.add(pk, ConnectionInfo { is_initiator: false,
+                generation: 1,
+            },
+        );
         assert!(set.remove(&pk));
         assert!(!set.has(&pk));
         assert_eq!(set.len(), 0);
     }
 
     #[test]
+    fn obsolete_session_cannot_release_replacement() {
+        let mut set = ConnectionSet::new();
+        let pk = [3; 32];
+        set.add(
+            pk,
+            ConnectionInfo {
+                is_initiator: false,
+                generation: 1,
+            },
+        );
+        set.add(
+            pk,
+            ConnectionInfo {
+                is_initiator: false,
+                generation: 2,
+            },
+        );
+        assert!(!set.remove_generation(&pk, 1));
+        assert!(set.has(&pk));
+        assert!(set.remove_generation(&pk, 2));
+        assert!(!set.has(&pk));
+    }
+
+    #[test]
     fn get_info() {
         let mut set = ConnectionSet::new();
         let pk = [3u8; 32];
-        set.add(pk, ConnectionInfo { is_initiator: true });
+        set.add(pk, ConnectionInfo { is_initiator: true,
+                generation: 1,
+            },
+        );
         let info = set.get(&pk).expect("should exist");
         assert!(info.is_initiator);
     }

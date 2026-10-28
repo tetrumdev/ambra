@@ -234,6 +234,7 @@ impl UserRequest {
 // ── Internal command channel ──────────────────────────────────────────────────
 
 enum DhtCommand {
+    PruneCancelledRequests,
     Bootstrapped {
         reply_tx: oneshot::Sender<Result<(), DhtError>>,
     },
@@ -303,6 +304,22 @@ enum DhtCommand {
         socket: UdxSocket,
         reply_tx: oneshot::Sender<Result<PingResponse, DhtError>>,
     },
+}
+
+// Drop the receiver before notifying the actor. A dropped candidate must not
+// keep a ten-second request alive, retrying after another forwarder wins.
+struct RequestWaiter<T> {
+    receiver: Option<oneshot::Receiver<T>>,
+    commands: mpsc::UnboundedSender<DhtCommand>,
+    armed: bool,
+}
+impl<T> Drop for RequestWaiter<T> {
+    fn drop(&mut self) {
+        self.receiver.take();
+        if self.armed {
+            let _ = self.commands.send(DhtCommand::PruneCancelledRequests);
+        }
+    }
 }
 
 // ── Standalone (non-query) inflight tracking ──────────────────────────────────
@@ -484,7 +501,14 @@ impl DhtHandle {
                 reply_tx: tx,
             })
             .map_err(|_| DhtError::ChannelClosed)?;
-        rx.await.map_err(|_| DhtError::ChannelClosed)?
+        let mut waiter = RequestWaiter {
+            receiver: Some(rx),
+            commands: self.cmd_tx.clone(),
+            armed: true,
+        };
+        let result = waiter.receiver.as_mut().unwrap().await;
+        waiter.armed = false;
+        result.map_err(|_| DhtError::ChannelClosed)?
     }
 
     /// Fire-and-forget relay send (no response tracking).
@@ -905,9 +929,7 @@ impl DhtNode {
 
     fn handle_delayed_ping(&mut self, req: crate::io::IncomingRequest) {
         let delay_ms = match &req.value {
-            Some(v) if v.len() >= 4 => {
-                u32::from_le_bytes([v[0], v[1], v[2], v[3]])
-            }
+            Some(v) if v.len() >= 4 => u32::from_le_bytes([v[0], v[1], v[2], v[3]]),
             _ => return,
         };
 
@@ -1311,6 +1333,18 @@ impl DhtNode {
 
     fn handle_command(&mut self, cmd: DhtCommand) -> bool {
         match cmd {
+            DhtCommand::PruneCancelledRequests => {
+                let io = &mut self.io;
+                self.standalone_tids.retain(|tid, request| {
+                    if matches!(request, StandaloneRequest::UserRequest(reply) if reply.is_closed())
+                    {
+                        io.cancel_request(*tid);
+                        false
+                    } else {
+                        true
+                    }
+                });
+            }
             DhtCommand::Bootstrapped { reply_tx } => {
                 if self.bootstrapped {
                     let _ = reply_tx.send(Ok(()));
@@ -1964,5 +1998,52 @@ mod tests {
         );
 
         let _ = handle.destroy().await;
+    }
+}
+
+#[cfg(test)]
+mod request_cancellation_tests {
+    use super::*;
+    #[tokio::test]
+    async fn dropped_request_stops_retrying_without_destroying_dht() {
+        let runtime = UdxRuntime::new().unwrap();
+        let (owner, handle) = spawn(&runtime, DhtConfig::default()).await.unwrap();
+        let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = receiver.local_addr().unwrap().port();
+        let call = tokio::spawn({
+            let handle = handle.clone();
+            async move {
+                handle
+                    .request(
+                        UserRequestParams {
+                            command: 99,
+                            token: None,
+                            target: None,
+                            value: None,
+                            timeout_ms: Some(100),
+                            retries: Some(3),
+                        },
+                        "127.0.0.1",
+                        port,
+                    )
+                    .await
+            }
+        });
+        let mut bytes = [0; 2048];
+        tokio::time::timeout(Duration::from_secs(1), receiver.recv_from(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        call.abort();
+        let _ = call.await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(400), receiver.recv_from(&mut bytes))
+                .await
+                .is_err(),
+            "abandoned request was retransmitted"
+        );
+        handle.bootstrapped().await.unwrap();
+        handle.destroy().await.unwrap();
+        owner.await.unwrap().unwrap();
     }
 }

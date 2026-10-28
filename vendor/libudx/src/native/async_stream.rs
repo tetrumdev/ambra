@@ -6,15 +6,18 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
+use super::header::{FLAG_END, Header};
+use super::stream::{DEFAULT_RWND, StreamEvent, StreamInner, build_data_packet};
 use crate::error::Result as UdxResult;
-use super::header::{Header, FLAG_END};
-use super::stream::{StreamEvent, StreamInner, DEFAULT_RWND, build_data_packet};
 
 /// Adapter that implements [`tokio::io::AsyncRead`] and [`tokio::io::AsyncWrite`]
 /// over a [`super::stream::UdxStream`].
 ///
 /// Created via [`super::stream::UdxStream::into_async_stream`]. Higher layers
 /// (e.g. SecretStream) wrap this for encrypted I/O.
+///
+/// Drop cancels queued writes and the reliability processor. Await `flush()`
+/// or `shutdown()` before dropping when queued bytes must be acknowledged.
 pub struct UdxAsyncStream {
     inner: Arc<Mutex<StreamInner>>,
     read_rx: mpsc::UnboundedReceiver<StreamEvent>,
@@ -24,6 +27,7 @@ pub struct UdxAsyncStream {
     pending_ack: Option<oneshot::Receiver<UdxResult<()>>>,
     processor: Option<tokio::task::JoinHandle<()>>,
     fin_queued: bool,
+    registration: Option<super::stream::SocketCleanup>,
 }
 
 impl UdxAsyncStream {
@@ -31,6 +35,7 @@ impl UdxAsyncStream {
         inner: Arc<Mutex<StreamInner>>,
         read_rx: mpsc::UnboundedReceiver<StreamEvent>,
         processor: Option<tokio::task::JoinHandle<()>>,
+        registration: Option<super::stream::SocketCleanup>,
     ) -> Self {
         Self {
             inner,
@@ -41,6 +46,7 @@ impl UdxAsyncStream {
             pending_ack: None,
             processor,
             fin_queued: false,
+            registration,
         }
     }
 }
@@ -142,7 +148,9 @@ impl AsyncWrite for UdxAsyncStream {
         {
             let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
             if guard.send_idle() {
-                guard.congestion.on_transmit_start(std::time::Instant::now());
+                guard
+                    .congestion
+                    .on_transmit_start(std::time::Instant::now());
             }
 
             let packets: Vec<(u32, Vec<u8>)> = wire_packets
@@ -266,10 +274,51 @@ impl Unpin for UdxAsyncStream {}
 
 impl Drop for UdxAsyncStream {
     fn drop(&mut self) {
-        let _ = self.processor.take();
-        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref tx) = guard.notify_tx {
-            let _ = tx.send(super::stream::StreamNotify::Shutdown);
+        // Explicit shutdown awaits FIN acknowledgment. Drop cancels all sockets,
+        // including stalled handshakes and losing multi-socket dials.
+        if let Some(processor) = self.processor.take() {
+            processor.abort();
         }
+        self.registration.take();
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .terminate();
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    #[tokio::test]
+    async fn dropping_stalled_async_stream_cancels_processor_and_registration() {
+        use tokio::io::AsyncWriteExt;
+        let runtime = crate::UdxRuntime::new().unwrap();
+        let socket = runtime.create_socket().await.unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let stream = runtime.create_stream(77).await.unwrap();
+        stream
+            .set_firewall_hook(&socket, 78, |_, _, _| true)
+            .unwrap();
+        let alternate = runtime.create_socket().await.unwrap();
+        alternate
+            .bind("127.0.0.1:0".parse().unwrap())
+            .await
+            .unwrap();
+        stream.firewall_socket_adder()(&alternate).unwrap();
+        assert!(alternate.streams_ref().lock().unwrap().contains_key(&77));
+        let mut stream = stream.into_async_stream();
+        let processor = stream.processor.as_ref().unwrap().abort_handle();
+        assert!(socket.streams_ref().lock().unwrap().contains_key(&77));
+        stream.write_all(b"unanswered greeting").await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), stream.flush())
+                .await
+                .is_err()
+        );
+        drop(stream);
+        tokio::task::yield_now().await;
+        assert!(processor.is_finished());
+        assert!(!socket.streams_ref().lock().unwrap().contains_key(&77));
+        assert!(!alternate.streams_ref().lock().unwrap().contains_key(&77));
     }
 }

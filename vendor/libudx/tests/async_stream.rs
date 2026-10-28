@@ -47,6 +47,7 @@ async fn async_stream_read_write_basic() {
                 .write_all(&payload_clone)
                 .await
                 .expect("write_all failed");
+            async_a.flush().await.expect("flush before drop failed");
         });
         let read_task = tokio::spawn(async move {
             let mut buf = vec![0u8; 100];

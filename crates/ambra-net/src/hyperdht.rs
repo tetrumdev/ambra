@@ -3,28 +3,46 @@ use libudx::UdxRuntime;
 use peeroxide_dht::hyperdht::{self, HyperDhtConfig, HyperDhtHandle};
 use std::{sync::Arc, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::AbortOnDropHandle};
 
 /// One lazy client node per manager, never one node per API call.
 pub struct Client {
     identity: Identity,
     node: Mutex<Option<Node>>,
+    config: HyperDhtConfig,
 }
 struct Node {
     runtime: UdxRuntime,
     handle: HyperDhtHandle,
     task: JoinHandle<std::result::Result<(), peeroxide_dht::hyperdht::HyperDhtError>>,
-    executor: tokio::runtime::Handle,
+    network: Vec<(String, std::net::IpAddr)>,
 }
 impl Drop for Node {
     fn drop(&mut self) {
-        // Destroy the node before aborting its owner: dropping JoinHandle alone detaches children.
-        let handle = self.handle.clone();
-        let abort = self.task.abort_handle();
-        self.executor.spawn(async move {
-            let _ = tokio::time::timeout(Duration::from_secs(2), handle.destroy()).await;
-            abort.abort();
-        });
+        // The supervisor owns abort-on-drop guards for both DHT tasks.
+        self.task.abort();
+    }
+}
+
+fn native_network() -> Vec<(String, std::net::IpAddr)> {
+    let mut addresses: Vec<_> = if_addrs::get_if_addrs()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|interface| {
+            peeroxide_dht::address_policy::is_native_interface(&interface.name, interface.ip())
+        })
+        .map(|interface| (interface.name, interface.addr.ip()))
+        .collect();
+    addresses.sort_unstable();
+    addresses.dedup();
+    addresses
+}
+
+impl Node {
+    async fn shutdown(&mut self) {
+        let _ = tokio::time::timeout(Duration::from_secs(2), self.handle.destroy()).await;
+        self.task.abort();
+        let _ = (&mut self.task).await;
     }
 }
 impl Client {
@@ -32,26 +50,53 @@ impl Client {
         Self {
             identity,
             node: Mutex::new(None),
+            config: HyperDhtConfig::with_public_bootstrap(),
         }
     }
     async fn ready(&self) -> Result<tokio::sync::MutexGuard<'_, Option<Node>>> {
         let mut node = self.node.lock().await;
+        let network = native_network();
+        if node
+            .as_ref()
+            .is_some_and(|node| node.task.is_finished() || node.network != network)
+        {
+            tracing::info!("Replacing failed DHT node or changed native network");
+            if let Some(mut old) = node.take() {
+                old.shutdown().await;
+            }
+        }
         if node.is_none() {
+            let started = std::time::Instant::now();
             let runtime = UdxRuntime::new()?;
             let (task, handle, _events) =
-                hyperdht::spawn(&runtime, HyperDhtConfig::with_public_bootstrap()).await?;
+                hyperdht::spawn(&runtime, self.config.clone()).await?;
             *node = Some(Node {
                 runtime,
                 handle,
                 task,
-                executor: tokio::runtime::Handle::current(),
+                network,
             });
+            tracing::debug!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "DHT node started"
+            );
         }
-        node.as_ref()
+        let started = std::time::Instant::now();
+        let result = node.as_ref()
             .ok_or("DHT failed to initialize")?
             .handle
             .bootstrapped()
-            .await?;
+            .await;
+        if let Err(error) = result {
+            if let Some(mut failed) = node.take() {
+                failed.shutdown().await;
+            }
+            return Err(error.into());
+        }
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "DHT bootstrap ready"
+        );
         Ok(node)
     }
     /// The dependency verifies the mutable-record signature against the selected server key.
@@ -67,6 +112,7 @@ impl Client {
         &self,
         key: PublicKey,
     ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
+        let started = std::time::Instant::now();
         tracing::debug!(server = %key, "HyperDHT bootstrap started");
         let node = self.ready().await?;
         let node = node.as_ref().ok_or("DHT failed to initialize")?;
@@ -86,14 +132,14 @@ impl Client {
         if connection.remote_public_key != key.0 || connection.remote_addr.is_none() {
             return Err("DHT identity or direct endpoint missing".into());
         }
-        tracing::info!(peer = %key, endpoint = ?connection.remote_addr, "HyperDHT authenticated direct encrypted stream; data relay disabled");
+        tracing::info!(peer = %key, endpoint = ?connection.remote_addr, elapsed_ms = started.elapsed().as_millis(), "HyperDHT authenticated direct encrypted stream; data relay disabled");
         // Vendored connect rejects relay_through before it can open a data stream.
         let socket = connection.socket.clone();
         Ok(transport::adapt(connection.stream, Some(Box::new(socket))))
     }
     pub async fn shutdown(&self) {
-        if let Some(node) = self.node.lock().await.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(2), node.handle.destroy()).await;
+        if let Some(mut node) = self.node.lock().await.take() {
+            node.shutdown().await;
         }
     }
 }
@@ -123,6 +169,7 @@ pub async fn serve(
     config.relay_through = None;
     config.relay_address = None;
     let (task, swarm, mut incoming) = peeroxide::spawn(config).await?;
+    let mut task = AbortOnDropHandle::new(task);
     if let Ok(mut status) = status.write() {
         status.running = true;
     }
@@ -132,7 +179,7 @@ pub async fn serve(
     let key_pair = identity.key_pair();
     let announcement_status = status.clone();
     let announcement_cancel = cancel.clone();
-    let announce = tokio::spawn(async move {
+    let mut announce = AbortOnDropHandle::new(tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -216,7 +263,7 @@ pub async fn serve(
                 }
             }
         }
-    });
+    }));
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -224,23 +271,25 @@ pub async fn serve(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             connection = incoming.recv() => {
                 let Some(connection) = connection else { break; };
-                if tasks.len() >= 64 { swarm.release_peer(connection.peer.remote_public_key).await; continue; }
+                let generation = connection.generation();
+                if tasks.len() >= 64 { swarm.release_peer(connection.peer.remote_public_key, generation).await; continue; }
                 let Some(address) = connection.peer.remote_addr.filter(|a| !peeroxide_dht::address_policy::is_overlay(a.ip())) else {
                     eprintln!("Rejecting HyperDHT session without a native peer endpoint");
-                    swarm.release_peer(connection.peer.remote_public_key).await;
+                    swarm.release_peer(connection.peer.remote_public_key, generation).await;
                     continue;
                 };
                 tracing::info!(peer = %PublicKey(connection.peer.remote_public_key), endpoint = %address, "HyperDHT accepted authenticated direct encrypted stream; data relay disabled");
-                let peer = transport::RemotePeer { public_key: PublicKey(connection.peer.remote_public_key), address, session: Arc::new(()) };
+                let peer = transport::RemotePeer { public_key: PublicKey(connection.peer.remote_public_key), address, session: Arc::new(transport::Session::default()) };
                 let socket = connection.peer.socket.clone();
                 let (io, pump) = transport::adapt(connection.peer.stream, Some(Box::new(socket)));
                 let app = app.clone(); let cancel = cancel.clone(); let swarm = swarm.clone(); let key = peer.public_key;
-                tasks.spawn(async move { if let Err(error) = transport::serve(io, pump, peer, app, cancel).await { eprintln!("HyperDHT HTTP session closed: {error:?}"); } swarm.release_peer(key.0).await; });
+                tasks.spawn(async move { if let Err(error) = transport::serve(io, pump, peer, app, cancel).await { eprintln!("HyperDHT HTTP session closed: {error:?}"); } swarm.release_peer(key.0, generation).await; });
             }
         }
     }
     tasks.shutdown().await;
     announce.abort();
+    let _ = (&mut announce).await;
     swarm.dht().unregister_server(&target);
     let _ = tokio::time::timeout(
         Duration::from_millis(500),
@@ -249,9 +298,85 @@ pub async fn serve(
     .await;
     let _ = tokio::time::timeout(Duration::from_secs(2), swarm.destroy()).await;
     task.abort();
+    let _ = (&mut task).await;
     if let Ok(mut status) = status.write() {
         status.running = false;
         status.announced = false;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod client_tests {
+    use super::*;
+
+    fn isolated_client() -> Client {
+        Client {
+            identity: Identity::generate().unwrap(),
+            node: Mutex::new(None),
+            config: HyperDhtConfig::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_peer_lookup_reuses_healthy_node() {
+        let client = isolated_client();
+        let key = Identity::generate().unwrap().public_key();
+        assert!(client.connect(key).await.is_err());
+        let port = client
+            .node
+            .lock()
+            .await
+            .as_ref()
+            .unwrap()
+            .handle
+            .dht()
+            .local_port()
+            .await
+            .unwrap();
+        assert!(client.connect(key).await.is_err());
+        {
+            let guard = client.node.lock().await;
+            let node = guard.as_ref().unwrap();
+            assert!(!node.task.is_finished());
+            assert_eq!(port, node.handle.dht().local_port().await.unwrap());
+        }
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn changed_network_replaces_stale_routing_state() {
+        let client = isolated_client();
+        let old = {
+            let mut node = client.ready().await.unwrap();
+            let node = node.as_mut().unwrap();
+            // Simulate the fingerprint recorded on a previous native network.
+            node.network
+                .push(("previous-network".into(), "192.0.2.9".parse().unwrap()));
+            node.handle.clone()
+        };
+        let replacement = client.ready().await.unwrap();
+        assert_eq!(replacement.as_ref().unwrap().network, native_network());
+        assert!(old.bootstrapped().await.is_err());
+        drop(replacement);
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn failed_node_is_replaced_and_shutdown_closes_owner() {
+        let client = isolated_client();
+        let old = {
+            let node = client.ready().await.unwrap();
+            let node = node.as_ref().unwrap();
+            node.task.abort();
+            node.handle.clone()
+        };
+        tokio::task::yield_now().await;
+        let replacement = client.ready().await.unwrap();
+        assert!(!replacement.as_ref().unwrap().task.is_finished());
+        assert!(old.bootstrapped().await.is_err());
+        drop(replacement);
+        client.shutdown().await;
+        assert!(client.node.lock().await.is_none());
+    }
 }

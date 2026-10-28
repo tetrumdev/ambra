@@ -249,7 +249,7 @@ mod tests {
         // With no ConnectInfo these requests take the paired-device path, even on loopback.
         let app: Router = routes(Arc::new(Library { root, state, lock: Mutex::new(()) }))
             .layer(axum::middleware::from_fn_with_state(policy, crate::access::enforce))
-            .layer(axum::Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(()) }));
+            .layer(axum::Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(ambra_net::transport::Session::default()) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

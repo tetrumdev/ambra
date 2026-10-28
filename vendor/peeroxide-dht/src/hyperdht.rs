@@ -1,9 +1,12 @@
 #![deny(clippy::all)]
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use ed25519_dalek::SigningKey;
 use rand::random;
@@ -550,6 +553,35 @@ pub struct HyperDhtHandle {
     admin_tx: mpsc::UnboundedSender<AdminRequest>,
     current_relay_addresses: Arc<Mutex<Vec<Ipv4Peer>>>,
     current_holepunch_relays: Arc<Mutex<Vec<RelayInfo>>>,
+    forwarder_hints: Arc<Mutex<HashMap<[u8; 32], Vec<ForwarderHint>>>>,
+}
+
+const FORWARDER_TTL: Duration = Duration::from_secs(300);
+const FORWARDER_FAILURE_COOLDOWN: Duration = Duration::from_secs(30);
+const FORWARDER_PARALLEL: usize = 3;
+
+struct ForwarderHint {
+    address: Ipv4Peer,
+    success: Option<Instant>,
+    updated: Instant,
+    latency: Duration,
+    failures: u32,
+}
+
+struct HandshakeAttempt {
+    local_stream_id: u32,
+    payload: NoisePayload,
+    // Every forwarder gets byte-identical IK message 1. No competing server
+    // holepunch state or UDX stream ids are created by candidate racing.
+    ephemeral: NoiseKeypair,
+}
+
+struct CandidateHandshake {
+    relay: Ipv4Peer,
+    reply: crate::router::HandshakeResult,
+    payload: NoisePayload,
+    noise: NoiseWrapResult,
+    elapsed: Duration,
 }
 
 impl HyperDhtHandle {
@@ -1221,179 +1253,335 @@ impl HyperDhtHandle {
         opts: ConnectOpts,
     ) -> Result<PeerConnection, HyperDhtError> {
         let mut last_err = HyperDhtError::NoRelayNodes;
-        let mut tried: Vec<(String, u16)> = Vec::new();
-
-        // Phase 1: Optimistic pre-connect through provided relay addresses.
-        for relay in relay_addresses {
-            tried.push((relay.host.clone(), relay.port));
+        let mut tried = HashSet::new();
+        let mut hints = self.cached_forwarders(&remote_public_key);
+        hints.extend_from_slice(relay_addresses);
+        self.rank_candidates(&remote_public_key, &mut hints);
+        if !hints.is_empty() {
+            // A stale warm hint must not defer fresh discovery for ten seconds.
+            // Discovery may retry the same address with the full normal window.
             match self
-                .connect_through_node(key_pair, &remote_public_key, relay, runtime, &opts)
+                .connect_candidates(
+                    key_pair,
+                    remote_public_key,
+                    &hints,
+                    runtime,
+                    &opts,
+                    Some(Duration::from_secs(1)),
+                )
                 .await
             {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    tracing::debug!(relay = %format!("{}:{}", relay.host, relay.port), err = %e, "pre-connect relay attempt failed");
-                    last_err = e;
-                }
+                Ok(connection) => return Ok(connection),
+                Err(error) => last_err = error,
             }
         }
 
         let target = hash(&remote_public_key);
-
-        // Phase 2: FIND_PEER on hash(pk). Responders are FE-holders (they
-        // returned a stored peer record under this target). Their `reply.from`
-        // address is a verified PEER_HANDSHAKE forwarder. This mirrors Node's
-        // `findAndConnect` which does `dht.findPeer(c.target)` and tries each
-        // `data.from`.
-        let peer_replies = self.query_find_peer(target).await.unwrap_or_else(|e| {
-            tracing::debug!(err = %e, "connect_with_nodes: FIND_PEER query failed");
+        let discovery = Instant::now();
+        let peer_replies = self.query_find_peer(target).await.unwrap_or_else(|error| {
+            tracing::debug!(%error, "FIND_PEER failed; retaining FIND_NODE fallback");
             Vec::new()
         });
         tracing::debug!(
-            reply_count = peer_replies.len(),
-            "connect_with_nodes: FIND_PEER completed"
+            elapsed_ms = discovery.elapsed().as_millis(),
+            replies = peer_replies.len(),
+            "FIND_PEER complete"
         );
-
+        let mut candidates = Vec::new();
         for reply in &peer_replies {
-            if reply.value.is_none() {
-                continue;
-            }
-            if tried
-                .iter()
-                .any(|(h, p)| h == &reply.from.host && *p == reply.from.port)
-            {
-                continue;
-            }
-            tried.push((reply.from.host.clone(), reply.from.port));
-            tracing::debug!(
-                relay = %format!("{}:{}", reply.from.host, reply.from.port),
-                "connect_with_nodes: trying FE-holder"
-            );
-            match self
-                .connect_through_node(key_pair, &remote_public_key, &reply.from, runtime, &opts)
-                .await
-            {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    tracing::debug!(
-                        relay = %format!("{}:{}", reply.from.host, reply.from.port),
-                        err = %e,
-                        "FE-holder relay attempt failed"
-                    );
-                    last_err = e;
-                }
+            if reply.value.is_some() && tried.insert((reply.from.host.clone(), reply.from.port)) {
+                candidates.push(reply.from.clone());
             }
         }
-
         for reply in &peer_replies {
             if let Some(value) = &reply.value {
                 if let Ok(peer) = decode_hyper_peer_from_bytes(value) {
-                    for relay in &peer.relay_addresses {
-                        if tried
-                            .iter()
-                            .any(|(h, p)| h == &relay.host && *p == relay.port)
-                        {
-                            continue;
-                        }
-                        tried.push((relay.host.clone(), relay.port));
-                        match self
-                            .connect_through_node(
-                                key_pair,
-                                &remote_public_key,
-                                relay,
-                                runtime,
-                                &opts,
-                            )
-                            .await
-                        {
-                            Ok(result) => return Ok(result),
-                            Err(e) => {
-                                tracing::debug!(
-                                    relay = %format!("{}:{}", relay.host, relay.port),
-                                    err = %e,
-                                    "peer-record relay attempt failed"
-                                );
-                                last_err = e;
-                            }
+                    // Untrusted records may suggest forwarders, never change the pinned key.
+                    if peer.public_key != remote_public_key {
+                        continue;
+                    }
+                    for relay in peer.relay_addresses {
+                        if tried.insert((relay.host.clone(), relay.port)) {
+                            candidates.push(relay);
                         }
                     }
                 }
             }
         }
-
-        // Phase 3: Fallback to FIND_NODE walk for closer nodes the DHT routing
-        // table reaches but that didn't return an FE record (e.g. mid-refresh).
-        let table_size = self.dht.table_size().await.unwrap_or(0);
-        tracing::debug!(
-            table_size,
-            "connect_with_nodes: routing table size before FIND_NODE"
-        );
-        let node_replies = self
-            .dht
-            .find_node(target)
-            .await
-            .map_err(HyperDhtError::Dht)?;
-        tracing::debug!(
-            reply_count = node_replies.len(),
-            "connect_with_nodes: FIND_NODE completed"
-        );
-
-        if relay_addresses.is_empty() && peer_replies.is_empty() && node_replies.is_empty() {
-            return Err(HyperDhtError::PeerNotFound);
-        }
-
-        let mut candidates: Vec<Ipv4Peer> = Vec::new();
-        for reply in &node_replies {
-            candidates.push(reply.from.clone());
-            for cn in &reply.closer_nodes {
-                if !candidates
-                    .iter()
-                    .any(|c| c.host == cn.host && c.port == cn.port)
-                {
-                    candidates.push(cn.clone());
-                }
-            }
-        }
-        tracing::debug!(
-            candidate_count = candidates.len(),
-            "connect_with_nodes: total FIND_NODE candidates (replies + closer_nodes)"
-        );
-
-        for (i, candidate) in candidates.iter().enumerate() {
-            let skip = tried
-                .iter()
-                .any(|(h, p)| h == &candidate.host && *p == candidate.port);
-            tracing::debug!(
-                i,
-                candidate = %format!("{}:{}", candidate.host, candidate.port),
-                skip,
-                "connect_with_nodes: candidate check"
-            );
-            if skip {
-                continue;
-            }
-            tried.push((candidate.host.clone(), candidate.port));
-            tracing::debug!(
-                candidate = %format!("{}:{}", candidate.host, candidate.port),
-                "connect_with_nodes: trying node candidate"
-            );
+        self.rank_candidates(&remote_public_key, &mut candidates);
+        if !candidates.is_empty() {
             match self
-                .connect_through_node(key_pair, &remote_public_key, candidate, runtime, &opts)
+                .connect_candidates(
+                    key_pair,
+                    remote_public_key,
+                    &candidates,
+                    runtime,
+                    &opts,
+                    None,
+                )
                 .await
             {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    tracing::debug!(
-                        relay = %format!("{}:{}", candidate.host, candidate.port),
-                        err = %e,
-                        "find_node candidate attempt failed"
-                    );
-                    last_err = e;
-                }
+                Ok(connection) => return Ok(connection),
+                Err(error) => last_err = error,
             }
         }
 
+        let discovery = Instant::now();
+        let node_replies = match self.dht.find_node(target).await {
+            Ok(replies) => replies,
+            Err(error) if !hints.is_empty() => {
+                tracing::debug!(%error, "FIND_NODE failed; retaining supplied/cached forwarders");
+                Vec::new()
+            }
+            Err(error) => return Err(error.into()),
+        };
+        tracing::debug!(
+            elapsed_ms = discovery.elapsed().as_millis(),
+            replies = node_replies.len(),
+            "FIND_NODE fallback complete"
+        );
+        if hints.is_empty() && peer_replies.is_empty() && node_replies.is_empty() {
+            return Err(HyperDhtError::PeerNotFound);
+        }
+        let mut candidates = Vec::new();
+        for reply in node_replies {
+            for candidate in std::iter::once(reply.from).chain(reply.closer_nodes) {
+                if tried.insert((candidate.host.clone(), candidate.port)) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        // Discovery can be empty while a supplied or cached forwarder is
+        // reachable over a high-latency path. Its grace is an optimization,
+        // never a replacement for the original full handshake timeout.
+        for hint in hints {
+            if tried.insert((hint.host.clone(), hint.port)) {
+                candidates.push(hint);
+            }
+        }
+        self.rank_candidates(&remote_public_key, &mut candidates);
+        if !candidates.is_empty() {
+            return self
+                .connect_candidates(
+                    key_pair,
+                    remote_public_key,
+                    &candidates,
+                    runtime,
+                    &opts,
+                    None,
+                )
+                .await;
+        }
         Err(last_err)
+    }
+
+    fn cached_forwarders(&self, key: &[u8; 32]) -> Vec<Ipv4Peer> {
+        let Ok(mut cache) = self.forwarder_hints.lock() else {
+            return Vec::new();
+        };
+        cache.retain(|_, hints| {
+            hints.retain(|hint| hint.updated.elapsed() < FORWARDER_TTL);
+            !hints.is_empty()
+        });
+        cache
+            .get(key)
+            .into_iter()
+            .flatten()
+            .filter(|hint| {
+                hint.success
+                    .is_some_and(|success| success.elapsed() < FORWARDER_TTL)
+                    && (hint.failures == 0 || hint.updated.elapsed() >= FORWARDER_FAILURE_COOLDOWN)
+            })
+            .map(|hint| hint.address.clone())
+            .collect()
+    }
+
+    fn rank_candidates(&self, key: &[u8; 32], candidates: &mut Vec<Ipv4Peer>) {
+        let mut seen = HashSet::new();
+        candidates.retain(|candidate| {
+            candidate.port != 0
+                && candidate
+                    .host
+                    .parse()
+                    .is_ok_and(|ip| !crate::address_policy::is_overlay(ip))
+                && seen.insert((candidate.host.clone(), candidate.port))
+        });
+        if let Ok(cache) = self.forwarder_hints.lock() {
+            if let Some(hints) = cache.get(key) {
+                candidates.sort_by_key(|candidate| {
+                    hints.iter().find(|hint| hint.address == *candidate).map_or(
+                        (false, Duration::from_secs(10)),
+                        |hint| {
+                            (
+                                hint.failures > 0
+                                    && hint.updated.elapsed() < FORWARDER_FAILURE_COOLDOWN,
+                                hint.latency,
+                            )
+                        },
+                    )
+                });
+            }
+        }
+    }
+
+    fn record_candidate(
+        &self,
+        key: [u8; 32],
+        address: &Ipv4Peer,
+        success: bool,
+        latency: Duration,
+    ) {
+        let Ok(mut cache) = self.forwarder_hints.lock() else {
+            return;
+        };
+        if !cache.contains_key(&key) && cache.len() >= 128 {
+            let oldest = cache
+                .iter()
+                .min_by_key(|(_, hints)| hints.iter().map(|hint| hint.updated).max())
+                .map(|(key, _)| *key);
+            if let Some(oldest) = oldest {
+                cache.remove(&oldest);
+            }
+        }
+        let hints = cache.entry(key).or_default();
+        let position = hints.iter().position(|hint| hint.address == *address);
+        let hint = if let Some(position) = position {
+            &mut hints[position]
+        } else {
+            if hints.len() >= 8 {
+                // Keep successful warm candidates ahead of failure-only history.
+                let remove = hints
+                    .iter()
+                    .position(|hint| hint.success.is_none())
+                    .unwrap_or(0);
+                hints.remove(remove);
+            }
+            hints.push(ForwarderHint {
+                address: address.clone(),
+                success: None,
+                updated: Instant::now(),
+                latency,
+                failures: 0,
+            });
+            hints.last_mut().unwrap()
+        };
+        hint.updated = Instant::now();
+        hint.latency = latency;
+        if success {
+            hint.success = Some(Instant::now());
+            hint.failures = 0;
+        } else {
+            hint.failures = hint.failures.saturating_add(1);
+        }
+    }
+
+    async fn connect_candidates(
+        &self,
+        key_pair: &KeyPair,
+        remote_public_key: [u8; 32],
+        candidates: &[Ipv4Peer],
+        runtime: &UdxRuntime,
+        opts: &ConnectOpts,
+        handshake_grace: Option<Duration>,
+    ) -> Result<PeerConnection, HyperDhtError> {
+        let mut attempt = Arc::new(self.prepare_handshake().await?);
+        let started = Instant::now();
+        let mut pending: std::collections::VecDeque<_> = candidates.iter().collect();
+        let mut failed = HashSet::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        let mut last_error = HyperDhtError::NoRelayNodes;
+        let mut attempted = 0;
+        let deadline = handshake_grace.map(|grace| Instant::now() + grace);
+        loop {
+            while tasks.len() < FORWARDER_PARALLEL {
+                let Some(relay) = pending.pop_front() else {
+                    break;
+                };
+                let relay = relay.clone();
+                let handle = self.clone();
+                let key_pair = key_pair.clone();
+                let attempt = attempt.clone();
+                attempted += 1;
+                tasks.spawn(async move {
+                    let started = Instant::now();
+                    let result = handle
+                        .handshake_candidate(&key_pair, remote_public_key, &relay, &attempt)
+                        .await;
+                    (relay, started.elapsed(), result)
+                });
+            }
+            let next = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline, tasks.join_next()).await,
+                None => Ok(tasks.join_next().await),
+            };
+            let Some(result) = (match next {
+                Ok(next) => next,
+                Err(_) => {
+                    for candidate in candidates {
+                        self.record_candidate(
+                            remote_public_key,
+                            candidate,
+                            false,
+                            started.elapsed(),
+                        );
+                    }
+                    return Err(HyperDhtError::HandshakeFailed(
+                        "cached forwarder handshake timed out".into(),
+                    ));
+                }
+            }) else {
+                break;
+            };
+            let (relay, elapsed, result) = result.map_err(|_| HyperDhtError::ChannelClosed)?;
+            match result {
+                Ok(handshake) => {
+                    // One validated IK response owns all further holepunch/UDX work.
+                    tasks.shutdown().await;
+                    let result = self
+                        .finish_connection(handshake, runtime, opts, attempt.local_stream_id)
+                        .await;
+                    self.record_candidate(
+                        remote_public_key,
+                        &relay,
+                        result.is_ok(),
+                        started.elapsed(),
+                    );
+                    tracing::debug!(
+                        attempted,
+                        elapsed_ms = started.elapsed().as_millis(),
+                        success = result.is_ok(),
+                        "Forwarder group complete"
+                    );
+                    match result {
+                        Ok(connection) => return Ok(connection),
+                        Err(error) => {
+                            failed.insert((relay.host.clone(), relay.port));
+                            last_error = error;
+                            // Losing forwarders were only cancelled, not proven
+                            // unusable. Retry them after a failed UDX/holepunch
+                            // continuation, with fresh Noise state and stream ID.
+                            pending = candidates
+                                .iter()
+                                .filter(|candidate| {
+                                    !failed.contains(&(candidate.host.clone(), candidate.port))
+                                })
+                                .collect();
+                            if pending.is_empty() {
+                                break;
+                            }
+                            attempt = Arc::new(self.prepare_handshake().await?);
+                        }
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(host = %relay.host, port = relay.port, elapsed_ms = elapsed.as_millis(), %error, "Handshake forwarder failed");
+                    self.record_candidate(remote_public_key, &relay, false, elapsed);
+                    failed.insert((relay.host.clone(), relay.port));
+                    last_error = error;
+                }
+            }
+        }
+        Err(last_error)
     }
 
     /// Connect directly to a peer at a known address, bypassing DHT routing.
@@ -1431,13 +1619,26 @@ impl HyperDhtHandle {
         runtime: &UdxRuntime,
         opts: &ConnectOpts,
     ) -> Result<PeerConnection, HyperDhtError> {
-        let target = hash(remote_public_key);
+        if relay
+            .host
+            .parse()
+            .map_or(true, crate::address_policy::is_overlay)
+        {
+            return Err(HyperDhtError::FirewallRejected);
+        }
+        self.connect_candidates(
+            key_pair,
+            *remote_public_key,
+            std::slice::from_ref(relay),
+            runtime,
+            opts,
+            None,
+        )
+        .await
+    }
 
-        // Phase 1: Noise IK handshake via PEER_HANDSHAKE relay
-        let mut nw = NoiseWrap::new_initiator(key_pair.to_noise_keypair(), *remote_public_key);
-
+    async fn prepare_handshake(&self) -> Result<HandshakeAttempt, HyperDhtError> {
         let local_stream_id = next_stream_id();
-
         // Advertise our reflexive address (if known) + local IPv4
         // interface addresses. Mirrors Node `lib/connect.js:420-437`. The
         // receiver sequentially probes this list and applies its own
@@ -1447,7 +1648,7 @@ impl HyperDhtHandle {
             Err(_) => vec![],
         };
 
-        let local_payload = NoisePayload {
+        let payload = NoisePayload {
             version: 1,
             error: 0,
             firewall: FIREWALL_UNKNOWN,
@@ -1465,9 +1666,27 @@ impl HyperDhtHandle {
             relay_addresses: None,
         };
 
-        let noise_bytes = nw.send(&local_payload)?;
-        let handshake_value = Router::encode_client_handshake(noise_bytes, None, None)?;
+        Ok(HandshakeAttempt {
+            local_stream_id,
+            payload,
+            ephemeral: crate::noise::generate_keypair(),
+        })
+    }
 
+    async fn handshake_candidate(
+        &self,
+        key_pair: &KeyPair,
+        remote_public_key: [u8; 32],
+        relay: &Ipv4Peer,
+        attempt: &HandshakeAttempt,
+    ) -> Result<CandidateHandshake, HyperDhtError> {
+        let started = Instant::now();
+        let target = hash(&remote_public_key);
+        let mut nw = NoiseWrap::new_initiator(key_pair.to_noise_keypair(), remote_public_key);
+        // Replay the same IK message across forwarding paths, as with a retry.
+        nw.set_ephemeral(attempt.ephemeral.clone());
+        let noise_bytes = nw.send(&attempt.payload)?;
+        let handshake_value = Router::encode_client_handshake(noise_bytes, None, None)?;
         let resp = self
             .dht
             .request(
@@ -1521,6 +1740,35 @@ impl HyperDhtHandle {
             return Err(HyperDhtError::FirewallRejected);
         }
 
+        Ok(CandidateHandshake {
+            relay: relay.clone(),
+            reply: hs_result,
+            payload: remote_payload,
+            noise: nw_result,
+            elapsed: started.elapsed(),
+        })
+    }
+
+    async fn finish_connection(
+        &self,
+        handshake: CandidateHandshake,
+        runtime: &UdxRuntime,
+        opts: &ConnectOpts,
+        local_stream_id: u32,
+    ) -> Result<PeerConnection, HyperDhtError> {
+        let CandidateHandshake {
+            relay,
+            reply: hs_result,
+            payload: remote_payload,
+            noise: nw_result,
+            elapsed,
+        } = handshake;
+        let relay = &relay;
+        let target = hash(&nw_result.remote_public_key);
+        tracing::debug!(
+            elapsed_ms = elapsed.as_millis(),
+            "Pinned Noise IK handshake complete"
+        );
         // Skip holepunching when the remote peer is directly reachable.
         // Node.js (connect.js) checks:
         //   payload.firewall === FIREWALL.OPEN  -- server says it's open
@@ -2093,7 +2341,9 @@ pub async fn establish_stream_with_socket(
         ),
     )
     .await
-    .map_err(|_| HyperDhtError::StreamEstablishment("encrypted header exchange timed out".into()))??;
+    .map_err(|_| {
+        HyperDhtError::StreamEstablishment("encrypted header exchange timed out".into())
+    })??;
     tracing::debug!("SecretStream established");
 
     Ok(PeerConnection {
@@ -2374,6 +2624,15 @@ pub async fn build_passive_holepunch_reply(
     })
 }
 
+// A dropped JoinHandle detaches its task. Supervisors must cancel children,
+// including when their own future is aborted before its first poll.
+struct AbortOnDrop<T>(JoinHandle<T>);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 // ── Spawn ─────────────────────────────────────────────────────────────────────
 
 /// Create a HyperDHT instance and start its background tasks.
@@ -2389,6 +2648,7 @@ pub async fn spawn(
     HyperDhtError,
 > {
     let (dht_join, dht_handle) = crate::rpc::spawn(runtime, config.dht).await?;
+    let mut dht_join = AbortOnDrop(dht_join);
     let persistent_config = config.persistent;
 
     let request_rx = dht_handle
@@ -2400,25 +2660,25 @@ pub async fn spawn(
     let (server_tx, server_rx) = mpsc::unbounded_channel();
     let (admin_tx, admin_rx) = mpsc::unbounded_channel::<AdminRequest>();
 
-    let request_task = tokio::spawn(run_request_handler(
+    let mut request_task = AbortOnDrop(tokio::spawn(run_request_handler(
         request_rx,
         persistent_config,
         dht_handle.clone(),
         Arc::clone(&router),
         server_tx.clone(),
         admin_rx,
-    ));
+    )));
 
     let join = tokio::spawn(async move {
         tokio::select! {
-            res = dht_join => {
+            res = &mut dht_join.0 => {
                 match res {
                     Ok(Ok(())) => Ok(()),
                     Ok(Err(e)) => Err(HyperDhtError::Dht(e)),
                     Err(_) => Err(HyperDhtError::ChannelClosed),
                 }
             }
-            res = request_task => {
+            res = &mut request_task.0 => {
                 match res {
                     Ok(()) => Ok(()),
                     Err(_) => Err(HyperDhtError::ChannelClosed),
@@ -2434,6 +2694,7 @@ pub async fn spawn(
         admin_tx,
         current_relay_addresses: Arc::new(Mutex::new(Vec::new())),
         current_holepunch_relays: Arc::new(Mutex::new(Vec::new())),
+        forwarder_hints: Arc::new(Mutex::new(HashMap::new())),
     };
     Ok((join, handle, server_rx))
 }
@@ -3565,5 +3826,217 @@ mod passive_holepunch_helper_tests {
             result.puncher.primary_socket().is_some(),
             "puncher should have a primary socket"
         );
+    }
+}
+
+#[cfg(test)]
+mod candidate_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn authenticated_but_unusable_candidate_does_not_skip_alternatives() {
+        let runtime = UdxRuntime::new().unwrap();
+        let mut config = HyperDhtConfig::default();
+        config.dht.host = "127.0.0.1".into();
+        config.dht.firewalled = false;
+        let key = KeyPair::generate();
+        let target = hash(&key.public_key);
+        let arrived = Arc::new(tokio::sync::Notify::new());
+        let messages = Arc::new(Mutex::new(Vec::new()));
+        let mut responders = tokio::task::JoinSet::new();
+        let mut nodes = Vec::new();
+        let mut addresses = Vec::new();
+        for first in [true, false] {
+            let (owner, handle, mut events) = spawn(&runtime, config.clone()).await.unwrap();
+            handle.register_server(&target);
+            addresses.push(Ipv4Peer {
+                host: "127.0.0.1".into(),
+                port: handle.local_port().await.unwrap(),
+            });
+            nodes.push((owner, handle));
+            let key = key.clone();
+            let arrived = arrived.clone();
+            let messages = messages.clone();
+            responders.spawn(async move {
+                while let Some(event) = events.recv().await {
+                    if let ServerEvent::PeerHandshake { msg, reply_tx, .. } = event {
+                        if first {
+                            arrived.notified().await;
+                        } else {
+                            messages.lock().unwrap().push(msg.noise.clone());
+                            arrived.notify_one();
+                            tokio::time::sleep(Duration::from_millis(25)).await;
+                        }
+                        let mut noise = NoiseWrap::new_responder(key.to_noise_keypair());
+                        noise.recv(&msg.noise).unwrap();
+                        let payload = NoisePayload {
+                            version: 1,
+                            error: 0,
+                            firewall: FIREWALL_OPEN,
+                            holepunch: None,
+                            addresses4: vec![],
+                            addresses6: vec![],
+                            // Both prove the pinned identity but cannot establish UDX.
+                            udx: (!first).then_some(UdxInfo {
+                                version: 1,
+                                reusable_socket: true,
+                                id: u64::MAX,
+                                seq: 0,
+                            }),
+                            secret_stream: Some(SecretStreamInfo { version: 1 }),
+                            relay_through: None,
+                            relay_addresses: None,
+                        };
+                        let reply = HandshakeMessage {
+                            mode: crate::hyperdht_messages::MODE_REPLY,
+                            noise: noise.send(&payload).unwrap(),
+                            peer_address: None,
+                            relay_address: None,
+                        };
+                        let _ = reply_tx.send(Some(
+                            crate::hyperdht_messages::encode_handshake_to_bytes(&reply).unwrap(),
+                        ));
+                    }
+                }
+            });
+        }
+        let (owner, client, _) = spawn(&runtime, config).await.unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.connect_candidates(
+                &KeyPair::generate(),
+                key.public_key,
+                &addresses,
+                &runtime,
+                &ConnectOpts::default(),
+                None,
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(result, Err(HyperDhtError::StreamEstablishment(ref message)) if message.contains("out of u32 range")),
+            "alternate pinned candidate was skipped: {result:?}"
+        );
+        let messages = messages.lock().unwrap();
+        assert!(messages.len() >= 2);
+        assert_ne!(
+            messages.first(),
+            messages.last(),
+            "a failed stream must retry with fresh Noise state"
+        );
+        drop(messages);
+        responders.shutdown().await;
+        client.destroy().await.unwrap();
+        owner.await.unwrap().unwrap();
+        for (owner, node) in nodes {
+            node.destroy().await.unwrap();
+            owner.await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn successful_hints_expire_and_failures_cool_down() {
+        let runtime = UdxRuntime::new().unwrap();
+        let (owner, handle, _) = spawn(&runtime, HyperDhtConfig::default()).await.unwrap();
+        let key = [7; 32];
+        let address = Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port: 1234,
+        };
+        handle.record_candidate(key, &address, true, Duration::from_millis(10));
+        assert_eq!(handle.cached_forwarders(&key), vec![address.clone()]);
+        handle.record_candidate(key, &address, false, Duration::from_secs(1));
+        assert!(handle.cached_forwarders(&key).is_empty());
+        tokio::time::advance(FORWARDER_FAILURE_COOLDOWN).await;
+        assert_eq!(handle.cached_forwarders(&key), vec![address]);
+        tokio::time::advance(FORWARDER_TTL).await;
+        assert!(handle.cached_forwarders(&key).is_empty());
+        handle.destroy().await.unwrap();
+        owner.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn candidate_ranking_is_bounded_deduplicated_and_excludes_overlays() {
+        let runtime = UdxRuntime::new().unwrap();
+        let (owner, handle, _) = spawn(&runtime, HyperDhtConfig::default()).await.unwrap();
+        let address = Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port: 1234,
+        };
+        for peer in 0..160u32 {
+            let mut key = [0; 32];
+            key[..4].copy_from_slice(&peer.to_le_bytes());
+            for port in 1..=12 {
+                handle.record_candidate(
+                    key,
+                    &Ipv4Peer {
+                        port,
+                        ..address.clone()
+                    },
+                    true,
+                    Duration::from_millis(10),
+                );
+            }
+        }
+        let cache = handle.forwarder_hints.lock().unwrap();
+        assert!(cache.len() <= 128);
+        assert!(cache.values().all(|hints| hints.len() <= 8));
+        drop(cache);
+        let mut candidates = vec![
+            address.clone(),
+            address.clone(),
+            Ipv4Peer {
+                host: "100.106.252.60".into(),
+                port: 1234,
+            },
+        ];
+        handle.rank_candidates(&[0; 32], &mut candidates);
+        assert_eq!(candidates, [address]);
+        handle.destroy().await.unwrap();
+        owner.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn forwarder_race_replays_identical_noise_and_stream_id() {
+        let runtime = UdxRuntime::new().unwrap();
+        let (owner, handle, _) = spawn(&runtime, HyperDhtConfig::default()).await.unwrap();
+        let attempt = handle.prepare_handshake().await.unwrap();
+        let key = KeyPair::generate();
+        let remote = KeyPair::generate();
+        let mut messages = Vec::new();
+        for _ in 0..FORWARDER_PARALLEL {
+            let mut noise = NoiseWrap::new_initiator(key.to_noise_keypair(), remote.public_key);
+            noise.set_ephemeral(attempt.ephemeral.clone());
+            messages.push(noise.send(&attempt.payload).unwrap());
+            assert_eq!(
+                attempt.payload.udx.as_ref().unwrap().id,
+                u64::from(attempt.local_stream_id)
+            );
+        }
+        assert!(messages.windows(2).all(|pair| pair[0] == pair[1]));
+        handle.destroy().await.unwrap();
+        owner.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn aborting_supervisor_closes_both_children_and_udp_socket() {
+        let runtime = UdxRuntime::new().unwrap();
+        let (owner, handle, _) = spawn(&runtime, HyperDhtConfig::default()).await.unwrap();
+        let port = handle.local_port().await.unwrap();
+        owner.abort();
+        let _ = owner.await;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), handle.bootstrapped())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        tokio::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port))
+            .await
+            .unwrap();
     }
 }

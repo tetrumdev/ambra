@@ -132,8 +132,10 @@ async fn direct_udx_stream_preserves_audio_across_packet_loss() {
     let serving = tokio::spawn(async move {
         let connection = incoming.recv().await.unwrap();
         assert!(connection.peer.remote_addr.is_some(), "accepted UDX must retain its actual endpoint");
-        let peer = ambra_net::transport::RemotePeer { public_key: ambra_net::PublicKey(connection.peer.remote_public_key), address: connection.peer.remote_addr.unwrap(), session: std::sync::Arc::new(()) };
-        let (io, pump) = ambra_net::transport::adapt(connection.peer.stream, Some(Box::new(connection.peer.socket)));
+        let peer = ambra_net::transport::RemotePeer { public_key: ambra_net::PublicKey(connection.peer.remote_public_key), address: connection.peer.remote_addr.unwrap(), session: std::sync::Arc::new(ambra_net::transport::Session::default()),
+        };
+        let (io, pump) = ambra_net::transport::adapt(connection.peer.stream, Some(Box::new(connection.peer.socket)),
+        );
         ambra_net::transport::serve(io, pump, peer, app, serving_stop).await
     });
     let mut client_config = HyperDhtConfig::default();
@@ -154,4 +156,164 @@ async fn direct_udx_stream_preserves_audio_across_packet_loss() {
     let _ = serving.await;
     client.destroy().await.unwrap(); server.destroy().await.unwrap();
     client_task.abort(); server_task.abort(); proxy_task.abort();
+}
+
+#[tokio::test]
+async fn slow_forwarder_does_not_block_pinned_peer_and_stale_sessions_do_not_block_reconnect() {
+    use peeroxide_dht::messages::Ipv4Peer;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let runtime = UdxRuntime::new().unwrap();
+    let mut config = peeroxide::SwarmConfig::default();
+    config.dht.dht.host = "127.0.0.1".into();
+    config.dht.dht.firewalled = false;
+    let (server_owner, server, mut incoming) = peeroxide::spawn(config).await.unwrap();
+    let key = server.key_pair().public_key;
+    server
+        .dht()
+        .register_server(&peeroxide_dht::crypto::hash(&key));
+    let port = server.dht().local_port().await.unwrap();
+    let dead = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let (client_owner, client, _) = hyperdht::spawn(&runtime, HyperDhtConfig::default())
+        .await
+        .unwrap();
+    let identity = KeyPair::generate();
+    let candidates = [
+        Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port: dead.local_addr().unwrap().port(),
+        },
+        Ipv4Peer {
+            host: "127.0.0.1".into(),
+            port,
+        },
+    ];
+    let serving = tokio::spawn(async move {
+        let mut sessions = Vec::new();
+        while let Some(connection) = incoming.recv().await {
+            let generation = connection.generation();
+            sessions.push((generation, connection.peer.stream, connection.peer.socket));
+            if sessions.len() == 5 {
+                break;
+            }
+        }
+        sessions
+    });
+    let mut clients = Vec::new();
+    for round in 0..5 {
+        let relays: &[Ipv4Peer] = if round == 0 { &candidates } else { &[] };
+        let start = std::time::Instant::now();
+        let connection = tokio::time::timeout(
+            Duration::from_secs(2),
+            client.connect_with_options(&identity, key, relays, &runtime, Default::default()),
+        )
+        .await
+        .expect(
+            "dead first forwarder blocked a working candidate or stale session blocked reconnect",
+        )
+        .unwrap();
+        println!(
+            "CONTROLLED round={round} connection_us={}",
+            start.elapsed().as_micros()
+        );
+        assert_eq!(connection.remote_public_key, key);
+        clients.push(connection);
+    }
+    let mut sessions = serving.await.unwrap();
+    // Old-session cleanup must not release the newest reservation.
+    server
+        .release_peer(identity.public_key, sessions[0].0)
+        .await;
+    // Validate each independently encrypted session; no previous session was closed before reconnect.
+    for (client, (_, stream, _socket)) in clients.iter_mut().zip(sessions.iter_mut()) {
+        let exchange = async {
+            client.stream.write(b"pinned").await.unwrap();
+            let received = stream.read().await.unwrap().unwrap();
+            assert_eq!(&received[..], b"pinned");
+        };
+        tokio::time::timeout(Duration::from_secs(2), exchange)
+            .await
+            .unwrap();
+    }
+    clients.clear();
+    sessions.clear();
+    client.destroy().await.unwrap();
+    server.destroy().await.unwrap();
+    client_owner.await.unwrap().unwrap();
+    server_owner.await.unwrap();
+}
+
+#[tokio::test]
+async fn slow_supplied_forwarder_survives_optimistic_grace_and_empty_discovery() {
+    let runtime = UdxRuntime::new().unwrap();
+    let mut config = peeroxide::SwarmConfig::default();
+    config.dht.dht.host = "127.0.0.1".into();
+    config.dht.dht.firewalled = false;
+    let (server_task, server, mut incoming) = peeroxide::spawn(config).await.unwrap();
+    let key = server.key_pair().public_key;
+    server
+        .dht()
+        .register_server(&peeroxide_dht::crypto::hash(&key));
+    let destination = format!("127.0.0.1:{}", server.dht().local_port().await.unwrap())
+        .parse()
+        .unwrap();
+    let proxy = std::sync::Arc::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap());
+    let proxy_address = proxy.local_addr().unwrap();
+    let proxy_task = tokio::spawn(async move {
+        let mut peer = None;
+        let mut delayed_first_reply = false;
+        let mut delayed = tokio::task::JoinSet::new();
+        let mut bytes = [0; 65536];
+        loop {
+            let (length, from) = tokio::select! {
+                result = proxy.recv_from(&mut bytes) => result.unwrap(),
+                Some(_) = delayed.join_next(), if !delayed.is_empty() => continue,
+            };
+            if from == destination {
+                let target = peer.unwrap();
+                if !delayed_first_reply {
+                    delayed_first_reply = true;
+                    let socket = proxy.clone();
+                    let reply = bytes[..length].to_vec();
+                    delayed.spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(1200)).await;
+                        socket.send_to(&reply, target).await.unwrap();
+                    });
+                } else {
+                    proxy.send_to(&bytes[..length], target).await.unwrap();
+                }
+            } else {
+                peer = Some(from);
+                proxy.send_to(&bytes[..length], destination).await.unwrap();
+            }
+        }
+    });
+    let (client_task, client, _) = hyperdht::spawn(&runtime, HyperDhtConfig::default())
+        .await
+        .unwrap();
+    let hints = [peeroxide_dht::messages::Ipv4Peer {
+        host: proxy_address.ip().to_string(),
+        port: proxy_address.port(),
+    }];
+    let connection = tokio::time::timeout(
+        Duration::from_secs(4),
+        client.connect_with_nodes(&KeyPair::generate(), key, &hints, &runtime),
+    )
+    .await
+    .expect("optimistic grace discarded the only supplied forwarder")
+    .unwrap();
+    assert_eq!(connection.remote_public_key, key);
+    let accepted = tokio::time::timeout(Duration::from_secs(1), incoming.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    drop(accepted);
+    drop(connection);
+    proxy_task.abort();
+    let _ = proxy_task.await;
+    client.destroy().await.unwrap();
+    server.destroy().await.unwrap();
+    client_task.await.unwrap().unwrap();
+    server_task.await.unwrap();
 }
