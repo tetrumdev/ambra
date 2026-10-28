@@ -19,7 +19,6 @@ use tokio::sync::mpsc;
 
 const HOLEPUNCH_MSG: &[u8] = &[0];
 const HOLEPUNCH_TTL: u32 = 5;
-const DEFAULT_TTL: u32 = 64;
 
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -120,9 +119,12 @@ impl SocketRef {
 
     pub fn send_holepunch(&self, addr: SocketAddr, low_ttl: bool) -> Result<()> {
         if crate::address_policy::is_overlay(addr.ip()) { return Err(SocketPoolError::OverlayExcluded); }
-        let ttl = if low_ttl { HOLEPUNCH_TTL } else { DEFAULT_TTL };
-        self.socket.set_ttl(ttl)?;
-        self.socket.send_to(HOLEPUNCH_MSG, addr)?;
+        if low_ttl {
+            self.socket
+                .send_to_with_ttl(HOLEPUNCH_MSG, addr, HOLEPUNCH_TTL)?;
+        } else {
+            self.socket.send_to(HOLEPUNCH_MSG, addr)?;
+        }
         Ok(())
     }
 
@@ -164,8 +166,8 @@ pub(crate) fn classify_inbound(buf: &[u8]) -> InboundClass {
 /// Map a raw `firewall` value into the punch-strategy bucket the Holepuncher
 /// dispatcher understands.
 ///
-/// Matches Node `hyperdht/lib/holepuncher.js:333-335`: only `OPEN →
-/// CONSISTENT`. `UNKNOWN` no longer gets silently coerced — by the time
+/// Matches Node `hyperdht/lib/holepuncher.js:333-335`: only `OPEN â†’
+/// CONSISTENT`. `UNKNOWN` no longer gets silently coerced â€” by the time
 /// `punch()` runs the puncher's `Nat` has been seeded by
 /// [`crate::holepuncher::Holepuncher::auto_sample`] which settles the
 /// firewall to `CONSISTENT` / `RANDOM` via real reflexive samples.
@@ -184,6 +186,25 @@ mod tests {
     use crate::hyperdht_messages::{
         FIREWALL_CONSISTENT, FIREWALL_OPEN, FIREWALL_RANDOM, FIREWALL_UNKNOWN,
     };
+
+    #[tokio::test]
+    async fn holepunch_probes_preserve_socket_default_ttl() {
+        let runtime = UdxRuntime::new().unwrap();
+        let socket = SocketPool::new("127.0.0.1".into())
+            .acquire(&runtime)
+            .await
+            .unwrap();
+        socket.socket.set_ttl(93).unwrap();
+        let addr = socket.socket.local_addr().await.unwrap();
+
+        socket.send_holepunch(addr, true).unwrap();
+        assert_eq!(socket.socket.ttl().unwrap(), 93);
+        socket.send_holepunch(addr, false).unwrap();
+        assert_eq!(socket.socket.ttl().unwrap(), 93);
+        socket.socket.send_to(b"reflection", addr).unwrap();
+        tokio::task::yield_now().await;
+        assert_eq!(socket.socket.ttl().unwrap(), 93);
+    }
 
     #[test]
     fn random_port_in_range() {
@@ -226,7 +247,7 @@ mod tests {
         assert_eq!(
             classify_inbound(&buf),
             InboundClass::UdxFrame,
-            "25-byte 0xFF-prefix packet must classify as UdxFrame (stub returns Drop — RED)",
+            "25-byte 0xFF-prefix packet must classify as UdxFrame (stub returns Drop â€” RED)",
         );
     }
 
@@ -249,7 +270,7 @@ mod tests {
         assert_eq!(
             classify_inbound(&buf),
             InboundClass::DhtResponse,
-            "valid DHT Response bytes must classify as DhtResponse (stub returns Drop — RED)",
+            "valid DHT Response bytes must classify as DhtResponse (stub returns Drop â€” RED)",
         );
     }
 }

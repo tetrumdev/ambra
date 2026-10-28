@@ -208,7 +208,7 @@ pub(crate) struct StreamInner {
     pub(crate) mtu_max: usize,
 
     // ── IO ──
-    pub(crate) udp: Option<Arc<tokio::net::UdpSocket>>,
+    pub(crate) udp: Option<Arc<super::socket::UdpSocket>>,
     pub(crate) read_tx: mpsc::UnboundedSender<StreamEvent>,
     close_tx: Option<oneshot::Sender<()>>,
     pub(crate) notify_tx: Option<mpsc::UnboundedSender<StreamNotify>>,
@@ -770,7 +770,7 @@ fn push_events(events: &mut Vec<StreamEvent>, payload: Vec<u8>, flags: u8) {
 // ── WritePrep ────────────────────────────────────────────────────────────────
 
 pub(crate) struct WritePrep {
-    pub udp: Arc<tokio::net::UdpSocket>,
+    pub udp: Arc<super::socket::UdpSocket>,
     pub remote_addr: SocketAddr,
     pub remote_id: u32,
     pub first_seq: u32,
@@ -1695,7 +1695,7 @@ pub(crate) fn build_data_packet(
 /// ensuring the retransmission engine can resend them if ACKs don't arrive.
 pub(crate) async fn send_data_packets(
     inner: &Arc<Mutex<StreamInner>>,
-    _udp: &tokio::net::UdpSocket,
+    _udp: &super::socket::UdpSocket,
     remote_addr: SocketAddr,
     remote_id: u32,
     first_seq: u32,
@@ -1733,7 +1733,7 @@ pub(crate) async fn send_data_packets(
 /// the SACK data encoded after the header (using `data_offset` to indicate
 /// the extra bytes).
 fn send_ack(
-    udp: &Option<Arc<tokio::net::UdpSocket>>,
+    udp: &Option<Arc<super::socket::UdpSocket>>,
     remote_addr: Option<SocketAddr>,
     remote_id: u32,
     ack: u32,
