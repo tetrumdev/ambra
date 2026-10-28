@@ -45,6 +45,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(cli::Command::Serve { bind, tray }) => {
             let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).with_ansi(false).try_init();
             let _lock = server_process::lock()?;
+            // Windows sleeps in ~15.6 ms ticks by default, which throttles paced
+            // peer-to-peer sends to a couple of packets per tick. The 1 ms
+            // resolution applies to this process only and ends when it exits.
+            #[cfg(windows)]
+            unsafe {
+                windows::Win32::Media::timeBeginPeriod(1);
+            }
             storage::migrate_legacy();
             if tray && cfg!(target_os = "windows") {
                 tokio::spawn(async move {

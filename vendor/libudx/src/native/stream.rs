@@ -559,8 +559,8 @@ impl StreamInner {
                 self.update_rtt(elapsed);
                 rtt_measured = true;
             }
-            if let Some(ref info) = pkt.rate_info {
-                acked_rate_info.push((seq, *info));
+            if let Some(info) = pkt.rate_info {
+                acked_rate_info.push((seq, super::congestion::rate::PacketRateInfo { retransmitted: pkt.retransmit_count > 0, ..info }));
             }
             if pkt.is_mtu_probe && self.mtu_state == MtuState::Search {
                 self.on_mtu_probe_acked();
@@ -597,8 +597,8 @@ impl StreamInner {
                 if let Some(pkt) = self.outgoing.get_mut(&seq) {
                     if !pkt.sacked {
                         pkt.sacked = true;
-                        if let Some(ref info) = pkt.rate_info {
-                            sack_rate_info.push((seq, *info));
+                        if let Some(info) = pkt.rate_info {
+                            sack_rate_info.push((seq, super::congestion::rate::PacketRateInfo { retransmitted: pkt.retransmit_count > 0, ..info }));
                         }
                     }
                 }
