@@ -994,6 +994,9 @@ fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
 
 static PROCESS_STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
 
+#[cfg(debug_assertions)]
+mod network_test;
+
 /// Milliseconds since the Rust entry point began, for startup tracing.
 #[tauri::command]
 fn startup_elapsed_ms() -> u64 {
@@ -1023,6 +1026,8 @@ pub fn run() {
             keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
+            #[cfg(debug_assertions)]
+            network_test::start(app.handle().clone());
             // Shared output starts only when the listener explicitly selects a shared session.
             Ok(())
         })

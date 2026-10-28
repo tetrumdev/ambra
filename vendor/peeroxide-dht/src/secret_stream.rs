@@ -23,7 +23,7 @@ use blake2::digest::{KeyInit, Mac};
 use blake2::Blake2bMac;
 use blake2::digest::consts::U32;
 use thiserror::Error;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter, ReadHalf, WriteHalf};
 use tracing::debug;
 
 use crate::crypto;
@@ -363,7 +363,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> SecretStream<T> {
                 decrypt: self.decrypt,
             },
             SecretStreamWriteHalf {
-                raw: write_raw,
+                raw: BufWriter::with_capacity(64 * 1024, write_raw),
                 encrypt: self.encrypt,
             },
         )
@@ -419,7 +419,7 @@ impl<R: AsyncRead + Unpin + Send> SecretStreamReadHalf<R> {
 /// [`write`](SecretStreamWriteHalf::write) mirrors [`SecretStream::write`]
 /// exactly.
 pub struct SecretStreamWriteHalf<W> {
-    raw: W,
+    raw: BufWriter<W>,
     encrypt: secretstream::Push,
 }
 
@@ -428,10 +428,22 @@ impl<W: AsyncWrite + Unpin + Send> SecretStreamWriteHalf<W> {
     ///
     /// Identical framing/cipher semantics to [`SecretStream::write`].
     pub async fn write(&mut self, data: &[u8]) -> Result<(), SecretStreamError> {
+        self.write_buffered(data).await?;
+        self.flush().await
+    }
+
+    /// Queue a complete encrypted frame in the bounded transport buffer.
+    /// Call `flush` when idle or `shutdown` at EOF. Dropping cancels queued data.
+    pub async fn write_buffered(&mut self, data: &[u8]) -> Result<(), SecretStreamError> {
         let encrypted = self.encrypt.next(data);
         // encrypted = [enc_tag(1)][ciphertext][mac(16)] = data.len() + ABYTES bytes
         debug_assert_eq!(encrypted.len(), data.len() + ABYTES);
-        write_frame(&mut self.raw, &encrypted).await
+        queue_frame(&mut self.raw, &encrypted).await
+    }
+
+    /// Flush queued frames, retaining the underlying transport's ACK semantics.
+    pub async fn flush(&mut self) -> Result<(), SecretStreamError> {
+        self.raw.flush().await.map_err(SecretStreamError::Io)
     }
 
     /// Gracefully close the write half, sending a FIN to the remote peer.
@@ -469,6 +481,15 @@ async fn write_frame<W: AsyncWrite + Unpin>(
     w: &mut W,
     data: &[u8],
 ) -> Result<(), SecretStreamError> {
+    queue_frame(w, data).await?;
+    w.flush().await?;
+    Ok(())
+}
+
+async fn queue_frame<W: AsyncWrite + Unpin>(
+    w: &mut W,
+    data: &[u8],
+) -> Result<(), SecretStreamError> {
     let len = data.len();
     if len > MAX_MESSAGE_LEN {
         return Err(SecretStreamError::MessageTooLarge { len });
@@ -479,7 +500,6 @@ async fn write_frame<W: AsyncWrite + Unpin>(
     frame.extend_from_slice(&[len as u8, (len >> 8) as u8, (len >> 16) as u8]);
     frame.extend_from_slice(data);
     w.write_all(&frame).await?;
-    w.flush().await?;
     Ok(())
 }
 
