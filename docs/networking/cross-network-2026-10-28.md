@@ -67,7 +67,7 @@ At the start of this session Kubuntu was executing an installed server binary, n
 - Track: Qobuz `qobuz:121923141`, **Redecorate**, about 245.84 s, FLAC 24-bit/48 kHz/stereo, estimated 1676.94 kbps.
 - Local eight-second tone ID: `local:4e85b5a02eb68e19da7968ec5f619999f7f0463ab89e84393e51962eeb09afd0`.
 
-Restart the already-built debug Desktop from `desktop/src-tauri` with:
+After the cleanup below, rebuild the debug Desktop before using this launch command from `desktop/src-tauri`:
 
 ```sh
 AMBRA_DATA_DIR=/tmp/ambra-cross-20261028-desktop \
@@ -130,3 +130,16 @@ Build with `CARGO_INCREMENTAL=0`, limited jobs, and explicit debug Cargo manifes
 7. Review the uncommitted synchronized Kubuntu changes before updating its checkout to the new Mac commit. Do not blindly pull over them. Match source hashes and explicitly select intended binaries again.
 
 Stop reason is the operator's usage limit, not completion of the original task. Preserve this distinction in any final report.
+
+## Subsequent cleanup requested by the operator
+
+The operator requested removal of unnecessary session files and test builds after the checkpoint. Both Mac Cargo output directories, `desktop/src-tauri/target` and `crates/ambra-net/target`, were deleted; these were generated, untracked artifacts. This also removed the incomplete release cache mentioned above. The Desktop and networking examples therefore require rebuilding before reuse.
+
+On Kubuntu, `crates/ambra-net/target` and the contents of `server/target` were removed **except** `server/target/debug/ambra-server`. That executable and the running server were preserved. No repository source, Git data, installed binary, music, provider configuration, or pairing profile was deleted.
+
+Individual October 28 temporary diagnostics and helper files were removed after their useful raw logs, JSON, CSV, and Python diagnostics were compressed into private archives:
+
+- Mac: `/private/tmp/ambra-cross-20261028-desktop/raw-evidence.tar.gz` (about 1.1 MiB). The isolated Desktop profile and credentials remain in the same directory.
+- Kubuntu: `/tmp/ambra-cross-20261028-evidence.tar.gz`. The live server log `/tmp/ambra-cross-20261028-batched-server.log` and isolated pwnat profile remain.
+
+The earlier individual `/tmp/ambra-cross-20261028-*` diagnostic paths in this handoff now refer to archive members. Use `tar -tzf` to list or `tar -xOf ARCHIVE MEMBER` to read without recreating all files. The committed sanitized evidence remains available under `docs/networking/results`. Older temporary files with uncertain ownership or unrelated scope were left alone.
