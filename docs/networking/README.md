@@ -1,5 +1,7 @@
 # Native networking: implementation and validation report
 
+**Hotspot traversal follow-up:** see [hotspot traversal fixes](hotspot-traversal.md) for candidate-socket handoff, probe TTL isolation, NAT sampling retries, corrected timeout budgets, and outstanding live-device verification.
+
 **Physical cross-network update (October 27, 2026):** see [the Mac cellular/Kubuntu home-Wi-Fi validation](cross-network-2026-10-27.md) for completed Desktop pairing, native HyperDHT audio playback, recovery checks, and the MTU fix. The original report below describes the earlier validation state.
 
 This implementation adds a native Rust networking subsystem to the existing server, Tauri desktop backend, and an Expo native module. The allowed connection policy is LAN, native HyperDHT, optional independent pwnat, then offline. There is no application-data relay, VPN integration, port-mapping strategy, or fourth fallback.
