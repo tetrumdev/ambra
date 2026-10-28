@@ -1075,6 +1075,7 @@ pub fn run() {
             server_link::cancel_pairing,
             service_login::open_service_login,
             service_login::cancel_service_login,
+            service_login::submit_service_login,
             local_import::import_local_music,
         ])
         .build(tauri::generate_context!())
