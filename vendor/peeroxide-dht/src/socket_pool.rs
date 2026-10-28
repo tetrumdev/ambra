@@ -17,6 +17,8 @@ use std::net::SocketAddr;
 use libudx::{Datagram, UdxRuntime, UdxSocket};
 use tokio::sync::mpsc;
 
+type ProbeHandler = Box<dyn FnMut(HolepunchEvent, &UdxSocket) + Send>;
+
 const HOLEPUNCH_MSG: &[u8] = &[0];
 const HOLEPUNCH_TTL: u32 = 5;
 
@@ -43,15 +45,41 @@ impl SocketPool {
     }
 
     pub async fn acquire(&self, runtime: &UdxRuntime) -> Result<SocketRef> {
+        self.acquire_routed(runtime, None).await
+    }
+
+    /// Production punchers handle probes in the router, avoiding a second task
+    /// and channel hop for each of the 256 birthday sockets.
+    pub(crate) async fn acquire_with_probe_handler(
+        &self,
+        runtime: &UdxRuntime,
+        handler: impl FnMut(HolepunchEvent, &UdxSocket) + Send + 'static,
+    ) -> Result<SocketRef> {
+        self.acquire_routed(runtime, Some(Box::new(handler))).await
+    }
+
+    async fn acquire_routed(
+        &self,
+        runtime: &UdxRuntime,
+        handler: Option<ProbeHandler>,
+    ) -> Result<SocketRef> {
         let socket = runtime.create_socket().await?;
         let addr: SocketAddr = format!("{}:0", self.host).parse()?;
         socket.bind(addr).await?;
+        // Tokio's first try_send_to needs an initial writable readiness event.
+        // Wait before scoped TTL changes; never defer a low-TTL probe send.
+        socket.writable().await?;
 
         let (hp_tx, hp_rx) = mpsc::unbounded_channel();
         let (dht_tx, dht_rx) = mpsc::unbounded_channel();
         let recv_rx = socket.recv_start()?;
 
-        let recv_task = tokio::spawn(route_messages(recv_rx, hp_tx, dht_tx));
+        let recv_task = tokio::spawn(route_messages(
+            recv_rx,
+            hp_tx,
+            dht_tx,
+            handler.map(|handler| (handler, socket.clone())),
+        ));
 
         Ok(SocketRef {
             socket,
@@ -66,12 +94,18 @@ async fn route_messages(
     mut recv_rx: mpsc::UnboundedReceiver<Datagram>,
     hp_tx: mpsc::UnboundedSender<HolepunchEvent>,
     dht_tx: mpsc::UnboundedSender<Datagram>,
+    mut handler: Option<(ProbeHandler, UdxSocket)>,
 ) {
     while let Some(dgram) = recv_rx.recv().await {
         match classify_inbound(&dgram.data) {
             InboundClass::Holepunch => {
                 tracing::debug!(addr = %dgram.addr, len = dgram.data.len(), "socket_pool: holepunch probe received");
-                let _ = hp_tx.send(HolepunchEvent { addr: dgram.addr });
+                let event = HolepunchEvent { addr: dgram.addr };
+                if let Some((handler, socket)) = &mut handler {
+                    handler(event, socket);
+                } else {
+                    let _ = hp_tx.send(event);
+                }
             }
             InboundClass::DhtResponse => {
                 tracing::trace!(addr = %dgram.addr, len = dgram.data.len(), "socket_pool: DHT response forwarded");
@@ -99,13 +133,19 @@ pub struct SocketRef {
     _recv_task: Option<tokio::task::JoinHandle<()>>,
 }
 
+impl Drop for SocketRef {
+    fn drop(&mut self) {
+        if let Some(task) = self._recv_task.take() {
+            task.abort();
+        }
+    }
+}
+
 impl SocketRef {
     /// The holepunch receiver is `Some(...)` immediately after `SocketPool::acquire()`.
     /// The Holepuncher recv-adapter takes ownership through this accessor exactly once;
     /// subsequent calls return `None`.
-    pub fn take_holepunch_rx(
-        &mut self,
-    ) -> Option<mpsc::UnboundedReceiver<HolepunchEvent>> {
+    pub fn take_holepunch_rx(&mut self) -> Option<mpsc::UnboundedReceiver<HolepunchEvent>> {
         self.holepunch_rx.take()
     }
 
@@ -118,7 +158,9 @@ impl SocketRef {
     }
 
     pub fn send_holepunch(&self, addr: SocketAddr, low_ttl: bool) -> Result<()> {
-        if crate::address_policy::is_overlay(addr.ip()) { return Err(SocketPoolError::OverlayExcluded); }
+        if crate::address_policy::is_overlay(addr.ip()) {
+            return Err(SocketPoolError::OverlayExcluded);
+        }
         if low_ttl {
             self.socket
                 .send_to_with_ttl(HOLEPUNCH_MSG, addr, HOLEPUNCH_TTL)?;
@@ -272,5 +314,40 @@ mod tests {
             InboundClass::DhtResponse,
             "valid DHT Response bytes must classify as DhtResponse (stub returns Drop — RED)",
         );
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+    #[tokio::test]
+    async fn low_ttl_probe_restores_ttl_and_drop_stops_router() {
+        let runtime = UdxRuntime::new().unwrap();
+        let pool = SocketPool::new("127.0.0.1".into());
+        let socket = pool.acquire(&runtime).await.unwrap();
+        let address = socket.socket.local_addr().await.unwrap();
+        let receiver = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let ttl = socket.socket.ttl().unwrap();
+        socket
+            .send_holepunch(receiver.local_addr().unwrap(), true)
+            .unwrap();
+        assert_eq!(socket.socket.ttl().unwrap(), ttl);
+        let mut bytes = [0; 8];
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            receiver.recv_from(&mut bytes),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let task = socket._recv_task.as_ref().unwrap().abort_handle();
+        drop(socket);
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(task.is_finished());
+        tokio::net::UdpSocket::bind(address)
+            .await
+            .expect("socket router retained UDP binding");
     }
 }

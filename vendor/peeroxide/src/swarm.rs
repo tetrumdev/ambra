@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::Duration;
 
 use rand::Rng;
@@ -17,10 +17,10 @@ use peeroxide_dht::hyperdht::{
     self, HyperDhtConfig, HyperDhtHandle, KeyPair, PeerConnection, ServerEvent,
 };
 use peeroxide_dht::hyperdht_messages::{
-    encode_handshake_to_bytes, encode_holepunch_msg_to_bytes, HandshakeMessage, HolepunchInfo,
-    HolepunchMessage, HolepunchPayload, NoisePayload, RelayThroughInfo,
-    SecretStreamInfo, UdxInfo, ERROR_NONE, FIREWALL_CONSISTENT, FIREWALL_RANDOM, FIREWALL_UNKNOWN,
-    MODE_FROM_RELAY, MODE_FROM_SECOND_RELAY, MODE_FROM_SERVER, MODE_REPLY,
+    ERROR_NONE, FIREWALL_CONSISTENT, FIREWALL_RANDOM, FIREWALL_UNKNOWN, HandshakeMessage,
+    HolepunchInfo, HolepunchMessage, HolepunchPayload, MODE_FROM_RELAY, MODE_FROM_SECOND_RELAY,
+    MODE_FROM_SERVER, MODE_REPLY, NoisePayload, RelayThroughInfo, SecretStreamInfo, UdxInfo,
+    encode_handshake_to_bytes, encode_holepunch_msg_to_bytes,
 };
 use peeroxide_dht::messages::Ipv4Peer;
 use peeroxide_dht::noise::Keypair as NoiseKeypair;
@@ -31,10 +31,24 @@ use peeroxide_dht::socket_pool::SocketPool;
 
 use crate::connection_set::{ConnectionInfo, ConnectionSet};
 use crate::error::SwarmError;
-use crate::peer_discovery::{run_discovery, DiscoveryEvent, PeerDiscoveryConfig};
+use crate::peer_discovery::{DiscoveryEvent, PeerDiscoveryConfig, run_discovery};
 use crate::peer_info::{PeerInfo, Priority};
 
+// Dropping a parent cancels its owned network workers.
+struct AbortOnDrop<T>(JoinHandle<T>);
+impl<T> AbortOnDrop<T> {
+    fn abort(&self) {
+        self.0.abort();
+    }
+}
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 static NEXT_STREAM_ID: AtomicU32 = AtomicU32::new(1);
+static NEXT_CONNECTION_ID: AtomicU64 = AtomicU64::new(1);
 
 fn next_stream_id() -> u32 {
     NEXT_STREAM_ID.fetch_add(1, Ordering::Relaxed)
@@ -66,9 +80,8 @@ fn retry_delay(info: &PeerInfo) -> Duration {
         _ => &BACKOFF_X,
     };
     let mut rng = rand::rng();
-    let jitter = rng.random_range(0..tier[1])
-        + rng.random_range(0..tier[2])
-        + rng.random_range(0..tier[3]);
+    let jitter =
+        rng.random_range(0..tier[1]) + rng.random_range(0..tier[2]) + rng.random_range(0..tier[3]);
     Duration::from_millis(tier[0] + jitter)
 }
 
@@ -165,9 +178,15 @@ pub struct SwarmConnection {
     /// Topic(s) associated with this connection.
     pub topics: Vec<[u8; 32]>,
     _runtime: UdxRuntime,
+    generation: u64,
 }
 
 impl SwarmConnection {
+    /// Generation for releasing precisely this session, never a newer session.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
     /// Returns the remote peer's static public key.
     pub fn remote_public_key(&self) -> &[u8; 32] {
         &self.peer.remote_public_key
@@ -177,7 +196,10 @@ impl SwarmConnection {
 impl fmt::Debug for SwarmConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SwarmConnection")
-            .field("remote_public_key", &short_hex(&self.peer.remote_public_key))
+            .field(
+                "remote_public_key",
+                &short_hex(&self.peer.remote_public_key),
+            )
             .field("is_initiator", &self.is_initiator)
             .field("topics", &self.topics.len())
             .finish()
@@ -275,8 +297,14 @@ impl SwarmHandle {
     }
 
     /// Ambra: release an accepted connection after its application stream closes.
-    pub async fn release_peer(&self, public_key: [u8; 32]) {
-        let _ = self.cmd_tx.send(SwarmCommand::Disconnected { public_key }).await;
+    pub async fn release_peer(&self, public_key: [u8; 32], generation: u64) {
+        let _ = self
+            .cmd_tx
+            .send(SwarmCommand::Disconnected {
+                public_key,
+                generation,
+            })
+            .await;
     }
 
     /// Destroy the swarm, cancelling all discovery and closing connections.
@@ -291,7 +319,10 @@ impl SwarmHandle {
 // ── Internal types ───────────────────────────────────────────────────────────
 
 enum SwarmCommand {
-    Disconnected { public_key: [u8; 32] },
+    Disconnected {
+        public_key: [u8; 32],
+        generation: u64,
+    },
     Join {
         topic: [u8; 32],
         server: bool,
@@ -347,7 +378,7 @@ struct SwarmActor {
 
     active_connects: usize,
     flush_waiters: Vec<oneshot::Sender<Result<(), SwarmError>>>,
-    server_failure_tx: Option<mpsc::UnboundedSender<[u8; 32]>>,
+    server_failure_tx: Option<mpsc::UnboundedSender<([u8; 32], u64)>>,
 
     // Passive-holepunch state. When the server is firewalled, each accepted
     // handshake stages an InFlightHolepunch entry instead of immediately
@@ -358,6 +389,7 @@ struct SwarmActor {
     connects: HashMap<u64, InFlightHolepunch>,
     pending_handshakes: HashMap<[u8; 32], u64>,
     handshake_replies: HashMap<[u8; 32], (std::time::Instant, Vec<u8>)>,
+    tasks: tokio::task::JoinSet<()>,
     next_holepunch_id: u64,
     passive_hp_event_tx: mpsc::UnboundedSender<PassiveHolepunchEvent>,
 }
@@ -374,7 +406,6 @@ struct InFlightHolepunch {
     /// Round handling between spawn and punch-land only updates state that
     /// can be reconstructed from the incoming round.
     puncher: Option<Holepuncher>,
-    punch_task: Option<AbortOnDropTask>,
     /// Listening-mode UDX stream whose `set_firewall_hook` will commit the
     /// 4-tuple when the first probe lands.
     udx_stream: UdxStream,
@@ -390,7 +421,8 @@ struct InFlightHolepunch {
     round: u64,
     /// 60s deadline. Cancelled when the firewall hook fires or when a new
     /// handshake from the same remote_pk preempts this entry.
-    abort_task: Option<JoinHandle<()>>,
+    abort_task: Option<AbortOnDrop<()>>,
+    punch_task: Option<AbortOnDrop<()>>,
     /// Pre-computed addresses advertised in PEER_HOLEPUNCH reply
     /// `addresses`. MUST point at OUR puncher socket, not echo back the
     /// initiator's reflexive address (Phase 3 MVP: loopback only).
@@ -409,14 +441,6 @@ enum PassiveHolepunchEvent {
     },
     /// Passive holepunch lifetime elapsed without the hook firing.
     Abort { id: u64 },
-}
-
-struct AbortOnDropTask(JoinHandle<()>);
-
-impl Drop for AbortOnDropTask {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
 }
 
 struct ConnectAttemptResult {
@@ -444,12 +468,15 @@ pub async fn spawn(
 ) -> Result<(JoinHandle<()>, SwarmHandle, mpsc::Receiver<SwarmConnection>), SwarmError> {
     // Ambra direct-only build: reject all data-relay configuration before any sockets open.
     if config.relay_through.is_some() || config.relay_address.is_some() {
-        return Err(SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::FirewallRejected));
+        return Err(SwarmError::Dht(
+            peeroxide_dht::hyperdht::HyperDhtError::FirewallRejected,
+        ));
     }
     let key_pair = config.key_pair.unwrap_or_else(KeyPair::generate);
     let runtime = UdxRuntime::new()?;
 
     let (dht_join, dht, server_rx) = hyperdht::spawn(&runtime, config.dht).await?;
+    let mut dht_join = AbortOnDrop(dht_join);
 
     let local_port = dht.dht().local_port().await?;
     // Fetch the actual port of the socket the server-side firewall hook
@@ -509,6 +536,7 @@ pub async fn spawn(
         connects: HashMap::new(),
         pending_handshakes: HashMap::new(),
         handshake_replies: HashMap::new(),
+        tasks: tokio::task::JoinSet::new(),
         next_holepunch_id: 0,
         passive_hp_event_tx,
     };
@@ -517,8 +545,10 @@ pub async fn spawn(
     // We must await dht_join AFTER actor.run() (which calls dht.destroy()),
     // so the DhtNode finishes closing its IO sockets before we drop the runtime.
     let join = tokio::spawn(async move {
-        actor.run(cmd_rx, discovery_event_rx, server_rx, passive_hp_event_rx).await;
-        let _ = dht_join.await;
+        actor
+            .run(cmd_rx, discovery_event_rx, server_rx, passive_hp_event_rx)
+            .await;
+        let _ = (&mut dht_join.0).await;
         drop(runtime);
     });
 
@@ -548,11 +578,12 @@ impl SwarmActor {
         // would lock that peer's slot forever, blocking any retry from a
         // different relay path.
         let (server_failure_tx, mut server_failure_rx) =
-            mpsc::unbounded_channel::<[u8; 32]>();
+            mpsc::unbounded_channel::<([u8; 32], u64)>();
         self.server_failure_tx = Some(server_failure_tx);
 
         loop {
             tokio::select! {
+                Some(_) = self.tasks.join_next(), if !self.tasks.is_empty() => {},
                 cmd = cmd_rx.recv() => {
                     let Some(cmd) = cmd else { break };
                     if self.handle_command(cmd) {
@@ -575,8 +606,8 @@ impl SwarmActor {
                     }
                 }
                 pk = server_failure_rx.recv() => {
-                    if let Some(pk) = pk {
-                        if self.connections.remove(&pk) {
+                    if let Some((pk, generation)) = pk {
+                        if self.connections.remove_generation(&pk, generation) {
                             tracing::debug!(pk = %short_hex(&pk), "server: stream failed, released connection slot");
                         }
                     }
@@ -601,13 +632,21 @@ impl SwarmActor {
             self.server_registered = false;
         }
 
+        self.connects.clear();
+        self.tasks.shutdown().await;
         let _ = self.dht.destroy().await;
     }
 
     /// Returns `true` when the actor should shut down.
     fn handle_command(&mut self, cmd: SwarmCommand) -> bool {
         match cmd {
-            SwarmCommand::Disconnected { public_key } => { self.connections.remove(&public_key); false },
+            SwarmCommand::Disconnected {
+                public_key,
+                generation,
+            } => {
+                self.connections.remove_generation(&public_key, generation);
+                false
+            }
             SwarmCommand::Join {
                 topic,
                 server,
@@ -661,7 +700,7 @@ impl SwarmActor {
             .as_ref()
             .map_or_else(Vec::new, |a| vec![a.clone()]);
 
-        tokio::spawn(run_discovery(
+        self.tasks.spawn(run_discovery(
             PeerDiscoveryConfig {
                 topic,
                 is_server: server,
@@ -696,8 +735,7 @@ impl SwarmActor {
             }
 
             if state.is_server && self.server_registered {
-                let has_remaining_server_topics =
-                    self.topics.values().any(|t| t.is_server);
+                let has_remaining_server_topics = self.topics.values().any(|t| t.is_server);
                 if !has_remaining_server_topics {
                     let target = hash(&self.key_pair.public_key);
                     self.dht.unregister_server(&target);
@@ -777,14 +815,8 @@ impl SwarmActor {
         while self.active_connects < self.config.max_parallel && !self.queue.is_empty() {
             // Sort by priority descending
             self.queue.sort_by(|a, b| {
-                let pa = self
-                    .peers
-                    .get(a)
-                    .map_or(Priority::VeryLow, |i| i.priority);
-                let pb = self
-                    .peers
-                    .get(b)
-                    .map_or(Priority::VeryLow, |i| i.priority);
+                let pa = self.peers.get(a).map_or(Priority::VeryLow, |i| i.priority);
+                let pb = self.peers.get(b).map_or(Priority::VeryLow, |i| i.priority);
                 pb.cmp(&pa)
             });
 
@@ -806,7 +838,7 @@ impl SwarmActor {
             let mut connect_opts = peeroxide_dht::hyperdht::ConnectOpts::default();
             connect_opts.local_connection = self.config.local_connection;
 
-            tokio::spawn(async move {
+            self.tasks.spawn(async move {
                 let conn_runtime = UdxRuntime::shared(rh);
                 tracing::debug!(pk = %short_hex(&pk), "connecting to peer");
                 match dht
@@ -868,8 +900,14 @@ impl SwarmActor {
                     self.connections.remove(&pk);
                 }
 
-                self.connections
-                    .add(pk, ConnectionInfo { is_initiator: true });
+                let generation = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+                self.connections.add(
+                    pk,
+                    ConnectionInfo {
+                        is_initiator: true,
+                        generation,
+                    },
+                );
 
                 let topics = if let Some(info) = self.peers.get_mut(&pk) {
                     info.connected();
@@ -883,6 +921,7 @@ impl SwarmActor {
                     is_initiator: true,
                     topics,
                     _runtime: runtime,
+                    generation,
                 };
                 if self.conn_tx.try_send(swarm_conn).is_err() {
                     tracing::warn!("connection channel full, dropping connection");
@@ -912,7 +951,7 @@ impl SwarmActor {
         let topic = info.topics[0];
         let event_tx = self.discovery_event_tx.clone();
 
-        tokio::spawn(async move {
+        self.tasks.spawn(async move {
             tokio::time::sleep(delay).await;
             let _ = event_tx.send(DiscoveryEvent::PeerFound {
                 public_key: pk,
@@ -931,7 +970,8 @@ impl SwarmActor {
                 target: _,
                 reply_tx,
             } => {
-                self.handle_server_handshake(msg, from, peer_address, reply_tx).await;
+                self.handle_server_handshake(msg, from, peer_address, reply_tx)
+                    .await;
             }
             ServerEvent::PeerHolepunch {
                 msg,
@@ -940,7 +980,8 @@ impl SwarmActor {
                 target: _,
                 reply_tx,
             } => {
-                self.handle_peer_holepunch(msg, peer_address, reply_tx).await;
+                self.handle_peer_holepunch(msg, peer_address, reply_tx)
+                    .await;
             }
             _ => {}
         }
@@ -956,19 +997,40 @@ impl SwarmActor {
         // Ambra: identical Noise handshakes can arrive through several DHT nodes.
         // Reuse the original reply/session, instead of destroying the holepunch ID the
         // client may already have selected from an earlier reply.
-        self.handshake_replies.retain(|_, (created, _)| created.elapsed() < Duration::from_secs(10));
+        self.handshake_replies
+            .retain(|_, (created, _)| created.elapsed() < Duration::from_secs(10));
         let handshake_key = hash(&msg.noise);
         if let Some((_, noise)) = self.handshake_replies.get(&handshake_key) {
             let forwarded = matches!(msg.mode, MODE_FROM_RELAY | MODE_FROM_SECOND_RELAY);
-            let reply = HandshakeMessage { mode: if forwarded { MODE_FROM_SERVER } else { MODE_REPLY }, noise: noise.clone(), peer_address: if forwarded { peer_address } else { None }, relay_address: None };
+            let reply = HandshakeMessage {
+                mode: if forwarded {
+                    MODE_FROM_SERVER
+                } else {
+                    MODE_REPLY
+                },
+                noise: noise.clone(),
+                peer_address: if forwarded { peer_address } else { None },
+                relay_address: None,
+            };
             let _ = reply_tx.send(encode_handshake_to_bytes(&reply).ok());
             return;
         }
-        if self.handshake_replies.len() >= self.config.max_peers * 2 || self.connects.len() >= self.config.max_peers {
-            let _ = reply_tx.send(None); return;
+        if self.handshake_replies.len() >= self.config.max_peers * 2
+            || self.connects.len() >= self.config.max_peers
+            || self.tasks.len() >= self.config.max_peers * 2
+        {
+            let _ = reply_tx.send(None);
+            return;
         }
         let initial_client_address = peer_address.clone().unwrap_or_else(|| from.clone());
-        if initial_client_address.host.parse().map_or(true, peeroxide_dht::address_policy::is_overlay) { let _ = reply_tx.send(None); return; }
+        if initial_client_address
+            .host
+            .parse()
+            .map_or(true, peeroxide_dht::address_policy::is_overlay)
+        {
+            let _ = reply_tx.send(None);
+            return;
+        }
         let is_forwarded = peer_address.is_some();
 
         if is_forwarded {
@@ -1128,13 +1190,14 @@ impl SwarmActor {
         //     via dht.relay_with_tid back to the FE-holder, which then routes
         //     a tid-preserved REPLY to the receiver.
         let (reply_mode, reply_peer_address) = match msg.mode {
-            MODE_FROM_RELAY | MODE_FROM_SECOND_RELAY => {
-                (MODE_FROM_SERVER, peer_address.clone())
-            }
+            MODE_FROM_RELAY | MODE_FROM_SECOND_RELAY => (MODE_FROM_SERVER, peer_address.clone()),
             _ => (MODE_REPLY, None),
         };
 
-        self.handshake_replies.insert(handshake_key, (std::time::Instant::now(), noise_reply.clone()));
+        self.handshake_replies.insert(
+            handshake_key,
+            (std::time::Instant::now(), noise_reply.clone()),
+        );
         let reply_msg = HandshakeMessage {
             mode: reply_mode,
             noise: noise_reply,
@@ -1154,11 +1217,9 @@ impl SwarmActor {
             return;
         }
 
-        if self.connections.has(&remote_pk) {
-            tracing::debug!(pk = %short_hex(&remote_pk), "server: already connected");
-            return;
-        }
-        if self.connections.len() >= self.config.max_peers {
+        // Noise proves the same device key. Admit a replacement transport;
+        // the application must authorize it before superseding the old session.
+        if !self.connections.has(&remote_pk) && self.connections.len() >= self.config.max_peers {
             tracing::debug!("server: at max connections");
             return;
         }
@@ -1171,8 +1232,14 @@ impl SwarmActor {
             }
         };
 
-        self.connections
-            .add(remote_pk, ConnectionInfo { is_initiator: false });
+        let generation = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+        self.connections.add(
+            remote_pk,
+            ConnectionInfo {
+                is_initiator: false,
+                generation,
+            },
+        );
 
         let conn_tx = self.conn_tx.clone();
 
@@ -1182,15 +1249,9 @@ impl SwarmActor {
             let relay_addr = self.config.relay_address;
             let rh = self.runtime_handle.clone();
             let failure_tx = self.server_failure_tx.clone();
-            tokio::spawn(async move {
+            self.tasks.spawn(async move {
                 match create_server_relay_connection(
-                    rh,
-                    dht,
-                    key_pair,
-                    relay_pk,
-                    relay_addr,
-                    token,
-                    nw_result,
+                    rh, dht, key_pair, relay_pk, relay_addr, token, nw_result,
                 )
                 .await
                 {
@@ -1200,6 +1261,7 @@ impl SwarmActor {
                             is_initiator: false,
                             topics: vec![],
                             _runtime: runtime,
+                            generation,
                         };
                         if conn_tx.send(swarm_conn).await.is_err() {
                             tracing::warn!("connection channel closed");
@@ -1208,7 +1270,7 @@ impl SwarmActor {
                     Err(e) => {
                         tracing::debug!(err = %e, "server: relay connection failed");
                         if let Some(tx) = failure_tx {
-                            let _ = tx.send(remote_pk);
+                            let _ = tx.send((remote_pk, generation));
                         }
                     }
                 }
@@ -1218,9 +1280,16 @@ impl SwarmActor {
             let dht = self.dht.clone();
             let client_addr_for_task = client_address.clone();
             let failure_tx = self.server_failure_tx.clone();
-            tokio::spawn(async move {
-                match create_server_connection(rh, dht, local_stream_id, &remote_udx, &client_addr_for_task, &nw_result)
-                    .await
+            self.tasks.spawn(async move {
+                match create_server_connection(
+                    rh,
+                    dht,
+                    local_stream_id,
+                    &remote_udx,
+                    &client_addr_for_task,
+                    &nw_result,
+                )
+                .await
                 {
                     Ok((conn, runtime)) => {
                         let swarm_conn = SwarmConnection {
@@ -1228,6 +1297,7 @@ impl SwarmActor {
                             is_initiator: false,
                             topics: vec![],
                             _runtime: runtime,
+                            generation,
                         };
                         if conn_tx.send(swarm_conn).await.is_err() {
                             tracing::warn!("connection channel closed");
@@ -1236,7 +1306,7 @@ impl SwarmActor {
                     Err(e) => {
                         tracing::debug!(err = %e, "server: stream establishment failed");
                         if let Some(tx) = failure_tx {
-                            let _ = tx.send(remote_pk);
+                            let _ = tx.send((remote_pk, generation));
                         }
                     }
                 }
@@ -1345,10 +1415,10 @@ impl SwarmActor {
         puncher.set_socket_callback(udx_stream.firewall_socket_adder())?;
 
         let abort_tx = self.passive_hp_event_tx.clone();
-        let abort_task = tokio::spawn(async move {
+        let abort_task = AbortOnDrop(tokio::spawn(async move {
             tokio::time::sleep(PASSIVE_HOLEPUNCH_LIFETIME).await;
             let _ = abort_tx.send(PassiveHolepunchEvent::Abort { id: holepunch_id });
-        });
+        }));
 
         Ok(HolepunchSetup {
             id: holepunch_id,
@@ -1398,12 +1468,12 @@ impl SwarmActor {
                 remote_pk,
                 payload,
                 puncher: Some(setup.puncher),
-                punch_task: None,
                 udx_stream: setup.udx_stream,
                 udx_socket: setup.udx_socket,
                 noise_result,
                 round: 0,
                 abort_task: Some(setup.abort_task),
+                punch_task: None,
                 local_punch_addrs,
             },
         );
@@ -1470,7 +1540,7 @@ impl SwarmActor {
         // owned by the task — subsequent rounds just keep building replies.
         if remote_hp.punching && entry.puncher.is_some() {
             if let Some(mut puncher) = entry.puncher.take() {
-                entry.punch_task = Some(AbortOnDropTask(tokio::spawn(async move {
+                entry.punch_task = Some(AbortOnDrop(tokio::spawn(async move {
                     let pool = SocketPool::new("0.0.0.0".into());
                     if let Ok(rt) = UdxRuntime::new() {
                         puncher.punch(&pool, &rt).await;
@@ -1536,14 +1606,9 @@ impl SwarmActor {
                 entry.udx_socket = socket;
                 self.pending_handshakes.remove(&entry.remote_pk);
 
-                if self.connections.has(&entry.remote_pk) {
-                    tracing::debug!(
-                        pk = %short_hex(&entry.remote_pk),
-                        "passive holepunch landed but already connected; dropping"
-                    );
-                    return;
-                }
-                if self.connections.len() >= self.config.max_peers {
+                if !self.connections.has(&entry.remote_pk)
+                    && self.connections.len() >= self.config.max_peers
+                {
                     tracing::debug!("passive holepunch landed but at max connections");
                     return;
                 }
@@ -1555,15 +1620,21 @@ impl SwarmActor {
                     "passive holepunch landed; finalizing SecretStream"
                 );
 
-                self.connections
-                    .add(entry.remote_pk, ConnectionInfo { is_initiator: false });
+                let generation = NEXT_CONNECTION_ID.fetch_add(1, Ordering::Relaxed);
+                self.connections.add(
+                    entry.remote_pk,
+                    ConnectionInfo {
+                        is_initiator: false,
+                        generation,
+                    },
+                );
 
                 let runtime = UdxRuntime::shared(self.runtime_handle.clone());
                 let conn_tx = self.conn_tx.clone();
                 let failure_tx = self.server_failure_tx.clone();
                 let remote_pk = entry.remote_pk;
 
-                tokio::spawn(async move {
+                self.tasks.spawn(async move {
                     let async_stream = entry.udx_stream.into_async_stream();
                     let ss = match SecretStream::from_session(
                         false,
@@ -1579,18 +1650,25 @@ impl SwarmActor {
                         Err(e) => {
                             tracing::debug!(err = %e, "passive holepunch: SecretStream failed");
                             if let Some(tx) = failure_tx {
-                                let _ = tx.send(remote_pk);
+                                let _ = tx.send((remote_pk, generation));
                             }
                             return;
                         }
                     };
 
-                    let conn = PeerConnection::with_remote_addr(ss, remote_pk, addr, entry.udx_socket, None);
+                    let conn = PeerConnection::with_remote_addr(
+                        ss,
+                        remote_pk,
+                        addr,
+                        entry.udx_socket,
+                        None,
+                    );
                     let swarm_conn = SwarmConnection {
                         peer: conn,
                         is_initiator: false,
                         topics: vec![],
                         _runtime: runtime,
+                        generation,
                     };
                     if conn_tx.send(swarm_conn).await.is_err() {
                         tracing::warn!("connection channel closed");
@@ -1629,7 +1707,7 @@ struct HolepunchSetup {
     puncher: Holepuncher,
     udx_stream: UdxStream,
     udx_socket: UdxSocket,
-    abort_task: JoinHandle<()>,
+    abort_task: AbortOnDrop<()>,
 }
 
 async fn create_server_connection(
@@ -1661,7 +1739,9 @@ async fn create_server_connection(
     let stream = runtime.create_stream(local_stream_id).await?;
     let (endpoint_tx, endpoint_rx) = oneshot::channel();
     stream.set_firewall_hook(&socket, remote_id, move |_, port, ip| {
-        if peeroxide_dht::address_policy::is_overlay(ip) { return false; }
+        if peeroxide_dht::address_policy::is_overlay(ip) {
+            return false;
+        }
         let _ = endpoint_tx.send(SocketAddr::new(ip, port));
         true
     })?;
@@ -1678,8 +1758,16 @@ async fn create_server_connection(
     .await
     .map_err(|e| SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::SecretStream(e)))?;
 
-    let endpoint = endpoint_rx.await.map_err(|_| SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::ChannelClosed))?;
-    let conn = PeerConnection::with_remote_addr(ss, noise_result.remote_public_key, endpoint, socket, None);
+    let endpoint = endpoint_rx
+        .await
+        .map_err(|_| SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::ChannelClosed))?;
+    let conn = PeerConnection::with_remote_addr(
+        ss,
+        noise_result.remote_public_key,
+        endpoint,
+        socket,
+        None,
+    );
     Ok((conn, runtime))
 }
 
@@ -1700,24 +1788,26 @@ async fn create_server_relay_connection(
 
     // 1. HyperDHT connection to the relay node (control channel).
     // Use direct address when available, fall back to DHT routing.
-    let connect_fut: std::pin::Pin<Box<dyn std::future::Future<Output = Result<PeerConnection, peeroxide_dht::hyperdht::HyperDhtError>> + Send>> =
-        if let Some(addr) = relay_addr {
-            tracing::debug!(?addr, "server: connecting to relay at known address");
-            Box::pin(dht.connect_to(&key_pair, relay_pk, addr, &runtime))
-        } else {
-            Box::pin(dht.connect(&key_pair, relay_pk, &runtime))
-        };
-    let relay_conn = tokio::time::timeout(
-        std::time::Duration::from_secs(15),
-        connect_fut,
-    )
-    .await
-    .map_err(|_| {
-        SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::HandshakeFailed(
-            "relay connect timeout".into(),
-        ))
-    })?
-    .map_err(SwarmError::Dht)?;
+    let connect_fut: std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<PeerConnection, peeroxide_dht::hyperdht::HyperDhtError>,
+                > + Send,
+        >,
+    > = if let Some(addr) = relay_addr {
+        tracing::debug!(?addr, "server: connecting to relay at known address");
+        Box::pin(dht.connect_to(&key_pair, relay_pk, addr, &runtime))
+    } else {
+        Box::pin(dht.connect(&key_pair, relay_pk, &runtime))
+    };
+    let relay_conn = tokio::time::timeout(std::time::Duration::from_secs(15), connect_fut)
+        .await
+        .map_err(|_| {
+            SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::HandshakeFailed(
+                "relay connect timeout".into(),
+            ))
+        })?
+        .map_err(SwarmError::Dht)?;
 
     let relay_addr = relay_conn.remote_addr.ok_or_else(|| {
         SwarmError::Dht(peeroxide_dht::hyperdht::HyperDhtError::StreamEstablishment(
@@ -1867,7 +1957,16 @@ mod tests {
         let target = hash(&handle.key_pair().public_key);
         let topic = [0xAA; 32];
 
-        handle.join(topic, JoinOpts { server: true, client: false }).await.unwrap();
+        handle
+            .join(
+                topic,
+                JoinOpts {
+                    server: true,
+                    client: false,
+                },
+            )
+            .await
+            .unwrap();
 
         {
             let router = handle.dht().router().lock().unwrap();
@@ -1899,7 +1998,16 @@ mod tests {
         let target = hash(&handle.key_pair().public_key);
         let topic = [0xBB; 32];
 
-        handle.join(topic, JoinOpts { server: true, client: false }).await.unwrap();
+        handle
+            .join(
+                topic,
+                JoinOpts {
+                    server: true,
+                    client: false,
+                },
+            )
+            .await
+            .unwrap();
 
         {
             let router = handle.dht().router().lock().unwrap();
@@ -1930,7 +2038,16 @@ mod tests {
         let target = hash(&handle.key_pair().public_key);
         let topic = [0xCC; 32];
 
-        handle.join(topic, JoinOpts { server: true, client: false }).await.unwrap();
+        handle
+            .join(
+                topic,
+                JoinOpts {
+                    server: true,
+                    client: false,
+                },
+            )
+            .await
+            .unwrap();
 
         {
             let router = dht_handle.router().lock().unwrap();

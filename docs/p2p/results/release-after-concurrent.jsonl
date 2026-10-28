@@ -1,0 +1,12 @@
+{"client":0,"connection_ms":6223.2345000000005,"ok":true,"round":0,"throughput_mib_s":0.3609006166835694}
+{"client":3,"connection_ms":6268.051834,"ok":true,"round":0,"throughput_mib_s":0.3557709840890309}
+{"client":1,"connection_ms":9184.741584,"ok":true,"round":0,"throughput_mib_s":0.37568787865918235}
+{"client":2,"connection_ms":9261.280167,"ok":true,"round":0,"throughput_mib_s":0.34193151955994716}
+{"client":0,"connection_ms":481.394875,"ok":true,"round":1,"throughput_mib_s":0.33103829997267276}
+{"client":3,"connection_ms":504.855833,"ok":true,"round":1,"throughput_mib_s":0.3190163831661116}
+{"client":1,"connection_ms":530.995,"ok":true,"round":1,"throughput_mib_s":0.25593172151160826}
+{"client":2,"connection_ms":483.002792,"ok":true,"round":1,"throughput_mib_s":0.2754661639033807}
+{"client":0,"connection_ms":712.169292,"ok":true,"round":2,"throughput_mib_s":0.23252765745722953}
+{"client":3,"connection_ms":775.829125,"ok":true,"round":2,"throughput_mib_s":0.24325515163154254}
+{"client":1,"connection_ms":647.1980000000001,"ok":true,"round":2,"throughput_mib_s":0.29453241618338394}
+{"client":2,"connection_ms":915.1510830000001,"ok":true,"round":2,"throughput_mib_s":0.30374247364953394}

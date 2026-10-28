@@ -3,7 +3,11 @@ use axum::{Router, body::Body};
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use peeroxide_dht::{noise::Keypair, secret_stream::SecretStream};
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream},
     task::JoinHandle,
@@ -16,7 +20,35 @@ use tower::ServiceExt;
 pub struct RemotePeer {
     pub public_key: PublicKey,
     pub address: SocketAddr,
-    pub session: Arc<()>,
+    pub session: Arc<Session>,
+}
+
+/// Server-local session order. Only a token authorized for this device may
+/// supersede an older encrypted session. A late old request cannot reclaim it.
+#[derive(Debug)]
+pub struct Session {
+    generation: u64,
+    cancel: CancellationToken,
+}
+impl Default for Session {
+    fn default() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self {
+            generation: NEXT.fetch_add(1, Ordering::Relaxed),
+            cancel: CancellationToken::new(),
+        }
+    }
+}
+impl Session {
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub fn close(&self) {
+        self.cancel.cancel();
+    }
+    pub fn is_closed(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
 }
 
 pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
@@ -48,7 +80,7 @@ pub async fn secure<T: Io + 'static>(
         RemotePeer {
             public_key: key,
             address: "192.0.2.1:0".parse()?,
-            session: Arc::new(()),
+            session: Arc::new(Session::default()),
         },
         pump,
     ))
@@ -67,6 +99,9 @@ pub fn adapt<T: Io + 'static>(
     let stop = cancel.clone();
     let task = tokio::spawn(async move {
         let _keep_alive = keep_alive;
+        let started = std::time::Instant::now();
+        let mut uploaded = 0u64;
+        let mut downloaded = 0u64;
         let upload = async {
             let mut buffer = [0; 16 * 1024];
             loop {
@@ -76,11 +111,13 @@ pub fn adapt<T: Io + 'static>(
                     return Ok::<_, crate::Error>(());
                 }
                 outgoing.write(&buffer[..length]).await?;
+                uploaded += length as u64;
             }
         };
         let download = async {
             while let Some(bytes) = incoming.read().await? {
                 write.write_all(&bytes).await?;
+                downloaded += bytes.len() as u64;
             }
             write.shutdown().await?;
             Ok::<_, crate::Error>(())
@@ -91,6 +128,12 @@ pub fn adapt<T: Io + 'static>(
                 if let Err(error) = result { tracing::debug!(error = ?error, "Encrypted stream pump closed"); }
             }
         }
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            uploaded,
+            downloaded,
+            "Encrypted stream pump finished"
+        );
         stop.cancel();
     });
     (
@@ -129,6 +172,7 @@ pub struct HttpConnection {
 }
 impl HttpConnection {
     pub async fn new(io: DuplexStream, pump: Pump) -> Result<Arc<Self>> {
+        let started = std::time::Instant::now();
         let (sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
             .keep_alive_interval(std::time::Duration::from_secs(15))
@@ -136,6 +180,10 @@ impl HttpConnection {
             .keep_alive_while_idle(true)
             .handshake(TokioIo::new(io))
             .await?;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_millis(),
+            "HTTP/2 client initialized"
+        );
         let closed = CancellationToken::new();
         let stop = closed.clone();
         let task = tokio::spawn(async move {
@@ -188,6 +236,7 @@ pub async fn serve(
     cancel: CancellationToken,
 ) -> Result<()> {
     let _pump = pump;
+    let superseded = peer.session.cancel.clone();
     let service = hyper::service::service_fn(move |request: Request<Incoming>| {
         let app = app.clone();
         let peer = peer.clone();
@@ -207,5 +256,5 @@ pub async fn serve(
         .max_concurrent_streams(64)
         .max_header_list_size(32 * 1024)
         .serve_connection(TokioIo::new(io), service);
-    tokio::select! { _ = cancel.cancelled() => Ok(()), result = connection => Ok(result?) }
+    tokio::select! { _ = cancel.cancelled() => Ok(()), _ = superseded.cancelled() => Ok(()), result = connection => Ok(result?) }
 }

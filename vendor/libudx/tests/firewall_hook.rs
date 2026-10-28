@@ -206,3 +206,44 @@ async fn firewall_cleanup_preserves_reused_stream_id() {
     })
     .await;
 }
+
+#[tokio::test]
+async fn queued_server_greeting_waits_for_firewall_endpoint() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    with_timeout(Duration::from_secs(3), async {
+        let runtime = create_runtime();
+        let (server_socket, server_address) = create_bound_socket(&runtime).await;
+        let (client_socket, _) = create_bound_socket(&runtime).await;
+        let server = runtime.create_stream(301).await.unwrap();
+        server
+            .set_firewall_hook(&server_socket, 302, |_, _, _| true)
+            .unwrap();
+        let mut server = server.into_async_stream();
+        let greeting = tokio::spawn(async move {
+            server.write_all(b"server greeting").await.unwrap();
+            let mut hello = [0; 5];
+            server.read_exact(&mut hello).await.unwrap();
+            assert_eq!(&hello, b"hello");
+            server.flush().await.unwrap();
+        });
+        // Allow the listener's pacing task to run before any peer is known.
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let client = runtime.create_stream(302).await.unwrap();
+        client
+            .connect(&client_socket, 301, server_address)
+            .await
+            .unwrap();
+        let mut client = client.into_async_stream();
+        let start = std::time::Instant::now();
+        client.write_all(b"hello").await.unwrap();
+        let mut bytes = [0; 15];
+        client.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"server greeting");
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "greeting waited for an RTO after premature send"
+        );
+        greeting.await.unwrap();
+    })
+    .await;
+}
