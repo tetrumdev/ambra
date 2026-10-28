@@ -6,13 +6,12 @@ use std::time::Instant;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error::{Result, UdxError};
 use super::congestion::CaState;
 use super::header::{
-    Header, SackRange,
-    FLAG_DATA, FLAG_END, FLAG_DESTROY, FLAG_SACK, FLAG_HEARTBEAT,
-    HEADER_SIZE, encode_sack, decode_sack,
+    FLAG_DATA, FLAG_DESTROY, FLAG_END, FLAG_HEARTBEAT, FLAG_SACK, HEADER_SIZE, Header, SackRange,
+    decode_sack, encode_sack,
 };
+use crate::error::{Result, UdxError};
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -157,7 +156,6 @@ pub(crate) struct PendingWrite {
 /// Notification from the send path to the processor task.
 pub(crate) enum StreamNotify {
     DataQueued,
-    Shutdown,
 }
 
 type WriteSenders = Vec<Option<oneshot::Sender<Result<()>>>>;
@@ -225,7 +223,7 @@ impl Drop for SocketRegistrations {
 }
 
 // Captured before spawning so cancellation before the first poll also deregisters.
-struct SocketCleanup(Arc<Mutex<SocketRegistrations>>);
+pub(crate) struct SocketCleanup(Arc<Mutex<SocketRegistrations>>);
 
 impl Drop for SocketCleanup {
     fn drop(&mut self) {
@@ -300,7 +298,7 @@ impl StreamInner {
     /// Drain all pending writes with `StreamClosed`, mark the stream
     /// disconnected, and drop `notify_tx` so future sends fail fast.
     /// Idempotent — safe to call more than once.
-    fn terminate(&mut self) {
+    pub(crate) fn terminate(&mut self) {
         self.connected = false;
         self.notify_tx = None;
 
@@ -345,11 +343,7 @@ impl StreamInner {
         packet[3] = padding as u8;
 
         self.mtu_probe_wanted = false;
-        tracing::trace!(
-            probe_size = target_size,
-            padding,
-            "mtu: probeify"
-        );
+        tracing::trace!(probe_size = target_size, padding, "mtu: probeify");
         true
     }
 
@@ -375,15 +369,14 @@ impl StreamInner {
 
     // ── Write preparation ────────────────────────────────────────────────────
 
-    pub(crate) fn prepare_write(
-        &mut self,
-        data_len: usize,
-    ) -> Result<WritePrep> {
+    pub(crate) fn prepare_write(&mut self, data_len: usize) -> Result<WritePrep> {
         if !self.connected && self.firewall_hook.is_none() {
             return Err(UdxError::Io(std::io::Error::other("stream not connected")));
         }
         if self.ended {
-            return Err(UdxError::Io(std::io::Error::other("stream already shut down")));
+            return Err(UdxError::Io(std::io::Error::other(
+                "stream already shut down",
+            )));
         }
         let udp = self.udp.clone().ok_or(UdxError::StreamClosed)?;
         // When the firewall hook hasn't fired yet, remote_addr is not known.
@@ -426,7 +419,9 @@ impl StreamInner {
             return Err(UdxError::Io(std::io::Error::other("stream not connected")));
         }
         if self.ended {
-            return Err(UdxError::Io(std::io::Error::other("stream already shut down")));
+            return Err(UdxError::Io(std::io::Error::other(
+                "stream already shut down",
+            )));
         }
         self.ended = true;
         let udp = self.udp.clone().ok_or(UdxError::StreamClosed)?;
@@ -460,28 +455,46 @@ impl StreamInner {
         let now = Instant::now();
         let inflight = self.inflight();
         let rate_info = self.congestion.on_packet_sent(seq, inflight, now);
-        tracing::trace!(seq, is_mtu_probe, "register_sent: packet placed in outgoing");
-        self.outgoing.insert(seq, SentPacket {
-            packet,
-            time_sent: now,
-            retransmit_count: 0,
-            sacked: false,
+        tracing::trace!(
+            seq,
             is_mtu_probe,
-            lost: false,
-            rate_info: Some(rate_info),
-        });
+            "register_sent: packet placed in outgoing"
+        );
+        self.outgoing.insert(
+            seq,
+            SentPacket {
+                packet,
+                time_sent: now,
+                retransmit_count: 0,
+                sacked: false,
+                is_mtu_probe,
+                lost: false,
+                rate_info: Some(rate_info),
+            },
+        );
     }
 
     pub(crate) fn inflight(&self) -> u32 {
-        self.outgoing.values().filter(|p| !p.sacked && !p.lost).count() as u32
+        self.outgoing
+            .values()
+            .filter(|p| !p.sacked && !p.lost)
+            .count() as u32
     }
 
     pub(crate) fn queue_for_send(&mut self, packets: Vec<(u32, Vec<u8>)>, remote_addr: SocketAddr) {
         let count = packets.len();
         for (seq, packet) in packets {
-            self.send_queue.push_back(QueuedPacket { packet, seq, remote_addr });
+            self.send_queue.push_back(QueuedPacket {
+                packet,
+                seq,
+                remote_addr,
+            });
         }
-        tracing::trace!(count, queue_len = self.send_queue.len(), "queue_for_send: packets staged");
+        tracing::trace!(
+            count,
+            queue_len = self.send_queue.len(),
+            "queue_for_send: packets staged"
+        );
         if let Some(ref tx) = self.notify_tx {
             let _ = tx.send(StreamNotify::DataQueued);
         }
@@ -527,10 +540,7 @@ impl StreamInner {
     ///
     /// Congestion control is NOT called here — the caller must combine this
     /// rate info with SACK rate info and loss count, then call `congestion.on_ack`.
-    fn on_cumulative_ack(
-        &mut self,
-        ack: u32,
-    ) -> (WriteSenders, AckedRateInfo) {
+    fn on_cumulative_ack(&mut self, ack: u32) -> (WriteSenders, AckedRateInfo) {
         if !seq_after(ack, self.remote_acked) {
             return (Vec::new(), Vec::new());
         }
@@ -577,7 +587,10 @@ impl StreamInner {
 
     /// Process SACK ranges from the remote peer. Marks selectively acknowledged
     /// packets and returns rate info from newly sacked packets for congestion control.
-    fn on_sack(&mut self, ranges: &[SackRange]) -> Vec<(u32, super::congestion::rate::PacketRateInfo)> {
+    fn on_sack(
+        &mut self,
+        ranges: &[SackRange],
+    ) -> Vec<(u32, super::congestion::rate::PacketRateInfo)> {
         let mut sack_rate_info = Vec::new();
         for range in ranges {
             for seq in range.start..range.end {
@@ -676,7 +689,9 @@ impl StreamInner {
             }
         } else {
             // Out-of-order: buffer for later delivery
-            self.recv_buf.entry(seq).or_insert(RecvdPacket { payload, flags });
+            self.recv_buf
+                .entry(seq)
+                .or_insert(RecvdPacket { payload, flags });
         }
 
         events
@@ -925,17 +940,23 @@ impl UdxStream {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .take();
-        // Prevent Drop from deregistering — the processor task is still running
-        self.socket_streams.lock().unwrap_or_else(|e| e.into_inner()).take();
+        // Transfer registration ownership along with the reliability processor.
+        let registration = self
+            .socket_streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+            .map(SocketCleanup);
         let Some(read_rx) = self.read_rx.take() else {
             return super::async_stream::UdxAsyncStream::new(
                 Arc::clone(&self.inner),
                 mpsc::unbounded_channel().1,
-                None,
+                processor,
+                registration,
             );
         };
         let inner = Arc::clone(&self.inner);
-        super::async_stream::UdxAsyncStream::new(inner, read_rx, processor)
+        super::async_stream::UdxAsyncStream::new(inner, read_rx, processor, registration)
     }
 
     /// Returns the current effective MTU (Maximum Transmission Unit) in bytes.
@@ -983,7 +1004,12 @@ impl UdxStream {
         });
         *self.processor.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
-        tracing::debug!(local_id = self.local_id, remote_id, ?remote_addr, "stream connected");
+        tracing::debug!(
+            local_id = self.local_id,
+            remote_id,
+            ?remote_addr,
+            "stream connected"
+        );
         Ok(())
     }
 
@@ -1127,7 +1153,11 @@ impl UdxStream {
         });
         *self.processor.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
-        tracing::debug!(local_id = self.local_id, remote_id, "stream listening (firewall hook set)");
+        tracing::debug!(
+            local_id = self.local_id,
+            remote_id,
+            "stream listening (firewall hook set)"
+        );
         Ok(())
     }
 
@@ -1198,11 +1228,7 @@ impl UdxStream {
             let _ = udp.send_to(&header.encode(), addr).await;
         }
 
-        let processor_handle = self
-            .processor
-            .lock()
-            .ok()
-            .and_then(|mut g| g.take());
+        let processor_handle = self.processor.lock().ok().and_then(|mut g| g.take());
         if let Some(handle) = processor_handle {
             handle.abort();
             let _ = handle.await;
@@ -1256,8 +1282,6 @@ async fn process_incoming(
     registrations: Arc<Mutex<SocketRegistrations>>,
 ) {
     use tokio::time::{self, Duration, Instant as TokioInstant};
-
-    let mut shutting_down = false;
 
     // RTO timer starts far in the future (no data in flight initially).
     let rto_sleep = time::sleep(FAR_FUTURE);
@@ -1476,6 +1500,9 @@ async fn process_incoming(
                     }
 
                     // Fast retransmit lost packets (outside lock)
+                    if !fast_retransmits.is_empty() {
+                        tracing::debug!(count = fast_retransmits.len(), "UDX fast retransmission");
+                    }
                     if let (Some(udp), Some(addr)) = (udp_for_retransmit, addr_for_retransmit) {
                         for packet_bytes in fast_retransmits {
                             let udp = Arc::clone(&udp);
@@ -1572,14 +1599,17 @@ async fn process_incoming(
                     StreamNotify::DataQueued => {
                         pacing_sleep.as_mut().reset(TokioInstant::now());
                     }
-                    StreamNotify::Shutdown => {
-                        shutting_down = true;
-                        pacing_sleep.as_mut().reset(TokioInstant::now());
-                    }
                 }
             }
 
             _ = &mut pacing_sleep => {
+                // A listening stream may queue its SecretStream greeting before
+                // the firewall hook learns the remote endpoint. Sending it to
+                // 0.0.0.0:0 loses the greeting and starts needless RTO recovery.
+                if !inner.lock().unwrap_or_else(|e| e.into_inner()).connected {
+                    pacing_sleep.as_mut().reset(TokioInstant::now() + FAR_FUTURE);
+                    continue;
+                }
                 let (packets_to_send, should_arm_rto, new_rto_ms) = {
                     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
                     let mut batch: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
@@ -1657,9 +1687,6 @@ async fn process_incoming(
                 }
 
                 let has_more = !inner.lock().unwrap_or_else(|e| e.into_inner()).send_queue.is_empty();
-                if shutting_down && !has_more {
-                    break;
-                }
                 if has_more {
                     pacing_sleep.as_mut().reset(TokioInstant::now() + Duration::from_millis(1));
                 } else {
@@ -1778,12 +1805,7 @@ async fn process_incoming(
 // ── Packet building ──────────────────────────────────────────────────────────
 
 /// Build a wire-format DATA packet (header + payload).
-pub(crate) fn build_data_packet(
-    remote_id: u32,
-    seq: u32,
-    ack: u32,
-    payload: &[u8],
-) -> Vec<u8> {
+pub(crate) fn build_data_packet(remote_id: u32, seq: u32, ack: u32, payload: &[u8]) -> Vec<u8> {
     let header = Header {
         type_flags: FLAG_DATA,
         data_offset: 0,
@@ -1813,7 +1835,10 @@ pub(crate) async fn send_data_packets(
     current_ack: u32,
     data: &[u8],
 ) -> Result<()> {
-    let max_payload = inner.lock().unwrap_or_else(|e| e.into_inner()).max_payload();
+    let max_payload = inner
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .max_payload();
     let chunks: Vec<&[u8]> = if data.is_empty() {
         vec![&[]]
     } else {
@@ -1829,7 +1854,9 @@ pub(crate) async fn send_data_packets(
     {
         let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
         if guard.outgoing.is_empty() && guard.send_queue.is_empty() {
-            guard.congestion.on_transmit_start(std::time::Instant::now());
+            guard
+                .congestion
+                .on_transmit_start(std::time::Instant::now());
         }
         guard.queue_for_send(packets, remote_addr);
     }
@@ -1956,23 +1983,39 @@ mod mtu_tests {
 
         let payload = vec![0xABu8; MTU_BASE - HEADER_SIZE];
         let packet = build_data_packet(0, 0, 0, &payload);
-        inner.outgoing.insert(0, SentPacket {
-            packet,
-            time_sent: Instant::now(),
-            retransmit_count: 0,
-            sacked: false,
-            is_mtu_probe: true,
-            lost: false,
-            rate_info: None,
-        });
+        inner.outgoing.insert(
+            0,
+            SentPacket {
+                packet,
+                time_sent: Instant::now(),
+                retransmit_count: 0,
+                sacked: false,
+                is_mtu_probe: true,
+                lost: false,
+                rate_info: None,
+            },
+        );
 
         let retransmits = inner.packets_to_retransmit();
         assert_eq!(retransmits.len(), 1);
         assert_eq!(inner.mtu_probe_count, 1);
-        assert!(!inner.outgoing[&0].is_mtu_probe, "probe flag should be cleared after retransmit");
-        assert_eq!(inner.outgoing[&0].packet[3], 0, "data_offset should be reset");
-        assert_eq!(inner.mtu_state, MtuState::Search, "still searching after 1 failure");
-        assert!(inner.mtu_probe_wanted, "should want another probe after non-terminal failure");
+        assert!(
+            !inner.outgoing[&0].is_mtu_probe,
+            "probe flag should be cleared after retransmit"
+        );
+        assert_eq!(
+            inner.outgoing[&0].packet[3], 0,
+            "data_offset should be reset"
+        );
+        assert_eq!(
+            inner.mtu_state,
+            MtuState::Search,
+            "still searching after 1 failure"
+        );
+        assert!(
+            inner.mtu_probe_wanted,
+            "should want another probe after non-terminal failure"
+        );
     }
 
     // T6: Probe uses data_offset padding — probeify inflates packet to probe size
@@ -1989,11 +2032,22 @@ mod mtu_tests {
 
         let ok = inner.mtu_probeify_packet(&mut packet);
         assert!(ok, "probeify should succeed for nearly-full packet");
-        assert_eq!(packet.len(), MTU_BASE + MTU_STEP, "packet should be inflated to probe size");
-        assert_eq!(packet[3] as usize, MTU_STEP, "data_offset should equal padding size");
+        assert_eq!(
+            packet.len(),
+            MTU_BASE + MTU_STEP,
+            "packet should be inflated to probe size"
+        );
+        assert_eq!(
+            packet[3] as usize, MTU_STEP,
+            "data_offset should equal padding size"
+        );
 
         let payload_start = HEADER_SIZE + MTU_STEP;
-        assert_eq!(&packet[payload_start..], &payload[..], "original payload should be intact after padding");
+        assert_eq!(
+            &packet[payload_start..],
+            &payload[..],
+            "original payload should be intact after padding"
+        );
     }
 
     // T7: Probe ACK advances MTU and scales congestion window
@@ -2010,7 +2064,11 @@ mod mtu_tests {
         assert_eq!(inner.mtu_probe_count, 0);
         assert_eq!(inner.mtu_probe_size, MTU_BASE + 2 * MTU_STEP);
         assert!(inner.mtu_probe_wanted, "should want next probe");
-        assert_eq!(inner.mtu_state, MtuState::Search, "still searching — haven't reached max");
+        assert_eq!(
+            inner.mtu_state,
+            MtuState::Search,
+            "still searching — haven't reached max"
+        );
     }
 
     // T8: MTU_MAX_PROBES consecutive failures → SearchComplete
@@ -2023,22 +2081,29 @@ mod mtu_tests {
         for i in 0..MTU_MAX_PROBES {
             let payload = vec![0xEFu8; MTU_BASE - HEADER_SIZE];
             let packet = build_data_packet(0, i, 0, &payload);
-            inner.outgoing.insert(i, SentPacket {
-                packet,
-                time_sent: Instant::now(),
-                retransmit_count: 0,
-                sacked: false,
-                is_mtu_probe: true,
-                lost: false,
-                rate_info: None,
-            });
+            inner.outgoing.insert(
+                i,
+                SentPacket {
+                    packet,
+                    time_sent: Instant::now(),
+                    retransmit_count: 0,
+                    sacked: false,
+                    is_mtu_probe: true,
+                    lost: false,
+                    rate_info: None,
+                },
+            );
 
             let _ = inner.packets_to_retransmit();
         }
 
         assert_eq!(inner.mtu_state, MtuState::SearchComplete);
         assert!(!inner.mtu_probe_wanted);
-        assert_eq!(inner.mtu, MTU_BASE + MTU_STEP, "MTU frozen at last successful value");
+        assert_eq!(
+            inner.mtu,
+            MTU_BASE + MTU_STEP,
+            "MTU frozen at last successful value"
+        );
     }
 }
 

@@ -1,0 +1,38 @@
+    Updating crates.io index
+     Locking 109 packages to highest compatible versions
+      Adding blake2 v0.10.6 (available: v0.11.0)
+      Adding chacha20 v0.9.1 (available: v0.10.2)
+      Adding chacha20poly1305 v0.10.1 (available: v0.11.0)
+      Adding curve25519-dalek v4.1.3 (available: v5.0.0)
+      Adding ed25519-dalek v2.2.0 (available: v3.0.0)
+      Adding generic-array v0.14.7 (available: v0.14.9)
+      Adding if-addrs v0.13.4 (available: v0.15.0)
+      Adding poly1305 v0.8.0 (available: v0.9.1)
+      Adding rand v0.9.5 (available: v0.10.3)
+      Adding sha2 v0.10.9 (available: v0.11.1)
+   Compiling libudx v1.7.3 (/tmp/ambra-server-baseline/vendor/libudx)
+   Compiling peeroxide-dht v1.7.3 (/tmp/ambra-server-baseline/vendor/peeroxide-dht)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.89s
+     Running unittests src/lib.rs (/home/llewyn/ambra/crates/ambra-net/target/debug/deps/peeroxide_dht-c55940215a254062)
+
+running 1 test
+ALLOCATION round=0 sockets=256 tasks=1023 elapsed_us=66055
+ALLOCATION round=1 sockets=256 tasks=2031 elapsed_us=50581
+ALLOCATION round=2 sockets=256 tasks=3023 elapsed_us=43178
+ALLOCATION round=3 sockets=246 tasks=3975 elapsed_us=24483
+
+thread 'holepuncher::allocation_benchmark::bounded_birthday_allocation_benchmark' (25765) panicked at src/holepuncher.rs:913:13:
+assertion `left == right` failed
+  left: 246
+ right: 256
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test holepuncher::allocation_benchmark::bounded_birthday_allocation_benchmark ... FAILED
+
+failures:
+
+failures:
+    holepuncher::allocation_benchmark::bounded_birthday_allocation_benchmark
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 391 filtered out; finished in 0.26s
+
+error: test failed, to rerun pass `--lib`

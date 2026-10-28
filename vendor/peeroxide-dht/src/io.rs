@@ -479,6 +479,18 @@ impl Io {
         events
     }
 
+    /// Remove an abandoned caller's request without retries or routing penalties.
+    pub(crate) fn cancel_request(&mut self, tid: u16) {
+        if let Some(index) = self.inflight.iter().position(|entry| entry.tid == tid) {
+            let entry = self.inflight.swap_remove(index);
+            if entry.sent > 0 {
+                self.congestion.recv();
+            }
+            self.stats.active = self.stats.active.saturating_sub(1);
+            self.pending.retain(|pending| pending.tid != tid);
+        }
+    }
+
     /// Create an outgoing request.
     /// Returns the assigned TID, or `None` if the IO is destroying or the
     /// destination address is invalid.
