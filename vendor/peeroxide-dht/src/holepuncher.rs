@@ -724,9 +724,8 @@ mod recv_adapter_tests {
             .send_to(&[0u8], target_addr)
             .expect("send probe");
 
-        let evt = timeout(Duration::from_secs(2), event_rx.recv())
+        let evt = with_probe_retries(&probe_socket, target_addr, event_rx.recv())
             .await
-            .expect("Connected within 2s")
             .expect("event_rx open");
         match evt {
             HolepunchEvent::Connected { addr, socket } => {
@@ -785,16 +784,16 @@ mod recv_adapter_tests {
         assert_eq!(puncher.sockets.len(), 2, "primary + one birthday socket");
 
         // Send a probe to the SECOND (birthday) socket, not the primary one.
-        let probe_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-        let probe_local = probe_socket.local_addr().unwrap();
+        let probe_socket = runtime.create_socket().await.unwrap();
         probe_socket
-            .send_to(&[0u8], extra_addr)
+            .bind("127.0.0.1:0".parse().unwrap())
             .await
-            .expect("send probe to birthday socket");
+            .unwrap();
+        let probe_local = probe_socket.local_addr().await.unwrap();
+        let mut probe_rx = probe_socket.recv_start().unwrap();
 
-        let evt = timeout(Duration::from_secs(2), event_rx.recv())
+        let evt = with_probe_retries(&probe_socket, extra_addr, event_rx.recv())
             .await
-            .expect("Connected within 2s")
             .expect("event_rx open");
         let winning_socket = match evt {
             HolepunchEvent::Connected { addr, socket } => {
@@ -808,29 +807,56 @@ mod recv_adapter_tests {
             _ => panic!("expected Connected, got something else"),
         };
 
-        probe_socket.send_to(&[0u8], primary_addr).await.unwrap();
+        with_probe_retries(
+            &probe_socket,
+            primary_addr,
+            tokio::time::sleep(Duration::from_millis(150)),
+        )
+        .await;
         assert!(
-            timeout(Duration::from_millis(100), event_rx.recv())
-                .await
-                .is_err(),
+            event_rx.try_recv().is_err(),
             "a later probe on the primary socket must not replace the winner"
         );
 
         puncher.destroy();
         drop(puncher);
-        winning_socket
-            .send_to(b"winning socket", probe_local)
-            .unwrap();
-        let mut buf = [0u8; 64];
-        let (len, from) = timeout(Duration::from_secs(2), probe_socket.recv_from(&mut buf))
+        let reply = with_probe_retries(&winning_socket, probe_local, probe_rx.recv())
             .await
-            .unwrap()
             .unwrap();
         assert_eq!(
-            from, extra_addr,
+            reply.addr, extra_addr,
             "handoff must preserve the punched source port"
         );
-        assert_eq!(&buf[..len], b"winning socket");
+    }
+
+    #[tokio::test]
+    async fn on_holepunch_message_hands_off_indexed_socket_once() {
+        let runtime = UdxRuntime::new().unwrap();
+        let pool = SocketPool::new("127.0.0.1".into());
+        let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+        let mut puncher = Holepuncher::new(&pool, &runtime, true, true, FIREWALL_RANDOM, event_tx)
+            .await
+            .unwrap();
+        let extra = pool.acquire(&runtime).await.unwrap();
+        let extra_addr = extra.socket.local_addr().await.unwrap();
+        puncher.sockets.push(extra);
+        let remote = "127.0.0.1:9000".parse().unwrap();
+
+        puncher.on_holepunch_message(remote, usize::MAX);
+        assert!(event_rx.try_recv().is_err());
+        assert!(!puncher.connected);
+        puncher.on_holepunch_message(remote, 1);
+        match event_rx.try_recv().unwrap() {
+            HolepunchEvent::Connected { addr, socket } => {
+                assert_eq!(addr, remote);
+                assert_eq!(socket.local_addr().await.unwrap(), extra_addr);
+            }
+            _ => panic!("expected Connected"),
+        }
+        puncher.on_holepunch_message(remote, 0);
+        assert!(event_rx.try_recv().is_err());
+        assert!(puncher.connected);
+        puncher.destroy();
     }
 
     #[tokio::test]
@@ -855,9 +881,8 @@ mod recv_adapter_tests {
             .send_to(&[0u8], puncher_addr)
             .expect("send probe");
 
-        let reflection = timeout(Duration::from_secs(2), probe_hp_rx.recv())
+        let reflection = with_probe_retries(&probe_socket, puncher_addr, probe_hp_rx.recv())
             .await
-            .expect("reflection within 2s")
             .expect("rx open");
 
         assert_eq!(
