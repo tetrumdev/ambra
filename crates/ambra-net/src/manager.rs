@@ -49,8 +49,9 @@ impl Default for Timing {
         Self {
             lan: Duration::from_secs(3),
             pwnat: Duration::from_secs(8),
-            // Bootstrap, lookup and Noise signaling precede the 30-second punch window.
-            hyperdht: Duration::from_secs(60),
+            // A failed hole-punch round can take 30 seconds before another
+            // discovery peer succeeds. Allow that retry plus bootstrap/setup.
+            hyperdht: Duration::from_secs(75),
             retry: Duration::from_secs(5),
         }
     }

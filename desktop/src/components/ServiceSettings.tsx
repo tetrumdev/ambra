@@ -19,10 +19,13 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   const [busy, setBusy] = useState<StreamingProvider | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [manualSubmit, setManualSubmit] = useState<((url: string) => Promise<void>) | null>(null);
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
     pending.current?.abort(); pending.current = null;
-    previous.current = null; setStatus(null); setBusy(null); setError(null); setMessage(null);
+    previous.current = null; setStatus(null); setBusy(null); setError(null); setMessage(null); setManualSubmit(null); setCallbackUrl(""); setSubmitting(false);
     if (!active || !connected) return;
     let disposed = false;
     const refresh = () => void serviceAuthStatus().then(value => {
@@ -38,14 +41,16 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   }, [active, connected, connection]);
   const cancel = () => {
     pending.current?.abort(); pending.current = null;
-    setBusy(null); setMessage("Sign-in cancelled.");
+    setBusy(null); setManualSubmit(null); setCallbackUrl(""); setSubmitting(false); setMessage("Sign-in cancelled.");
   };
   const signIn = async (provider: StreamingProvider) => {
     if (pending.current) return;
     const controller = new AbortController(); pending.current = controller;
-    setBusy(provider); setError(null); setMessage(null);
+    setBusy(provider); setError(null); setMessage(null); setCallbackUrl(""); setSubmitting(false);
     try {
-      await signInService(provider, controller.signal);
+      await signInService(provider, controller.signal, submit => {
+        if (pending.current === controller) setManualSubmit(() => submit);
+      });
       if (pending.current !== controller || controller.signal.aborted) return;
       const next = { tidal: false, qobuz: false, spotify: false, ...previous.current, [provider]: true };
       previous.current = next; setStatus(next); updateServiceAvailability(next); callback.current();
@@ -58,7 +63,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   };
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Services</h1></header>
-    <p className="settingsMuted">Sign in through the service’s browser window. Credentials stay on your server.</p>
+    <p className="settingsMuted">Sign in using your default browser. Credentials stay on your server.</p>
     {!connected && <p className="settingsMuted">Connect through Settings → Server to use streaming services.</p>}
     {(["tidal", "qobuz", "spotify"] as const).map(provider => <div className="settingsGroup" key={provider}>
       <h2>{provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"}</h2>
@@ -69,7 +74,23 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
         {status?.[provider] ? "Connected" : busy === provider ? "Waiting for sign-in…" : "Sign in"}
       </button>
     </div>)}
-    {busy && <p role="status" className="settingsMuted">Finish signing in in the browser window. <button type="button" className="settingsPill" onClick={cancel}>Cancel</button></p>}
+    {busy && <p role="status" className="settingsMuted">Finish signing in in your browser. <button type="button" className="settingsPill" onClick={cancel}>Cancel</button></p>}
+    {busy === "tidal" && manualSubmit && <form className="settingsCallbackForm" onSubmit={event => {
+      event.preventDefault();
+      if (submitting || !callbackUrl.trim()) return;
+      const controller = pending.current;
+      setSubmitting(true); setError(null);
+      void manualSubmit(callbackUrl).then(() => {
+        if (pending.current === controller) setCallbackUrl("");
+      }).catch(reason => {
+        if (pending.current === controller) setError(String(reason));
+      }).finally(() => { if (pending.current === controller) setSubmitting(false); });
+    }}>
+      <p className="settingsMuted">After signing in to Tidal, copy the final URL from your browser’s address bar and paste it here.</p>
+      <input type="text" aria-label="Tidal callback URL" placeholder="https://tidal.com/android/login/auth?code=…"
+        value={callbackUrl} onChange={event => setCallbackUrl(event.currentTarget.value)} autoComplete="off" spellCheck={false} />
+      <button type="submit" className="settingsPill settingsPillPrimary" disabled={submitting || !callbackUrl.trim()}>Finish sign-in</button>
+    </form>}
     {message && <p className="settingsServiceMessage" role="status">{message}</p>}
     {error && <p className="settingsError" role="alert">{error}</p>}
     <SpotifyPlaybackSettings active={active && connected} connected={connected} />

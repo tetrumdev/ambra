@@ -28,12 +28,18 @@ function JoinFlow({ server, onCancel, onConnected }: { server: { name: string; a
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let disposed = false;
-    const started = invoke<PairingStarted>("start_pairing", { address: server.address });
-    void started.then(value => { if (!disposed) setPairing(value); })
-      .catch(reason => { if (!disposed) setError(String(reason)); });
+    let started: Promise<PairingStarted> | undefined;
+    // Let StrictMode finish its development remount before starting native pairing.
+    // Two concurrent starts share a device identity and invalidate each other.
+    queueMicrotask(() => {
+      if (disposed) return;
+      started = invoke<PairingStarted>("start_pairing", { address: server.address });
+      void started.then(value => { if (!disposed) setPairing(value); })
+        .catch(reason => { if (!disposed) setError(String(reason)); });
+    });
     return () => {
       disposed = true;
-      void started.then(value => invoke("cancel_pairing", { requestId: value.requestId })).catch(() => {});
+      void started?.then(value => invoke("cancel_pairing", { requestId: value.requestId })).catch(() => {});
     };
   }, [server.address]);
   useEffect(() => {

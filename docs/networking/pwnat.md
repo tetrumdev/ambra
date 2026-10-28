@@ -61,7 +61,7 @@ The server remains an independent executable. Clients contain only shared client
 
 ## Failure behavior and diagnostics
 
-LAN has a three-second deadline, HyperDHT fifteen seconds, and pwnat eight seconds including at most three seconds for record retrieval and five seconds for ICMP/QUIC/Noise setup. Failed rounds wait five seconds before retrying. ICMP signaling is limited to one packet per 300 ms during setup. The listener sends at most three small punches per new public source, with at most sixteen sources per ten-second window and sixty-four active setup/session tasks.
+LAN has a three-second deadline, HyperDHT seventy-five seconds, and pwnat eight seconds including at most three seconds for record retrieval and five seconds for ICMP/QUIC/Noise setup. The HyperDHT deadline allows discovery and setup plus a retry after a thirty-second hole-punch attempt expires, as can happen on hotspot networks with destination-dependent UDP mappings. Failed rounds wait five seconds before retrying. ICMP signaling is limited to one packet per 300 ms during setup. The listener sends at most three small punches per new public source, with at most sixteen sources per ten-second window and sixty-four active setup/session tasks.
 
 A failed pwnat listener does not stop LAN or HyperDHT. Its DHT publication has a separate deadline and cannot change HyperDHT announcement success. Enabling or disabling only pwnat does not restart a working HyperDHT stream. A live client connection remains selected until loss. Reconnect reuses the client's fixed-port QUIC endpoint while old sessions drain; it does not immediately bind another socket to the same port.
 
