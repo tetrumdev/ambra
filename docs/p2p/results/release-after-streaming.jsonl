@@ -1,0 +1,1 @@
+{"body_gaps_over_250ms":1,"bytes":27262976,"max_body_gap_ms":338.73312500000003,"poll_p50_ms":332.850583,"poll_p95_ms":389.54254199999997,"polls":142,"responses":13,"result":"Ok(Ok(()))","seconds":60.499809375,"throughput_mib_s":0.4297533858634887}

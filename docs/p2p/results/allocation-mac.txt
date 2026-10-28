@@ -1,0 +1,22 @@
+    Blocking waiting for file lock on build directory
+   Compiling libudx v1.7.3 (/Users/eythanlawless/WebstormProjects/ambra/vendor/libudx)
+   Compiling peeroxide-dht v1.7.3 (/Users/eythanlawless/WebstormProjects/ambra/vendor/peeroxide-dht)
+    Finished `test` profile [unoptimized] target(s) in 14.01s
+     Running unittests src/lib.rs (crates/ambra-net/target/debug/deps/peeroxide_dht-0fab21da98861013)
+
+running 1 test
+ALLOCATION round=0 sockets=256 tasks=512 elapsed_us=8060
+ALLOCATION round=1 sockets=256 tasks=512 elapsed_us=9072
+ALLOCATION round=2 sockets=256 tasks=512 elapsed_us=8623
+ALLOCATION round=3 sockets=256 tasks=512 elapsed_us=8463
+ALLOCATION round=4 sockets=256 tasks=512 elapsed_us=8496
+ALLOCATION round=5 sockets=256 tasks=512 elapsed_us=9583
+ALLOCATION round=6 sockets=256 tasks=512 elapsed_us=9717
+ALLOCATION round=7 sockets=256 tasks=512 elapsed_us=9639
+ALLOCATION round=8 sockets=256 tasks=512 elapsed_us=10264
+ALLOCATION round=9 sockets=256 tasks=512 elapsed_us=9847
+ALLOCATION round=10 sockets=256 tasks=512 elapsed_us=8964
+ALLOCATION round=11 sockets=256 tasks=512 elapsed_us=8776
+test holepuncher::allocation_benchmark::bounded_birthday_allocation_benchmark ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 399 filtered out; finished in 0.12s

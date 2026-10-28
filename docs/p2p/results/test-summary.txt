@@ -1,0 +1,119 @@
+
+/tmp/ambra-net-final.log
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.79s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+/tmp/ambra-dht-final.log
+test result: ok. 400 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.51s
+
+/tmp/ambra-swarm-final.log
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+/tmp/ambra-udx-final.log
+test result: ok. 62 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.33s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.02s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.28s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.24s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 58.62s
+
+/tmp/ambra-udx-additional.log
+warning: variant `Shutdown` is never constructed
+warning: `libudx` (lib) generated 1 warning
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.51s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+/tmp/ambra-access-final.log
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.05s
+
+/tmp/ambra-desktop-rust.log
+warning: variant `Shutdown` is never constructed
+warning: `libudx` (lib) generated 1 warning
+test result: FAILED. 45 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.09s
+error: test failed, to rerun pass `--lib`
+
+/tmp/ambra-mobile-final.log
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+/tmp/ambra-mobile-js-final.log
+ 5 pass
+ 0 fail
+
+/tmp/ambra-clippy-final.log
+warning: this `if` statement can be collapsed
+warning: `ambra-net` (lib) generated 1 warning (run `cargo clippy --fix --lib -p ambra-net -- ` to apply 1 suggestion)
+
+/tmp/ambra-desktop-test-summary.txt
+ 85 pass
+ 0 fail
+ 5 pass
+ 0 fail
+ 3 pass
+ 0 fail
+ 8 pass
+ 2 fail
+error: script "test" exited with code 1
+
+/tmp/ambra-desktop-remaining-summary.txt
+artworkLoading: exit 0
+artworkQuality: exit 0
+lyricsPerformance: exit 0
+pageNavigation: exit 0
+backgroundLighting: exit 0
+serviceSignIn: exit 0
+trackPlaybackMenu: exit 0
+
+Kubuntu final net
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.80s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.19s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+Kubuntu final dht
+test result: ok. 400 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.22s
+
+Kubuntu final swarm
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+Kubuntu final access
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 190 filtered out; finished in 0.23s
+
+Combined commit integration — Mac
+
+net
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.84s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.88s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+dht
+test result: ok. 412 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s
+
+swarm
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+udx
+test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 61.02s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.49s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.40s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.40s
+
+access
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 191 filtered out; finished in 0.02s
+
+udx-unit-final
+test result: ok. 64 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s

@@ -428,7 +428,7 @@ async fn status_requires_pairing_but_administration_stays_host_only() {
                         .insert(ambra_net::transport::RemotePeer {
                             public_key: ambra_net::Identity::generate().unwrap().public_key(),
                             address: "192.0.2.2:1".parse().unwrap(),
-                            session: std::sync::Arc::new(()),
+                            session: std::sync::Arc::new(ambra_net::transport::Session::default()),
                         });
                 }
                 next.run(request).await

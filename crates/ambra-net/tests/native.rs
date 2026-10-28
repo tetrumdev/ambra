@@ -354,6 +354,7 @@ async fn failed_authorization_never_reports_connected() {
             pwnat: Duration::from_millis(1),
             hyperdht: Duration::ZERO,
             retry: Duration::from_secs(1),
+            ..Default::default()
         },
     );
     assert!(manager.connect().await.is_err());
@@ -469,4 +470,100 @@ async fn enrollment_authorizes_on_the_same_encrypted_connection() {
     bridge.shutdown().await;
     cancel.cancel();
     task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn connection_waiters_share_authorization_when_first_waiter_is_cancelled() {
+    let identity = Identity::generate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let stop = CancellationToken::new();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let authorizations = Arc::new(AtomicUsize::new(0));
+    let app = Router::new().route(
+        "/api/network/session",
+        get({
+            let entered = entered.clone();
+            let release = release.clone();
+            let count = authorizations.clone();
+            move || {
+                let entered = entered.clone();
+                let release = release.clone();
+                let count = count.clone();
+                async move {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    entered.notify_one();
+                    release.notified().await;
+                    "authorized"
+                }
+            }
+        }),
+    );
+    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+    let manager = manager(&identity, address);
+    let first = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.connect().await }
+    });
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    first.abort();
+    let mut waiters = tokio::task::JoinSet::new();
+    for _ in 0..32 {
+        let manager = manager.clone();
+        waiters.spawn(async move { manager.connect().await.unwrap() });
+    }
+    tokio::task::yield_now().await;
+    release.notify_one();
+    let connection = manager.connect().await.unwrap();
+    while let Some(waiter) = waiters.join_next().await {
+        assert!(Arc::ptr_eq(&connection, &waiter.unwrap()));
+    }
+    assert_eq!(authorizations.load(Ordering::SeqCst), 1);
+    manager.shutdown().await;
+    assert!(connection.is_closed());
+    assert!(manager.connect().await.is_err());
+    stop.cancel();
+    server.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_cancels_shared_authorization_and_all_waiters() {
+    let identity = Identity::generate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let app = Router::new().route(
+        "/api/network/session",
+        get({
+            let entered = entered.clone();
+            move || {
+                let entered = entered.clone();
+                async move {
+                    entered.notify_one();
+                    std::future::pending::<&'static str>().await
+                }
+            }
+        }),
+    );
+    let stop = CancellationToken::new();
+    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+    let manager = manager(&identity, address);
+    let waiter = tokio::spawn({
+        let manager = manager.clone();
+        async move { manager.connect().await }
+    });
+    tokio::time::timeout(Duration::from_secs(3), entered.notified())
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(1), manager.shutdown())
+        .await
+        .unwrap();
+    assert!(waiter.await.unwrap().is_err());
+    assert_eq!(manager.status().state, ConnectionState::Offline);
+    assert!(manager.connect().await.is_err());
+    stop.cancel();
+    server.await.unwrap().unwrap();
 }

@@ -1,0 +1,56 @@
+   Compiling syn v3.0.9
+   Compiling zeroize v1.9.1
+   Compiling smallvec v1.16.4
+   Compiling cipher v0.4.4
+   Compiling serde_core v1.0.229
+   Compiling parking_lot_core v0.9.12
+   Compiling tracing v0.1.44
+   Compiling parking_lot v0.12.5
+   Compiling tokio-macros v2.7.2
+   Compiling thiserror-impl v2.0.21
+   Compiling serde_json v1.0.154
+   Compiling tokio v1.54.1
+   Compiling thiserror v2.0.21
+   Compiling curve25519-dalek v4.1.3
+   Compiling serde_derive v1.0.229
+   Compiling salsa20 v0.10.2
+   Compiling chacha20 v0.9.1
+   Compiling memchr v2.8.3
+   Compiling libudx v1.7.3 (/home/llewyn/ambra/vendor/libudx)
+   Compiling tracing-subscriber v0.3.23
+warning: variant `Shutdown` is never constructed
+   --> /home/llewyn/ambra/vendor/libudx/src/native/stream.rs:160:5
+    |
+158 | pub(crate) enum StreamNotify {
+    |                 ------------ variant in this enum
+159 |     DataQueued,
+160 |     Shutdown,
+    |     ^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: `libudx` (lib) generated 1 warning
+   Compiling chacha20poly1305 v0.10.1
+   Compiling xsalsa20poly1305 v0.9.1
+   Compiling ed25519-dalek v2.2.0
+   Compiling serde v1.0.229
+   Compiling peeroxide-dht v1.7.3 (/home/llewyn/ambra/vendor/peeroxide-dht)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 35s
+     Running unittests src/lib.rs (crates/ambra-net/target/debug/deps/peeroxide_dht-7495788294030970)
+
+running 1 test
+ALLOCATION round=0 sockets=256 tasks=512 elapsed_us=65834
+ALLOCATION round=1 sockets=256 tasks=512 elapsed_us=69430
+ALLOCATION round=2 sockets=256 tasks=512 elapsed_us=51433
+ALLOCATION round=3 sockets=256 tasks=512 elapsed_us=51122
+ALLOCATION round=4 sockets=256 tasks=512 elapsed_us=51520
+ALLOCATION round=5 sockets=256 tasks=512 elapsed_us=58355
+ALLOCATION round=6 sockets=256 tasks=512 elapsed_us=52257
+ALLOCATION round=7 sockets=256 tasks=512 elapsed_us=52791
+ALLOCATION round=8 sockets=256 tasks=512 elapsed_us=52992
+ALLOCATION round=9 sockets=256 tasks=512 elapsed_us=52674
+ALLOCATION round=10 sockets=256 tasks=512 elapsed_us=52160
+ALLOCATION round=11 sockets=256 tasks=512 elapsed_us=52492
+test holepuncher::allocation_benchmark::bounded_birthday_allocation_benchmark ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 399 filtered out; finished in 0.72s

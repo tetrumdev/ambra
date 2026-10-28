@@ -52,7 +52,7 @@ pub struct Network {
     pub lan_error: RwLock<Option<String>>,
     pub discovery_error: RwLock<Option<String>>,
     pub changed: tokio::sync::Notify,
-    pub authenticated_sessions: RwLock<HashMap<String, Vec<std::sync::Weak<()>>>>,
+    pub authenticated_sessions: RwLock<HashMap<String, (u64, std::sync::Weak<ambra_net::transport::Session>)>>,
     pending: Mutex<HashMap<String, PendingPairing>>,
     /// The address actually listened on, which an environment override may have changed.
     pub listening: RwLock<Option<SocketAddr>>,
@@ -93,6 +93,13 @@ impl Network {
         change(&mut next)?;
         next.save()?;
         *config = next.clone();
+        if let Ok(mut sessions) = self.authenticated_sessions.write() {
+            sessions.retain(|id, (_, session)| {
+                let paired = next.paired_clients.iter().any(|client| &client.id == id);
+                if !paired { if let Some(session) = session.upgrade() { session.close(); } }
+                paired
+            });
+        }
         self.changed.notify_one();
         Ok(next)
     }
@@ -469,7 +476,7 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
         "discoveryError": *network.discovery_error.read().unwrap_or_else(|p| p.into_inner()),
         "pairedDevices": config.paired_clients.len(),
-        "authenticatedConnectedDevices": network.authenticated_sessions.read().map(|sessions| sessions.iter().filter(|(id, sessions)| config.paired_clients.iter().any(|c| &c.id == *id) && sessions.iter().any(|s| s.strong_count() > 0)).count()).unwrap_or(0),
+        "authenticatedConnectedDevices": network.authenticated_sessions.read().map(|sessions| sessions.iter().filter(|(id, sessions)| config.paired_clients.iter().any(|c| &c.id == *id) && sessions.1.upgrade().is_some_and(|session| !session.is_closed())).count()).unwrap_or(0),
         "dataRelay": false,
     }))
 }
@@ -513,7 +520,7 @@ mod tests {
         network.pending.lock().await.insert("handle".into(), PendingPairing {
             code: "123456".into(), client_id: "client".into(), client_name: "Device".into(), peer: "test".into(), requested: Instant::now(), token: None, denied: false, client_key: Some(key),
         });
-        let peer = |key| Some(axum::Extension(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1".parse().unwrap(), session: Arc::new(()) }));
+        let peer = |key| Some(axum::Extension(ambra_net::transport::RemotePeer { public_key: key, address: "127.0.0.1:1".parse().unwrap(), session: Arc::new(ambra_net::transport::Session::default()) }));
         let stranger = ambra_net::Identity::generate().unwrap().public_key();
         assert_eq!(pairing_status(State(network.clone()), Path("handle".into()), peer(stranger)).await.status(), StatusCode::FORBIDDEN);
         assert!(network.pending.lock().await.contains_key("handle"));

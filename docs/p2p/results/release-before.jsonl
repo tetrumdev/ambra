@@ -1,0 +1,4 @@
+{"client":0,"connection_ms":4480.679625,"ok":true,"round":0,"throughput_mib_s":0.4288972793887331}
+{"client":0,"elapsed_ms":45002.517458,"error":"Err(Elapsed(()))","ok":false,"round":1}
+{"client":0,"connection_ms":1404.9890409999998,"ok":true,"round":2,"throughput_mib_s":0.4210881137931675}
+{"client":0,"elapsed_ms":45003.578916,"error":"Err(Elapsed(()))","ok":false,"round":3}
