@@ -42,6 +42,8 @@ fn next_stream_id() -> u32 {
 
 const DEFAULT_MAX_PEERS: usize = 64;
 const DEFAULT_MAX_PARALLEL: usize = 3;
+// Includes handshake/signaling time before the initiator's 30s holepunch window.
+const PASSIVE_HOLEPUNCH_LIFETIME: Duration = Duration::from_secs(60);
 
 // ── Retry backoff tiers (matching Node.js lib/retry-timer.js) ────────────────
 // Each tier: [base_ms, jitter1, jitter2, jitter3]
@@ -352,7 +354,7 @@ struct SwarmActor {
     // creating a UDX connection. The entry persists across PEER_HOLEPUNCH
     // rounds (preserving SecurePayload tokens + the Holepuncher's NAT
     // analysis) and is resolved into a real SwarmConnection only when the
-    // firewall hook on the puncher's primary socket commits the 4-tuple.
+    // firewall hook on a puncher candidate socket commits the 4-tuple.
     connects: HashMap<u64, InFlightHolepunch>,
     pending_handshakes: HashMap<[u8; 32], u64>,
     handshake_replies: HashMap<[u8; 32], (std::time::Instant, Vec<u8>)>,
@@ -361,7 +363,7 @@ struct SwarmActor {
 }
 
 /// State carried between the initial server handshake and the moment the
-/// passive Holepuncher's primary socket sees its first probe. Owned
+/// passive Holepuncher's winning socket sees its first valid UDX packet. Owned
 /// directly by `SwarmActor` (single-threaded mutation, no `Arc<Mutex>`).
 struct InFlightHolepunch {
     remote_pk: [u8; 32],
@@ -372,13 +374,12 @@ struct InFlightHolepunch {
     /// Round handling between spawn and punch-land only updates state that
     /// can be reconstructed from the incoming round.
     puncher: Option<Holepuncher>,
+    punch_task: Option<AbortOnDropTask>,
     /// Listening-mode UDX stream whose `set_firewall_hook` will commit the
     /// 4-tuple when the first probe lands.
     udx_stream: UdxStream,
-    /// Clone of the puncher's primary `UdxSocket`. Held independently so
-    /// the live UDP socket survives even after `puncher` is moved into a
-    /// spawned `punch()` task, and so we have something to hand to
-    /// `PeerConnection::new` when finalizing.
+    /// Initially the primary socket, replaced by the actual winning socket
+    /// when the firewall hook commits the connection.
     udx_socket: UdxSocket,
     /// Kept verbatim from the original handshake; consumed by `SecretStream::from_session`
     /// when the punch lands.
@@ -387,7 +388,7 @@ struct InFlightHolepunch {
     /// reordered PEER_HOLEPUNCH duplicates; replies always echo
     /// `remote_hp.round` to stay in lockstep with the client loop.
     round: u64,
-    /// 10s deadline. Cancelled when the firewall hook fires or when a new
+    /// 60s deadline. Cancelled when the firewall hook fires or when a new
     /// handshake from the same remote_pk preempts this entry.
     abort_task: Option<JoinHandle<()>>,
     /// Pre-computed addresses advertised in PEER_HOLEPUNCH reply
@@ -400,11 +401,22 @@ struct InFlightHolepunch {
 /// Decoupled from `SwarmCommand` because the firewall-hook closure must be
 /// `FnOnce + Send + 'static` and cannot await the public command channel.
 enum PassiveHolepunchEvent {
-    /// Firewall hook fired — the puncher's primary socket has bound a
-    /// remote 4-tuple at `addr`. Time to finalize the SecretStream.
-    Punched { id: u64, addr: SocketAddr },
-    /// 10s deadline elapsed without the hook firing.
+    /// Firewall hook committed a candidate socket and remote endpoint.
+    Punched {
+        id: u64,
+        addr: SocketAddr,
+        socket: UdxSocket,
+    },
+    /// Passive holepunch lifetime elapsed without the hook firing.
     Abort { id: u64 },
+}
+
+struct AbortOnDropTask(JoinHandle<()>);
+
+impl Drop for AbortOnDropTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 struct ConnectAttemptResult {
@@ -1245,7 +1257,7 @@ impl SwarmActor {
     }
 
     /// Stage a passive Holepuncher, create its listening UdxStream, wire
-    /// the firewall hook, and arm the 10s abort timer — all the work that
+    /// the firewall hook, and arm the 60s abort timer — all the work that
     /// must happen *before* the handshake reply goes out (the reply has
     /// to advertise the puncher's bound port and the session id).
     async fn try_setup_passive_holepunch(
@@ -1275,7 +1287,7 @@ impl SwarmActor {
         // construction is the passive side of the punch. The HolepunchEvent
         // channel is intentionally discarded (`_event_rx` is dropped): the
         // passive puncher never emits `Connected` itself — the libudx
-        // firewall hook on its primary socket is the authoritative
+        // firewall hook on its candidate sockets is the authoritative
         // punch-landed signal for the server side.
         let (event_tx, _event_rx) = mpsc::unbounded_channel::<HolepunchEvent>();
         let mut puncher = Holepuncher::new(&pool, &runtime, true, false, remote_firewall, event_tx)
@@ -1318,19 +1330,23 @@ impl SwarmActor {
         // be FnOnce + Send + 'static, so we send the result to the actor
         // through an mpsc channel rather than awaiting anything inline.
         let event_tx = self.passive_hp_event_tx.clone();
-        udx_stream.set_firewall_hook(&socket, remote_id, move |_sock, port, ip| {
-            if peeroxide_dht::address_policy::is_overlay(ip) { return false; }
+        udx_stream.set_firewall_hook(&socket, remote_id, move |sock, port, ip| {
+            if peeroxide_dht::address_policy::is_overlay(ip) {
+                return false;
+            }
             let addr = SocketAddr::new(ip, port);
             let _ = event_tx.send(PassiveHolepunchEvent::Punched {
                 id: holepunch_id,
                 addr,
+                socket: sock.clone(),
             });
             true
         })?;
+        puncher.set_socket_callback(udx_stream.firewall_socket_adder())?;
 
         let abort_tx = self.passive_hp_event_tx.clone();
         let abort_task = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(10)).await;
+            tokio::time::sleep(PASSIVE_HOLEPUNCH_LIFETIME).await;
             let _ = abort_tx.send(PassiveHolepunchEvent::Abort { id: holepunch_id });
         });
 
@@ -1382,6 +1398,7 @@ impl SwarmActor {
                 remote_pk,
                 payload,
                 puncher: Some(setup.puncher),
+                punch_task: None,
                 udx_stream: setup.udx_stream,
                 udx_socket: setup.udx_socket,
                 noise_result,
@@ -1439,7 +1456,7 @@ impl SwarmActor {
             // `puncher.analyze(false).await` would deadlock forever
             // here, blocking the entire SwarmActor event loop. The
             // passive side's success signal is the firewall hook on
-            // the puncher's primary UDX stream firing when the punch
+            // the puncher's listening UDX stream firing when the punch
             // probe lands — not a NAT classification gate.
         }
 
@@ -1453,12 +1470,12 @@ impl SwarmActor {
         // owned by the task — subsequent rounds just keep building replies.
         if remote_hp.punching && entry.puncher.is_some() {
             if let Some(mut puncher) = entry.puncher.take() {
-                tokio::spawn(async move {
+                entry.punch_task = Some(AbortOnDropTask(tokio::spawn(async move {
                     let pool = SocketPool::new("0.0.0.0".into());
                     if let Ok(rt) = UdxRuntime::new() {
                         puncher.punch(&pool, &rt).await;
                     }
-                });
+                })));
             }
         }
 
@@ -1507,13 +1524,16 @@ impl SwarmActor {
 
     async fn handle_passive_holepunch_event(&mut self, event: PassiveHolepunchEvent) {
         match event {
-            PassiveHolepunchEvent::Punched { id, addr } => {
+            PassiveHolepunchEvent::Punched { id, addr, socket } => {
                 let Some(mut entry) = self.connects.remove(&id) else {
                     return;
                 };
                 if let Some(task) = entry.abort_task.take() {
                     task.abort();
                 }
+                entry.punch_task.take();
+                entry.puncher.take();
+                entry.udx_socket = socket;
                 self.pending_handshakes.remove(&entry.remote_pk);
 
                 if self.connections.has(&entry.remote_pk) {
@@ -1584,6 +1604,7 @@ impl SwarmActor {
                 if let Some(task) = entry.abort_task.take() {
                     task.abort();
                 }
+                entry.punch_task.take();
                 self.pending_handshakes.remove(&entry.remote_pk);
                 if let Some(mut puncher) = entry.puncher.take() {
                     puncher.destroy();
@@ -1776,6 +1797,14 @@ async fn create_server_relay_connection(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn passive_holepunch_lifetime_covers_handshake_and_punch() {
+        let handshake_budget = Duration::from_secs(10);
+        let holepunch_budget = Duration::from_secs(30);
+        assert!(PASSIVE_HOLEPUNCH_LIFETIME >= handshake_budget + holepunch_budget);
+        assert_eq!(PASSIVE_HOLEPUNCH_LIFETIME, Duration::from_secs(60));
+    }
 
     #[test]
     fn retry_delay_first_attempt_unproven() {
