@@ -49,6 +49,8 @@ pub struct RemoteAddress {
     pub verified: bool,
 }
 
+type SocketCallback = Box<dyn Fn(&UdxSocket) -> Result<(), libudx::UdxError> + Send + Sync>;
+
 pub struct Holepuncher {
     pub(crate) nat: Nat,
     pub is_initiator: bool,
@@ -61,6 +63,7 @@ pub struct Holepuncher {
     pub remote_holepunching: bool,
 
     sockets: Vec<SocketRef>,
+    socket_callback: Option<SocketCallback>,
     event_tx: mpsc::UnboundedSender<HolepunchEvent>,
 
     /// Shared with the recv-adapter task; the initiator branch CAS-flips
@@ -105,6 +108,7 @@ impl Holepuncher {
             remote_addresses: Vec::new(),
             remote_holepunching: false,
             sockets: vec![socket],
+            socket_callback: None,
             event_tx,
             connected_flag,
             recv_tasks: recv_task.into_iter().collect(),
@@ -144,6 +148,18 @@ impl Holepuncher {
         self.remote_addresses
             .iter()
             .any(|a| a.verified && a.host == host)
+    }
+
+    /// Register existing and future candidate sockets before any probes are sent.
+    pub fn set_socket_callback<F>(&mut self, callback: F) -> Result<(), libudx::UdxError>
+    where
+        F: Fn(&UdxSocket) -> Result<(), libudx::UdxError> + Send + Sync + 'static,
+    {
+        for socket in &self.sockets {
+            callback(&socket.socket)?;
+        }
+        self.socket_callback = Some(Box::new(callback));
+        Ok(())
     }
 
     pub fn primary_socket(&self) -> Option<&SocketRef> {
@@ -390,6 +406,12 @@ impl Holepuncher {
         while self.punching && self.sockets.len() < BIRTHDAY_SOCKETS {
             match pool.acquire(runtime).await {
                 Ok(mut socket) => {
+                    if let Some(callback) = &self.socket_callback {
+                        if let Err(error) = callback(&socket.socket) {
+                            tracing::debug!(%error, "birthday candidate registration stopped");
+                            break;
+                        }
+                    }
                     let _ = socket.send_holepunch(target, true);
                     // Cover this birthday socket's probe stream with its own
                     // recv-adapter task so a probe landing on it (rather than
@@ -501,6 +523,12 @@ impl Holepuncher {
         if !self.connected && !self.connected_flag.load(Ordering::Acquire) {
             let _ = self.event_tx.send(HolepunchEvent::Aborted);
         }
+    }
+}
+
+impl Drop for Holepuncher {
+    fn drop(&mut self) {
+        self.destroy();
     }
 }
 
@@ -827,6 +855,82 @@ mod recv_adapter_tests {
             reply.addr, extra_addr,
             "handoff must preserve the punched source port"
         );
+    }
+
+    #[tokio::test]
+    async fn passive_birthday_candidate_registered_before_probe_and_survives_cleanup() {
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        timeout(Duration::from_secs(5), async {
+            let runtime = UdxRuntime::new().unwrap();
+            let pool = SocketPool::new("127.0.0.1".into());
+            let (event_tx, _event_rx) = mpsc::unbounded_channel();
+            let mut puncher =
+                Holepuncher::new(&pool, &runtime, true, false, FIREWALL_CONSISTENT, event_tx)
+                    .await
+                    .unwrap();
+            let primary = puncher.primary_socket().unwrap().socket.clone();
+            let server = runtime.create_stream(301).await.unwrap();
+            let (winner_tx, winner_rx) = tokio::sync::oneshot::channel();
+            server
+                .set_firewall_hook(&primary, 302, move |socket, _, _| {
+                    let _ = winner_tx.send(socket.clone());
+                    true
+                })
+                .unwrap();
+            let add_candidate = server.firewall_socket_adder();
+            let registered = Arc::new(AtomicUsize::new(0));
+            let count = registered.clone();
+            puncher
+                .set_socket_callback(move |socket| {
+                    // Keep this test to primary + one birthday socket.
+                    if count.fetch_add(1, Ordering::Relaxed) >= 2 {
+                        return Err(libudx::UdxError::StreamClosed);
+                    }
+                    add_candidate(socket)
+                })
+                .unwrap();
+            let client_socket = runtime.create_socket().await.unwrap();
+            client_socket
+                .bind("127.0.0.1:0".parse().unwrap())
+                .await
+                .unwrap();
+            let client_addr = client_socket.local_addr().await.unwrap();
+            puncher.punching = true;
+            puncher
+                .open_birthday_sockets(
+                    &pool,
+                    &runtime,
+                    &Ipv4Peer {
+                        host: client_addr.ip().to_string(),
+                        port: client_addr.port(),
+                    },
+                )
+                .await;
+            assert_eq!(puncher.sockets.len(), 2);
+            let candidate_addr = puncher.sockets[1].socket.local_addr().await.unwrap();
+            let client = runtime.create_stream(302).await.unwrap();
+            client
+                .connect(&client_socket, 301, candidate_addr)
+                .await
+                .unwrap();
+            let mut client = client.into_async_stream();
+            let mut server = server.into_async_stream();
+            client.write_all(b"ping").await.unwrap();
+            let mut buf = [0; 4];
+            server.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"ping");
+            let winner = winner_rx.await.unwrap();
+            assert_eq!(winner.local_addr().await.unwrap(), candidate_addr);
+            drop(puncher);
+            drop(primary);
+            server.write_all(b"pong").await.unwrap();
+            client.read_exact(&mut buf).await.unwrap();
+            assert_eq!(&buf, b"pong");
+        })
+        .await
+        .expect("passive birthday UDX exchange");
     }
 
     #[tokio::test]

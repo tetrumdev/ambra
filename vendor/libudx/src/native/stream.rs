@@ -108,8 +108,8 @@ fn is_plausible_first_packet(header: &Header) -> bool {
 
 pub(crate) struct IncomingPacket {
     pub data: Vec<u8>,
-    #[allow(dead_code)]
     pub addr: SocketAddr,
+    pub socket: super::socket::UdxSocket,
 }
 
 pub(crate) enum StreamEvent {
@@ -162,9 +162,76 @@ pub(crate) enum StreamNotify {
 
 type WriteSenders = Vec<Option<oneshot::Sender<Result<()>>>>;
 type AckedRateInfo = Vec<(u32, super::congestion::rate::PacketRateInfo)>;
-type StreamMap = Arc<Mutex<std::collections::HashMap<u32, mpsc::UnboundedSender<IncomingPacket>>>>;
+
 type FirewallHook =
     Box<dyn FnOnce(&super::socket::UdxSocket, u16, std::net::IpAddr) -> bool + Send>;
+
+struct SocketRegistrations {
+    local_id: u32,
+    tx: mpsc::UnboundedSender<IncomingPacket>,
+    sockets: Vec<super::socket::UdxSocket>,
+}
+
+impl SocketRegistrations {
+    fn register(&mut self, socket: &super::socket::UdxSocket) -> Result<()> {
+        socket.udp_arc()?;
+        let map = socket.streams_ref();
+        if self
+            .sockets
+            .iter()
+            .any(|s| Arc::ptr_eq(&s.streams_ref(), &map))
+        {
+            return Ok(());
+        }
+        socket.register_stream(self.local_id, self.tx.clone())?;
+        self.sockets.push(socket.clone());
+        Ok(())
+    }
+
+    fn unregister(&self, socket: &super::socket::UdxSocket) {
+        let map = socket.streams_ref();
+        let mut map = map.lock().unwrap_or_else(|e| e.into_inner());
+        // A later stream may have reused the ID on this socket.
+        if map
+            .get(&self.local_id)
+            .is_some_and(|tx| tx.same_channel(&self.tx))
+        {
+            map.remove(&self.local_id);
+        }
+    }
+
+    fn retain_winner(&mut self, socket: &super::socket::UdxSocket) {
+        let winner = socket.streams_ref();
+        for candidate in std::mem::take(&mut self.sockets) {
+            if Arc::ptr_eq(&candidate.streams_ref(), &winner) {
+                self.sockets.push(candidate);
+            } else {
+                self.unregister(&candidate);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        for socket in std::mem::take(&mut self.sockets) {
+            self.unregister(&socket);
+        }
+    }
+}
+
+impl Drop for SocketRegistrations {
+    fn drop(&mut self) {
+        self.clear();
+    }
+}
+
+// Captured before spawning so cancellation before the first poll also deregisters.
+struct SocketCleanup(Arc<Mutex<SocketRegistrations>>);
+
+impl Drop for SocketCleanup {
+    fn drop(&mut self) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
 
 // ── StreamInner ──────────────────────────────────────────────────────────────
 
@@ -225,9 +292,6 @@ pub(crate) struct StreamInner {
     /// starts in listening mode (via `set_firewall_hook`). On `true` the stream
     /// adopts the packet's source as `remote_addr` and transitions to connected.
     firewall_hook: Option<FirewallHook>,
-    /// Retained socket clone supplied to `set_firewall_hook`; forwarded to the
-    /// hook and cleared after the hook fires.
-    firewall_socket: Option<super::socket::UdxSocket>,
 }
 
 impl StreamInner {
@@ -794,7 +858,7 @@ pub struct UdxStream {
     pub(crate) read_rx: Option<mpsc::UnboundedReceiver<StreamEvent>>,
     #[allow(dead_code)]
     close_rx: Option<oneshot::Receiver<()>>,
-    socket_streams: Mutex<Option<StreamMap>>,
+    socket_streams: Mutex<Option<Arc<Mutex<SocketRegistrations>>>>,
 }
 
 impl UdxStream {
@@ -836,18 +900,21 @@ impl UdxStream {
             send_queue: VecDeque::new(),
             relay_target: None,
             firewall_hook: None,
-            firewall_socket: None,
         };
 
         Self {
             local_id,
             inner: Arc::new(Mutex::new(inner)),
             processor: Mutex::new(None),
-            incoming_tx: Some(incoming_tx),
+            incoming_tx: Some(incoming_tx.clone()),
             incoming_rx: Mutex::new(Some(incoming_rx)),
             read_rx: Some(read_rx),
             close_rx: Some(close_rx),
-            socket_streams: Mutex::new(None),
+            socket_streams: Mutex::new(Some(Arc::new(Mutex::new(SocketRegistrations {
+                local_id,
+                tx: incoming_tx,
+                sockets: Vec::new(),
+            })))),
         }
     }
 
@@ -896,15 +963,11 @@ impl UdxStream {
             inner.notify_tx = Some(notify_tx);
         }
 
-        let tx = self
-            .incoming_tx
-            .as_ref()
-            .ok_or_else(|| UdxError::Io(std::io::Error::other("stream already consumed")))?
-            .clone();
-        socket.register_stream(self.local_id, tx)?;
-
-        *self.socket_streams.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(socket.streams_ref());
+        let registrations = self.socket_registrations()?;
+        registrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(socket)?;
 
         let incoming_rx = self
             .incoming_rx
@@ -913,13 +976,10 @@ impl UdxStream {
             .take()
             .ok_or_else(|| UdxError::Io(std::io::Error::other("processor already started")))?;
         let inner = Arc::clone(&self.inner);
-        let streams_for_cleanup = socket.streams_ref();
-        let local_id_for_cleanup = self.local_id;
+        let cleanup = SocketCleanup(registrations.clone());
         let handle = tokio::spawn(async move {
-            process_incoming(inner, incoming_rx, notify_rx).await;
-            if let Ok(mut map) = streams_for_cleanup.lock() {
-                map.remove(&local_id_for_cleanup);
-            }
+            let _cleanup = cleanup;
+            process_incoming(inner, incoming_rx, notify_rx, registrations).await;
         });
         *self.processor.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
@@ -1005,8 +1065,8 @@ impl UdxStream {
     /// The stream is registered with `socket` for demux immediately (so incoming
     /// packets addressed to `self.local_id` are routed here), but `connected`
     /// stays `false` until the hook fires.  On the first incoming packet the hook
-    /// is called with `(socket, src_port, src_ip)`; if it returns `true` the
-    /// stream adopts that source as its remote address and becomes connected,
+    /// is called with `(receiving_socket, src_port, src_ip)`; if it returns `true`
+    /// the stream adopts that socket for outgoing traffic and commits the remote address,
     /// then processes the packet normally.  If it returns `false` the processor
     /// exits and the stream is permanently closed.
     ///
@@ -1045,18 +1105,13 @@ impl UdxStream {
             inner.udp = Some(udp);
             inner.notify_tx = Some(notify_tx);
             inner.firewall_hook = Some(Box::new(hook));
-            inner.firewall_socket = Some(socket.clone());
         }
 
-        let tx = self
-            .incoming_tx
-            .as_ref()
-            .ok_or_else(|| UdxError::Io(std::io::Error::other("stream already consumed")))?
-            .clone();
-        socket.register_stream(self.local_id, tx)?;
-
-        *self.socket_streams.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some(socket.streams_ref());
+        let registrations = self.socket_registrations()?;
+        registrations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .register(socket)?;
 
         let incoming_rx = self
             .incoming_rx
@@ -1065,18 +1120,57 @@ impl UdxStream {
             .take()
             .ok_or_else(|| UdxError::Io(std::io::Error::other("processor already started")))?;
         let inner = Arc::clone(&self.inner);
-        let streams_for_cleanup = socket.streams_ref();
-        let local_id_for_cleanup = self.local_id;
+        let cleanup = SocketCleanup(registrations.clone());
         let handle = tokio::spawn(async move {
-            process_incoming(inner, incoming_rx, notify_rx).await;
-            if let Ok(mut map) = streams_for_cleanup.lock() {
-                map.remove(&local_id_for_cleanup);
-            }
+            let _cleanup = cleanup;
+            process_incoming(inner, incoming_rx, notify_rx, registrations).await;
         });
         *self.processor.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
 
         tracing::debug!(local_id = self.local_id, remote_id, "stream listening (firewall hook set)");
         Ok(())
+    }
+
+    fn socket_registrations(&self) -> Result<Arc<Mutex<SocketRegistrations>>> {
+        self.socket_streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .cloned()
+            .ok_or(UdxError::StreamClosed)
+    }
+
+    /// Register another candidate for a stream waiting on its firewall hook.
+    /// Does not consume the receiver or start another packet processor.
+    pub fn add_firewall_socket(&self, socket: &super::socket::UdxSocket) -> Result<()> {
+        self.firewall_socket_adder()(socket)
+    }
+
+    /// A candidate registrar that can outlive the stream handle without keeping
+    /// the stream alive. It fails once the hook commits or the stream is closed.
+    pub fn firewall_socket_adder(
+        &self,
+    ) -> impl Fn(&super::socket::UdxSocket) -> Result<()> + Send + Sync + 'static {
+        let inner = Arc::downgrade(&self.inner);
+        let registrations = self
+            .socket_streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .map(Arc::downgrade)
+            .unwrap_or_default();
+        move |socket| {
+            let inner = inner.upgrade().ok_or(UdxError::StreamClosed)?;
+            let registrations = registrations.upgrade().ok_or(UdxError::StreamClosed)?;
+            let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.connected || guard.firewall_hook.is_none() {
+                return Err(UdxError::StreamClosed);
+            }
+            registrations
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .register(socket)
+        }
     }
 
     /// Destroy the stream, sending a DESTROY packet to the remote peer.
@@ -1124,8 +1218,13 @@ impl UdxStream {
             }
         }
 
-        if let Some(streams) = self.socket_streams.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            streams.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.local_id);
+        if let Some(streams) = self
+            .socket_streams
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
         }
 
         tracing::debug!(local_id = self.local_id, "stream destroyed");
@@ -1142,9 +1241,7 @@ impl Drop for UdxStream {
         }
         if let Ok(mut guard) = self.socket_streams.lock() {
             if let Some(streams) = guard.take() {
-                if let Ok(mut map) = streams.lock() {
-                    map.remove(&self.local_id);
-                }
+                streams.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
         }
     }
@@ -1156,6 +1253,7 @@ async fn process_incoming(
     inner: Arc<Mutex<StreamInner>>,
     mut incoming_rx: mpsc::UnboundedReceiver<IncomingPacket>,
     mut notify_rx: mpsc::UnboundedReceiver<StreamNotify>,
+    registrations: Arc<Mutex<SocketRegistrations>>,
 ) {
     use tokio::time::{self, Duration, Instant as TokioInstant};
 
@@ -1190,6 +1288,19 @@ async fn process_incoming(
                     Err(_) => continue,
                 };
 
+                let received_udp = match packet.socket.udp_arc() {
+                    Ok(udp) => udp,
+                    Err(_) => continue,
+                };
+                {
+                    let guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                    if guard.connected && (guard.remote_addr != Some(packet.addr)
+                        || guard.udp.as_ref().is_some_and(|udp| !Arc::ptr_eq(udp, &received_udp)))
+                    {
+                        continue;
+                    }
+                }
+
                 // ── Firewall hook: single-fire 4-tuple commit ────────────
                 // NOTE: this hook is single-fire (`FnOnce`) to match the Node
                 // Hyperswarm reference. A re-armable variant (`Fn`, fired on every
@@ -1222,16 +1333,16 @@ async fn process_incoming(
                             );
                             continue;
                         }
-                        let hook_and_socket = {
-                            let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
-                            guard.firewall_hook.take().zip(guard.firewall_socket.take())
-                        };
-                        match hook_and_socket {
-                            Some((hook, sock)) => {
-                                if hook(&sock, packet.addr.port(), packet.addr.ip()) {
+                        let hook = inner.lock().unwrap_or_else(|e| e.into_inner()).firewall_hook.take();
+                        match hook {
+                            Some(hook) => {
+                                if hook(&packet.socket, packet.addr.port(), packet.addr.ip()) {
                                     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
+                                    guard.udp = Some(received_udp);
                                     guard.remote_addr = Some(packet.addr);
                                     guard.connected = true;
+                                    registrations.lock().unwrap_or_else(|e| e.into_inner())
+                                        .retain_winner(&packet.socket);
                                     // Patch any packets queued before the hook fired
                                     // (they were staged with the 0.0.0.0:0 sentinel).
                                     let sentinel: std::net::SocketAddr =
@@ -1821,7 +1932,6 @@ mod mtu_tests {
             relay_target: None,
             ended: false,
             firewall_hook: None,
-            firewall_socket: None,
         }
     }
 

@@ -104,7 +104,7 @@ impl UdxSocketInner {
         })?))
     }
 
-    fn ensure_recv_loop(&self) -> Result<()> {
+    fn ensure_recv_loop(self: &Arc<Self>) -> Result<()> {
         let mut guard = self.recv_task.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(ref handle) = *guard {
             if !handle.is_finished() {
@@ -115,6 +115,8 @@ impl UdxSocketInner {
         let udp = self.udp_arc()?;
         let streams = Arc::clone(&self.streams);
         let fallback_tx = Arc::clone(&self.fallback_tx);
+        // The receive task must not keep its own socket alive indefinitely.
+        let receiving_socket = Arc::downgrade(self);
 
         let handle = tokio::spawn(async move {
             let mut buf = vec![0u8; 65536];
@@ -125,7 +127,14 @@ impl UdxSocketInner {
                     if let Ok(hdr) = super::header::Header::decode(&packet) {
                         let guard = streams.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(tx) = guard.get(&hdr.remote_id) {
-                            let _ = tx.send(super::stream::IncomingPacket { data: packet, addr });
+                            let Some(inner) = receiving_socket.upgrade() else {
+                                break;
+                            };
+                            let _ = tx.send(super::stream::IncomingPacket {
+                                data: packet,
+                                addr,
+                                socket: UdxSocket { inner },
+                            });
                             continue;
                         }
                     }

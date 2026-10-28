@@ -49,7 +49,8 @@ impl Default for Timing {
         Self {
             lan: Duration::from_secs(3),
             pwnat: Duration::from_secs(8),
-            hyperdht: Duration::from_secs(15),
+            // Bootstrap, lookup and Noise signaling precede the 30-second punch window.
+            hyperdht: Duration::from_secs(60),
             retry: Duration::from_secs(5),
         }
     }
@@ -154,13 +155,23 @@ impl ConnectionManager {
             Method::Pwnat => {
                 self.state(ConnectionState::ConnectingPwnat, Some(method), None);
                 let capability = pwnat::capability();
-                if !capability.available { return Err(capability.reason.into()); }
+                if !capability.available {
+                    return Err(capability.reason.into());
+                }
                 let endpoint = match self.selected.public_endpoint {
                     Some(endpoint) => endpoint,
-                    None => tokio::time::timeout(Duration::from_secs(3), self.dht.pwnat_endpoint(self.selected.public_key))
-                        .await.map_err(|_| "Signed pwnat endpoint lookup timed out; no cached public endpoint")??,
+                    None => tokio::time::timeout(
+                        Duration::from_secs(3),
+                        self.dht.pwnat_endpoint(self.selected.public_key),
+                    )
+                    .await
+                    .map_err(
+                        |_| "Signed pwnat endpoint lookup timed out; no cached public endpoint",
+                    )??,
                 };
-                self.pwnat.connect(endpoint, self.selected.public_key, &self.identity).await?
+                self.pwnat
+                    .connect(endpoint, self.selected.public_key, &self.identity)
+                    .await?
             }
             Method::HyperDHT => {
                 self.state(ConnectionState::ConnectingHyperDHT, Some(method), None);
@@ -224,7 +235,8 @@ impl ConnectionManager {
     /// DHT connection races the server's one-live-session-per-device rule.
     pub async fn authorize(&self, token: String) -> Result<()> {
         let connection = self.connect().await?;
-        let request = Request::builder().uri("/api/network/session")
+        let request = Request::builder()
+            .uri("/api/network/session")
             .header(hyper::header::AUTHORIZATION, format!("Bearer {token}"))
             .body(Body::empty())?;
         let response = tokio::select! {
@@ -235,12 +247,19 @@ impl ConnectionManager {
             return Err("Device authorization failed; pairing may have been revoked".into());
         }
         *self.token.write().await = Some(token);
-        let method = self.status().method.ok_or("Missing encrypted transport method")?;
-        self.state(match method {
-            Method::Lan => ConnectionState::ConnectedLocal,
-            Method::Pwnat => ConnectionState::ConnectedPwnat,
-            Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
-        }, Some(method), None);
+        let method = self
+            .status()
+            .method
+            .ok_or("Missing encrypted transport method")?;
+        self.state(
+            match method {
+                Method::Lan => ConnectionState::ConnectedLocal,
+                Method::Pwnat => ConnectionState::ConnectedPwnat,
+                Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
+            },
+            Some(method),
+            None,
+        );
         Ok(())
     }
 
@@ -353,8 +372,21 @@ where
         };
         match result {
             Ok(Ok(connection)) => return Ok(connection),
-            Ok(Err(error)) => { tracing::warn!(?method, %error, "Transport attempt failed"); errors.push(format!("{method:?}: {error}")); },
-            Err(_) => { tracing::warn!(?method, "Transport attempt timed out"); errors.push(format!("{method:?}: connection timed out")); },
+            Ok(Err(error)) => {
+                tracing::warn!(?method, %error, "Transport attempt failed");
+                errors.push(format!("{method:?}: {error}"));
+            }
+            Err(_) => {
+                tracing::warn!(
+                    ?method,
+                    timeout_seconds = timeout.as_secs_f64(),
+                    "Transport attempt timed out"
+                );
+                errors.push(format!(
+                    "{method:?}: connection timed out after {:.1}s",
+                    timeout.as_secs_f64()
+                ));
+            }
         }
     }
     Err(errors.join("; ").into())
@@ -386,6 +418,47 @@ mod tests {
             assert_eq!(visited, METHODS[..count]);
         }
     }
+    #[tokio::test(start_paused = true)]
+    async fn default_budget_allows_signaling_and_full_holepunch_window() {
+        let result = ordered(
+            &Timing::default(),
+            &CancellationToken::new(),
+            |method| async move {
+                match method {
+                    Method::Lan => Err("LAN down".into()),
+                    Method::HyperDHT => {
+                        // A slow handshake followed by a successful late punch must not
+                        // be cancelled by the manager's shorter, outer timeout.
+                        tokio::time::sleep(Duration::from_secs(10 + 30 + 5)).await;
+                        Ok(())
+                    }
+                    Method::Pwnat => panic!("must not fall back before the punch window ends"),
+                }
+            },
+        )
+        .await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn failures_retain_each_method_and_timeout_budget() {
+        let result: Result<()> = ordered(
+            &Timing::default(),
+            &CancellationToken::new(),
+            |method| async move {
+                match method {
+                    Method::HyperDHT => std::future::pending().await,
+                    _ => Err("unavailable".into()),
+                }
+            },
+        )
+        .await;
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("Lan: unavailable"));
+        assert!(error.contains("HyperDHT: connection timed out after 60.0s"));
+        assert!(error.contains("Pwnat: unavailable"));
+    }
+
     #[tokio::test(start_paused = true)]
     async fn timeout_drops_attempt_and_moves_to_final_method() {
         let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
