@@ -132,6 +132,7 @@ impl CongestionController {
             self.delivered_ts.unwrap_or(now),
             self.first_sent_ts.unwrap_or(now),
             self.app_limited > 0,
+            now,
         )
     }
 
@@ -161,13 +162,16 @@ impl CongestionController {
             self.app_limited = 0;
         }
 
-        // Rate sampling — clamp sub-ms RTTs to 1ms so BBR can measure on localhost
+        // Rate sampling — clamp sub-ms RTTs to 1ms so BBR can measure on localhost.
+        // RTT is measured from this packet's own send time, not the start of its
+        // send burst, which can be seconds old on a busy stream. A retransmitted
+        // packet's RTT is ambiguous and is not sampled.
         for (_seq, info) in acked_packets {
             let dur = now
-                .checked_duration_since(info.first_sent_ts)
+                .checked_duration_since(info.sent_ts)
                 .unwrap_or(Duration::ZERO);
-            let rtt_ms = if dur.is_zero() { 0 } else { (dur.as_millis() as u32).max(1) };
-            if let Some(new_first_sent) = self.rate.on_packet_delivered(info, info.first_sent_ts, rtt_ms) {
+            let rtt_ms = if dur.is_zero() || info.retransmitted { 0 } else { (dur.as_millis() as u32).max(1) };
+            if let Some(new_first_sent) = self.rate.on_packet_delivered(info, info.sent_ts, rtt_ms) {
                 self.first_sent_ts = Some(new_first_sent);
             }
         }

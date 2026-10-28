@@ -9,16 +9,13 @@ use std::time::{Duration, Instant};
 pub(crate) struct TokenBucket {
     /// Bytes currently available to send.
     available: u32,
-    /// Last time tokens were refilled.
+    /// Time up to which elapsed time has been credited as tokens.
     last_refill: Option<Instant>,
-    /// Pacing rate set by BBR (bytes per millisecond).
     rate_bytes_per_ms: u32,
-    /// Maximum burst size (cap on available tokens).
     max_burst: u32,
 }
 
 impl TokenBucket {
-    /// Create a new token bucket with initial burst of 2 * MSS.
     pub(crate) fn new(mss: u32) -> Self {
         Self {
             available: 2 * mss,
@@ -28,25 +25,37 @@ impl TokenBucket {
         }
     }
 
-    /// Set the pacing rate (called when BBR updates pacing).
     pub(crate) fn set_rate(&mut self, bytes_per_ms: u32) {
         self.rate_bytes_per_ms = bytes_per_ms;
     }
 
-    /// Refill tokens based on elapsed time since last refill.
+    /// Credits tokens for elapsed time at microsecond precision. Time too short
+    /// to earn a whole byte stays uncredited, so frequent calls do not lose it.
     pub(crate) fn refill(&mut self, now: Instant) {
-        if let Some(last) = self.last_refill {
-            if self.rate_bytes_per_ms > 0 {
-                let elapsed_ms = now.duration_since(last).as_millis() as u32;
-                let tokens = elapsed_ms.saturating_mul(self.rate_bytes_per_ms);
-                self.available = self.available.saturating_add(tokens).min(self.max_burst);
-            }
+        let Some(last) = self.last_refill else {
+            self.last_refill = Some(now);
+            return;
+        };
+        if self.rate_bytes_per_ms == 0 {
+            self.last_refill = Some(now);
+            return;
         }
-        self.last_refill = Some(now);
+        let elapsed_us = now.saturating_duration_since(last).as_micros() as u64;
+        let tokens = elapsed_us * self.rate_bytes_per_ms as u64 / 1000;
+        if tokens == 0 {
+            return;
+        }
+        let available = self.available as u64 + tokens;
+        if available >= self.max_burst as u64 {
+            self.available = self.max_burst;
+            self.last_refill = Some(now);
+        } else {
+            self.available = available as u32;
+            let credited_us = tokens * 1000 / self.rate_bytes_per_ms as u64;
+            self.last_refill = Some(last + Duration::from_micros(credited_us));
+        }
     }
 
-    /// Try to consume bytes. Returns true if enough tokens available.
-    /// Refills first, then checks.
     pub(crate) fn try_consume(&mut self, bytes: u32, now: Instant) -> bool {
         self.refill(now);
         if self.available >= bytes {
@@ -57,33 +66,25 @@ impl TokenBucket {
         }
     }
 
-    /// Compute delay until enough tokens are available for `bytes`.
-    /// Returns Duration::ZERO if tokens already available or rate is 0.
     pub(crate) fn delay_for(&self, bytes: u32, now: Instant) -> Duration {
         if self.rate_bytes_per_ms == 0 || self.available >= bytes {
             return Duration::ZERO;
         }
 
-        let deficit = bytes - self.available;
-        // Account for tokens that will be refilled by now
-        let effective_deficit = if let Some(last) = self.last_refill {
-            let elapsed_ms = now.duration_since(last).as_millis() as u32;
-            let pending_tokens = elapsed_ms.saturating_mul(self.rate_bytes_per_ms);
-            deficit.saturating_sub(pending_tokens)
-        } else {
-            deficit
-        };
+        let deficit = (bytes - self.available) as u64;
+        let elapsed_us = self
+            .last_refill
+            .map_or(0, |last| now.saturating_duration_since(last).as_micros() as u64);
+        let pending_tokens = elapsed_us * self.rate_bytes_per_ms as u64 / 1000;
+        let effective_deficit = deficit.saturating_sub(pending_tokens);
 
         if effective_deficit == 0 {
             return Duration::ZERO;
         }
 
-        // Ceiling division: (deficit + rate - 1) / rate
-        let delay_ms = effective_deficit.div_ceil(self.rate_bytes_per_ms);
-        Duration::from_millis(delay_ms as u64)
+        Duration::from_micros((effective_deficit * 1000).div_ceil(self.rate_bytes_per_ms as u64))
     }
 
-    /// Reset the bucket (full burst available).
     pub(crate) fn reset(&mut self, now: Instant) {
         self.available = self.max_burst;
         self.last_refill = Some(now);
@@ -140,7 +141,7 @@ mod tests {
         tb.set_rate(100);
         let delay = tb.delay_for(1180, now);
 
-        assert_eq!(delay, Duration::from_millis(12));
+        assert_eq!(delay, Duration::from_micros(11_800));
     }
 
     #[test]

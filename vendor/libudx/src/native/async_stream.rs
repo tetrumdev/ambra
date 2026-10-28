@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -24,7 +25,10 @@ pub struct UdxAsyncStream {
     read_buf: Vec<u8>,
     read_pos: usize,
     read_eof: bool,
-    pending_ack: Option<oneshot::Receiver<UdxResult<()>>>,
+    /// Writes queued on the stream but not yet acknowledged, oldest first, with
+    /// their byte lengths. ACKs are cumulative, so they resolve in this order.
+    pending_acks: VecDeque<(oneshot::Receiver<UdxResult<()>>, usize)>,
+    unacked_bytes: usize,
     processor: Option<tokio::task::JoinHandle<()>>,
     fin_queued: bool,
     registration: Option<super::stream::SocketCleanup>,
@@ -43,11 +47,52 @@ impl UdxAsyncStream {
             read_buf: Vec::new(),
             read_pos: 0,
             read_eof: false,
-            pending_ack: None,
+            pending_acks: VecDeque::new(),
+            unacked_bytes: 0,
             processor,
             fin_queued: false,
             registration,
         }
+    }
+}
+
+/// Bounds on the unacknowledged bytes a writer may queue before `poll_write`
+/// waits for ACKs.
+///
+/// Waiting for each write's ACK before accepting the next limits a stream to one
+/// write per round trip, far below the congestion window on WAN paths. The
+/// writer may instead queue about two congestion windows: enough for congestion
+/// control to keep the path full, without building seconds of queueing delay in
+/// front of later writes on slow paths.
+const MIN_UNACKED_WRITE_BYTES: usize = 64 * 1024;
+const MAX_UNACKED_WRITE_BYTES: usize = 1024 * 1024;
+
+impl UdxAsyncStream {
+    /// Releases acknowledged writes in order. Returns `Pending` while the oldest
+    /// write is unacknowledged, registering the waker on its ACK.
+    fn poll_acks(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        while let Some((ack_rx, len)) = self.pending_acks.front_mut() {
+            let len = *len;
+            match Pin::new(ack_rx).poll(cx) {
+                Poll::Ready(Ok(result)) => {
+                    self.pending_acks.pop_front();
+                    self.unacked_bytes -= len;
+                    if let Err(e) = result {
+                        return Poll::Ready(Err(io::Error::other(e.to_string())));
+                    }
+                }
+                Poll::Ready(Err(_)) => {
+                    self.pending_acks.clear();
+                    self.unacked_bytes = 0;
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "UDX stream closed",
+                    )));
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+        Poll::Ready(Ok(()))
     }
 }
 
@@ -98,23 +143,18 @@ impl AsyncWrite for UdxAsyncStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        if let Some(ref mut ack_rx) = self.pending_ack {
-            match Pin::new(ack_rx).poll(cx) {
-                Poll::Ready(Ok(result)) => {
-                    self.pending_ack = None;
-                    if let Err(e) = result {
-                        return Poll::Ready(Err(io::Error::other(e.to_string())));
-                    }
-                }
-                Poll::Ready(Err(_)) => {
-                    self.pending_ack = None;
-                    return Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "UDX stream closed",
-                    )));
-                }
-                Poll::Pending => return Poll::Pending,
-            }
+        if let Poll::Ready(Err(e)) = self.poll_acks(cx) {
+            return Poll::Ready(Err(e));
+        }
+        // Apply backpressure only once the unacknowledged window is full. The
+        // oldest write's ACK wakes this task.
+        let limit = {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            (2 * inner.congestion.cwnd as usize * inner.max_payload())
+                .clamp(MIN_UNACKED_WRITE_BYTES, MAX_UNACKED_WRITE_BYTES)
+        };
+        if self.unacked_bytes >= limit {
+            return Poll::Pending;
         }
 
         let (prep, max_payload) = {
@@ -162,74 +202,29 @@ impl AsyncWrite for UdxAsyncStream {
             guard.queue_for_send(packets, remote_addr);
         }
 
-        self.pending_ack = Some(prep.ack_rx);
-
-        if let Some(ref mut ack) = self.pending_ack {
-            match Pin::new(ack).poll(cx) {
-                Poll::Ready(Ok(result)) => {
-                    self.pending_ack = None;
-                    if let Err(e) = result {
-                        return Poll::Ready(Err(io::Error::other(e.to_string())));
-                    }
-                    Poll::Ready(Ok(len))
-                }
-                Poll::Ready(Err(_)) => {
-                    self.pending_ack = None;
-                    Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "UDX stream closed",
-                    )))
-                }
-                Poll::Pending => Poll::Ready(Ok(len)),
-            }
-        } else {
-            Poll::Ready(Ok(len))
-        }
+        self.pending_acks.push_back((prep.ack_rx, len));
+        self.unacked_bytes += len;
+        Poll::Ready(Ok(len))
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if let Some(ref mut ack_rx) = self.pending_ack {
-            match Pin::new(ack_rx).poll(cx) {
-                Poll::Ready(Ok(result)) => {
-                    self.pending_ack = None;
-                    if let Err(e) = result {
-                        return Poll::Ready(Err(io::Error::other(e.to_string())));
-                    }
-                    Poll::Ready(Ok(()))
-                }
-                Poll::Ready(Err(_)) => {
-                    self.pending_ack = None;
-                    Poll::Ready(Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "UDX stream closed",
-                    )))
-                }
-                Poll::Pending => Poll::Pending,
-            }
-        } else {
-            Poll::Ready(Ok(()))
-        }
+        self.poll_acks(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        if let Some(ref mut ack_rx) = self.pending_ack {
-            match Pin::new(ack_rx).poll(cx) {
-                Poll::Ready(Ok(result)) => {
-                    self.pending_ack = None;
-                    if let Err(e) = result {
-                        return Poll::Ready(Err(io::Error::other(e.to_string())));
-                    }
-                    if self.fin_queued {
-                        return Poll::Ready(Ok(()));
-                    }
-                    // Write ACK resolved — fall through to queue FIN
-                }
-                Poll::Ready(Err(_)) => {
-                    self.pending_ack = None;
+        // Wait for queued writes, then for the FIN once it is queued.
+        match self.poll_acks(cx) {
+            Poll::Ready(Ok(())) => {
+                if self.fin_queued {
                     return Poll::Ready(Ok(()));
                 }
-                Poll::Pending => return Poll::Pending,
+                // Every write is acknowledged — fall through to queue FIN
             }
+            Poll::Ready(Err(e)) if e.kind() == io::ErrorKind::BrokenPipe => {
+                return Poll::Ready(Ok(()));
+            }
+            Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
+            Poll::Pending => return Poll::Pending,
         }
 
         let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
@@ -263,7 +258,7 @@ impl AsyncWrite for UdxAsyncStream {
             drop(inner);
 
             self.fin_queued = true;
-            self.pending_ack = Some(ack_rx);
+            self.pending_acks.push_back((ack_rx, 0));
             return self.as_mut().poll_shutdown(cx);
         }
         Poll::Ready(Ok(()))
