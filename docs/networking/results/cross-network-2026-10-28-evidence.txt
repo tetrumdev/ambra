@@ -1,0 +1,94 @@
+Sanitized evidence excerpts. Times are UTC. WARP was enabled for final Desktop runs.
+Raw machine logs remain under /tmp/ambra-cross-20261028-*; do not publish raw logs without reviewing them.
+
+2026-10-28T15:26:06.952953Z DEBUG ambra_net::hyperdht: HyperDHT bootstrap started server=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240
+2026-10-28T15:26:08.024391Z DEBUG ambra_net::hyperdht: HyperDHT bootstrap complete; resolving public key server=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240
+2026-10-28T15:26:09.314782Z DEBUG peeroxide_dht::hyperdht: FIND_PEER complete elapsed_ms=1289 replies=20
+2026-10-28T15:26:09.640412Z DEBUG peeroxide_dht::hyperdht: Pinned Noise IK handshake complete elapsed_ms=319
+2026-10-28T15:26:09.759351Z DEBUG peeroxide_dht::hyperdht: probe sent round=0 hp_id=0
+2026-10-28T15:26:09.830260Z DEBUG peeroxide_dht::hyperdht: probe reply round=0 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:26:09.830585Z DEBUG peeroxide_dht::hyperdht: probe sent round=1 hp_id=0
+2026-10-28T15:26:10.037944Z DEBUG peeroxide_dht::hyperdht: probe reply round=1 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:26:10.038045Z DEBUG peeroxide_dht::hyperdht: probe sent round=2 hp_id=0
+2026-10-28T15:26:10.244446Z DEBUG peeroxide_dht::hyperdht: probe reply round=2 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:26:10.244737Z DEBUG peeroxide_dht::hyperdht: probe sent round=3 hp_id=0
+2026-10-28T15:26:10.451263Z DEBUG peeroxide_dht::hyperdht: probe reply round=3 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:26:10.451521Z  INFO peeroxide::_events::holepunch::final_punch_sent: final punch sent, waiting for Connected event round=4 verified_addr=74.104.161.161:45458
+2026-10-28T15:26:11.980973Z  INFO peeroxide::_events::holepunch::connected: punch successful from=74.104.161.161:47120
+2026-10-28T15:26:12.009968Z  INFO ambra_net::hyperdht: HyperDHT authenticated direct encrypted stream; data relay disabled peer=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240 endpoint=Some(74.104.161.161:47120) elapsed_ms=5057
+2026-10-28T15:26:12.017018Z DEBUG ambra_net::transport: HTTP/2 client initialized elapsed_ms=6
+2026-10-28T15:26:12.296126Z DEBUG ambra_net::manager: Device authentication complete method=HyperDHT elapsed_ms=278
+2026-10-28T15:26:12.296159Z  INFO ambra_net::manager: Connection round complete method=HyperDHT elapsed_ms=5606
+2026-10-28T15:32:16.259454Z DEBUG ambra_net::hyperdht: HyperDHT bootstrap started server=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240
+2026-10-28T15:32:16.264068Z DEBUG ambra_net::hyperdht: HyperDHT bootstrap complete; resolving public key server=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240
+2026-10-28T15:32:16.864496Z DEBUG peeroxide_dht::hyperdht: FIND_PEER complete elapsed_ms=598 replies=20
+2026-10-28T15:32:17.005273Z DEBUG peeroxide_dht::hyperdht: Pinned Noise IK handshake complete elapsed_ms=136
+2026-10-28T15:32:17.116612Z DEBUG peeroxide_dht::hyperdht: probe sent round=0 hp_id=1
+2026-10-28T15:32:17.149682Z DEBUG peeroxide_dht::hyperdht: probe reply round=0 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:32:17.149813Z DEBUG peeroxide_dht::hyperdht: probe sent round=1 hp_id=1
+2026-10-28T15:32:17.187109Z DEBUG peeroxide_dht::hyperdht: probe reply round=1 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:32:17.187186Z DEBUG peeroxide_dht::hyperdht: probe sent round=2 hp_id=1
+2026-10-28T15:32:17.224934Z DEBUG peeroxide_dht::hyperdht: probe reply round=2 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:32:17.225027Z DEBUG peeroxide_dht::hyperdht: probe sent round=3 hp_id=1
+2026-10-28T15:32:17.256745Z DEBUG peeroxide_dht::hyperdht: probe reply round=3 punching=false firewall=2 addresses=2 verified=true
+2026-10-28T15:32:17.256831Z  INFO peeroxide::_events::holepunch::final_punch_sent: final punch sent, waiting for Connected event round=4 verified_addr=74.104.161.161:45458
+2026-10-28T15:32:18.539958Z  INFO peeroxide::_events::holepunch::connected: punch successful from=74.104.161.161:60707
+2026-10-28T15:32:18.567126Z  INFO ambra_net::hyperdht: HyperDHT authenticated direct encrypted stream; data relay disabled peer=154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240 endpoint=Some(74.104.161.161:60707) elapsed_ms=2307
+2026-10-28T15:32:18.568680Z DEBUG ambra_net::transport: HTTP/2 client initialized elapsed_ms=0
+2026-10-28T15:32:18.882537Z DEBUG ambra_net::manager: Device authentication complete method=HyperDHT elapsed_ms=313
+2026-10-28T15:32:18.882648Z  INFO ambra_net::manager: Connection round complete method=HyperDHT elapsed_ms=2878
+
+bootstrap-before:
+test rpc::tests::unreachable_bootstrap_fails_current_and_later_waiters ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 413 filtered out; finished in 0.00s
+
+bootstrap-after:
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 401 filtered out; finished in 0.41s
+
+http-stream-before:
+test native_audio::decoder::http_streaming_tests::playback_reads_large_range_before_its_body_finishes ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.54s
+
+http-stream-tests:
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 49 filtered out; finished in 0.23s
+
+batching-before:
+test transport::batching_tests::idle_messages_flush_and_ready_frames_do_not_wait_between_acknowledgements ... FAILED
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.22s
+
+batching-after:
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 20 filtered out; finished in 0.03s
+
+batched-net-tests:
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.04s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.71s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.91s
+
+batched-dht-tests:
+test result: ok. 415 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.58s
+
+final-swarm-tests:
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+desktop-final-tests:
+test native_audio::tests::releasing_a_paused_device_does_not_reopen_the_song ... FAILED
+test result: FAILED. 50 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.50s
+
+Final source SHA-256: all eight matched Kubuntu at checkpoint.
+3f0f63efc359fef8feb5fa85c396c7d508cabd8f9cb14f56e1a92d35d41ce3a8  crates/ambra-net/src/hyperdht.rs
+8e81d08213cf753204a412e72d3455c4800f2c2d89fa95eb548c3cd30bab76c2  crates/ambra-net/src/transport.rs
+e4e879e6c378fe42d777c1dec222fb1b0d2eeb8afa31b9ddb0a340c5bc1e3dce  desktop/src-tauri/src/lib.rs
+f4491069f3db909c872c9c0e83f335ce1e64c95557193197421f043678eefc07  desktop/src-tauri/src/native_audio/decoder.rs
+361cadcfbe2763512f4df6b6890e4c2389e763764347b84d63a4588419950e05  desktop/src-tauri/src/server_link.rs
+ca540411612d5610d7832019bec016ca6ae6b777be9479a7274ba008d989b336  desktop/src-tauri/src/network_test.rs
+9ebbcba687b30aa0e5b7eec9664350f07d543d60fb28078588e7ca427ebf89a7  vendor/peeroxide-dht/src/rpc.rs
+df9eaf88d30d4067cc876a63b6b5b76da3aad005dc97462d2db964f223578dc0  vendor/peeroxide-dht/src/secret_stream.rs
+
+Kubuntu final Ambra-net: 21 unit, 4 direct-only, 15 native integration passed.
+
+Selected synchronized server events (UTC):
+2026-10-28T15:26:11.997934Z DEBUG libudx::native::stream: firewall hook: accepted addr=104.28.203.246:34860
+2026-10-28T15:26:12.068606Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=4fde20bc26cd0006ccc9557de0b1ce19437721cf9b6085700c3df59e23957707 endpoint=104.28.203.246:34860
+2026-10-28T15:32:18.542168Z DEBUG libudx::native::stream: firewall hook: accepted addr=104.28.203.246:35269
+2026-10-28T15:32:18.564117Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=4fde20bc26cd0006ccc9557de0b1ce19437721cf9b6085700c3df59e23957707 endpoint=104.28.203.246:35269
+2026-10-28T15:34:28.058228Z DEBUG ambra_net::transport: Encrypted stream pump finished elapsed_ms=129493 uploaded=16012400 downloaded=177905

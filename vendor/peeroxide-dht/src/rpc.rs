@@ -61,7 +61,7 @@ pub enum DhtError {
     #[error("command channel closed")]
     ChannelClosed,
     /// Bootstrapping did not complete successfully.
-    #[error("bootstrap failed")]
+    #[error("bootstrap failed: no reachable DHT nodes; public UDP may be blocked")]
     BootstrapFailed,
     /// A request failed with the given message.
     #[error("request failed: {0}")]
@@ -678,6 +678,13 @@ impl DhtHandle {
 
 // ── DhtNode (internal background actor) ──────────────────────────────────────
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BootstrapState {
+    Pending,
+    Ready,
+    Failed,
+}
+
 struct DhtNode {
     io: Io,
     table: Arc<Mutex<RoutingTable>>,
@@ -686,7 +693,7 @@ struct DhtNode {
     tick: u64,
     refresh_ticks: u64,
     repinging: u32,
-    bootstrapped: bool,
+    bootstrap_state: BootstrapState,
     bootstrap_waiters: Vec<oneshot::Sender<Result<(), DhtError>>>,
 
     active_queries: HashMap<u64, Query>,
@@ -1212,7 +1219,7 @@ impl DhtNode {
         self.last_tick_time = now;
         self.down_hints_per_tick = 0;
 
-        if !self.bootstrapped {
+        if self.bootstrap_state != BootstrapState::Ready {
             return;
         }
 
@@ -1346,10 +1353,14 @@ impl DhtNode {
                 });
             }
             DhtCommand::Bootstrapped { reply_tx } => {
-                if self.bootstrapped {
-                    let _ = reply_tx.send(Ok(()));
-                } else {
-                    self.bootstrap_waiters.push(reply_tx);
+                match self.bootstrap_state {
+                    BootstrapState::Ready => {
+                        let _ = reply_tx.send(Ok(()));
+                    }
+                    BootstrapState::Failed => {
+                        let _ = reply_tx.send(Err(DhtError::BootstrapFailed));
+                    }
+                    BootstrapState::Pending => self.bootstrap_waiters.push(reply_tx),
                 }
             }
 
@@ -1654,7 +1665,7 @@ impl DhtNode {
     }
 
     fn handle_bucket_full(&mut self, new_node: Node) {
-        if !self.bootstrapped || self.repinging >= MAX_REPINGING {
+        if self.bootstrap_state != BootstrapState::Ready || self.repinging >= MAX_REPINGING {
             return;
         }
 
@@ -1758,7 +1769,24 @@ impl DhtNode {
     }
 
     fn mark_bootstrapped(&mut self) {
-        if self.bootstrapped {
+        if self.bootstrap_state != BootstrapState::Pending {
+            return;
+        }
+
+        // Exhausting bootstrap retries is not evidence of a usable DHT. Only
+        // explicitly standalone nodes may start without a responsive peer.
+        let nodes = self.table.lock().map(|table| table.len()).unwrap_or(0);
+        if !self.config.bootstrap.is_empty() && nodes == 0 {
+            self.bootstrap_state = BootstrapState::Failed;
+            let (bytes_sent, bytes_received) = self.io.wire.snapshot();
+            tracing::warn!(
+                bytes_sent,
+                bytes_received,
+                "DHT bootstrap failed: no reachable routing nodes"
+            );
+            for tx in self.bootstrap_waiters.drain(..) {
+                let _ = tx.send(Err(DhtError::BootstrapFailed));
+            }
             return;
         }
 
@@ -1773,9 +1801,10 @@ impl DhtNode {
             self.needs_id_update = false;
         }
 
-        self.bootstrapped = true;
+        self.bootstrap_state = BootstrapState::Ready;
         tracing::info!(
             target: "peeroxide::_events::dht::bootstrapped",
+            nodes,
             "DHT node bootstrapped"
         );
         for tx in self.bootstrap_waiters.drain(..) {
@@ -1814,11 +1843,18 @@ pub async fn spawn(
     runtime: &UdxRuntime,
     config: DhtConfig,
 ) -> Result<(tokio::task::JoinHandle<Result<(), DhtError>>, DhtHandle), DhtError> {
+    let ephemeral = config.ephemeral.unwrap_or(!config.bootstrap.is_empty());
+    let mut config = config;
+    let bootstrap_required = !config.bootstrap.is_empty();
+    config.bootstrap = resolve_bootstrap_nodes(&config.bootstrap).await;
+    if bootstrap_required && config.bootstrap.is_empty() {
+        return Err(DhtError::BootstrapFailed);
+    }
+
     let table_id: NodeId = rand::random();
     let table = Arc::new(Mutex::new(RoutingTable::new(table_id)));
     let table_for_handle = Arc::clone(&table);
 
-    let ephemeral = config.ephemeral.unwrap_or(!config.bootstrap.is_empty());
     let io_config = IoConfig {
         max_window: config.max_window,
         port: config.port,
@@ -1842,9 +1878,6 @@ pub async fn spawn(
         }
     }
 
-    let mut config = config;
-    config.bootstrap = resolve_bootstrap_nodes(&config.bootstrap).await;
-
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (deferred_reply_tx, deferred_reply_rx) = mpsc::unbounded_channel();
 
@@ -1858,7 +1891,7 @@ pub async fn spawn(
         tick: 0,
         refresh_ticks: REFRESH_TICKS,
         repinging: 0,
-        bootstrapped: false,
+        bootstrap_state: BootstrapState::Pending,
         bootstrap_waiters: Vec::new(),
         active_queries: HashMap::new(),
         tid_to_query: HashMap::new(),
@@ -1947,6 +1980,80 @@ mod tests {
         assert_eq!(REFRESH_TICKS, 60);
         assert_eq!(RECENT_NODE, 12);
         assert_eq!(OLD_NODE, 360);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unreachable_bootstrap_fails_current_and_later_waiters() {
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let (task, handle) = spawn(
+            &runtime,
+            DhtConfig {
+                bootstrap: vec![silent.local_addr().unwrap().to_string()],
+                ..DhtConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+        let (first, second) = tokio::join!(handle.bootstrapped(), handle.bootstrapped());
+        assert!(matches!(first, Err(DhtError::BootstrapFailed)), "{first:?}");
+        assert!(matches!(second, Err(DhtError::BootstrapFailed)), "{second:?}");
+        assert!(matches!(
+            handle.bootstrapped().await,
+            Err(DhtError::BootstrapFailed)
+        ));
+        handle.destroy().await.unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalid_bootstrap_does_not_become_standalone() {
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let result = spawn(
+            &runtime,
+            DhtConfig {
+                bootstrap: vec!["invalid-bootstrap-address".into()],
+                ..DhtConfig::default()
+            },
+        )
+        .await;
+        assert!(matches!(result, Err(DhtError::BootstrapFailed)));
+    }
+
+    #[tokio::test]
+    async fn reachable_bootstrap_and_explicit_standalone_node_are_ready() {
+        let runtime = libudx::UdxRuntime::new().unwrap();
+        let (server_task, server) = spawn(
+            &runtime,
+            DhtConfig {
+                host: "127.0.0.1".into(),
+                ephemeral: Some(false),
+                firewalled: false,
+                ..DhtConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+        server.bootstrapped().await.unwrap();
+        let (client_task, client) = spawn(
+            &runtime,
+            DhtConfig {
+                bootstrap: vec![format!("127.0.0.1:{}", server.local_port().await.unwrap())],
+                ..DhtConfig::default()
+            },
+        )
+        .await
+        .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), client.bootstrapped())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(client.table_size().await.unwrap() > 0);
+        client.bootstrapped().await.unwrap();
+        client.destroy().await.unwrap();
+        server.destroy().await.unwrap();
+        client_task.await.unwrap().unwrap();
+        server_task.await.unwrap().unwrap();
     }
 
     #[tokio::test]
