@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
-use crate::hyperdht_messages::{FIREWALL_CONSISTENT, FIREWALL_OPEN, FIREWALL_RANDOM, FIREWALL_UNKNOWN};
+use crate::hyperdht_messages::{
+    FIREWALL_CONSISTENT, FIREWALL_OPEN, FIREWALL_RANDOM, FIREWALL_UNKNOWN,
+};
 use crate::messages::Ipv4Peer;
 use crate::rpc::DhtHandle;
 use libudx::{Datagram, UdxSocket};
@@ -10,6 +12,9 @@ use std::time::Duration;
 use tokio::sync::{Notify, mpsc};
 
 pub(crate) const NAT_MIN_SAMPLES: u32 = 4;
+const NAT_SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
+// Allow replacement probes without letting sampling indefinitely delay holepunch setup.
+const NAT_SAMPLE_DEADLINE: Duration = Duration::from_secs(6);
 
 #[derive(Debug, Clone)]
 struct Sample {
@@ -145,14 +150,14 @@ impl Nat {
     /// DHT pings out the supplied puncher socket. Mirrors Node's
     /// `lib/nat.js:25-79 autoSample()`.
     ///
-    /// Walks `dht.recent_nodes(max_samples + 5)`, fires up to 4 concurrent
-    /// `dht.ping_via_socket` calls, and feeds each pong's `(to, from)`
-    /// into [`Self::add`]. Returns the number of NEW samples added.
+    /// Walks `dht.recent_nodes(max_samples + 5)`, keeping at most
+    /// `min(max_samples, 4)` pings in flight. `max_samples` limits concurrency,
+    /// not successful samples: failures need replacements and the classifier
+    /// can need a fifth observation. Returns the number of NEW samples added.
     ///
-    /// Short-circuits with `0` if the NAT is already settled. Each ping
-    /// is bound by a ~2s wall-clock timeout (Node-default); on failure
-    /// (timeout, decode error, channel closed) the sample is skipped and
-    /// the function continues.
+    /// Stops once the firewall is no longer UNKNOWN, candidates run out, or
+    /// the six-second overall deadline expires. Each ping has a two-second
+    /// timeout; failed, missing-`to`, and duplicate replies do not add samples.
     pub(crate) async fn auto_sample(
         &mut self,
         dht: &DhtHandle,
@@ -160,12 +165,12 @@ impl Nat {
         dht_reply_rx: mpsc::UnboundedReceiver<Datagram>,
         max_samples: usize,
     ) -> usize {
-        if self.firewall != FIREWALL_UNKNOWN {
+        if self.firewall != FIREWALL_UNKNOWN || max_samples == 0 {
             drop(dht_reply_rx);
             return 0;
         }
 
-        let candidates = dht.recent_nodes(max_samples + 5);
+        let candidates = dht.recent_nodes(max_samples.saturating_add(5));
         if candidates.is_empty() {
             drop(dht_reply_rx);
             return 0;
@@ -173,24 +178,50 @@ impl Nat {
 
         let forwarder = spawn_dht_reply_forwarder(dht.clone(), dht_reply_rx);
 
-        let mut joinset: tokio::task::JoinSet<Result<crate::rpc::PingResponse, crate::rpc::DhtError>> =
-            tokio::task::JoinSet::new();
-        for node in candidates.into_iter().take(max_samples) {
-            let dht_clone = dht.clone();
-            let socket_clone = socket.clone();
-            joinset.spawn(async move {
-                tokio::time::timeout(
-                    Duration::from_millis(2000),
-                    dht_clone.ping_via_socket(node, socket_clone),
-                )
-                .await
-                .map_err(|_| crate::rpc::DhtError::ChannelClosed)?
-            });
-        }
+        let added = self
+            .sample_candidates(candidates, max_samples, |node| {
+                let dht = dht.clone();
+                let socket = socket.clone();
+                async move { dht.ping_via_socket(node, socket).await }
+            })
+            .await;
+        forwarder.abort();
+        added
+    }
 
-        let mut added = 0usize;
+    async fn sample_candidates<F, Fut>(
+        &mut self,
+        candidates: Vec<Ipv4Peer>,
+        max_samples: usize,
+        mut ping: F,
+    ) -> usize
+    where
+        F: FnMut(Ipv4Peer) -> Fut,
+        Fut: std::future::Future<Output = Result<crate::rpc::PingResponse, crate::rpc::DhtError>>
+            + Send
+            + 'static,
+    {
+        let deadline = tokio::time::Instant::now() + NAT_SAMPLE_DEADLINE;
+        let mut candidates = candidates.into_iter().take(max_samples.saturating_add(5));
+        let mut joinset = tokio::task::JoinSet::new();
         let before = self.sampled;
-        while let Some(joined) = joinset.join_next().await {
+        while self.firewall == FIREWALL_UNKNOWN && tokio::time::Instant::now() < deadline {
+            while joinset.len() < max_samples.min(4) {
+                let Some(node) = candidates.next() else {
+                    break;
+                };
+                let probe = ping(node);
+                joinset.spawn(async move {
+                    tokio::time::timeout(NAT_SAMPLE_TIMEOUT, probe)
+                        .await
+                        .map_err(|_| crate::rpc::DhtError::ChannelClosed)?
+                });
+            }
+
+            let Ok(Some(joined)) = tokio::time::timeout_at(deadline, joinset.join_next()).await
+            else {
+                break;
+            };
             match joined {
                 Ok(Ok(resp)) => {
                     let Some(to) = resp.to.as_ref() else {
@@ -198,12 +229,6 @@ impl Nat {
                         continue;
                     };
                     self.add(to, &resp.from);
-                    if self.sampled > before + added as u32 {
-                        added = (self.sampled - before) as usize;
-                    }
-                    if self.firewall != FIREWALL_UNKNOWN {
-                        break;
-                    }
                 }
                 Ok(Err(e)) => {
                     tracing::warn!(err = ?e, "auto_sample: ping_via_socket failed");
@@ -214,9 +239,8 @@ impl Nat {
             }
         }
 
-        joinset.abort_all();
-        forwarder.abort();
-        added
+        joinset.shutdown().await;
+        (self.sampled - before) as usize
     }
 
     fn update_firewall(&mut self) {
@@ -414,7 +438,8 @@ mod tests {
         let mut nat = Nat::new(true);
         let from = peer("10.0.0.1", 1);
         nat.add(&peer("1.2.3.4", 5000), &from);
-        nat.add(&peer("1.2.3.4", 5000), &from);         assert_eq!(nat.sampled, 1);
+        nat.add(&peer("1.2.3.4", 5000), &from);
+        assert_eq!(nat.sampled, 1);
     }
 
     #[test]
@@ -575,6 +600,200 @@ mod tests {
         );
     }
 
+    fn sample_candidates(count: u16) -> Vec<Ipv4Peer> {
+        (1..=count).map(|port| peer("127.0.0.1", port)).collect()
+    }
+
+    fn sample_reply(from: Ipv4Peer, to: Option<Ipv4Peer>) -> crate::rpc::PingResponse {
+        crate::rpc::PingResponse {
+            from,
+            id: None,
+            rtt: Duration::ZERO,
+            to,
+            closer_nodes: vec![],
+        }
+    }
+
+    struct ActiveProbe(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl Drop for ActiveProbe {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_replaces_errors_missing_to_duplicates_and_panics() {
+        let mut nat = Nat::new(true);
+        nat.add(&peer("1.2.3.4", 5000), &peer("127.0.0.1", 3));
+        let added = nat
+            .sample_candidates(sample_candidates(9), 4, |from| async move {
+                match from.port {
+                    1 => Err(crate::rpc::DhtError::ChannelClosed),
+                    2 => Ok(sample_reply(from, None)),
+                    4 => panic!("simulated probe task failure"),
+                    5 => std::future::pending().await,
+                    _ => Ok(sample_reply(from, Some(peer("1.2.3.4", 5000)))),
+                }
+            })
+            .await;
+
+        assert_eq!(added, 2, "count only new observations, not attempts");
+        assert_eq!(nat.sampled, 3);
+        assert_eq!(nat.firewall, FIREWALL_CONSISTENT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_replaces_timed_out_probes() {
+        let mut nat = Nat::new(true);
+        let start = tokio::time::Instant::now();
+        let added = nat
+            .sample_candidates(sample_candidates(6), 1, |from| async move {
+                if from.port <= 2 {
+                    return std::future::pending().await;
+                }
+                Ok(sample_reply(from, Some(peer("1.2.3.4", 5000))))
+            })
+            .await;
+
+        assert_eq!(added, 3);
+        assert_eq!(nat.firewall, FIREWALL_CONSISTENT);
+        assert_eq!(start.elapsed(), NAT_SAMPLE_TIMEOUT * 2);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_collects_fifth_sample_for_unresolved_classifier() {
+        let mut nat = Nat::new(true);
+        let added = nat
+            .sample_candidates(sample_candidates(9), 4, |from| async move {
+                // Preserve the A, A, B, C, D observation order despite concurrency.
+                tokio::time::sleep(Duration::from_millis(u64::from(from.port) * 10)).await;
+                let host = match from.port {
+                    1 | 2 => "1.2.3.4",
+                    3 => "5.6.7.8",
+                    4 => "9.9.9.9",
+                    _ => "8.8.8.8",
+                };
+                Ok(sample_reply(from, Some(peer(host, 5000))))
+            })
+            .await;
+
+        // Four samples notify `analyzing()`, but A, A, B, C is still UNKNOWN.
+        assert_eq!(added, 5);
+        assert_eq!(nat.firewall, FIREWALL_RANDOM);
+        assert!(nat.addresses.is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_bounds_concurrency_and_candidate_budget() {
+        use std::sync::atomic::AtomicUsize;
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let mut nat = Nat::new(true);
+        let added = nat
+            .sample_candidates(sample_candidates(30), 20, |_| {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                let active = active.clone();
+                let peak = peak.clone();
+                async move {
+                    let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                    let _guard = ActiveProbe(active);
+                    peak.fetch_max(count, Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+
+                    Err(crate::rpc::DhtError::ChannelClosed)
+                }
+            })
+            .await;
+
+        assert_eq!(added, 0);
+        assert_eq!(attempts.load(Ordering::SeqCst), 25);
+        assert_eq!(peak.load(Ordering::SeqCst), 4);
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(nat.firewall, FIREWALL_UNKNOWN);
+        assert!(nat.addresses.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_overall_deadline_bounds_replacement_waves() {
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut nat = Nat::new(true);
+        let start = tokio::time::Instant::now();
+        let mut attempts = 0;
+        let added = nat
+            .sample_candidates(sample_candidates(6), 1, |_| {
+                attempts += 1;
+                let active = active.clone();
+                async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let _guard = ActiveProbe(active);
+                    std::future::pending().await
+                }
+            })
+            .await;
+
+        assert_eq!(added, 0);
+        assert_eq!(start.elapsed(), NAT_SAMPLE_DEADLINE);
+        assert_eq!(attempts, 3, "do not start probes at or after the deadline");
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+        assert_eq!(nat.firewall, FIREWALL_UNKNOWN);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_stops_early_and_cancels_outstanding_probes() {
+        use std::sync::atomic::AtomicUsize;
+
+        let active = Arc::new(AtomicUsize::new(0));
+        let mut attempts = 0;
+        let mut nat = Nat::new(true);
+        let added = nat
+            .sample_candidates(sample_candidates(9), 4, |from| {
+                attempts += 1;
+                let active = active.clone();
+                async move {
+                    active.fetch_add(1, Ordering::SeqCst);
+                    let _guard = ActiveProbe(active);
+                    if from.port >= 4 {
+                        return std::future::pending().await;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    Ok(sample_reply(from, Some(peer("1.2.3.4", 5000))))
+                }
+            })
+            .await;
+
+        assert_eq!(added, 3);
+        assert_eq!(nat.firewall, FIREWALL_CONSISTENT);
+        assert!(
+            attempts < 9,
+            "do not exhaust candidates after classification"
+        );
+        assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn auto_sample_no_work_for_empty_zero_or_classified_nat() {
+        for (firewall, count, max_samples) in [
+            (FIREWALL_UNKNOWN, 0, 4),
+            (FIREWALL_UNKNOWN, 9, 0),
+            (FIREWALL_CONSISTENT, 9, 4),
+            (FIREWALL_RANDOM, 9, 4),
+            (FIREWALL_OPEN, 9, 4),
+        ] {
+            let mut nat = Nat::new(true);
+            nat.firewall = firewall;
+            let added = nat
+                .sample_candidates(sample_candidates(count), max_samples, |_| async {
+                    panic!("no probe should be launched");
+                })
+                .await;
+            assert_eq!(added, 0);
+            assert_eq!(nat.firewall, firewall);
+        }
+    }
+
     /// Drives `Nat::auto_sample` end-to-end against real loopback DHT nodes
     /// (no internet required). A primary node's routing table is seeded
     /// with `NAT_MIN_SAMPLES` local peer nodes via
@@ -616,7 +835,9 @@ mod tests {
                 firewalled: false,
                 ..crate::rpc::DhtConfig::default()
             };
-            let (task, handle) = crate::rpc::spawn(&runtime, cfg).await.expect("spawn target");
+            let (task, handle) = crate::rpc::spawn(&runtime, cfg)
+                .await
+                .expect("spawn target");
             target_tasks.push(task);
             target_handles.push(handle);
         }
@@ -641,7 +862,10 @@ mod tests {
         // Acquire a puncher socket exactly as production code does, wiring
         // its DHT-reply lane through to `auto_sample`.
         let pool = SocketPool::new("127.0.0.1".to_string());
-        let mut socket_ref = pool.acquire(&runtime).await.expect("acquire puncher socket");
+        let mut socket_ref = pool
+            .acquire(&runtime)
+            .await
+            .expect("acquire puncher socket");
         let socket = socket_ref.socket.clone();
         let dht_reply_rx = socket_ref
             .take_dht_reply_rx()

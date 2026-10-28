@@ -16,19 +16,19 @@
 #![allow(missing_docs)]
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use libudx::UdxSocket;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::hyperdht_messages::{FIREWALL_CONSISTENT, FIREWALL_RANDOM, FIREWALL_UNKNOWN};
 use crate::messages::Ipv4Peer;
 use crate::nat::Nat;
 use crate::socket_pool::{
-    coerce_firewall, random_port, HolepunchEvent as ProbeEvent, SocketPool, SocketRef,
+    HolepunchEvent as ProbeEvent, SocketPool, SocketRef, coerce_firewall, random_port,
 };
 
 const BIRTHDAY_SOCKETS: usize = 256;
@@ -37,6 +37,8 @@ const BIRTHDAY_SOCKETS: usize = 256;
 pub enum HolepunchEvent {
     Connected {
         addr: SocketAddr,
+        /// The socket that received the successful probe, including birthday sockets.
+        socket: UdxSocket,
     },
     Aborted,
 }
@@ -109,12 +111,24 @@ impl Holepuncher {
         })
     }
 
-    pub fn update_remote(&mut self, punching: bool, firewall: u64, addresses: &[Ipv4Peer], verified_host: Option<&str>) {
+    pub fn update_remote(
+        &mut self,
+        punching: bool,
+        firewall: u64,
+        addresses: &[Ipv4Peer],
+        verified_host: Option<&str>,
+    ) {
         let mut remote_addrs = Vec::new();
         for addr in addresses {
-            if addr.host.parse().map_or(true, crate::address_policy::is_overlay) { continue; }
-            let is_verified = verified_host == Some(addr.host.as_str())
-                || self.is_verified(&addr.host);
+            if addr
+                .host
+                .parse()
+                .map_or(true, crate::address_policy::is_overlay)
+            {
+                continue;
+            }
+            let is_verified =
+                verified_host == Some(addr.host.as_str()) || self.is_verified(&addr.host);
             remote_addrs.push(RemoteAddress {
                 host: addr.host.clone(),
                 port: addr.port,
@@ -127,7 +141,9 @@ impl Holepuncher {
     }
 
     fn is_verified(&self, host: &str) -> bool {
-        self.remote_addresses.iter().any(|a| a.verified && a.host == host)
+        self.remote_addresses
+            .iter()
+            .any(|a| a.verified && a.host == host)
     }
 
     pub fn primary_socket(&self) -> Option<&SocketRef> {
@@ -143,7 +159,9 @@ impl Holepuncher {
         let mut out = Vec::new();
         if let Ok(ifs) = if_addrs::get_if_addrs() {
             for iface in ifs {
-                if iface.is_loopback() || !crate::address_policy::is_native_interface(&iface.name, iface.ip()) {
+                if iface.is_loopback()
+                    || !crate::address_policy::is_native_interface(&iface.name, iface.ip())
+                {
                     continue;
                 }
                 if let std::net::IpAddr::V4(v4) = iface.ip() {
@@ -192,7 +210,16 @@ impl Holepuncher {
     ) -> Vec<Ipv4Peer> {
         let mut out = Vec::new();
         if let Some(addrs) = nat_addresses {
-            out.extend(addrs.iter().filter(|a| a.host.parse().is_ok_and(|ip| !crate::address_policy::is_overlay(ip))).cloned());
+            out.extend(
+                addrs
+                    .iter()
+                    .filter(|a| {
+                        a.host
+                            .parse()
+                            .is_ok_and(|ip| !crate::address_policy::is_overlay(ip))
+                    })
+                    .cloned(),
+            );
         }
         out.extend(Self::local_addresses(fallback_port));
         out
@@ -226,8 +253,7 @@ impl Holepuncher {
 
     fn unstable(&self) -> bool {
         let fw = self.nat.firewall;
-        (self.remote_firewall >= FIREWALL_RANDOM && fw >= FIREWALL_RANDOM)
-            || fw == FIREWALL_UNKNOWN
+        (self.remote_firewall >= FIREWALL_RANDOM && fw >= FIREWALL_RANDOM) || fw == FIREWALL_UNKNOWN
     }
 
     pub async fn analyze(&mut self, allow_reopen: bool) -> bool {
@@ -247,11 +273,7 @@ impl Holepuncher {
         !self.unstable()
     }
 
-    pub async fn punch(
-        &mut self,
-        pool: &SocketPool,
-        runtime: &libudx::UdxRuntime,
-    ) -> bool {
+    pub async fn punch(&mut self, pool: &SocketPool, runtime: &libudx::UdxRuntime) -> bool {
         if self.done() || self.remote_addresses.is_empty() {
             return false;
         }
@@ -278,7 +300,8 @@ impl Holepuncher {
         }
 
         if local >= FIREWALL_RANDOM && remote == FIREWALL_CONSISTENT {
-            self.open_birthday_sockets(pool, runtime, &verified_addr).await;
+            self.open_birthday_sockets(pool, runtime, &verified_addr)
+                .await;
             if self.punching {
                 self.keep_alive_random_nat(&verified_addr).await;
             }
@@ -289,10 +312,13 @@ impl Holepuncher {
     }
 
     fn first_verified_address(&self) -> Option<Ipv4Peer> {
-        self.remote_addresses.iter().find(|a| a.verified).map(|a| Ipv4Peer {
-            host: a.host.clone(),
-            port: a.port,
-        })
+        self.remote_addresses
+            .iter()
+            .find(|a| a.verified)
+            .map(|a| Ipv4Peer {
+                host: a.host.clone(),
+                port: a.port,
+            })
     }
 
     async fn consistent_probe(&mut self) {
@@ -355,7 +381,8 @@ impl Holepuncher {
         runtime: &libudx::UdxRuntime,
         remote_addr: &Ipv4Peer,
     ) {
-        let target: SocketAddr = match format!("{}:{}", remote_addr.host, remote_addr.port).parse() {
+        let target: SocketAddr = match format!("{}:{}", remote_addr.host, remote_addr.port).parse()
+        {
             Ok(a) => a,
             Err(_) => return,
         };
@@ -383,7 +410,8 @@ impl Holepuncher {
     }
 
     async fn keep_alive_random_nat(&mut self, remote_addr: &Ipv4Peer) {
-        let target: SocketAddr = match format!("{}:{}", remote_addr.host, remote_addr.port).parse() {
+        let target: SocketAddr = match format!("{}:{}", remote_addr.host, remote_addr.port).parse()
+        {
             Ok(a) => a,
             Err(_) => return,
         };
@@ -428,14 +456,23 @@ impl Holepuncher {
             return;
         }
 
-        if self.connected {
+        let Some(socket_ref) = self.sockets.get(socket_idx) else {
+            return;
+        };
+        if self
+            .connected_flag
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
             return;
         }
-
+        let socket = socket_ref.socket.clone();
         self.connected = true;
         self.punching = false;
 
-        let _ = self.event_tx.send(HolepunchEvent::Connected { addr });
+        let _ = self
+            .event_tx
+            .send(HolepunchEvent::Connected { addr, socket });
     }
 
     fn done(&self) -> bool {
@@ -503,7 +540,9 @@ async fn run_recv_adapter(
     connected_flag: Arc<AtomicBool>,
 ) {
     while let Some(probe) = hp_rx.recv().await {
-        if crate::address_policy::is_overlay(probe.addr.ip()) { continue; }
+        if crate::address_policy::is_overlay(probe.addr.ip()) {
+            continue;
+        }
         if is_initiator {
             if connected_flag
                 .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -514,7 +553,10 @@ async fn run_recv_adapter(
                     addr = %probe.addr,
                     "holepuncher(initiator): probe received, firing Connected"
                 );
-                let _ = event_tx.send(HolepunchEvent::Connected { addr: probe.addr });
+                let _ = event_tx.send(HolepunchEvent::Connected {
+                    addr: probe.addr,
+                    socket,
+                });
                 return;
             }
         } else {
@@ -528,7 +570,10 @@ async fn run_recv_adapter(
     }
 }
 
-pub fn match_address(local_addresses: &[Ipv4Peer], remote_local_addresses: &[Ipv4Peer]) -> Option<Ipv4Peer> {
+pub fn match_address(
+    local_addresses: &[Ipv4Peer],
+    remote_local_addresses: &[Ipv4Peer],
+) -> Option<Ipv4Peer> {
     if remote_local_addresses.is_empty() {
         return None;
     }
@@ -614,10 +659,7 @@ mod tests {
     #[test]
     fn match_address_picks_closest() {
         let local = vec![peer("192.168.1.100", 5000)];
-        let remote = vec![
-            peer("192.168.2.50", 6000),
-            peer("192.168.1.99", 7000),
-        ];
+        let remote = vec![peer("192.168.2.50", 6000), peer("192.168.1.99", 7000)];
         let result = match_address(&local, &remote).unwrap();
         assert_eq!(result.host, "192.168.1.99");
     }
@@ -638,6 +680,25 @@ mod recv_adapter_tests {
     use std::time::Duration;
     use tokio::time::timeout;
 
+    async fn with_probe_retries<T>(
+        socket: &UdxSocket,
+        target: SocketAddr,
+        receive: impl std::future::Future<Output = T>,
+    ) -> T {
+        timeout(Duration::from_secs(2), async {
+            tokio::pin!(receive);
+            let mut interval = tokio::time::interval(Duration::from_millis(50));
+            loop {
+                tokio::select! {
+                    result = &mut receive => break result,
+                    _ = interval.tick() => socket.send_to(&[0u8], target).unwrap(),
+                }
+            }
+        })
+        .await
+        .expect("probe exchange within 2s")
+    }
+
     #[tokio::test]
     async fn recv_adapter_initiator_emits_connected_on_first_probe() {
         let runtime = UdxRuntime::new().expect("runtime");
@@ -645,16 +706,9 @@ mod recv_adapter_tests {
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        let puncher = Holepuncher::new(
-            &pool,
-            &runtime,
-            true,
-            true,
-            FIREWALL_CONSISTENT,
-            event_tx,
-        )
-        .await
-        .expect("puncher");
+        let puncher = Holepuncher::new(&pool, &runtime, true, true, FIREWALL_CONSISTENT, event_tx)
+            .await
+            .expect("puncher");
 
         let primary = puncher.primary_socket().expect("primary socket");
         let target_addr = primary.socket.local_addr().await.expect("local_addr");
@@ -675,8 +729,9 @@ mod recv_adapter_tests {
             .expect("Connected within 2s")
             .expect("event_rx open");
         match evt {
-            HolepunchEvent::Connected { addr } => {
+            HolepunchEvent::Connected { addr, socket } => {
                 assert_eq!(addr, probe_local, "Connected.addr matches probe source");
+                assert_eq!(socket.local_addr().await.unwrap(), target_addr);
             }
             _ => panic!("expected Connected, got something else"),
         }
@@ -685,10 +740,7 @@ mod recv_adapter_tests {
             .send_to(&[0u8], target_addr)
             .expect("send second probe");
         let evt2 = timeout(Duration::from_millis(500), event_rx.recv()).await;
-        assert!(
-            evt2.is_err(),
-            "second probe should not emit a second event"
-        );
+        assert!(evt2.is_err(), "second probe should not emit a second event");
     }
 
     /// Regression test for the birthday-socket recv-adapter coverage gap:
@@ -705,21 +757,22 @@ mod recv_adapter_tests {
         let pool = SocketPool::new("127.0.0.1".to_string());
         let (event_tx, mut event_rx) = mpsc::unbounded_channel();
 
-        let mut puncher = Holepuncher::new(
-            &pool,
-            &runtime,
-            true,
-            true,
-            FIREWALL_RANDOM,
-            event_tx,
-        )
-        .await
-        .expect("puncher");
+        let mut puncher = Holepuncher::new(&pool, &runtime, true, true, FIREWALL_RANDOM, event_tx)
+            .await
+            .expect("puncher");
 
         // Register a second ("birthday") socket exactly as
         // `open_birthday_sockets` would, without running the full punch loop.
+        let primary_addr = puncher
+            .primary_socket()
+            .unwrap()
+            .socket
+            .local_addr()
+            .await
+            .unwrap();
         let mut extra = pool.acquire(&runtime).await.expect("acquire extra socket");
         let extra_addr = extra.socket.local_addr().await.expect("extra local_addr");
+        assert_ne!(extra_addr, primary_addr);
         if let Some(handle) = spawn_recv_adapter_for_socket(
             &mut extra,
             puncher.is_initiator,
@@ -732,30 +785,52 @@ mod recv_adapter_tests {
         assert_eq!(puncher.sockets.len(), 2, "primary + one birthday socket");
 
         // Send a probe to the SECOND (birthday) socket, not the primary one.
-        let probe_socket = pool
-            .acquire(&runtime)
-            .await
-            .expect("acquire probe socket")
-            .socket
-            .clone();
-        let probe_local = probe_socket.local_addr().await.expect("probe local_addr");
+        let probe_socket = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let probe_local = probe_socket.local_addr().unwrap();
         probe_socket
             .send_to(&[0u8], extra_addr)
+            .await
             .expect("send probe to birthday socket");
 
         let evt = timeout(Duration::from_secs(2), event_rx.recv())
             .await
             .expect("Connected within 2s")
             .expect("event_rx open");
-        match evt {
-            HolepunchEvent::Connected { addr } => {
+        let winning_socket = match evt {
+            HolepunchEvent::Connected { addr, socket } => {
                 assert_eq!(
                     addr, probe_local,
                     "Connected fires from a probe landing on the birthday socket"
                 );
+                assert_eq!(socket.local_addr().await.unwrap(), extra_addr);
+                socket
             }
             _ => panic!("expected Connected, got something else"),
-        }
+        };
+
+        probe_socket.send_to(&[0u8], primary_addr).await.unwrap();
+        assert!(
+            timeout(Duration::from_millis(100), event_rx.recv())
+                .await
+                .is_err(),
+            "a later probe on the primary socket must not replace the winner"
+        );
+
+        puncher.destroy();
+        drop(puncher);
+        winning_socket
+            .send_to(b"winning socket", probe_local)
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let (len, from) = timeout(Duration::from_secs(2), probe_socket.recv_from(&mut buf))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            from, extra_addr,
+            "handoff must preserve the punched source port"
+        );
+        assert_eq!(&buf[..len], b"winning socket");
     }
 
     #[tokio::test]
@@ -765,16 +840,9 @@ mod recv_adapter_tests {
 
         let (event_tx, _event_rx) = mpsc::unbounded_channel();
 
-        let puncher = Holepuncher::new(
-            &pool,
-            &runtime,
-            true,
-            false,
-            FIREWALL_CONSISTENT,
-            event_tx,
-        )
-        .await
-        .expect("puncher");
+        let puncher = Holepuncher::new(&pool, &runtime, true, false, FIREWALL_CONSISTENT, event_tx)
+            .await
+            .expect("puncher");
 
         let primary = puncher.primary_socket().expect("primary socket");
         let puncher_addr = primary.socket.local_addr().await.expect("local_addr");
@@ -820,7 +888,11 @@ mod recv_adapter_tests {
         // least assert the function emits non-loopback when one is present.
         // If only_loopback, document that path was taken (test still passes).
         if only_loopback {
-            assert_eq!(addrs.len(), 1, "loopback fallback must be exactly one entry");
+            assert_eq!(
+                addrs.len(),
+                1,
+                "loopback fallback must be exactly one entry"
+            );
             assert_eq!(addrs[0].host, "127.0.0.1");
         } else {
             assert!(
@@ -852,8 +924,14 @@ mod recv_adapter_tests {
     #[test]
     fn select_punch_addresses_prepends_autosample_then_appends_local() {
         let nat_addrs = vec![
-            Ipv4Peer { host: "47.197.162.13".into(), port: 49737 },
-            Ipv4Peer { host: "47.197.162.13".into(), port: 49738 },
+            Ipv4Peer {
+                host: "47.197.162.13".into(),
+                port: 49737,
+            },
+            Ipv4Peer {
+                host: "47.197.162.13".into(),
+                port: 49738,
+            },
         ];
         let result = Holepuncher::select_punch_addresses(Some(&nat_addrs), 1234);
         let local = Holepuncher::local_addresses(1234);
