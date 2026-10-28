@@ -666,6 +666,8 @@ struct HttpRangeSource {
     cache: Vec<u8>,
     initial_cache: Vec<u8>,
     small_reads_until: u64,
+    response: Option<reqwest::blocking::Response>,
+    response_left: u64,
     loudness: LoudnessInfo,
 }
 
@@ -694,6 +696,8 @@ impl HttpRangeSource {
             initial_cache: bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec(),
             small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
             cache: bytes,
+            response: None,
+            response_left: 0,
             loudness: LoudnessInfo::from_headers(&headers),
         })
     }
@@ -722,6 +726,54 @@ impl HttpRangeSource {
             .saturating_add(cache_bytes - 1)
             .min(self.length - 1);
         let range = format!("bytes={}-{}", self.position, end);
+        if cache_bytes == HTTP_CACHE_BYTES {
+            let mut response = self
+                .client
+                .get(&self.url)
+                .header(RANGE, &range)
+                .send()
+                .map_err(|error| io_other(error.without_url()))?;
+            let status = response.status();
+            if !status.is_success() {
+                let kind = if status.is_client_error()
+                    && status != StatusCode::REQUEST_TIMEOUT
+                    && status != StatusCode::TOO_MANY_REQUESTS
+                {
+                    io::ErrorKind::PermissionDenied
+                } else {
+                    io::ErrorKind::Other
+                };
+                return Err(io::Error::new(kind, format!("HTTP status {status}")));
+            }
+            self.response_left = if status == StatusCode::PARTIAL_CONTENT {
+                validated_range_length(
+                    response.headers().get(CONTENT_RANGE),
+                    self.position,
+                    end,
+                    self.length,
+                )?
+            } else if status == StatusCode::OK {
+                // Some servers ignore Range. Discard only the prefix, without
+                // collecting the entire track or presenting wrong-offset bytes.
+                let skipped =
+                    io::copy(&mut response.by_ref().take(self.position), &mut io::sink())?;
+                if skipped != self.position {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "Audio response ended before the requested position",
+                    ));
+                }
+                self.length - self.position
+            } else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Unexpected audio range response",
+                ));
+            };
+            self.cache.clear();
+            self.response = Some(response);
+            return Ok(());
+        }
         let (status, _, bytes) = get_bytes_with_retry(&self.client, &self.url, Some(&range))?;
         self.cache_start = if status == StatusCode::PARTIAL_CONTENT {
             self.position
@@ -850,22 +902,65 @@ impl Read for HttpRangeSource {
         if destination.is_empty() || self.position >= self.length {
             return Ok(0);
         }
-        let mut written = 0;
-        while written < destination.len() && self.position < self.length {
-            if self.cache_offset().is_none() {
-                self.refill()?;
+        let mut last_error = None;
+        for attempt in 0..HTTP_ATTEMPTS {
+            if self.cache_offset().is_none() && self.response.is_none() {
+                if let Err(error) = self.refill() {
+                    if self.position < self.small_reads_until
+                        || matches!(
+                            error.kind(),
+                            io::ErrorKind::InvalidData | io::ErrorKind::PermissionDenied
+                        )
+                    {
+                        return Err(error);
+                    }
+                    last_error = Some(error);
+                    if attempt + 1 < HTTP_ATTEMPTS {
+                        thread::sleep(Duration::from_millis(100 * (1 << attempt)));
+                    }
+                    continue;
+                }
             }
-            let Some(offset) = self.cache_offset() else {
-                break;
-            };
-            let available = self.cache.len() - offset;
-            let count = available.min(destination.len() - written);
-            destination[written..written + count]
-                .copy_from_slice(&self.cache[offset..offset + count]);
-            self.position += count as u64;
-            written += count;
+            if let Some(offset) = self.cache_offset() {
+                let count = (self.cache.len() - offset).min(destination.len());
+                destination[..count].copy_from_slice(&self.cache[offset..offset + count]);
+                self.position += count as u64;
+                return Ok(count);
+            }
+            if let Some(response) = self.response.as_mut() {
+                let count = (destination.len() as u64).min(self.response_left) as usize;
+                match response.read(&mut destination[..count]) {
+                    Ok(read) if read > 0 => {
+                        self.position += read as u64;
+                        self.response_left -= read as u64;
+                        if self.response_left == 0 {
+                            self.response = None;
+                        }
+                        return Ok(read);
+                    }
+                    Ok(_) => {
+                        last_error = Some(io::Error::new(
+                            io::ErrorKind::UnexpectedEof,
+                            "Audio range body was truncated",
+                        ))
+                    }
+                    Err(error) => last_error = Some(error),
+                }
+                // Resume at the first unread byte. Already delivered audio must
+                // never be discarded or replayed after a body timeout.
+                self.response = None;
+                self.response_left = 0;
+            } else {
+                last_error = Some(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Audio response was empty",
+                ));
+            }
+            if attempt + 1 < HTTP_ATTEMPTS {
+                thread::sleep(Duration::from_millis(100 * (1 << attempt)));
+            }
         }
-        Ok(written)
+        Err(last_error.unwrap_or_else(|| io::Error::other("Audio range read failed")))
     }
 }
 
@@ -885,6 +980,8 @@ impl Seek for HttpRangeSource {
         let next = next as u64;
         if next != self.position {
             self.small_reads_until = next.saturating_add(HTTP_STARTUP_WINDOW_BYTES);
+            self.response = None;
+            self.response_left = 0;
         }
         self.position = next;
         Ok(self.position)
@@ -905,6 +1002,191 @@ fn content_range_length(value: Option<&reqwest::header::HeaderValue>) -> Option<
     value?.to_str().ok()?.rsplit_once('/')?.1.parse().ok()
 }
 
+fn validated_range_length(
+    value: Option<&reqwest::header::HeaderValue>,
+    start: u64,
+    end: u64,
+    length: u64,
+) -> io::Result<u64> {
+    let parsed = value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("bytes "))
+        .and_then(|value| value.split_once('/'))
+        .and_then(|(range, total)| {
+            let (first, last) = range.split_once('-')?;
+            Some((
+                first.parse::<u64>().ok()?,
+                last.parse::<u64>().ok()?,
+                total.parse::<u64>().ok()?,
+            ))
+        });
+    match parsed {
+        Some((first, last, total))
+            if first == start
+                && last >= first
+                && last <= end
+                && last < total
+                && total == length =>
+        {
+            Ok(last - first + 1)
+        }
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Audio Content-Range does not match the requested bytes",
+        )),
+    }
+}
+
 fn io_other(error: impl std::fmt::Display) -> io::Error {
     io::Error::other(error.to_string())
+}
+
+#[cfg(test)]
+mod http_streaming_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc;
+
+    #[test]
+    fn streaming_range_rejects_wrong_offsets_and_changed_files() {
+        let valid = reqwest::header::HeaderValue::from_static("bytes 1048576-5242879/6291456");
+        assert_eq!(
+            validated_range_length(Some(&valid), 1048576, 5242879, 6291456).unwrap(),
+            4194304
+        );
+        for header in [
+            "bytes 0-4194303/6291456",
+            "bytes 1048576-5242880/6291456",
+            "bytes 1048576-5242879/6291457",
+            "bytes 5242879-1048576/6291456",
+        ] {
+            let header = reqwest::header::HeaderValue::from_str(header).unwrap();
+            assert!(validated_range_length(Some(&header), 1048576, 5242879, 6291456).is_err());
+        }
+        assert!(validated_range_length(None, 1048576, 5242879, 6291456).is_err());
+    }
+
+    #[test]
+    fn interrupted_range_resumes_after_delivered_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let length = HTTP_STARTUP_WINDOW_BYTES + HTTP_CACHE_BYTES;
+        let server = thread::spawn(move || {
+            for part in 0..2 {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = BufReader::new(socket.try_clone().unwrap());
+                let mut start = None;
+                loop {
+                    let mut line = String::new();
+                    request.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        start = Some(value.split_once('-').unwrap().0.parse::<u64>().unwrap());
+                    }
+                }
+                let start = start.unwrap();
+                assert_eq!(start, HTTP_STARTUP_WINDOW_BYTES + part * 8192);
+                let end = length - 1;
+                write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{length}\r\nConnection: close\r\n\r\n", end - start + 1).unwrap();
+                let prefix: Vec<_> = (start..start + 8192)
+                    .map(|offset| (offset % 251) as u8)
+                    .collect();
+                socket.write_all(&prefix).unwrap();
+                thread::sleep(Duration::from_millis(50));
+                // Deliberately truncate each response after its useful prefix.
+            }
+        });
+        let mut source = HttpRangeSource {
+            client: http_client().unwrap(),
+            url: format!("http://{address}/audio"),
+            position: HTTP_STARTUP_WINDOW_BYTES,
+            length,
+            cache_start: 0,
+            cache: Vec::new(),
+            initial_cache: Vec::new(),
+            small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
+            response: None,
+            response_left: 0,
+            loudness: LoudnessInfo::default(),
+        };
+        let mut bytes = [0; 16384];
+        source.read_exact(&mut bytes).unwrap();
+        for (index, byte) in bytes.iter().enumerate() {
+            assert_eq!(
+                *byte,
+                ((HTTP_STARTUP_WINDOW_BYTES + index as u64) % 251) as u8
+            );
+        }
+        assert_eq!(
+            source.position,
+            HTTP_STARTUP_WINDOW_BYTES + bytes.len() as u64
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn playback_reads_large_range_before_its_body_finishes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, gate) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let length = HTTP_STARTUP_WINDOW_BYTES + HTTP_CACHE_BYTES;
+            for _ in 0..9 {
+                let (mut socket, _) = listener.accept().unwrap();
+                let mut request = BufReader::new(socket.try_clone().unwrap());
+                let mut range = None;
+                loop {
+                    let mut line = String::new();
+                    request.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (start, end) = value.trim().split_once('-').unwrap();
+                        range = Some((start.parse::<u64>().unwrap(), end.parse::<u64>().unwrap()));
+                    }
+                }
+                let (start, end) = range.unwrap();
+                let end = end.min(length - 1);
+                let count = (end - start + 1) as usize;
+                write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Length: {count}\r\nContent-Range: bytes {start}-{end}/{length}\r\nConnection: close\r\n\r\n").unwrap();
+                let prefix = if start >= HTTP_STARTUP_WINDOW_BYTES {
+                    8192
+                } else {
+                    count
+                };
+                socket.write_all(&vec![42; prefix]).unwrap();
+                if prefix < count {
+                    let _ = gate.recv_timeout(Duration::from_secs(3));
+                    let _ = socket.write_all(&vec![42; count - prefix]);
+                }
+            }
+        });
+        let mut source = HttpRangeSource::open(&format!("http://{address}/audio")).unwrap();
+        let mut startup = vec![0; HTTP_STARTUP_WINDOW_BYTES as usize];
+        source.read_exact(&mut startup).unwrap();
+        assert!(startup.iter().all(|&byte| byte == 42));
+        let (finished, observed) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let mut prefix = [0; 8192];
+            let result = source.read_exact(&mut prefix);
+            finished.send((result, prefix)).unwrap();
+        });
+        let early = observed.recv_timeout(Duration::from_millis(500));
+        let read_before_completion = early.is_ok();
+        release.send(()).unwrap();
+        let (result, prefix) =
+            early.unwrap_or_else(|_| observed.recv_timeout(Duration::from_secs(3)).unwrap());
+        reader.join().unwrap();
+        server.join().unwrap();
+        result.unwrap();
+        assert_eq!(prefix, [42; 8192]);
+        assert!(
+            read_before_completion,
+            "audio waited for the entire 4 MiB HTTP range"
+        );
+    }
 }

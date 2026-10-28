@@ -104,13 +104,27 @@ pub fn adapt<T: Io + 'static>(
         let mut downloaded = 0u64;
         let upload = async {
             let mut buffer = [0; 16 * 1024];
+            let mut buffered = false;
             loop {
-                let length = read.read(&mut buffer).await?;
+                let length = if buffered {
+                    tokio::select! {
+                        biased;
+                        result = read.read(&mut buffer) => result?,
+                        result = outgoing.flush() => {
+                            result?;
+                            buffered = false;
+                            continue;
+                        }
+                    }
+                } else {
+                    read.read(&mut buffer).await?
+                };
                 if length == 0 {
                     outgoing.shutdown().await?;
                     return Ok::<_, crate::Error>(());
                 }
-                outgoing.write(&buffer[..length]).await?;
+                outgoing.write_buffered(&buffer[..length]).await?;
+                buffered = true;
                 uploaded += length as u64;
             }
         };
@@ -257,4 +271,94 @@ pub async fn serve(
         .max_header_list_size(32 * 1024)
         .serve_connection(TokioIo::new(io), service);
     tokio::select! { _ = cancel.cancelled() => Ok(()), _ = superseded.cancelled() => Ok(()), result = connection => Ok(result?) }
+}
+
+#[cfg(test)]
+mod batching_tests {
+    use super::*;
+    use std::{
+        pin::Pin,
+        sync::atomic::AtomicBool,
+        task::{Context, Poll},
+        time::Duration,
+    };
+    use tokio::io::ReadBuf;
+
+    struct AckGatedIo {
+        io: DuplexStream,
+        acknowledge: Arc<AtomicBool>,
+    }
+    impl AsyncRead for AckGatedIo {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bytes: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.io).poll_read(cx, bytes)
+        }
+    }
+    impl AsyncWrite for AckGatedIo {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            bytes: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Pin::new(&mut self.io).poll_write(cx, bytes)
+        }
+        fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            if !self.acknowledge.load(Ordering::Acquire) {
+                return Poll::Pending;
+            }
+            Pin::new(&mut self.io).poll_flush(cx)
+        }
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Pin::new(&mut self.io).poll_shutdown(cx)
+        }
+    }
+
+    #[tokio::test]
+    async fn idle_messages_flush_and_ready_frames_do_not_wait_between_acknowledgements() {
+        let server_identity = Identity::generate().unwrap();
+        let client_identity = Identity::generate().unwrap();
+        let (client, server) = tokio::io::duplex(128 * 1024);
+        let acknowledge = Arc::new(AtomicBool::new(true));
+        let (client, server) = tokio::join!(
+            secure(
+                AckGatedIo {
+                    io: client,
+                    acknowledge: acknowledge.clone()
+                },
+                &client_identity,
+                Some(server_identity.public_key())
+            ),
+            secure(server, &server_identity, None),
+        );
+        let (mut client, _, client_pump) = client.unwrap();
+        let (mut server, _, server_pump) = server.unwrap();
+        client.write_all(b"idle").await.unwrap();
+        let mut idle = [0; 4];
+        tokio::time::timeout(Duration::from_secs(1), server.read_exact(&mut idle))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&idle, b"idle");
+
+        acknowledge.store(false, Ordering::Release);
+        let payload = vec![42; 48 * 1024];
+        client.write_all(&payload).await.unwrap();
+        let mut received = vec![0; payload.len()];
+        let result =
+            tokio::time::timeout(Duration::from_millis(200), server.read_exact(&mut received))
+                .await;
+        drop((client_pump, server_pump));
+        assert!(
+            result.is_ok(),
+            "the next encrypted frame waited for the previous frame's remote ACK"
+        );
+        result.unwrap().unwrap();
+        assert_eq!(received, payload);
+    }
 }

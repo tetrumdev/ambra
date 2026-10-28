@@ -319,6 +319,41 @@ mod client_tests {
     }
 
     #[tokio::test]
+    async fn failed_bootstrap_discards_node_and_recovers_with_fresh_sockets() {
+        let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let port = silent.local_addr().unwrap().port();
+        let mut client = isolated_client();
+        client.config.dht.bootstrap = vec![format!("127.0.0.1:{port}")];
+        assert!(client.ready().await.is_err());
+        assert!(client.node.lock().await.is_none());
+
+        drop(silent);
+        let runtime = UdxRuntime::new().unwrap();
+        let mut config = peeroxide_dht::rpc::DhtConfig::default();
+        config.host = "127.0.0.1".into();
+        config.port = port;
+        config.ephemeral = Some(false);
+        config.firewalled = false;
+        let (task, bootstrap) = peeroxide_dht::rpc::spawn(&runtime, config).await.unwrap();
+        bootstrap.bootstrapped().await.unwrap();
+        let node = client.ready().await.unwrap();
+        assert!(
+            node.as_ref()
+                .unwrap()
+                .handle
+                .dht()
+                .table_size()
+                .await
+                .unwrap()
+                > 0
+        );
+        drop(node);
+        client.shutdown().await;
+        bootstrap.destroy().await.unwrap();
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
     async fn failed_peer_lookup_reuses_healthy_node() {
         let client = isolated_client();
         let key = Identity::generate().unwrap().public_key();
