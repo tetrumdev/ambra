@@ -1,10 +1,16 @@
-//! Provider pages get an isolated window. Only their exact redirect URL returns to the main app.
+//! Sign in with the default browser; capture loopback redirects on this computer.
 use reqwest::Url;
 use std::{
-    sync::{Arc, Mutex},
+    collections::HashMap,
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
-use tauri::{Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::WebviewWindow;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::oneshot,
+};
 
 fn login_redirect(provider: &str, source: &str) -> Result<(Url, Url), String> {
     let login = Url::parse(source).map_err(|_| "Invalid service sign-in URL")?;
@@ -69,9 +75,124 @@ fn label(attempt_id: &str) -> Result<String, String> {
     Ok(format!("service-login-{attempt_id}"))
 }
 
+struct LoginAttempt {
+    redirect: Url,
+    sender: oneshot::Sender<Result<String, String>>,
+}
+
+static ATTEMPTS: LazyLock<Mutex<HashMap<String, LoginAttempt>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+struct AttemptGuard(String);
+impl Drop for AttemptGuard {
+    fn drop(&mut self) {
+        ATTEMPTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.0);
+    }
+}
+
+async fn browser_callback(
+    listener: TcpListener,
+    login: &Url,
+    redirect: &Url,
+) -> Result<String, String> {
+    loop {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .map_err(|_| "Could not receive service sign-in")?;
+        let request = tokio::time::timeout(Duration::from_secs(5), async {
+            let mut request = Vec::new();
+            let mut buffer = [0; 1024];
+            while request.len() < 8192 {
+                let count = stream.read(&mut buffer).await.ok()?;
+                if count == 0 {
+                    return None;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                if request.windows(4).any(|part| part == b"\r\n\r\n") {
+                    return String::from_utf8(request).ok();
+                }
+            }
+            None
+        })
+        .await
+        .ok()
+        .flatten();
+        let callback = request.as_deref().and_then(|request| {
+            let mut line = request.lines().next()?.split_whitespace();
+            if line.next()? != "GET" {
+                return None;
+            }
+            let host = request
+                .lines()
+                .skip(1)
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("host"))?
+                .1
+                .trim();
+            let expected_host = format!("127.0.0.1:{}", redirect.port()?);
+            if host != expected_host {
+                return None;
+            }
+            let path = line.next()?;
+            if !path.starts_with('/') || path.starts_with("//") {
+                return None;
+            }
+            let url = Url::parse(&format!(
+                "{}{}",
+                redirect.origin().ascii_serialization(),
+                path
+            ))
+            .ok()?;
+            if !callback_matches(redirect, &url) {
+                return None;
+            }
+            // Spotify binds the authorization to its original PKCE attempt.
+            if let Some((_, state)) = login.query_pairs().find(|(key, _)| key == "state") {
+                let states: Vec<_> = url
+                    .query_pairs()
+                    .filter(|(key, _)| key == "state")
+                    .collect();
+                if states.len() != 1 || states[0].1 != state {
+                    return None;
+                }
+            }
+            Some(url.to_string())
+        });
+        let (status, message) = if callback.is_some() {
+            (
+                "200 OK",
+                "Sign-in response received. Return to Ambra to finish connecting. You can close this tab.",
+            )
+        } else {
+            (
+                "400 Bad Request",
+                "This is not the expected sign-in response. Return to the service tab to finish signing in.",
+            )
+        };
+        let body = format!(
+            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width\"><title>Ambra sign-in</title><body><p>{message}</p></body></html>"
+        );
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: default-src 'none'\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            stream.write_all(response.as_bytes()).await?;
+            stream.shutdown().await
+        })
+        .await;
+        if let Some(callback) = callback {
+            return Ok(callback);
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn open_service_login(
-    app: tauri::AppHandle,
     window: WebviewWindow,
     provider: String,
     login_url: String,
@@ -81,61 +202,88 @@ pub async fn open_service_login(
         return Err("Only the main app may start service sign-in".into());
     }
     let (login, redirect) = login_redirect(&provider, &login_url)?;
-    let label = label(&attempt_id)?;
-    let (sender, receiver) = tokio::sync::oneshot::channel::<Result<String, String>>();
-    let sender = Arc::new(Mutex::new(Some(sender)));
-    let navigation = sender.clone();
-    // Async construction avoids WebView2's synchronous-command deadlock. Provider pages have no app capabilities.
-    let browser = WebviewWindowBuilder::new(&app, &label, WebviewUrl::External(login))
-        .title(format!(
-            "Sign in to {} — Ambra",
-            match provider.as_str() {
-                "tidal" => "Tidal",
-                "qobuz" => "Qobuz",
-                _ => "Spotify",
-            }
-        ))
-        .inner_size(560.0, 760.0)
-        .incognito(true)
-        .on_navigation(move |url| {
-            if callback_matches(&redirect, url) {
-                if let Some(sender) = navigation.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                    let _ = sender.send(Ok(url.to_string()));
-                }
-                return false;
-            }
-            // Authentication pages may use HTTPS SSO, but may never navigate into app/file origins.
-            url.scheme() == "https"
-        })
-        .build()
-        .map_err(|_| "Could not open the service sign-in window")?;
-    browser.on_window_event(move |event| {
-        if matches!(event, WindowEvent::Destroyed) {
-            if let Some(sender) = sender.lock().unwrap_or_else(|e| e.into_inner()).take() {
-                let _ = sender.send(Err("Sign-in cancelled".into()));
-            }
+    let key = label(&attempt_id)?;
+    // Bind before opening the browser so a fast redirect cannot race the listener.
+    let listener = if redirect.scheme() == "http" {
+        Some(TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, redirect.port().unwrap()))
+            .await.map_err(|_| "The service sign-in port is in use. Close other sign-in attempts and try again")?)
+    } else {
+        None
+    };
+    let (sender, receiver) = oneshot::channel();
+    {
+        let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
+        if attempts.contains_key(&key) {
+            return Err("This sign-in is already open".into());
         }
-    });
-    let result = tokio::time::timeout(Duration::from_secs(600), receiver)
-        .await
-        .map_err(|_| "Sign-in timed out. Try again".to_owned())
-        .and_then(|result| result.map_err(|_| "Sign-in window closed".to_owned()))
-        .and_then(|result| result);
-    let _ = browser.destroy();
+        attempts.insert(
+            key.clone(),
+            LoginAttempt {
+                redirect: redirect.clone(),
+                sender,
+            },
+        );
+    }
+    let _guard = AttemptGuard(key);
+    tauri_plugin_opener::open_url(login.as_str(), None::<&str>)
+        .map_err(|_| "Could not open the default browser")?;
+    let result = tokio::time::timeout(Duration::from_secs(600), async {
+        let manual = async { receiver.await.map_err(|_| "Sign-in cancelled".to_owned())? };
+        match listener {
+            Some(listener) => tokio::select! {
+                result = browser_callback(listener, &login, &redirect) => result,
+                result = manual => result,
+            },
+            None => manual.await,
+        }
+    })
+    .await
+    .map_err(|_| "Sign-in timed out. Try again".to_owned())?;
+    if result.is_ok() {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
     result
 }
 
+/// Tidal's registered HTTPS callback belongs to Tidal, so it cannot reach a loopback listener.
 #[tauri::command]
-pub async fn cancel_service_login(
-    app: tauri::AppHandle,
+pub async fn submit_service_login(
     window: WebviewWindow,
     attempt_id: String,
+    callback_url: String,
 ) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Only the main app may complete service sign-in".into());
+    }
+    let key = label(&attempt_id)?;
+    let callback = Url::parse(callback_url.trim())
+        .map_err(|_| "Paste the full callback URL from your browser")?;
+    let mut attempts = ATTEMPTS.lock().unwrap_or_else(|e| e.into_inner());
+    let attempt = attempts
+        .get(&key)
+        .ok_or("This sign-in is no longer active")?;
+    if attempt.redirect.scheme() != "https" || !callback_matches(&attempt.redirect, &callback) {
+        return Err("This URL is not the expected service callback".into());
+    }
+    let attempt = attempts.remove(&key).unwrap();
+    attempt
+        .sender
+        .send(Ok(callback.to_string()))
+        .map_err(|_| "This sign-in is no longer active".into())
+}
+
+#[tauri::command]
+pub async fn cancel_service_login(window: WebviewWindow, attempt_id: String) -> Result<(), String> {
     if window.label() != "main" {
         return Err("Only the main app may cancel service sign-in".into());
     }
-    if let Some(browser) = app.get_webview_window(&label(&attempt_id)?) {
-        let _ = browser.destroy();
+    if let Some(attempt) = ATTEMPTS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&label(&attempt_id)?)
+    {
+        let _ = attempt.sender.send(Err("Sign-in cancelled".into()));
     }
     Ok(())
 }

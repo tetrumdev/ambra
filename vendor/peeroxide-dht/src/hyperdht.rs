@@ -2079,15 +2079,21 @@ pub async fn establish_stream_with_socket(
     stream.connect(&socket, remote_id, addr).await?;
 
     let async_stream = stream.into_async_stream();
-    let ss = SecretStream::from_session(
-        result.noise.is_initiator,
-        async_stream,
-        result.noise.tx,
-        result.noise.rx,
-        result.noise.handshake_hash,
-        result.noise.remote_public_key,
+    // A hole-punch response does not prove that stream traffic can pass.
+    // Bound the header exchange so a stalled path can try another DHT peer.
+    let ss = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        SecretStream::from_session(
+            result.noise.is_initiator,
+            async_stream,
+            result.noise.tx,
+            result.noise.rx,
+            result.noise.handshake_hash,
+            result.noise.remote_public_key,
+        ),
     )
-    .await?;
+    .await
+    .map_err(|_| HyperDhtError::StreamEstablishment("encrypted header exchange timed out".into()))??;
     tracing::debug!("SecretStream established");
 
     Ok(PeerConnection {
