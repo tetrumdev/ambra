@@ -10,6 +10,10 @@ use std::time::{Duration, Instant};
 /// Matches C: pkt->first_sent_ts, pkt->delivered_ts, pkt->delivered, pkt->is_app_limited.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PacketRateInfo {
+    /// Timestamp when this packet was sent.
+    pub(crate) sent_ts: Instant,
+    /// Whether this packet was retransmitted, making its RTT ambiguous.
+    pub(crate) retransmitted: bool,
     /// Timestamp when the first packet in this send batch was sent.
     pub(crate) first_sent_ts: Instant,
     /// Timestamp when the last ACK was received before this packet was sent.
@@ -65,8 +69,11 @@ impl RateState {
         delivered_ts: Instant,
         first_sent_ts: Instant,
         is_app_limited: bool,
+        sent_ts: Instant,
     ) -> PacketRateInfo {
         PacketRateInfo {
+            sent_ts,
+            retransmitted: false,
             first_sent_ts,
             delivered_ts,
             delivered,
@@ -172,7 +179,7 @@ mod tests {
     #[test]
     fn test_on_packet_sent_captures_state() {
         let now = Instant::now();
-        let info = RateState::on_packet_sent(5, now, now, false);
+        let info = RateState::on_packet_sent(5, now, now, false, now);
         assert_eq!(info.delivered, 5);
         assert!(!info.is_app_limited);
     }
@@ -183,12 +190,16 @@ mod tests {
         let mut rs = RateState::new();
 
         let info1 = PacketRateInfo {
+            sent_ts: now,
+            retransmitted: false,
             first_sent_ts: now,
             delivered_ts: now,
             delivered: 3,
             is_app_limited: false,
         };
         let info2 = PacketRateInfo {
+            sent_ts: now,
+            retransmitted: false,
             first_sent_ts: now,
             delivered_ts: now,
             delivered: 7,
@@ -210,6 +221,8 @@ mod tests {
 
         // Packet sent at t0 with delivered=0
         let pkt_info = PacketRateInfo {
+            sent_ts: t0,
+            retransmitted: false,
             first_sent_ts: t0,
             delivered_ts: t0,
             delivered: 0,
@@ -239,6 +252,8 @@ mod tests {
         let mut rs = RateState::new();
 
         let pkt_info = PacketRateInfo {
+            sent_ts: t0,
+            retransmitted: false,
             first_sent_ts: t0,
             delivered_ts: t0,
             delivered: 0,
