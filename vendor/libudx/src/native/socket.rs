@@ -15,8 +15,74 @@ pub struct Datagram {
     pub addr: SocketAddr,
 }
 
+/// All sends, including stream traffic, share this socket's TTL lock.
+/// Do not expose the raw socket: a send outside this lock could inherit a probe TTL.
+pub(crate) struct UdpSocket {
+    socket: tokio::net::UdpSocket,
+    default_ttl: Mutex<u32>,
+}
+
+impl UdpSocket {
+    fn new(socket: tokio::net::UdpSocket) -> std::io::Result<Self> {
+        let default_ttl = Mutex::new(socket.ttl()?);
+        Ok(Self {
+            socket,
+            default_ttl,
+        })
+    }
+
+    fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
+    async fn recv_from(&self, buf: &mut [u8]) -> std::io::Result<(usize, SocketAddr)> {
+        self.socket.recv_from(buf).await
+    }
+
+    fn set_ttl(&self, ttl: u32) -> std::io::Result<()> {
+        let mut default_ttl = self.default_ttl.lock().unwrap_or_else(|e| e.into_inner());
+        self.socket.set_ttl(ttl)?;
+        *default_ttl = ttl;
+        Ok(())
+    }
+
+    fn ttl(&self) -> std::io::Result<u32> {
+        let _guard = self.default_ttl.lock().unwrap_or_else(|e| e.into_inner());
+        self.socket.ttl()
+    }
+
+    pub(crate) async fn send_to(&self, data: &[u8], addr: SocketAddr) -> std::io::Result<usize> {
+        self.send_to_with_ttl(data, addr, None).await
+    }
+
+    async fn send_to_with_ttl(
+        &self,
+        data: &[u8],
+        addr: SocketAddr,
+        ttl: Option<u32>,
+    ) -> std::io::Result<usize> {
+        loop {
+            self.socket.writable().await?;
+            let result = {
+                let default_ttl = self.default_ttl.lock().unwrap_or_else(|e| e.into_inner());
+                // Reapply the default even if an earlier restoration failed.
+                self.socket.set_ttl(ttl.unwrap_or(*default_ttl))?;
+                let result = self.socket.try_send_to(data, addr);
+                if ttl.is_some() {
+                    self.socket.set_ttl(*default_ttl)?;
+                }
+                result
+            };
+            match result {
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
 struct UdxSocketInner {
-    udp: OnceLock<Arc<tokio::net::UdpSocket>>,
+    udp: OnceLock<Arc<UdpSocket>>,
     recv_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     streams: Arc<Mutex<HashMap<u32, mpsc::UnboundedSender<super::stream::IncomingPacket>>>>,
     fallback_tx: Arc<Mutex<Option<mpsc::UnboundedSender<Datagram>>>>,
@@ -32,12 +98,10 @@ impl UdxSocketInner {
         }
     }
 
-    fn udp_arc(&self) -> Result<Arc<tokio::net::UdpSocket>> {
-        Ok(Arc::clone(
-            self.udp
-                .get()
-                .ok_or_else(|| UdxError::Io(std::io::Error::other("socket not bound")))?,
-        ))
+    fn udp_arc(&self) -> Result<Arc<UdpSocket>> {
+        Ok(Arc::clone(self.udp.get().ok_or_else(|| {
+            UdxError::Io(std::io::Error::other("socket not bound"))
+        })?))
     }
 
     fn ensure_recv_loop(&self) -> Result<()> {
@@ -61,10 +125,7 @@ impl UdxSocketInner {
                     if let Ok(hdr) = super::header::Header::decode(&packet) {
                         let guard = streams.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(tx) = guard.get(&hdr.remote_id) {
-                            let _ = tx.send(super::stream::IncomingPacket {
-                                data: packet,
-                                addr,
-                            });
+                            let _ = tx.send(super::stream::IncomingPacket { data: packet, addr });
                             continue;
                         }
                     }
@@ -87,6 +148,68 @@ impl UdxSocketInner {
                 handle.abort();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn per_datagram_ttl_restored_after_actual_send_and_error() {
+        let udp =
+            UdpSocket::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap()).unwrap();
+        udp.set_ttl(93).unwrap();
+        let addr = udp.local_addr().unwrap();
+        assert_eq!(
+            udp.send_to_with_ttl(b"probe", addr, Some(5)).await.unwrap(),
+            5
+        );
+        assert_eq!(udp.ttl().unwrap(), 93);
+        assert_eq!(udp.send_to(b"normal", addr).await.unwrap(), 6);
+        assert_eq!(udp.ttl().unwrap(), 93);
+
+        // An IPv4 socket cannot send to an IPv6 destination. Restoration must
+        // happen even when the actual send fails, not just on the happy path.
+        assert!(
+            udp.send_to_with_ttl(b"probe", "[::1]:1".parse().unwrap(), Some(5))
+                .await
+                .is_err()
+        );
+        assert_eq!(udp.ttl().unwrap(), 93);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_actual_sends_preserve_default_ttl() {
+        let udp = Arc::new(
+            UdpSocket::new(tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap()).unwrap(),
+        );
+        udp.set_ttl(93).unwrap();
+        let addr = udp.local_addr().unwrap();
+        let barrier = Arc::new(tokio::sync::Barrier::new(4));
+        let mut tasks = Vec::new();
+        for worker in 0..4 {
+            let udp = udp.clone();
+            let barrier = barrier.clone();
+            tasks.push(tokio::spawn(async move {
+                barrier.wait().await;
+                for _ in 0..64 {
+                    if worker % 2 == 0 {
+                        udp.send_to_with_ttl(b"probe", addr, Some(5)).await.unwrap();
+                    } else {
+                        udp.send_to(b"normal", addr).await.unwrap();
+                    }
+                    assert_eq!(udp.ttl().unwrap(), 93);
+                }
+            }));
+        }
+        for task in tasks {
+            tokio::time::timeout(std::time::Duration::from_secs(5), task)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        assert_eq!(udp.ttl().unwrap(), 93);
     }
 }
 
@@ -122,7 +245,7 @@ impl UdxSocket {
         let socket = tokio::net::UdpSocket::bind(addr).await?;
         self.inner
             .udp
-            .set(Arc::new(socket))
+            .set(Arc::new(UdpSocket::new(socket)?))
             .map_err(|_| UdxError::Io(std::io::Error::other("socket already bound")))?;
         Ok(())
     }
@@ -140,10 +263,9 @@ impl UdxSocket {
     /// Set the IP time-to-live (IPv4 `IP_TTL` / IPv6 hop limit) used for
     /// outgoing datagrams sent on this socket.
     ///
-    /// A low TTL is used by NAT-holepunching probes that intentionally
-    /// expire before reaching the remote peer (birthday-attack probes that
-    /// must not trigger a "connection refused" ICMP response visible to the
-    /// remote NAT), while the default TTL is used for regular traffic.
+    /// This changes the default for subsequent sends. For holepunch probes,
+    /// use [`send_to_with_ttl`](Self::send_to_with_ttl) instead so concurrent
+    /// regular traffic retains the default TTL.
     pub fn set_ttl(&self, ttl: u32) -> Result<()> {
         let udp = self.inner.udp_arc()?;
         Ok(udp.set_ttl(ttl)?)
@@ -156,7 +278,7 @@ impl UdxSocket {
     }
 
     /// Get a shared reference to the underlying UDP socket.
-    pub(crate) fn udp_arc(&self) -> Result<Arc<tokio::net::UdpSocket>> {
+    pub(crate) fn udp_arc(&self) -> Result<Arc<UdpSocket>> {
         self.inner.udp_arc()
     }
 
@@ -183,10 +305,26 @@ impl UdxSocket {
 
     /// Send an unreliable datagram to `addr`. Fire-and-forget.
     pub fn send_to(&self, data: &[u8], addr: SocketAddr) -> Result<()> {
+        self.send_datagram(data, addr, None)
+    }
+
+    /// Send an unreliable datagram with a TTL override. Fire-and-forget.
+    ///
+    /// The override applies only to the actual UDP send, including deferred
+    /// sends, and does not change the default TTL used by other datagrams or
+    /// UDX streams. As with [`send_to`](Self::send_to), asynchronous send
+    /// errors are not reported to the caller.
+    pub fn send_to_with_ttl(&self, data: &[u8], addr: SocketAddr, ttl: u32) -> Result<()> {
+        self.send_datagram(data, addr, Some(ttl))
+    }
+
+    fn send_datagram(&self, data: &[u8], addr: SocketAddr, ttl: Option<u32>) -> Result<()> {
         let udp = self.inner.udp_arc()?;
         let data = data.to_vec();
         tokio::spawn(async move {
-            let _ = udp.send_to(&data, addr).await;
+            if let Err(error) = udp.send_to_with_ttl(&data, addr, ttl).await {
+                tracing::warn!(%addr, %error, "UDP datagram send failed");
+            }
         });
         Ok(())
     }
