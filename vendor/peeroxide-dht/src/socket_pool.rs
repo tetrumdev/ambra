@@ -166,8 +166,8 @@ pub(crate) fn classify_inbound(buf: &[u8]) -> InboundClass {
 /// Map a raw `firewall` value into the punch-strategy bucket the Holepuncher
 /// dispatcher understands.
 ///
-/// Matches Node `hyperdht/lib/holepuncher.js:333-335`: only `OPEN â†’
-/// CONSISTENT`. `UNKNOWN` no longer gets silently coerced â€” by the time
+/// Matches Node `hyperdht/lib/holepuncher.js:333-335`: only `OPEN →
+/// CONSISTENT`. `UNKNOWN` no longer gets silently coerced — by the time
 /// `punch()` runs the puncher's `Nat` has been seeded by
 /// [`crate::holepuncher::Holepuncher::auto_sample`] which settles the
 /// firewall to `CONSISTENT` / `RANDOM` via real reflexive samples.
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(
             classify_inbound(&buf),
             InboundClass::UdxFrame,
-            "25-byte 0xFF-prefix packet must classify as UdxFrame (stub returns Drop â€” RED)",
+            "25-byte 0xFF-prefix packet must classify as UdxFrame (stub returns Drop — RED)",
         );
     }
 
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(
             classify_inbound(&buf),
             InboundClass::DhtResponse,
-            "valid DHT Response bytes must classify as DhtResponse (stub returns Drop â€” RED)",
+            "valid DHT Response bytes must classify as DhtResponse (stub returns Drop — RED)",
         );
     }
 }
