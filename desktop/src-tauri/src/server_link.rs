@@ -235,6 +235,13 @@ impl ServerLink {
     pub fn client_id(&self) -> String {
         self.settings.lock().map(|settings| settings.client_id.clone()).unwrap_or_default()
     }
+
+    #[cfg(debug_assertions)]
+    pub async fn reconnect_for_test(&self) -> Result<(), String> {
+        let manager = self.runtime.lock().unwrap().manager.clone().ok_or("No server transport")?;
+        manager.connect().await.map_err(|error| error.to_string())?.close();
+        Ok(())
+    }
 }
 
 impl Runtime {

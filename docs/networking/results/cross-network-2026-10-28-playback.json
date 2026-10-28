@@ -1,0 +1,378 @@
+{
+  "transport": "VPN-assisted HyperDHT through WARP; not VPN-free school traversal",
+  "scenario": "Playback after one forced encrypted-transport reconnect",
+  "samples": [
+    {
+      "at": "2026-10-28T15:32:45.127Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 15.545770833333334,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:32:48.253Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 18.622416666666666,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:32:51.362Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 21.687458333333332,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:32:54.470Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 24.93825,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:32:57.577Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 28.003270833333332,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:00.696Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 31.079916666666666,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:03.804Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 34.144958333333335,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:06.911Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 37.39575,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:10.019Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 40.460791666666665,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:13.127Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 43.537416666666665,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:16.235Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 46.6140625,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    },
+    {
+      "at": "2026-10-28T15:33:19.342Z",
+      "networkTest": true,
+      "ok": true,
+      "value": {
+        "native": {
+          "audioQuality": {
+            "bitDepth": 24,
+            "bitrateIsEstimate": true,
+            "bitrateKbps": 1676.941929305951,
+            "channels": 2,
+            "codec": "flac",
+            "normalizationGainDb": null,
+            "sampleRateHz": 48000
+          },
+          "buffering": false,
+          "currentTime": 49.67910416666667,
+          "duration": 245.842583333,
+          "ended": false,
+          "error": null,
+          "hasSource": true,
+          "isPlaying": true
+        },
+        "network": {
+          "error": null,
+          "method": "HyperDHT",
+          "server": "154597d7ea1e2c45b89cd4d362424c0b845ed813301c8ea344e22e0292c54240",
+          "state": "ConnectedHyperDHT"
+        }
+      }
+    }
+  ]
+}
