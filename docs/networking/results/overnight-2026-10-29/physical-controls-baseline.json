@@ -1,0 +1,904 @@
+{
+  "schema": 1,
+  "transport": "hyperdht",
+  "physical_test_attempted": true,
+  "physical_path_verified": true,
+  "started_unix_ms": 1793248250857,
+  "rounds": [],
+  "ok": true,
+  "first_pair_request_ms": 8767.943082842976,
+  "first_ready_ms": 63952.937540831044,
+  "streams": [
+    "STREAM ok bytes=10584044 chunks=649 elapsed_ms=19427"
+  ],
+  "probe_resources": {
+    "peak_sampled_rss_kib": 41984,
+    "ps_cpu_percent_samples": [
+      0.0,
+      6.6,
+      8.2,
+      1.0,
+      0.1,
+      0.0,
+      0.5,
+      0.8,
+      0.1,
+      1.9,
+      1.9,
+      2.3,
+      17.7,
+      15.2,
+      12.2,
+      21.7,
+      22.5,
+      23.2,
+      22.4,
+      20.0,
+      21.2,
+      23.5,
+      19.6,
+      22.1,
+      15.5,
+      22.1,
+      21.9,
+      14.1,
+      14.7,
+      14.6,
+      12.4,
+      11.3,
+      8.6,
+      9.4,
+      10.1,
+      3.9,
+      18.9,
+      21.6,
+      21.2,
+      20.4,
+      17.8,
+      22.7,
+      15.3,
+      20.4,
+      27.3,
+      23.8,
+      24.5,
+      8.0,
+      8.3,
+      7.6,
+      9.0,
+      14.0,
+      23.1,
+      23.8,
+      22.5,
+      23.7,
+      15.9,
+      24.3,
+      25.4,
+      29.8,
+      26.9,
+      26.5,
+      25.5
+    ],
+    "samples": 63,
+    "note": "OS-reported ps CPU percentages are platform dependent; RSS is sampled once per second"
+  },
+  "native_playback_progress_verified": true,
+  "audible_output_measured": false,
+  "client_interfaces": [
+    "en0"
+  ],
+  "server_interfaces": [
+    "wlo1"
+  ],
+  "elapsed_seconds": 130.5583848329261,
+  "metrics": [
+    {
+      "data": {
+        "elapsed_ms": 8757.671792
+      },
+      "schema": 1,
+      "stage": "pair_request",
+      "unix_ms": 1793248277236
+    },
+    {
+      "data": {
+        "elapsed_ms": 70.732583
+      },
+      "schema": 1,
+      "stage": "authorization",
+      "unix_ms": 1793248279323
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 2,
+        "bytes": 10584044,
+        "elapsed_ms": 19425.509250000003,
+        "exact_bytes": true,
+        "first_byte_ms": 114.855708,
+        "hardware_playback": false,
+        "max_body_gap_ms": 378.037458,
+        "throughput_mib_s": 0.5196120763035658
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793248332069
+    }
+  ],
+  "desktop_samples": [
+    {
+      "elapsed_ms": 109.53341703861952,
+      "native": {
+        "audioQuality": null,
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 0.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 1121.1169580928981,
+      "native": {
+        "audioQuality": null,
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 0.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 2121.5873749461025,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": true,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 3134.0412080753595,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": true,
+        "currentTime": 0.7198185941043084,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      },
+      "network_state": "ConnectingHyperDHT"
+    },
+    {
+      "elapsed_ms": 4141.960458131507,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": true,
+        "currentTime": 0.7198185941043084,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      },
+      "network_state": "ConnectingHyperDHT"
+    },
+    {
+      "elapsed_ms": 5148.587916977704,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 1.0332879818594105,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 6158.034666907042,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 2.043356009070295,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 7168.460333021358,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 2.995374149659864,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 8174.809833057225,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 4.1099319727891155,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 9177.556083071977,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 5.038730158730159,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 10188.050457974896,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 5.9675283446712015,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 11191.656291950494,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 7.082086167800454,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 12199.46170807816,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 8.010884353741497,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 13208.68695806712,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 9.125442176870749,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    },
+    {
+      "elapsed_ms": 14217.964292038232,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 10.054240362811791,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      },
+      "network_state": "ConnectedHyperDHT"
+    }
+  ],
+  "control_measurements": [
+    {
+      "action": "pause",
+      "accepted_ms": 150.30616614967585,
+      "native_confirmed_ms": 150.59833298437297,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 11.168798185941043,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      }
+    },
+    {
+      "action": "play",
+      "accepted_ms": 67.1081249602139,
+      "native_confirmed_ms": 119.58308308385313,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 11.168798185941043,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "seek",
+      "accepted_ms": 54.13454188965261,
+      "native_confirmed_ms": 54.4323748908937,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 11.354557823129252,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "next",
+      "accepted_ms": 234.69883296638727,
+      "native_confirmed_ms": 292.97670791856945,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "pause",
+      "accepted_ms": 57.07529210485518,
+      "native_confirmed_ms": 57.294500060379505,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.4179591836734694,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      }
+    },
+    {
+      "action": "play",
+      "accepted_ms": 441.15229207091033,
+      "native_confirmed_ms": 854.988417122513,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.4179591836734694,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "seek",
+      "accepted_ms": 389.6575828548521,
+      "native_confirmed_ms": 783.1657498609275,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 10.011609977324262,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "next",
+      "accepted_ms": 169.68029201962054,
+      "native_confirmed_ms": 221.41841682605445,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "pause",
+      "accepted_ms": 133.36204108782113,
+      "native_confirmed_ms": 533.2842080388218,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.3831292517006803,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      }
+    },
+    {
+      "action": "play",
+      "accepted_ms": 461.37041691690683,
+      "native_confirmed_ms": 983.2640839740634,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.3831292517006803,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "seek",
+      "accepted_ms": 372.1454169135541,
+      "native_confirmed_ms": 749.9633750412613,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 10.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "next",
+      "accepted_ms": 69.62008308619261,
+      "native_confirmed_ms": 130.29145798645914,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "pause",
+      "accepted_ms": 212.375707924366,
+      "native_confirmed_ms": 594.5677908603102,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.3831292517006803,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      }
+    },
+    {
+      "action": "play",
+      "accepted_ms": 395.06987505592406,
+      "native_confirmed_ms": 1080.1861670333892,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.5688888888888889,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "seek",
+      "accepted_ms": 410.32537491992116,
+      "native_confirmed_ms": 899.5343749411404,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 10.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "next",
+      "accepted_ms": 74.13529185578227,
+      "native_confirmed_ms": 131.99412496760488,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "pause",
+      "accepted_ms": 209.40433302894235,
+      "native_confirmed_ms": 1157.4295829050243,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.9404081632653061,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": false
+      }
+    },
+    {
+      "action": "play",
+      "accepted_ms": 489.26629102788866,
+      "native_confirmed_ms": 1118.4987910091877,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.9404081632653061,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "seek",
+      "accepted_ms": 442.1882079914212,
+      "native_confirmed_ms": 901.5212079975754,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 10.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    },
+    {
+      "action": "next",
+      "accepted_ms": 407.49445906840265,
+      "native_confirmed_ms": 518.6691249255091,
+      "native": {
+        "audioQuality": {
+          "bitDepth": 16,
+          "bitrateIsEstimate": false,
+          "bitrateKbps": 1411.2,
+          "channels": 2,
+          "codec": "pcm_s16le",
+          "normalizationGainDb": null,
+          "sampleRateHz": 44100
+        },
+        "buffering": false,
+        "currentTime": 0.0,
+        "duration": 60.0,
+        "ended": false,
+        "error": null,
+        "hasSource": true,
+        "isPlaying": true
+      }
+    }
+  ]
+}

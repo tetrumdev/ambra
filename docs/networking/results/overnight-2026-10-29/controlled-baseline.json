@@ -1,0 +1,80 @@
+{
+  "schema": 1,
+  "started_unix_ms": 1793247690423,
+  "ok": true,
+  "mode": "physical_hyperdht_udx",
+  "physical_path_verified": true,
+  "commands": [
+    {
+      "name": "connection_bench",
+      "exit_code": 0,
+      "elapsed_seconds": 33.729805416893214,
+      "results": [
+        {
+          "client": 0,
+          "connection_ms": 4698.91725,
+          "ok": true,
+          "round": 0,
+          "throughput_mib_s": 0.5027998409141303
+        },
+        {
+          "client": 0,
+          "connection_ms": 2125.406625,
+          "ok": true,
+          "round": 1,
+          "throughput_mib_s": 0.5159373032989031
+        },
+        {
+          "client": 0,
+          "connection_ms": 1851.5802919999999,
+          "ok": true,
+          "round": 2,
+          "throughput_mib_s": 0.5001187625774007
+        },
+        {
+          "client": 0,
+          "connection_ms": 1823.7262919999998,
+          "ok": true,
+          "round": 3,
+          "throughput_mib_s": 0.5097165784246983
+        },
+        {
+          "client": 0,
+          "connection_ms": 2146.743334,
+          "ok": true,
+          "round": 4,
+          "throughput_mib_s": 0.501021901932203
+        }
+      ]
+    },
+    {
+      "name": "streaming_bench",
+      "exit_code": 0,
+      "elapsed_seconds": 98.3596223751083,
+      "results": [
+        {
+          "body_gaps_over_250ms": 1,
+          "bytes": 48234496,
+          "max_body_gap_ms": 255.474166,
+          "poll_error": null,
+          "poll_p50_ms": 514.260292,
+          "poll_p95_ms": 622.1119170000001,
+          "polls": 146,
+          "responses": 23,
+          "result": "Ok(Ok(()))",
+          "seconds": 90.490662292,
+          "throughput_mib_s": 0.5083310352649559
+        }
+      ]
+    }
+  ],
+  "client_interfaces": [
+    "en0"
+  ],
+  "server_interfaces": [
+    "wlo1"
+  ],
+  "route_verification_initial_error": "CalledProcessError: Command '['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=10', 'llewyn@100.95.127.9', 'python3 -']' returned non-zero exit status 1.",
+  "route_verification_correction": "Strip ANSI formatting before parsing authenticated endpoint evidence; repeat route checks against captured public endpoints.",
+  "evidence_note": "Debug Rust binaries. Physical tests use hotspot/home Wi-Fi, verified public HyperDHT endpoints. Loopback is not physical LAN. Native Node reference is a test-only optimized native server."
+}

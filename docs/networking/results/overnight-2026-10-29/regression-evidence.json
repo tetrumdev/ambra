@@ -1,0 +1,139 @@
+{
+  "mac-session-baseline.log": [
+    "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 188 filtered out; finished in 1.33s"
+  ],
+  "mac-session-final.log": [
+    "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 190 filtered out; finished in 2.46s"
+  ],
+  "native-pause-before.log": [
+    "test native_audio::tests::pause_interrupts_network_preparation_without_waiting_for_the_body ... FAILED",
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 52 filtered out; finished in 0.74s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "native-pause-after.log": [
+    "assertion failed: worker.decoder.is_none()",
+    "test native_audio::tests::releasing_a_paused_device_does_not_reopen_the_song ... FAILED",
+    "NATIVE_PAUSE_MS 0.024875",
+    "test result: FAILED. 6 passed; 1 failed; 0 ignored; 0 measured; 46 filtered out; finished in 0.02s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "decoder-before.log": [
+    "startup/HLS read waited for the complete HTTP body",
+    "startup/HLS read waited for the complete HTTP body",
+    "test native_audio::decoder::http_streaming_tests::hls_resource_yields_before_its_body_finishes ... FAILED",
+    "test native_audio::decoder::http_streaming_tests::startup_range_yields_before_its_body_finishes ... FAILED",
+    "test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.51s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "decoder-after.log": [
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 50 filtered out; finished in 0.24s"
+  ],
+  "pacer-before.log": [
+    "assertion `left == right` failed: newly registered packets count once",
+    "test native::stream::mtu_tests::send_batch_fills_exactly_the_available_window ... FAILED",
+    "test native::stream::mtu_tests::full_window_waits_for_events_instead_of_polling_every_millisecond ... FAILED",
+    "test result: FAILED. 8 passed; 2 failed; 0 ignored; 0 measured; 61 filtered out; finished in 1.01s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "pacer-after.log": [
+    "test result: ok. 71 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s",
+    "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.07s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.21s",
+    "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.91s",
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 51.93s"
+  ],
+  "pacer-wakes-final.log": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.16s"
+  ],
+  "pacing-credit-before.log": [
+    "test native::congestion::tests::pacing_preserves_the_rate_across_coarse_timer_wakes ... FAILED",
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 72 filtered out; finished in 0.00s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "pacing-credit-tests.log": [
+    "test result: ok. 73 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s",
+    "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s",
+    "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.45s",
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.16s"
+  ],
+  "mobile-before.log": [
+    "error: expect(received).toEqual(expected)",
+    "error: expect(received).toBe(expected)"
+  ],
+  "mobile-final.log": [],
+  "provider-retry-before.log": [
+    "test session::driver_tests::pause_during_provider_retry_does_not_wait_or_get_overwritten ... FAILED",
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 207 filtered out; finished in 0.43s",
+    "error: test failed, to rerun pass `--bin ambra-server`"
+  ],
+  "server-exact-tests.log": [
+    "test result: ok. 207 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.77s"
+  ],
+  "close-notice-before.log": [
+    "test native::async_stream::close_notice_tests::dropping_an_established_stream_notifies_its_peer_immediately ... FAILED",
+    "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 74 filtered out; finished in 0.21s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "close-notice-tests.log": [
+    "test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s",
+    "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s",
+    "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.26s",
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.75s"
+  ],
+  "final-dht-tests.log": [
+    "test result: ok. 415 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s"
+  ],
+  "final-swarm-tests.log": [
+    "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+  ],
+  "credit-net-tests.log": [
+    "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.18s",
+    "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.84s",
+    "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "credit-desktop-tests.log": [
+    "test native_audio::tests::releasing_a_paused_device_does_not_reopen_the_song ... FAILED",
+    "assertion failed: worker.decoder.is_none()",
+    "test result: FAILED. 56 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.08s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "repeated-play-regression.log": [
+    "NATIVE_PAUSE_MS 0.199167",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 57 filtered out; finished in 0.02s"
+  ],
+  "final-net-gate.log": [
+    "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.28s",
+    "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.92s"
+  ],
+  "final-desktop-gate.log": [
+    "test native_audio::tests::releasing_a_paused_device_does_not_reopen_the_song ... FAILED",
+    "assertion failed: worker.decoder.is_none()",
+    "test result: FAILED. 56 passed; 1 failed; 1 ignored; 0 measured; 0 filtered out; finished in 1.08s",
+    "error: test failed, to rerun pass `--lib`"
+  ],
+  "linux-final-summary.log": [
+    "test write_behind::tests::write_behind_benchmark ... FAILED",
+    "test result: FAILED. 204 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 36.25s",
+    "test result: ok. 75 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.02s",
+    "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s",
+    "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s",
+    "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.99s",
+    "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.56s",
+    "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.93s"
+  ]
+}

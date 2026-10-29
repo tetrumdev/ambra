@@ -1,0 +1,141 @@
+{
+  "schema": 1,
+  "started_unix_ms": 1793250305652,
+  "ok": true,
+  "mode": "loopback_lan_noise_http2",
+  "physical_path_verified": false,
+  "reference_native_server": false,
+  "commands": [
+    {
+      "name": "connection_bench",
+      "exit_code": 0,
+      "elapsed_seconds": 2.4636753329541534,
+      "results": [
+        {
+          "client": 0,
+          "connection_ms": 15.371625,
+          "ok": true,
+          "round": 0,
+          "throughput_mib_s": 10.074479823375832
+        },
+        {
+          "client": 0,
+          "connection_ms": 15.118583,
+          "ok": true,
+          "round": 1,
+          "throughput_mib_s": 9.349373236483238
+        },
+        {
+          "client": 0,
+          "connection_ms": 12.679708,
+          "ok": true,
+          "round": 2,
+          "throughput_mib_s": 9.417745883053577
+        },
+        {
+          "client": 0,
+          "connection_ms": 13.556125,
+          "ok": true,
+          "round": 3,
+          "throughput_mib_s": 9.328824171539425
+        },
+        {
+          "client": 0,
+          "connection_ms": 13.050209,
+          "ok": true,
+          "round": 4,
+          "throughput_mib_s": 9.379634843968391
+        }
+      ]
+    },
+    {
+      "name": "streaming_bench",
+      "exit_code": 0,
+      "elapsed_seconds": 15.079449249897152,
+      "results": [
+        {
+          "body_gaps_over_250ms": 0,
+          "bytes": 165675008,
+          "max_body_gap_ms": 21.677458,
+          "poll_error": null,
+          "poll_latency_ms": [
+            113.371083,
+            115.652292,
+            115.8735,
+            116.1435,
+            116.63808300000001,
+            117.683083,
+            122.285291,
+            122.72383400000001,
+            123.165458,
+            123.227583,
+            123.353291,
+            123.530458,
+            123.62329199999999,
+            123.628875,
+            124.33004100000001,
+            124.80675,
+            125.927125,
+            127.334375,
+            127.56400000000001,
+            128.512125,
+            128.559666,
+            128.894708,
+            128.90337499999998,
+            128.918416,
+            129.33529099999998,
+            129.379,
+            129.538666,
+            129.731541,
+            129.79912499999998,
+            130.50508299999998,
+            130.629875,
+            130.841541,
+            130.942792,
+            131.608458,
+            132.014375,
+            132.26075,
+            132.88970799999998,
+            132.961458,
+            133.29220899999999,
+            133.31562499999998,
+            133.521083,
+            133.88325,
+            134.625208,
+            134.631125,
+            134.69958300000002,
+            134.81795799999998,
+            136.244958,
+            136.361125,
+            136.43770899999998,
+            136.715542,
+            137.334167,
+            137.560083,
+            138.58404199999998,
+            139.15525,
+            139.166958,
+            139.34812499999998,
+            140.207041,
+            140.537042,
+            140.76549999999997,
+            143.833041,
+            144.045334,
+            147.80458399999998,
+            149.452584,
+            157.96137499999998
+          ],
+          "poll_p50_ms": 130.841541,
+          "poll_p95_ms": 144.045334,
+          "poll_p99_ms": 157.96137499999998,
+          "polls": 64,
+          "responses": 79,
+          "result": "Ok(Ok(()))",
+          "seconds": 15.005204458,
+          "throughput_mib_s": 10.529675353598584,
+          "transport": "lan_noise_http2"
+        }
+      ]
+    }
+  ],
+  "evidence_note": "Debug Rust binaries. Physical tests use hotspot/home Wi-Fi, verified public HyperDHT endpoints. Loopback is not physical LAN. Native Node reference is a test-only optimized native server."
+}

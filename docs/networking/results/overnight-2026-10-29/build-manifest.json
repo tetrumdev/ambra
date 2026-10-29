@@ -1,0 +1,34 @@
+{
+  "source_commit": "aa7c936257cd5f204623346cae0048aa4ae9d182",
+  "source_git_blobs": {
+    "server/src/session.rs": "c902c404621da14134495a867084a9ac223127d7",
+    "server/src/endpoints.rs": "160062368d64c0a445bac80f49b95eb2b1eef5f6",
+    "server/src/soloist/tests.rs": "6114ff3fd04d25d3a42f2501accee1da810a5507",
+    "vendor/libudx/src/native/stream.rs": "badd9855753a601d6ac213a658cc550f7b8c44ef",
+    "vendor/libudx/src/native/congestion/mod.rs": "90816f22df1d5a527acdf91bb069893c61afc8cd",
+    "vendor/libudx/src/native/congestion/pacing.rs": "f1e56b507817d63c1df4839a2d3032ef62f8f8cb",
+    "vendor/libudx/src/native/async_stream.rs": "0c50c2018b9ed11736760ca22d03b43ca3e955bc",
+    "vendor/libudx/src/native/socket.rs": "0a0f02be016e8a84cdaed20f1720e06387b65be3",
+    "desktop/src-tauri/src/native_audio.rs": "c98d918641493e217d970167a299ca51f6e81729",
+    "desktop/src-tauri/src/native_audio/decoder.rs": "08f0ceb12ca812a783eb61bfcad5defa60b66abf",
+    "desktop/src-tauri/src/remote_endpoint.rs": "de1c549fe177f355f3babcd52fa66476e55b101a",
+    "desktop/src-tauri/src/lib.rs": "9c40fa8a9b0a03206bd2b562f0a94ec24c219137",
+    "desktop/src-tauri/src/network_test.rs": "9c618adb445f4d528c7cd15bc587c0cc60f25363",
+    "mobile/src/client.ts": "bf0fc7b3fcc79adb10a64b745ddc96e7af7a27b0"
+  },
+  "build_profile": {
+    "rust": "debug",
+    "incremental": false,
+    "debug_symbols": false
+  },
+  "mac_executable_sha256": {
+    "baseline_probe": "d526467a7677a2f85ee14a73e5c664bb0793d9eff8891dcd3c9513b08cb6929d",
+    "baseline_desktop": "9bf81042c918ad7c68ac44ad3e022a1f4a6b43751818795db2f3e8e6f1334e0a",
+    "final_probe": "6ebc2855c81eaca9d3a6c1177ba42f6076db345bc03b02b8ec3da23634bfd2f3",
+    "final_connection_bench": "81f7aa4dd94cb73b6a9d25cb00df0f30b1ec4bf56c91570e658c7759f2c679a4",
+    "final_streaming_bench": "0f81e435603d610962fee2231285898369d6e45d4abc2ecd3d93d6b5b562318a",
+    "final_desktop_input": "5f3eee357ecdddac39991cfd65970a28e1fba18e3dc5c9744418ca94f49d7f1f",
+    "final_signed_desktop": "3046756b36f18f5c0d465e60bcfc83be5fe55e25505dcb850894fa95ee3051ec"
+  },
+  "note": "Source includes all final production and harness changes. Linux six temporary source blobs were individually verified against this commit before fast-forward sync. Older measurements explicitly retain the source HEAD recorded during their dirty-source qualification; binary hashes identify the tested executable. Baseline desktop adds debug-only queue/next automation to original production sources."
+}

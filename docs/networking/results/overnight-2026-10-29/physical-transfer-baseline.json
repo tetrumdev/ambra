@@ -1,0 +1,377 @@
+{
+  "schema": 1,
+  "transport": "hyperdht",
+  "physical_test_attempted": true,
+  "physical_path_verified": true,
+  "started_unix_ms": 1793245951761,
+  "rounds": [
+    {
+      "round": 0,
+      "ok": true,
+      "reconnect_ms": 2214.7179159801453
+    },
+    {
+      "round": 1,
+      "ok": true,
+      "reconnect_ms": 2260.574416955933
+    },
+    {
+      "round": 2,
+      "ok": true,
+      "reconnect_ms": 2214.9312081746757
+    },
+    {
+      "round": 3,
+      "ok": true,
+      "reconnect_ms": 2351.915624924004
+    },
+    {
+      "round": 4,
+      "ok": true,
+      "reconnect_ms": 2457.844000076875
+    }
+  ],
+  "ok": false,
+  "first_pair_request_ms": 8936.931333038956,
+  "first_ready_ms": 53958.652124973014,
+  "streams": [
+    "STREAM ok bytes=10584044 chunks=646 elapsed_ms=19917",
+    "STREAM ok bytes=10584044 chunks=645 elapsed_ms=19483",
+    "STREAM ok bytes=10584044 chunks=643 elapsed_ms=19518",
+    "STREAM ok bytes=10584044 chunks=602 elapsed_ms=22889",
+    "STREAM ok bytes=10584044 chunks=645 elapsed_ms=18575",
+    "STREAM ok bytes=10584044 chunks=647 elapsed_ms=19609"
+  ],
+  "probe_resources": {
+    "peak_sampled_rss_kib": 36560,
+    "ps_cpu_percent_samples": [
+      0.0,
+      1.4,
+      2.5,
+      0.0,
+      0.0,
+      0.0,
+      2.8,
+      2.1,
+      0.0,
+      0.4,
+      0.3,
+      0.3,
+      4.2,
+      23.5,
+      7.3,
+      7.1,
+      11.0,
+      11.3,
+      10.1,
+      13.8,
+      14.2,
+      9.5,
+      8.0,
+      12.3,
+      11.4,
+      11.0,
+      9.6,
+      10.7,
+      10.0,
+      7.1,
+      11.1,
+      10.5,
+      12.1,
+      13.7,
+      8.0,
+      8.3,
+      7.8,
+      9.1,
+      7.6,
+      10.1,
+      11.3,
+      11.2,
+      9.8,
+      11.8,
+      11.4,
+      8.3,
+      9.1,
+      25.5,
+      25.4,
+      11.6,
+      18.8,
+      24.6,
+      21.3,
+      22.4,
+      3.5,
+      0.4,
+      10.6,
+      20.7,
+      25.0,
+      30.7,
+      25.6,
+      26.9,
+      23.6,
+      28.7,
+      26.2,
+      23.6,
+      23.5,
+      28.4,
+      24.3,
+      23.3,
+      22.5,
+      16.6,
+      31.4,
+      30.5,
+      14.3,
+      18.5,
+      1.9,
+      0.7,
+      19.1,
+      24.0,
+      24.0,
+      27.3,
+      27.5,
+      28.8,
+      28.8,
+      19.3,
+      28.7,
+      28.0,
+      26.8,
+      26.0,
+      22.3,
+      25.2,
+      26.9,
+      26.3,
+      19.7,
+      26.0,
+      33.3,
+      5.3,
+      0.1,
+      6.8,
+      13.8,
+      9.9,
+      10.6,
+      15.9,
+      14.0,
+      13.8,
+      22.4,
+      20.0,
+      23.5,
+      17.9,
+      21.8,
+      27.4,
+      30.3,
+      27.1,
+      26.1,
+      24.5,
+      27.1,
+      28.4,
+      25.0,
+      30.0,
+      20.0,
+      27.1,
+      3.7,
+      0.1,
+      20.4,
+      24.1,
+      28.4,
+      26.9,
+      16.6,
+      24.7,
+      26.0,
+      23.5,
+      25.5,
+      26.6,
+      26.0,
+      29.1,
+      31.2,
+      27.3,
+      20.7,
+      27.0,
+      27.1,
+      27.9,
+      13.7,
+      1.0,
+      0.5,
+      25.6,
+      31.0,
+      26.9,
+      20.4,
+      25.1,
+      28.1,
+      8.7,
+      7.6,
+      11.8,
+      9.3,
+      7.2,
+      9.3,
+      9.7,
+      18.8,
+      15.0,
+      22.3,
+      22.5,
+      28.6,
+      27.1
+    ],
+    "samples": 164,
+    "note": "OS-reported ps CPU percentages are platform dependent; RSS is sampled once per second"
+  },
+  "client_interfaces": [
+    "en0"
+  ],
+  "server_interfaces": [
+    "wlo1"
+  ],
+  "elapsed_seconds": 196.38597654202022,
+  "error": "RuntimeError: Desktop command failed: {'error': \"This Desktop's default output did not register within 15 seconds\", 'networkTest': True, 'ok': False}",
+  "metrics": [
+    {
+      "data": {
+        "elapsed_ms": 8149.5935
+      },
+      "schema": 1,
+      "stage": "pair_request",
+      "unix_ms": 1793245968078
+    },
+    {
+      "data": {
+        "elapsed_ms": 237.486375
+      },
+      "schema": 1,
+      "stage": "authorization",
+      "unix_ms": 1793245970527
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 10584044,
+        "elapsed_ms": 19916.141,
+        "exact_bytes": true,
+        "first_byte_ms": 79.096083,
+        "hardware_playback": false,
+        "max_body_gap_ms": 151.009417,
+        "throughput_mib_s": 0.5068114631857936
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246012780
+    },
+    {
+      "data": {
+        "elapsed_ms": 2214.059667,
+        "ok": true
+      },
+      "schema": 1,
+      "stage": "session_request",
+      "unix_ms": 1793246015315
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 10584044,
+        "elapsed_ms": 19483.235416,
+        "exact_bytes": true,
+        "first_byte_ms": 142.918125,
+        "hardware_playback": false,
+        "max_body_gap_ms": 142.67454199999997,
+        "throughput_mib_s": 0.5180723352769648
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246034798
+    },
+    {
+      "data": {
+        "elapsed_ms": 2260.1711670000004,
+        "ok": true
+      },
+      "schema": 1,
+      "stage": "session_request",
+      "unix_ms": 1793246037063
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 10584044,
+        "elapsed_ms": 19518.631458,
+        "exact_bytes": true,
+        "first_byte_ms": 148.61312500000003,
+        "hardware_playback": false,
+        "max_body_gap_ms": 228.640292,
+        "throughput_mib_s": 0.5171329528889885
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246056582
+    },
+    {
+      "data": {
+        "elapsed_ms": 2214.285417,
+        "ok": true
+      },
+      "schema": 1,
+      "stage": "session_request",
+      "unix_ms": 1793246058798
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 7,
+        "bytes": 10584044,
+        "elapsed_ms": 22889.455291000002,
+        "exact_bytes": true,
+        "first_byte_ms": 75.490333,
+        "hardware_playback": false,
+        "max_body_gap_ms": 580.161042,
+        "throughput_mib_s": 0.44097718034326366
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246081688
+    },
+    {
+      "data": {
+        "elapsed_ms": 2351.241125,
+        "ok": true
+      },
+      "schema": 1,
+      "stage": "session_request",
+      "unix_ms": 1793246084039
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 10584044,
+        "elapsed_ms": 18575.602958,
+        "exact_bytes": true,
+        "first_byte_ms": 132.280083,
+        "hardware_playback": false,
+        "max_body_gap_ms": 64.459875,
+        "throughput_mib_s": 0.5433862270225163
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246102616
+    },
+    {
+      "data": {
+        "elapsed_ms": 2457.166875,
+        "ok": true
+      },
+      "schema": 1,
+      "stage": "session_request",
+      "unix_ms": 1793246105074
+    },
+    {
+      "data": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 10584044,
+        "elapsed_ms": 19609.277291000002,
+        "exact_bytes": true,
+        "first_byte_ms": 75.540958,
+        "hardware_playback": false,
+        "max_body_gap_ms": 134.34225,
+        "throughput_mib_s": 0.5147423392794094
+      },
+      "schema": 1,
+      "stage": "audio_transfer",
+      "unix_ms": 1793246124684
+    }
+  ]
+}
