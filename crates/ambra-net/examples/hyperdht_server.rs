@@ -45,6 +45,20 @@ async fn main() -> ambra_net::Result<()> {
             },
         ));
     let cancel = CancellationToken::new();
+    if std::env::args().any(|arg| arg == "--loopback") {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        println!("ADDRESS {}", listener.local_addr()?);
+        let task = tokio::spawn(ambra_net::lan::serve(
+            listener,
+            identity,
+            app,
+            cancel.clone(),
+        ));
+        tokio::select! { _ = tokio::time::sleep(Duration::from_secs(300)) => {}, _ = tokio::signal::ctrl_c() => {} }
+        cancel.cancel();
+        task.await??;
+        return Ok(());
+    }
     let status = Arc::new(RwLock::new(hyperdht::Status::default()));
     let task = tokio::spawn(hyperdht::serve(
         identity,

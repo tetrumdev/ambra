@@ -32,9 +32,13 @@ def main():
     parser.add_argument("host")
     parser.add_argument("--remote-root", default="/home/llewyn/ambra")
     parser.add_argument("--probe", type=Path)
+    parser.add_argument("--remote-server", help="Absolute checkout-built server executable on the SSH host")
     parser.add_argument("--transport", choices=("hyperdht", "pwnat"), default="hyperdht")
     parser.add_argument("--rounds", type=int, choices=range(0, 21), default=5)
     parser.add_argument("--audio-seconds", type=int, choices=range(1, 121), default=12)
+    parser.add_argument("--restart-server", action="store_true", help="Restart only the isolated server and verify authenticated native resume")
+    parser.add_argument("--sample-interval", type=float, choices=(.05, .1, .25, 1.0), default=1.0)
+    parser.add_argument("--exercise-controls", action="store_true", help="Measure native pause/resume/seek/skip after playback")
     parser.add_argument("--desktop-binary",type=Path,help="Also play the fixture in an isolated real debug Desktop")
     parser.add_argument("--playback-seconds",type=int,choices=range(5,91),default=30)
     args = parser.parse_args()
@@ -46,6 +50,8 @@ def main():
     print("ARTIFACTS", directory, flush=True)
     report = {"schema": 1, "transport": args.transport, "physical_test_attempted": False, "physical_path_verified": False,
               "started_unix_ms": int(time.time()*1000), "rounds": [], "ok": False}
+    report["probe_sha256"] = hashlib.sha256(probe.read_bytes()).hexdigest()
+    if args.desktop_binary: report["desktop_sha256"] = hashlib.sha256(args.desktop_binary.read_bytes()).hexdigest()
     descriptor = None
     if args.transport == "pwnat":
         try:
@@ -60,13 +66,17 @@ def main():
     ssh = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", args.host]
 
     def remote_python(code, timeout=25):
-        return json.loads(subprocess.check_output(ssh + ["python3 -"], input=code, text=True, timeout=timeout))
+        result = subprocess.run(ssh + ["python3 -"], input=code, text=True, capture_output=True, timeout=timeout)
+        if result.returncode:
+            raise RuntimeError("SSH test helper failed: " + result.stderr.strip()[-2000:])
+        return json.loads(result.stdout)
 
     def cli(*words):
         assignments = [f"AMBRA_{kind}_DIR={server['directory']}/{kind.lower()}" for kind in ("CONFIG", "DATA", "CACHE")]
-        command = ["env", *assignments, str(Path(args.remote_root)/"server/target/debug/ambra-server"), *words]
+        command = ["env", *assignments, server_binary, *words]
         return subprocess.check_output(ssh+[shlex.join(command)],text=True,timeout=20)
 
+    server_binary = args.remote_server or str(Path(args.remote_root)/"server/target/debug/ambra-server")
     server = None
     process = None
     desktop = None
@@ -76,17 +86,19 @@ def main():
         # Launch a separate process with private identity, storage, and loopback administration.
         # A pre-existing user server and its installed executable remain untouched.
         server = remote_python("""
-import json,os,pathlib,subprocess,tempfile,time,urllib.request
+import hashlib,json,os,pathlib,subprocess,tempfile,time,urllib.request
 root=pathlib.Path(ROOT)
+binary=pathlib.Path(SERVER_BINARY)
+digest=hashlib.sha256(binary.read_bytes()).hexdigest()
 directory=pathlib.Path(tempfile.mkdtemp(prefix='ambra-physical-server-'))
 environment=os.environ.copy(); environment.pop('AMBRA_SERVER_ADDRESS',None)
 for kind in ('CONFIG','DATA','CACHE'):
     path=directory/kind.lower();path.mkdir();environment['AMBRA_'+kind+'_DIR']=str(path)
 environment['RUST_LOG']='ambra_net=info,peeroxide_dht::hyperdht=info'
-config={'id':'physical-test','name':'Isolated physical test','bind':'0.0.0.0:0',
+config={'id':'physical-test-'+directory.name,'name':'Isolated physical test','bind':'0.0.0.0:0',
         'securePort':48489,'discovery':False,'p2p':True,'pwnat':PWNAT,'pairedClients':[]}
 path=directory/'config/server.json';path.write_text(json.dumps(config));path.chmod(0o600)
-command=[str(root/'server/target/debug/ambra-server'),'serve']
+command=[SERVER_BINARY,'serve']
 if PWNAT: command.insert(0,'/usr/local/libexec/ambra-icmp-launch')
 # The test server also expires if this administration connection disappears.
 command=['/usr/bin/timeout','--signal=INT','600',*command]
@@ -102,18 +114,21 @@ try:
             port=json.loads(runtime.read_text())['address'].rsplit(':',1)[1]
             base='http://127.0.0.1:'+port
             try:
-                status=json.loads(subprocess.check_output([str(root/'server/target/debug/ambra-server'),'network','status'],env=environment,text=True,timeout=10))
+                status=json.loads(subprocess.check_output([SERVER_BINARY,'network','status'],env=environment,text=True,timeout=10))
                 ready=status.get('pwnatStatus',{}).get('publicEndpoint') if PWNAT else status.get('hyperdht',{}).get('announced')
                 if ready:
                     with urllib.request.urlopen(base+'/api/local/pairing/qr',timeout=5) as response: pairing=json.load(response)
-                    print(json.dumps({'directory':str(directory),'pid':process.pid,'pairing':pairing,'status':status}));break
+                    assert digest==hashlib.sha256(binary.read_bytes()).hexdigest(), 'Server executable changed during startup'
+                    print(json.dumps({'directory':str(directory),'pid':process.pid,'pairing':pairing,'status':status,'binary_sha256':digest,'source_commit':subprocess.check_output(['git','-C',str(root),'rev-parse','HEAD'],text=True).strip()}));break
             except (OSError,subprocess.SubprocessError): pass
         time.sleep(.5)
     else: raise RuntimeError('Isolated server readiness timed out; inspect '+str(directory/'server.log'))
 except BaseException:
     process.terminate();process.wait(timeout=10);raise
-""".replace("ROOT", repr(args.remote_root)).replace("PWNAT", repr(args.transport == "pwnat")), timeout=100)
+""".replace("SERVER_BINARY", repr(server_binary)).replace("ROOT", repr(args.remote_root)).replace("PWNAT", repr(args.transport == "pwnat")), timeout=100)
         report["server_directory"] = server["directory"]
+        report["server_binary_sha256"] = server["binary_sha256"]
+        report["server_source_commit"] = server["source_commit"]
         key = server["pairing"]["publicKey"]
         payload = {"version": 1, "publicKey": key, "name": "Physical test", "localAddresses": [],
                    "publicEndpoint": server["status"].get("pwnatStatus", {}).get("publicEndpoint")}
@@ -193,30 +208,6 @@ except BaseException:
         report["probe_resources"]={"peak_sampled_rss_kib":max((s["rss_kib"] for s in resources),default=None),
             "ps_cpu_percent_samples":[s["cpu_percent"] for s in resources],"samples":len(resources),"note":"OS-reported ps CPU percentages are platform dependent; RSS is sampled once per second"}
         assert len(report["streams"]) == args.rounds+1 and all(l.startswith("STREAM ok ") for l in report["streams"])
-        # Method selection alone cannot prove the OS did not route through a VPN.
-        # Check the route of each actual, authenticated public data endpoint.
-        import importlib.util
-        import ipaddress
-        spec = importlib.util.spec_from_file_location("udp_peer",root/"scripts/pwnat/udp-peer.py")
-        route_tools = importlib.util.module_from_spec(spec);spec.loader.exec_module(route_tools)
-        addresses = re.findall(r"authenticated direct.*?endpoint=(?:Some\()?([0-9.]+):",(directory/"client.log").read_text())
-        if not addresses: raise RuntimeError("Missing authenticated client endpoint evidence")
-        if not all(ipaddress.ip_address(ip).is_global for ip in addresses):raise RuntimeError("Nonpublic client data endpoint")
-        report["client_interfaces"] = sorted({route_tools.route(ip) for ip in addresses})
-        report["server_interfaces"] = remote_python("""
-import ipaddress,json,pathlib,re,subprocess
-text=(pathlib.Path(DIRECTORY)/'server.log').read_text()
-addresses=re.findall(r'accepted authenticated direct.*?endpoint=([0-9.]+):',text)
-if not addresses: raise RuntimeError('Missing authenticated server endpoint evidence')
-names=set()
-for ip in addresses:
-    if not ipaddress.ip_address(ip).is_global: raise RuntimeError('Nonpublic server data endpoint')
-    name=json.loads(subprocess.check_output(['ip','-j','route','get',ip],text=True,timeout=5))[0]['dev']
-    if name.startswith(('utun','tun','tap','tailscale','wg','ipsec','ppp','lo')): raise RuntimeError('Overlay data route')
-    names.add(name)
-print(json.dumps(sorted(names)))
-""".replace("DIRECTORY",repr(server["directory"])))
-        report["physical_path_verified"] = True
         if args.desktop_binary:
             desktop_env=environment.copy();desktop_env["AMBRA_DATA_DIR"]=str(desktop_data)
             desktop=subprocess.Popen([str(root/"desktop/src-tauri/scripts/run-signed.sh"),str(args.desktop_binary.resolve()),"--network-test-stdin"],
@@ -240,15 +231,16 @@ print(json.dumps(sorted(names)))
             play_start=time.monotonic()
             desktop_command("playTrack",trackId="local:"+file_id.split('.')[0])
             samples=[]
+            report["desktop_samples"] = samples
+            reconnected=False
             deadline=time.monotonic()+args.playback_seconds
             while time.monotonic()<deadline:
                 status=desktop_command("status")
                 samples.append({"elapsed_ms":(time.monotonic()-play_start)*1000,"status":status})
-                if len(samples)==max(3,args.playback_seconds//4):desktop_command("reconnect")
-                time.sleep(1)
-            desktop_command("pause")
-            desktop.stdin.write('{"action":"quit"}\n');desktop.stdin.flush();desktop.wait(timeout=15)
-            report["desktop_samples"]=samples
+                if not reconnected and time.monotonic()-play_start >= max(3,args.playback_seconds/4):
+                    desktop_command("reconnect")
+                    reconnected=True
+                time.sleep(args.sample_interval)
             (directory/"desktop-samples.json").write_text(json.dumps(samples,indent=2)+"\n")
             native=[s["status"]["native"] for s in samples]
             playing=[s for s in native if s.get("isPlaying") and s.get("currentTime",0)>0]
@@ -256,6 +248,115 @@ print(json.dumps(sorted(names)))
             assert not any(s.get("error") for s in native), "Native decoder/output reported an error"
             report["native_playback_progress_verified"]=True
             report["audible_output_measured"]=False
+            if args.exercise_controls:
+                track_id = "local:" + file_id.split('.')[0]
+                measurements = []
+                report["control_measurements"] = measurements
+                def measure(action, predicate, **fields):
+                    start = time.monotonic()
+                    desktop_command(action, **fields)
+                    accepted_ms = (time.monotonic() - start) * 1000
+                    deadline = time.monotonic() + 15
+                    while True:
+                        native = desktop_command("status")["native"]
+                        report["last_native_control"] = native
+                        if native.get("error"): raise RuntimeError("Native command error: " + str(native["error"]))
+                        if predicate(native): break
+                        if time.monotonic() >= deadline: raise TimeoutError("Native " + action + " did not settle")
+                        time.sleep(.05)
+                    measurements.append({"action": action, "accepted_ms": accepted_ms,
+                        "native_confirmed_ms": (time.monotonic() - start) * 1000,
+                        "native": native})
+                    with (directory/"control-measurements.jsonl").open("a") as output:
+                        output.write(json.dumps(measurements[-1])+"\n")
+                # Use the same authenticated session, queue API and actual native output.
+                # Repeated identical fixtures also cover explicit same-source skipping.
+                for _ in range(5):
+                    measure("pause", lambda n: not n["isPlaying"] and not n["buffering"])
+                    measure("play", lambda n: n["isPlaying"])
+                    measure("seek", lambda n: n["isPlaying"] and 10 <= n["currentTime"] < 14, positionSeconds=10)
+                    desktop_command("queueTrack", trackId=track_id)
+                    measure("next", lambda n: n["isPlaying"] and n["currentTime"] < 4)
+                report["control_measurements"] = measurements
+            if args.restart_server:
+                desktop_command("pause")
+                restart_start = time.monotonic()
+                restarted = remote_python("""
+import json,os,pathlib,signal,subprocess,time
+root=pathlib.Path(DIRECTORY)
+pid=int((root/'pid').read_text())
+try: os.killpg(pid,signal.SIGINT)
+except ProcessLookupError: pass
+time.sleep(1)
+environment=os.environ.copy(); environment.pop('AMBRA_SERVER_ADDRESS',None)
+for kind in ('CONFIG','DATA','CACHE'): environment['AMBRA_'+kind+'_DIR']=str(root/kind.lower())
+environment['RUST_LOG']='ambra_net=info,peeroxide_dht::hyperdht=info'
+command=['/usr/bin/timeout','--signal=INT','600',BINARY,'serve']
+log=open(root/'server.log','a')
+process=subprocess.Popen(command,env=environment,stdin=subprocess.DEVNULL,stdout=log,stderr=log,start_new_session=True)
+(root/'pid').write_text(str(process.pid))
+for _ in range(80):
+    if process.poll() is not None: raise RuntimeError('Restarted isolated server exited')
+    try:
+        status=json.loads(subprocess.check_output([BINARY,'network','status'],env=environment,text=True,timeout=5))
+        if status.get('hyperdht',{}).get('announced'):
+            print(json.dumps({'pid':process.pid}));break
+    except (OSError,subprocess.SubprocessError,ValueError): pass
+    time.sleep(1)
+else: process.terminate();raise RuntimeError('Restart readiness timed out')
+""".replace("DIRECTORY",repr(server["directory"])).replace("BINARY",repr(server_binary)),timeout=100)
+                server["pid"] = restarted["pid"]
+                # Read-only status first; never replay an ambiguously delivered mutation.
+                deadline = time.monotonic()+95
+                while True:
+                    status = desktop_command("status")
+                    if status["network"]["state"] == "ConnectedHyperDHT":
+                        try:
+                            desktop_command("tracks")
+                            break
+                        except RuntimeError: pass
+                    if time.monotonic() >= deadline: raise TimeoutError("Desktop did not authenticate after server restart")
+                    time.sleep(.25)
+                authenticated_ms = (time.monotonic()-restart_start)*1000
+                desktop_command("play")
+                first = None
+                while True:
+                    native = desktop_command("status")["native"]
+                    if native.get("error"): raise RuntimeError("Native restart resume error: "+str(native["error"]))
+                    if native["isPlaying"]:
+                        if first is None: first = native["currentTime"]
+                        if native["currentTime"] >= first+2: break
+                    if time.monotonic() >= deadline: raise TimeoutError("Native playback did not advance after server restart")
+                    time.sleep(.1)
+                report["server_restart"] = {"authenticated_ms":authenticated_ms,
+                    "native_resume_and_advance_ms":(time.monotonic()-restart_start)*1000,
+                    "native":native,"note":"Existing server restart policy restores paused state; test explicitly resumes after authentication."}
+            desktop_command("pause")
+            desktop.stdin.write('{"action":"quit"}\n');desktop.stdin.flush();desktop.wait(timeout=15)
+        # Method selection alone cannot prove the OS did not route through a VPN.
+        # Check the route of each actual, authenticated public data endpoint.
+        import importlib.util
+        import ipaddress
+        spec = importlib.util.spec_from_file_location("udp_peer",root/"scripts/pwnat/udp-peer.py")
+        route_tools = importlib.util.module_from_spec(spec);spec.loader.exec_module(route_tools)
+        addresses = re.findall(r"authenticated direct.*?endpoint=(?:Some\()?([0-9.]+):",(directory/"client.log").read_text()+((directory/"desktop.log").read_text() if (directory/"desktop.log").exists() else ""))
+        if not addresses: raise RuntimeError("Missing authenticated client endpoint evidence")
+        if not all(ipaddress.ip_address(ip).is_global for ip in addresses):raise RuntimeError("Nonpublic client data endpoint")
+        report["client_interfaces"] = sorted({route_tools.route(ip) for ip in addresses})
+        report["server_interfaces"] = remote_python("""
+import ipaddress,json,pathlib,re,subprocess
+text=(pathlib.Path(DIRECTORY)/'server.log').read_text()
+addresses=re.findall(r'accepted authenticated direct.*?endpoint=([0-9.]+):',text)
+if not addresses: raise RuntimeError('Missing authenticated server endpoint evidence')
+names=set()
+for ip in addresses:
+    if not ipaddress.ip_address(ip).is_global: raise RuntimeError('Nonpublic server data endpoint')
+    name=json.loads(subprocess.check_output(['ip','-j','route','get',ip],text=True,timeout=5))[0]['dev']
+    if name.startswith(('utun','tun','tap','tailscale','wg','ipsec','ppp','lo')): raise RuntimeError('Overlay data route')
+    names.add(name)
+print(json.dumps(sorted(names)))
+""".replace("DIRECTORY",repr(server["directory"])))
+        report["physical_path_verified"] = True
         report["ok"] = True
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
