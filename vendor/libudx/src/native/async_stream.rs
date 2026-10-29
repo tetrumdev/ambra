@@ -7,7 +7,7 @@ use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, oneshot};
 
-use super::header::{FLAG_END, Header};
+use super::header::{FLAG_DESTROY, FLAG_END, Header};
 use super::stream::{DEFAULT_RWND, StreamEvent, StreamInner, build_data_packet};
 use crate::error::Result as UdxResult;
 
@@ -276,6 +276,18 @@ impl Unpin for UdxAsyncStream {}
 
 impl Drop for UdxAsyncStream {
     fn drop(&mut self) {
+        // An abort must not leave a live peer waiting for its HTTP/2 keepalive.
+        // This is best effort and nonblocking: never spawn a detached send task
+        // or delay local cleanup. Completed graceful FIN needs no reset.
+        if !(self.fin_queued && self.pending_acks.is_empty()) {
+            let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+            if inner.connected && let (Some(udp), Some(address)) = (&inner.udp, inner.remote_addr) {
+                let packet = Header { type_flags: FLAG_DESTROY, data_offset: 0,
+                    remote_id: inner.remote_id, recv_window: 0, seq: inner.next_seq,
+                    ack: inner.next_remote_seq }.encode();
+                let _ = udp.try_send_to(&packet, address);
+            }
+        }
         // Explicit shutdown awaits FIN acknowledgment. Drop cancels all sockets,
         // including stalled handshakes and losing multi-socket dials.
         if let Some(processor) = self.processor.take() {
@@ -322,5 +334,36 @@ mod cancellation_tests {
         assert!(processor.is_finished());
         assert!(!socket.streams_ref().lock().unwrap().contains_key(&77));
         assert!(!alternate.streams_ref().lock().unwrap().contains_key(&77));
+    }
+}
+
+#[cfg(test)]
+mod close_notice_tests {
+    use super::*;
+    use super::super::header::FLAG_DESTROY;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn dropping_an_established_stream_notifies_its_peer_immediately() {
+        let runtime = crate::UdxRuntime::new().unwrap();
+        let socket = runtime.create_socket().await.unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let stream = runtime.create_stream(1).await.unwrap();
+        stream.connect(&socket, 2, peer.local_addr().unwrap()).await.unwrap();
+        let stream = stream.into_async_stream();
+        let udp = stream.inner.lock().unwrap().udp.clone().unwrap();
+        udp.send_to(b"prime", peer.local_addr().unwrap()).await.unwrap();
+        let mut bytes = [0; 2048];
+        loop { let n = peer.recv(&mut bytes).await.unwrap(); if &bytes[..n] == b"prime" { break; } }
+        drop(stream);
+        let header = tokio::time::timeout(Duration::from_millis(200), async {
+            loop {
+                let count = peer.recv(&mut bytes).await.unwrap();
+                if let Ok(header) = Header::decode(&bytes[..count]) && header.has_flag(FLAG_DESTROY) { break header; }
+            }
+        }).await.expect("an established peer must not wait for HTTP/2 keepalive after an abort");
+        assert!(header.has_flag(FLAG_DESTROY));
+        assert_eq!(header.remote_id, 2);
     }
 }
