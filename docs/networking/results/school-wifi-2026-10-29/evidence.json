@@ -1,0 +1,3390 @@
+{
+  "schema": 1,
+  "date": "2026-10-29",
+  "scope": "Physical Mac school Wi-Fi and Kubuntu home Wi-Fi; experimental fixtures, not release integration",
+  "source_heads": {
+    "mac": "5c8633f",
+    "home": "ffd5e3446fd2242b089f75326b86a276fc637594",
+    "network_library_diff_between_heads": "empty"
+  },
+  "topology": {
+    "mac_interface": "en0",
+    "mac_ipv4": "10.29.33.171",
+    "home_interface": "wlo1",
+    "home_ipv4": "192.168.86.220",
+    "school_tcp_public_ipv4": "208.58.177.214",
+    "school_udp_stun_public_ipv4": "209.6.175.114",
+    "home_public_ipv4": "74.104.161.161",
+    "warp_trace_public_ipv4": "104.28.203.246",
+    "warp_peer_public_ipv4": "104.28.235.246",
+    "physical_global_ipv6": false
+  },
+  "tcp_runs": [
+    {
+      "mode": "management",
+      "payload": "noise",
+      "passive": false,
+      "mac_port": 48507,
+      "local_candidate": [
+        "208.58.177.214",
+        48507
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        443
+      ],
+      "start_unix": 1793287761.561785,
+      "checks_start_unix": 1793287792.282536,
+      "end_unix": 1793287803.300322,
+      "benchmark_exit": 0,
+      "remote_port": 443,
+      "mac_warp_connected": false,
+      "mac_tailscale_stopped": false,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+      "home_peer_route": "208.58.177.214 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793287758.473011,
+          "stage": "ready",
+          "local": [
+            "10.29.33.171",
+            48507
+          ],
+          "mapping": [
+            "208.58.177.214",
+            48507
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287759.21051,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287792.391003,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793287792.394242,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793287792.3945029,
+          "stage": "connected",
+          "local": [
+            "10.29.33.171",
+            48507
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287792.394641,
+          "stage": "stream_connected",
+          "local": [
+            "10.29.33.171",
+            48507
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ],
+          "version": null,
+          "elapsed_ms": 0.021999934688210487
+        },
+        {
+          "unix": 1793287792.680001,
+          "stage": "authentication",
+          "rtt_ms": 285.24770913645625
+        },
+        {
+          "unix": 1793287792.6882958,
+          "stage": "bridge_ready",
+          "address": [
+            "127.0.0.1",
+            48510
+          ]
+        },
+        {
+          "unix": 1793287803.287093,
+          "stage": "bridge_complete",
+          "seconds": 10.480030208826065,
+          "network_to_loopback": 33617155,
+          "loopback_to_network": 5077
+        },
+        {
+          "unix": 1793287803.287145,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793287758.4103909,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "mapping": [
+            "74.104.161.161",
+            443
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287759.8194494,
+          "stage": "peer",
+          "endpoint": [
+            "208.58.177.214",
+            48507
+          ]
+        },
+        {
+          "unix": 1793287792.3697128,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 115
+        },
+        {
+          "unix": 1793287792.3802595,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793287792.3804238,
+          "stage": "connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48507
+          ]
+        },
+        {
+          "unix": 1793287792.380481,
+          "stage": "stream_connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48507
+          ],
+          "version": null,
+          "elapsed_ms": 0.014708988601341844
+        },
+        {
+          "unix": 1793287803.1903918,
+          "stage": "bridge_complete",
+          "seconds": 10.629139925003983,
+          "network_to_loopback": 5077,
+          "loopback_to_network": 33617155
+        },
+        {
+          "unix": 1793287803.1904778,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "metrics": {
+        "body_gaps_over_250ms": 0,
+        "bytes": 33554432,
+        "max_body_gap_ms": 211.375667,
+        "poll_error": null,
+        "poll_latency_ms": [
+          126.760667,
+          137.28795799999997,
+          148.411125,
+          149.71025,
+          154.33875,
+          155.428167,
+          158.982167,
+          158.99237499999998,
+          159.250792,
+          163.837791,
+          164.169792,
+          167.18574999999998,
+          167.73075,
+          168.197708,
+          170.167542,
+          171.23966700000003,
+          172.48975,
+          172.666291,
+          173.221167,
+          174.95779100000001,
+          175.17350000000002,
+          177.200416,
+          181.425833,
+          182.199334,
+          183.015334,
+          183.447167,
+          184.48475,
+          189.17837500000002,
+          201.73174999999998,
+          212.098125,
+          258.50374999999997,
+          260.246625,
+          265.17600000000004,
+          299.331708,
+          330.006709
+        ],
+        "poll_p50_ms": 172.666291,
+        "poll_p95_ms": 299.331708,
+        "poll_p99_ms": 330.006709,
+        "polls": 35,
+        "responses": 16,
+        "result": "Ok(Ok(()))",
+        "seconds": 10.187027292,
+        "throughput_mib_s": 3.1409836267517135,
+        "transport": "lan_noise_http2"
+      },
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-p7u67ylf",
+      "remote_evidence_directory": "/tmp/ambra-tcp-UId5C78E",
+      "packet_match": {
+        "mac_to_home": {
+          "mac_capture_packets": 2630,
+          "home_capture_packets": 2510,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 43,
+          "mac_syns": [
+            {
+              "seq": 3461226972,
+              "flags": 2,
+              "time": 1793287792.390789
+            }
+          ],
+          "home_syns": [
+            {
+              "seq": 2764512082,
+              "flags": 18,
+              "time": 1793287792.380039
+            }
+          ]
+        },
+        "home_to_mac": {
+          "mac_capture_packets": 9370,
+          "home_capture_packets": 9490,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 8935,
+          "mac_syns": [
+            {
+              "seq": 2675728891,
+              "flags": 18,
+              "time": 1793287792.394051
+            }
+          ],
+          "home_syns": [
+            {
+              "seq": 2600052343,
+              "flags": 2,
+              "time": 1793287792.369661
+            }
+          ]
+        }
+      }
+    },
+    {
+      "mode": "native",
+      "payload": "noise",
+      "passive": false,
+      "mac_port": 48508,
+      "remote_port": 48500,
+      "local_candidate": [
+        "208.58.177.214",
+        48508
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        48500
+      ],
+      "start_unix": 1793287892.0829928,
+      "checks_start_unix": 1793287921.580771,
+      "error": "TimeoutError('Peer stream did not authenticate')",
+      "mac_warp_connected": false,
+      "mac_tailscale_stopped": true,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+      "home_peer_route": "208.58.177.214 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793287887.760003,
+          "stage": "ready",
+          "local": [
+            "10.29.33.171",
+            48508
+          ],
+          "mapping": [
+            "208.58.177.214",
+            48508
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287888.7269602,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            48500
+          ]
+        },
+        {
+          "unix": 1793287921.658046,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793287926.688458,
+          "stage": "dial",
+          "attempt": 2,
+          "errno": 48
+        },
+        {
+          "unix": 1793287931.689183,
+          "stage": "dial",
+          "attempt": 3,
+          "errno": 36
+        },
+        {
+          "unix": 1793287936.723042,
+          "stage": "dial",
+          "attempt": 4,
+          "errno": 48
+        },
+        {
+          "unix": 1793287941.828594,
+          "stage": "dial",
+          "attempt": 5,
+          "errno": 36
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793287887.6950722,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            48500
+          ],
+          "mapping": [
+            "74.104.161.161",
+            48500
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287889.5075033,
+          "stage": "peer",
+          "endpoint": [
+            "208.58.177.214",
+            48508
+          ]
+        },
+        {
+          "unix": 1793287921.6581414,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 115
+        },
+        {
+          "unix": 1793287926.6817727,
+          "stage": "dial",
+          "attempt": 2,
+          "errno": 99
+        },
+        {
+          "unix": 1793287931.7059627,
+          "stage": "dial",
+          "attempt": 3,
+          "errno": 115
+        },
+        {
+          "unix": 1793287936.7330444,
+          "stage": "dial",
+          "attempt": 4,
+          "errno": 99
+        },
+        {
+          "unix": 1793287941.7613251,
+          "stage": "dial",
+          "attempt": 5,
+          "errno": 115
+        }
+      ],
+      "metrics": null,
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-ohd40ool",
+      "remote_evidence_directory": "/tmp/ambra-tcp-w3Sac8TP",
+      "packet_match": {
+        "mac_to_home": {
+          "mac_capture_packets": 17,
+          "home_capture_packets": 0,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 0,
+          "mac_syns": [
+            {
+              "seq": 1947323911,
+              "flags": 2,
+              "time": 1793287921.65793
+            },
+            {
+              "seq": 1947323911,
+              "flags": 2,
+              "time": 1793287922.660141
+            },
+            {
+              "seq": 1947323911,
+              "flags": 2,
+              "time": 1793287923.660331
+            },
+            {
+              "seq": 1947323911,
+              "flags": 2,
+              "time": 1793287924.661569
+            },
+            {
+              "seq": 1947323911,
+              "flags": 2,
+              "time": 1793287925.66156
+            }
+          ],
+          "home_syns": []
+        },
+        "home_to_mac": {
+          "mac_capture_packets": 0,
+          "home_capture_packets": 18,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 0,
+          "mac_syns": [],
+          "home_syns": [
+            {
+              "seq": 4288960809,
+              "flags": 2,
+              "time": 1793287921.65808
+            },
+            {
+              "seq": 4288960809,
+              "flags": 2,
+              "time": 1793287922.710953
+            },
+            {
+              "seq": 4288960809,
+              "flags": 2,
+              "time": 1793287923.734935
+            },
+            {
+              "seq": 4288960809,
+              "flags": 2,
+              "time": 1793287924.758971
+            },
+            {
+              "seq": 4288960809,
+              "flags": 2,
+              "time": 1793287925.782951
+            }
+          ]
+        }
+      }
+    },
+    {
+      "mode": "native",
+      "payload": "noise",
+      "passive": false,
+      "mac_port": 48505,
+      "local_candidate": [
+        "208.58.177.214",
+        48505
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        443
+      ],
+      "start_unix": 1793287446.721056,
+      "checks_start_unix": 1793287475.31648,
+      "end_unix": 1793287506.363127,
+      "benchmark_exit": 0,
+      "remote_port": 443,
+      "mac_warp_connected": false,
+      "mac_tailscale_stopped": true,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+      "home_peer_route": "208.58.177.214 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793287442.074903,
+          "stage": "ready",
+          "local": [
+            "10.29.33.171",
+            48505
+          ],
+          "mapping": [
+            "208.58.177.214",
+            48505
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287443.42129,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287475.401718,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793287475.408673,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793287475.4088461,
+          "stage": "connected",
+          "local": [
+            "10.29.33.171",
+            48505
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287475.40902,
+          "stage": "stream_connected",
+          "local": [
+            "10.29.33.171",
+            48505
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ],
+          "version": null,
+          "elapsed_ms": 0.042833155021071434
+        },
+        {
+          "unix": 1793287475.6142452,
+          "stage": "authentication",
+          "rtt_ms": 205.09500009939075
+        },
+        {
+          "unix": 1793287475.615191,
+          "stage": "bridge_ready",
+          "address": [
+            "127.0.0.1",
+            48510
+          ]
+        },
+        {
+          "unix": 1793287506.351878,
+          "stage": "bridge_complete",
+          "seconds": 30.654565582983196,
+          "network_to_loopback": 98749765,
+          "loopback_to_network": 13762
+        },
+        {
+          "unix": 1793287506.3560152,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793287442.250544,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "mapping": [
+            "74.104.161.161",
+            443
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287444.3641791,
+          "stage": "peer",
+          "endpoint": [
+            "208.58.177.214",
+            48505
+          ]
+        },
+        {
+          "unix": 1793287475.405496,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 115
+        },
+        {
+          "unix": 1793287475.4835012,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793287475.4836397,
+          "stage": "connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48505
+          ]
+        },
+        {
+          "unix": 1793287475.483716,
+          "stage": "stream_connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48505
+          ],
+          "version": null,
+          "elapsed_ms": 0.01435901504009962
+        },
+        {
+          "unix": 1793287506.2704296,
+          "stage": "bridge_complete",
+          "seconds": 30.753919237002265,
+          "network_to_loopback": 13762,
+          "loopback_to_network": 98749765
+        },
+        {
+          "unix": 1793287506.2705154,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "metrics": {
+        "body_gaps_over_250ms": 1,
+        "bytes": 98566144,
+        "max_body_gap_ms": 264.19599999999997,
+        "poll_error": null,
+        "poll_latency_ms": [
+          129.952667,
+          133.893917,
+          143.059583,
+          149.449375,
+          149.679167,
+          153.091792,
+          157.085542,
+          157.7675,
+          158.127791,
+          158.705292,
+          158.886,
+          159.065708,
+          159.569958,
+          162.844459,
+          164.25120800000002,
+          164.617166,
+          164.81241699999998,
+          164.861334,
+          165.538958,
+          165.752375,
+          165.897417,
+          166.141167,
+          166.465875,
+          166.646042,
+          167.149667,
+          167.253708,
+          168.51820800000002,
+          168.97283299999998,
+          169.2715,
+          169.285,
+          169.337542,
+          170.12379099999998,
+          171.12133400000002,
+          171.819708,
+          172.046542,
+          172.25775,
+          172.39350000000002,
+          174.268375,
+          174.360625,
+          175.755833,
+          177.53275,
+          178.683791,
+          178.728958,
+          179.175209,
+          181.103584,
+          183.101833,
+          183.39837500000002,
+          183.524417,
+          183.870083,
+          184.041958,
+          184.56725,
+          184.99454200000002,
+          185.637541,
+          185.803833,
+          186.747792,
+          186.949209,
+          187.448083,
+          189.034541,
+          189.382125,
+          189.634208,
+          190.770209,
+          190.85112500000002,
+          193.926458,
+          194.89245799999998,
+          195.25562499999998,
+          196.08425,
+          196.29075,
+          197.44225,
+          203.12520800000001,
+          205.943959,
+          206.29425,
+          210.520125,
+          215.863625,
+          216.682042,
+          219.428666,
+          221.902458,
+          225.396375,
+          226.221333,
+          227.671292,
+          239.411834,
+          248.820875,
+          250.370291,
+          250.96775,
+          269.50983299999996,
+          286.331292,
+          290.12041700000003,
+          296.999958,
+          317.548,
+          332.2745,
+          350.81379200000003,
+          400.111459,
+          449.815584,
+          486.832041,
+          499.647792,
+          615.3915,
+          922.4175839999999
+        ],
+        "poll_p50_ms": 183.524417,
+        "poll_p95_ms": 449.815584,
+        "poll_p99_ms": 922.4175839999999,
+        "polls": 96,
+        "responses": 47,
+        "result": "Ok(Ok(()))",
+        "seconds": 30.393094084,
+        "throughput_mib_s": 3.0927212852193433,
+        "transport": "lan_noise_http2"
+      },
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-mg2nwzwp",
+      "remote_evidence_directory": "/tmp/ambra-tcp-trOlYKcL",
+      "packet_match": {
+        "mac_to_home": {
+          "mac_capture_packets": 2457,
+          "home_capture_packets": 2223,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 38,
+          "mac_syns": [
+            {
+              "seq": 1396141237,
+              "flags": 2,
+              "time": 1793287475.401505
+            }
+          ],
+          "home_syns": [
+            {
+              "seq": 1863558984,
+              "flags": 18,
+              "time": 1793287475.483247
+            }
+          ]
+        },
+        "home_to_mac": {
+          "mac_capture_packets": 9543,
+          "home_capture_packets": 9777,
+          "identical_tcp_headers_and_prefixes": 0,
+          "shared_32_byte_prefixes": 8895,
+          "mac_syns": [
+            {
+              "seq": 1666263413,
+              "flags": 18,
+              "time": 1793287475.40842
+            }
+          ],
+          "home_syns": [
+            {
+              "seq": 2218634033,
+              "flags": 2,
+              "time": 1793287475.405433
+            }
+          ]
+        }
+      }
+    },
+    {
+      "mode": "native",
+      "payload": "noise",
+      "passive": true,
+      "mac_port": 48506,
+      "local_candidate": [
+        "208.58.177.214",
+        48506
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        443
+      ],
+      "start_unix": 1793287645.932968,
+      "checks_start_unix": 1793287671.561436,
+      "error": "TimeoutError('Peer stream did not authenticate')",
+      "remote_port": 443,
+      "mac_warp_connected": false,
+      "mac_tailscale_stopped": true,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+      "home_peer_route": "208.58.177.214 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793287638.860054,
+          "stage": "ready",
+          "local": [
+            "10.29.33.171",
+            48506
+          ],
+          "mapping": [
+            "208.58.177.214",
+            48506
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287640.79893,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287671.5905778,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793287671.597474,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793287671.597724,
+          "stage": "connected",
+          "local": [
+            "10.29.33.171",
+            48506
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793287671.597889,
+          "stage": "stream_connected",
+          "local": [
+            "10.29.33.171",
+            48506
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ],
+          "version": null,
+          "elapsed_ms": 0.018958933651447296
+        },
+        {
+          "unix": 1793287679.604426,
+          "stage": "stream_failed",
+          "error": "TimeoutError('timed out')"
+        },
+        {
+          "unix": 1793287679.605252,
+          "stage": "dial",
+          "attempt": 2,
+          "errno": 48
+        },
+        {
+          "unix": 1793287684.650759,
+          "stage": "dial",
+          "attempt": 3,
+          "errno": 48
+        },
+        {
+          "unix": 1793287689.684777,
+          "stage": "dial",
+          "attempt": 4,
+          "errno": 48
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793287639.1783652,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "mapping": [
+            "74.104.161.161",
+            443
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793287642.70701,
+          "stage": "peer",
+          "endpoint": [
+            "208.58.177.214",
+            48506
+          ]
+        }
+      ],
+      "metrics": null,
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-ol1oknfu",
+      "remote_evidence_directory": "/tmp/ambra-tcp-6iHZkGQg"
+    },
+    {
+      "mode": "warp",
+      "payload": "noise",
+      "passive": false,
+      "mac_port": 48509,
+      "remote_port": 443,
+      "local_candidate": [
+        "104.28.235.246",
+        14480
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        443
+      ],
+      "start_unix": 1793288015.6316411,
+      "checks_start_unix": 1793288101.368902,
+      "error": "TimeoutError('Peer stream did not authenticate')",
+      "warp_candidate_reconnect_caveat": true,
+      "warp_stats": "Tunnel Protocol: MASQUE (HTTP/3)\nEndpoints: 162.159.198.2, ::\nTime since last handshake: 1s\nSent: 57.0kB; Received: 68.5kB\nEstimated latency: 6ms\nEstimated loss: 0.00%\nTLS Handshake:\n\tVersion: TLSv1.3\n\tPost-Quantum enabled: true\n\tElliptic curve: P256Kyber768Draft00\n\tCipher suite: TLS_AES_256_GCM_SHA384\nColo: BOS (1167f40)\n",
+      "mac_warp_connected": true,
+      "mac_tailscale_stopped": true,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 64.0.0.0\n       mask: 224.0.0.0\n  interface: utun11\n      flags: <UP,DONE,PRCLONING>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1280         0 \n",
+      "home_peer_route": "104.28.235.246 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793288005.685171,
+          "stage": "ready",
+          "local": [
+            "172.16.0.2",
+            48509
+          ],
+          "mapping": [
+            "104.28.235.246",
+            14480
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793288007.7160268,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793288101.3907351,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793288106.470028,
+          "stage": "dial",
+          "attempt": 2,
+          "errno": 48
+        },
+        {
+          "unix": 1793288111.4773571,
+          "stage": "dial",
+          "attempt": 3,
+          "errno": 36
+        },
+        {
+          "unix": 1793288116.5432498,
+          "stage": "dial",
+          "attempt": 4,
+          "errno": 48
+        },
+        {
+          "unix": 1793288121.587792,
+          "stage": "dial",
+          "attempt": 5,
+          "errno": 36
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793288002.6471152,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "mapping": [
+            "74.104.161.161",
+            443
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793288009.0918875,
+          "stage": "peer",
+          "endpoint": [
+            "104.28.235.246",
+            14480
+          ]
+        },
+        {
+          "unix": 1793288101.4351516,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 115
+        },
+        {
+          "unix": 1793288106.4592328,
+          "stage": "dial",
+          "attempt": 2,
+          "errno": 99
+        },
+        {
+          "unix": 1793288111.483594,
+          "stage": "dial",
+          "attempt": 3,
+          "errno": 115
+        },
+        {
+          "unix": 1793288116.5099432,
+          "stage": "dial",
+          "attempt": 4,
+          "errno": 99
+        },
+        {
+          "unix": 1793288121.5366926,
+          "stage": "dial",
+          "attempt": 5,
+          "errno": 115
+        }
+      ],
+      "metrics": null,
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-k59nqek9",
+      "remote_evidence_directory": "/tmp/ambra-tcp-f3ahUs2z"
+    },
+    {
+      "mode": "native",
+      "payload": "noise",
+      "passive": false,
+      "mac_port": 48511,
+      "remote_port": 443,
+      "local_candidate": [
+        "208.58.177.214",
+        48511
+      ],
+      "remote_candidate": [
+        "74.104.161.161",
+        443
+      ],
+      "start_unix": 1793288308.829052,
+      "checks_start_unix": 1793288337.359725,
+      "end_unix": 1793288398.365835,
+      "benchmark_exit": 0,
+      "mac_warp_connected": false,
+      "mac_tailscale_stopped": true,
+      "mac_peer_route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+      "home_peer_route": "208.58.177.214 via 192.168.86.1 dev wlo1 src 192.168.86.220 uid 1000 \n    cache \n",
+      "client_events": [
+        {
+          "unix": 1793288303.701503,
+          "stage": "ready",
+          "local": [
+            "10.29.33.171",
+            48511
+          ],
+          "mapping": [
+            "208.58.177.214",
+            48511
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793288304.6558669,
+          "stage": "peer",
+          "endpoint": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793288337.367483,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 36
+        },
+        {
+          "unix": 1793288337.37109,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793288337.3712509,
+          "stage": "connected",
+          "local": [
+            "10.29.33.171",
+            48511
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ]
+        },
+        {
+          "unix": 1793288337.371457,
+          "stage": "stream_connected",
+          "local": [
+            "10.29.33.171",
+            48511
+          ],
+          "peer": [
+            "74.104.161.161",
+            443
+          ],
+          "version": null,
+          "elapsed_ms": 0.02070819027721882
+        },
+        {
+          "unix": 1793288337.61809,
+          "stage": "authentication",
+          "rtt_ms": 246.46962503902614
+        },
+        {
+          "unix": 1793288337.619057,
+          "stage": "bridge_ready",
+          "address": [
+            "127.0.0.1",
+            48510
+          ]
+        },
+        {
+          "unix": 1793288398.3146722,
+          "stage": "bridge_complete",
+          "seconds": 60.61946662492119,
+          "network_to_loopback": 205903437,
+          "loopback_to_network": 28985
+        },
+        {
+          "unix": 1793288398.3150458,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "server_events": [
+        {
+          "unix": 1793288303.6887493,
+          "stage": "ready",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "mapping": [
+            "74.104.161.161",
+            443
+          ],
+          "stun_peer": [
+            "46.225.95.169",
+            443
+          ]
+        },
+        {
+          "unix": 1793288305.3982556,
+          "stage": "peer",
+          "endpoint": [
+            "208.58.177.214",
+            48511
+          ]
+        },
+        {
+          "unix": 1793288337.4451802,
+          "stage": "dial",
+          "attempt": 1,
+          "errno": 115
+        },
+        {
+          "unix": 1793288337.4618993,
+          "stage": "connect_result",
+          "errno": 0
+        },
+        {
+          "unix": 1793288337.4620383,
+          "stage": "connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48511
+          ]
+        },
+        {
+          "unix": 1793288337.4620943,
+          "stage": "stream_connected",
+          "local": [
+            "192.168.86.220",
+            443
+          ],
+          "peer": [
+            "208.58.177.214",
+            48511
+          ],
+          "version": null,
+          "elapsed_ms": 0.014739023754373193
+        },
+        {
+          "unix": 1793288398.2023695,
+          "stage": "bridge_complete",
+          "seconds": 60.71294589401805,
+          "network_to_loopback": 28985,
+          "loopback_to_network": 205903437
+        },
+        {
+          "unix": 1793288398.2024558,
+          "stage": "authenticated",
+          "tls": false,
+          "fixture_bridge": true
+        }
+      ],
+      "metrics": {
+        "body_gaps_over_250ms": 1,
+        "bytes": 205520896,
+        "max_body_gap_ms": 289.845458,
+        "poll_error": null,
+        "poll_latency_ms": [
+          121.050792,
+          125.786875,
+          129.889333,
+          137.394666,
+          138.953875,
+          139.34520799999999,
+          141.069792,
+          141.73829099999998,
+          145.60325,
+          146.837625,
+          147.88795800000003,
+          148.735458,
+          149.073333,
+          150.245125,
+          150.573542,
+          151.20695800000001,
+          152.165583,
+          152.197125,
+          152.22925,
+          153.81175,
+          155.055834,
+          155.521875,
+          155.736084,
+          155.97387500000002,
+          156.13125,
+          156.141208,
+          156.26204199999998,
+          156.85625,
+          156.88908400000003,
+          157.915958,
+          157.931041,
+          158.03829199999998,
+          158.850459,
+          160.045167,
+          160.356209,
+          161.15270900000002,
+          161.162333,
+          161.238041,
+          161.26533400000002,
+          161.391125,
+          161.497334,
+          161.625875,
+          162.628041,
+          163.099,
+          163.187,
+          163.53925,
+          163.85554199999999,
+          164.083708,
+          164.124292,
+          164.15516599999998,
+          164.389541,
+          164.585333,
+          164.863583,
+          165.492167,
+          166.316416,
+          166.584,
+          166.78420799999998,
+          166.87591700000002,
+          167.233625,
+          167.420416,
+          167.561584,
+          167.693,
+          167.848416,
+          167.97775000000001,
+          168.03041599999997,
+          168.56520799999998,
+          168.640667,
+          168.683459,
+          168.72225,
+          168.875917,
+          169.24487499999998,
+          170.066834,
+          170.265917,
+          170.394709,
+          170.599208,
+          170.74375,
+          170.792834,
+          170.838833,
+          171.613542,
+          171.665333,
+          171.99920899999998,
+          172.523667,
+          173.389792,
+          173.442375,
+          173.447417,
+          173.61729200000002,
+          173.621208,
+          173.953625,
+          174.03241699999998,
+          174.114792,
+          175.197458,
+          175.67025,
+          175.818333,
+          176.104,
+          176.335667,
+          176.46824999999998,
+          176.53983300000002,
+          176.58633300000002,
+          177.142334,
+          177.257584,
+          177.543,
+          177.625,
+          177.656,
+          178.052166,
+          179.528333,
+          179.701625,
+          180.748833,
+          180.824375,
+          181.553375,
+          181.622291,
+          182.506917,
+          184.12124999999997,
+          184.539333,
+          184.541083,
+          184.736208,
+          184.844167,
+          184.89129200000002,
+          184.93354100000002,
+          185.2135,
+          185.624292,
+          186.05975,
+          186.387709,
+          186.798667,
+          186.823209,
+          187.14975,
+          187.515458,
+          187.777084,
+          188.2055,
+          188.226209,
+          188.71379199999998,
+          189.022208,
+          189.059958,
+          189.134375,
+          189.192792,
+          189.576541,
+          189.688084,
+          189.714,
+          189.928458,
+          190.3805,
+          190.382375,
+          190.543542,
+          190.581125,
+          190.732833,
+          190.91575,
+          190.994833,
+          191.439166,
+          191.62575,
+          191.674583,
+          192.00816700000001,
+          192.578417,
+          192.711041,
+          192.99025,
+          193.800958,
+          195.00883399999998,
+          195.603334,
+          195.641875,
+          196.442375,
+          197.436834,
+          197.60025000000002,
+          197.627625,
+          198.388541,
+          198.904875,
+          199.523125,
+          202.039125,
+          202.684167,
+          203.035875,
+          203.972708,
+          204.29625000000001,
+          206.304667,
+          206.611917,
+          206.84212499999998,
+          207.30675000000002,
+          208.14391600000002,
+          208.429375,
+          208.87175,
+          209.07458300000002,
+          209.78275,
+          210.670875,
+          213.457125,
+          213.544375,
+          214.244667,
+          221.832125,
+          224.284583,
+          227.083,
+          227.58025,
+          229.036042,
+          229.55462500000002,
+          233.102042,
+          233.23575,
+          235.462333,
+          238.420875,
+          239.55854100000002,
+          244.401792,
+          252.26037499999998,
+          264.436459,
+          265.633167,
+          266.887875,
+          271.92224999999996,
+          272.38745800000004,
+          280.431625,
+          286.299209,
+          288.64791699999995,
+          321.409333,
+          323.52783400000004,
+          327.640333,
+          342.504417,
+          375.530292,
+          450.34024999999997
+        ],
+        "poll_p50_ms": 178.052166,
+        "poll_p95_ms": 271.92224999999996,
+        "poll_p99_ms": 342.504417,
+        "polls": 208,
+        "responses": 98,
+        "result": "Ok(Ok(()))",
+        "seconds": 60.554841583,
+        "throughput_mib_s": 3.2366629294287694,
+        "transport": "lan_noise_http2"
+      },
+      "evidence_directory": "/var/folders/6d/dhlbm4590lgf5vvf6331g0yr0000gn/T/ambra-tcp-zejdey0v",
+      "remote_evidence_directory": "/tmp/ambra-tcp-AwHw83wU",
+      "home_tcp_info_samples": [
+        {
+          "rtt": "16.592/6.39",
+          "rto": "217",
+          "bytes_sent": "64",
+          "bytes_acked": "65",
+          "data_segs_out": "1",
+          "minrtt": "16.096"
+        },
+        {
+          "rtt": "129.742/6.777",
+          "rto": "330",
+          "bytes_sent": "2787675",
+          "bytes_acked": "2502976",
+          "data_segs_out": "1923",
+          "minrtt": "8.885"
+        },
+        {
+          "rtt": "21.753/6.039",
+          "rto": "222",
+          "bytes_sent": "6515536",
+          "bytes_acked": "6366013",
+          "data_segs_out": "4491",
+          "minrtt": "8.885"
+        },
+        {
+          "rtt": "16.825/3.148",
+          "rto": "217",
+          "bytes_sent": "10208544",
+          "bytes_acked": "10106429",
+          "data_segs_out": "7037",
+          "minrtt": "8.081"
+        },
+        {
+          "rtt": "66.493/3.305",
+          "rto": "267",
+          "bytes_sent": "13344941",
+          "bytes_acked": "13165614",
+          "data_segs_out": "9193",
+          "minrtt": "8.081"
+        },
+        {
+          "rtt": "19.544/3.787",
+          "rto": "220",
+          "bytes_sent": "16808834",
+          "bytes_acked": "16791876",
+          "data_segs_out": "11581",
+          "minrtt": "8.081"
+        },
+        {
+          "rtt": "30.962/12.415",
+          "rto": "231",
+          "bytes_sent": "20238666",
+          "bytes_acked": "20129335",
+          "data_segs_out": "13943",
+          "minrtt": "8.081"
+        },
+        {
+          "rtt": "43.578/8.178",
+          "rto": "244",
+          "bytes_sent": "23456607",
+          "bytes_acked": "23275048",
+          "data_segs_out": "16159",
+          "minrtt": "8.08"
+        },
+        {
+          "rtt": "20.904/3.92",
+          "rto": "221",
+          "bytes_sent": "27083327",
+          "bytes_acked": "26845883",
+          "data_segs_out": "18659",
+          "minrtt": "8.08"
+        },
+        {
+          "rtt": "16.905/3.546",
+          "rto": "217",
+          "bytes_sent": "30431419",
+          "bytes_acked": "30335144",
+          "data_segs_out": "20964",
+          "minrtt": "8.08"
+        },
+        {
+          "rtt": "25.666/5.623",
+          "rto": "226",
+          "bytes_sent": "33894836",
+          "bytes_acked": "33719033",
+          "data_segs_out": "23348",
+          "minrtt": "8.08"
+        },
+        {
+          "rtt": "24.495/3.717",
+          "rto": "225",
+          "bytes_sent": "37554589",
+          "bytes_acked": "37419666",
+          "data_segs_out": "25865",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "72.361/3.768",
+          "rto": "273",
+          "bytes_sent": "40919757",
+          "bytes_acked": "40612202",
+          "data_segs_out": "28183",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "20.327/6.988",
+          "rto": "221",
+          "bytes_sent": "44122314",
+          "bytes_acked": "44122155",
+          "data_segs_out": "30389",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "19.844/3.667",
+          "rto": "220",
+          "bytes_sent": "47699679",
+          "bytes_acked": "47617660",
+          "data_segs_out": "32853",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "36.347/4.215",
+          "rto": "237",
+          "bytes_sent": "51050342",
+          "bytes_retrans": "1460",
+          "bytes_acked": "50926231",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "35168",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "17.747/4.06",
+          "rto": "218",
+          "bytes_sent": "54611379",
+          "bytes_retrans": "1460",
+          "bytes_acked": "54569124",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "37620",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "22.146/8.2",
+          "rto": "223",
+          "bytes_sent": "57926287",
+          "bytes_retrans": "1460",
+          "bytes_acked": "57781832",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "39901",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "51.131/5.318",
+          "rto": "252",
+          "bytes_sent": "61422904",
+          "bytes_retrans": "1460",
+          "bytes_acked": "61257833",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "42308",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "19.83/4.75",
+          "rto": "220",
+          "bytes_sent": "65100914",
+          "bytes_retrans": "1460",
+          "bytes_acked": "65017435",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "44846",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "17.195/0.976",
+          "rto": "218",
+          "bytes_sent": "68415662",
+          "bytes_retrans": "1460",
+          "bytes_acked": "68329607",
+          "retrans": "0/1",
+          "dsack_dups": "1",
+          "data_segs_out": "47130",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "59.004/27.865",
+          "rto": "260",
+          "bytes_sent": "71438680",
+          "bytes_retrans": "2575",
+          "bytes_acked": "71436106",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "49216",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "27.101/2.663",
+          "rto": "228",
+          "bytes_sent": "74967708",
+          "bytes_retrans": "2575",
+          "bytes_acked": "74902077",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "51647",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "19.335/1.726",
+          "rto": "220",
+          "bytes_sent": "78496556",
+          "bytes_retrans": "2575",
+          "bytes_acked": "78438586",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "54081",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "18.776/4.53",
+          "rto": "219",
+          "bytes_sent": "81944105",
+          "bytes_retrans": "2575",
+          "bytes_acked": "81938956",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "56459",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "16.792/4.18",
+          "rto": "217",
+          "bytes_sent": "85456152",
+          "bytes_retrans": "2575",
+          "bytes_acked": "85396378",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "58878",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "35.336/2.965",
+          "rto": "236",
+          "bytes_sent": "88788853",
+          "bytes_retrans": "2575",
+          "bytes_acked": "88676683",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "61177",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "19.669/3.956",
+          "rto": "220",
+          "bytes_sent": "92301730",
+          "bytes_retrans": "2575",
+          "bytes_acked": "92249944",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "63601",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "19.728/4.445",
+          "rto": "220",
+          "bytes_sent": "95615473",
+          "bytes_retrans": "2575",
+          "bytes_acked": "95545823",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "65883",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "47.289/6.515",
+          "rto": "248",
+          "bytes_sent": "99162590",
+          "bytes_retrans": "2575",
+          "bytes_acked": "98937920",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "68327",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "17.279/3.107",
+          "rto": "218",
+          "bytes_sent": "102510960",
+          "bytes_retrans": "2575",
+          "bytes_acked": "102452990",
+          "retrans": "0/2",
+          "dsack_dups": "2",
+          "data_segs_out": "70636",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "25.791/2.405",
+          "rto": "226",
+          "bytes_sent": "105942524",
+          "bytes_retrans": "3011",
+          "bytes_acked": "105840570",
+          "retrans": "0/3",
+          "dsack_dups": "3",
+          "data_segs_out": "72999",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "16.045/2.229",
+          "rto": "217",
+          "bytes_sent": "109405304",
+          "bytes_retrans": "3011",
+          "bytes_acked": "109280082",
+          "retrans": "0/3",
+          "dsack_dups": "3",
+          "data_segs_out": "75383",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "24.681/5.495",
+          "rto": "225",
+          "bytes_sent": "112771894",
+          "bytes_retrans": "4180",
+          "bytes_acked": "112446255",
+          "retrans": "0/4",
+          "dsack_dups": "4",
+          "data_segs_out": "77701",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "40.364/3.143",
+          "rto": "241",
+          "bytes_sent": "115956710",
+          "bytes_retrans": "5640",
+          "bytes_acked": "115823875",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "79895",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "17.682/2.136",
+          "rto": "218",
+          "bytes_sent": "119714840",
+          "bytes_retrans": "5640",
+          "bytes_acked": "119639205",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "82486",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "16.374/4.095",
+          "rto": "217",
+          "bytes_sent": "122950035",
+          "bytes_retrans": "5640",
+          "bytes_acked": "122925844",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "84715",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "34.395/4.588",
+          "rto": "235",
+          "bytes_sent": "126412375",
+          "bytes_retrans": "5640",
+          "bytes_acked": "126260904",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "87101",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "16.809/1.908",
+          "rto": "219",
+          "bytes_sent": "130205297",
+          "bytes_retrans": "5640",
+          "bytes_acked": "130134042",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "89712",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "16.496/4.641",
+          "rto": "217",
+          "bytes_sent": "133455581",
+          "bytes_retrans": "5640",
+          "bytes_acked": "133410950",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "91951",
+          "minrtt": "7.849"
+        },
+        {
+          "rtt": "132.137/6.299",
+          "rto": "333",
+          "bytes_sent": "136655824",
+          "bytes_retrans": "5640",
+          "bytes_acked": "136568853",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "94153",
+          "minrtt": "7.589"
+        },
+        {
+          "rtt": "14.938/2.208",
+          "rto": "215",
+          "bytes_sent": "140414357",
+          "bytes_retrans": "5640",
+          "bytes_acked": "140335802",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "96743",
+          "minrtt": "7.589"
+        },
+        {
+          "rtt": "16.391/2.869",
+          "rto": "217",
+          "bytes_sent": "143812681",
+          "bytes_retrans": "5640",
+          "bytes_acked": "143725022",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "99082",
+          "minrtt": "7.589"
+        },
+        {
+          "rtt": "23.179/9.944",
+          "rto": "224",
+          "bytes_sent": "147079697",
+          "bytes_retrans": "5640",
+          "bytes_acked": "147074058",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "101332",
+          "minrtt": "7.589"
+        },
+        {
+          "rtt": "16.532/2.604",
+          "rto": "217",
+          "bytes_sent": "150786921",
+          "bytes_retrans": "5640",
+          "bytes_acked": "150691190",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "103884",
+          "minrtt": "7.589"
+        },
+        {
+          "rtt": "30.445/3.322",
+          "rto": "231",
+          "bytes_sent": "153988645",
+          "bytes_retrans": "5640",
+          "bytes_acked": "153877790",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "106093",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "19.897/5.542",
+          "rto": "225",
+          "bytes_sent": "157584584",
+          "bytes_retrans": "5640",
+          "bytes_acked": "157472449",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "108568",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "22.715/2.04",
+          "rto": "223",
+          "bytes_sent": "161146567",
+          "bytes_retrans": "5640",
+          "bytes_acked": "161058908",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "111026",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "35.589/3.057",
+          "rto": "236",
+          "bytes_sent": "164428119",
+          "bytes_retrans": "5640",
+          "bytes_acked": "164326372",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "113290",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "19.713/7.519",
+          "rto": "220",
+          "bytes_sent": "168089715",
+          "bytes_retrans": "5640",
+          "bytes_acked": "168047660",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "115814",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "26.223/0.558",
+          "rto": "227",
+          "bytes_sent": "171158956",
+          "bytes_retrans": "5640",
+          "bytes_acked": "171040889",
+          "retrans": "0/5",
+          "dsack_dups": "5",
+          "data_segs_out": "117925",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "18.524/2.031",
+          "rto": "219",
+          "bytes_sent": "174394443",
+          "bytes_retrans": "6755",
+          "bytes_acked": "174338394",
+          "retrans": "0/6",
+          "dsack_dups": "5",
+          "data_segs_out": "120158",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "100.003/10.466",
+          "rto": "301",
+          "bytes_sent": "177656556",
+          "bytes_retrans": "6755",
+          "bytes_acked": "177325229",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "122405",
+          "minrtt": "7.527"
+        },
+        {
+          "rtt": "51.179/10.31",
+          "rto": "252",
+          "bytes_sent": "181058296",
+          "bytes_retrans": "6755",
+          "bytes_acked": "180834942",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "124746",
+          "minrtt": "7.426"
+        },
+        {
+          "rtt": "19.724/3.999",
+          "rto": "220",
+          "bytes_sent": "184684411",
+          "bytes_retrans": "6755",
+          "bytes_acked": "184608777",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "127247",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "19.915/5.375",
+          "rto": "223",
+          "bytes_sent": "187821393",
+          "bytes_retrans": "6755",
+          "bytes_acked": "187768347",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "129405",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "21.844/5.757",
+          "rto": "222",
+          "bytes_sent": "191202869",
+          "bytes_retrans": "6755",
+          "bytes_acked": "191196115",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "131737",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "15.606/2.92",
+          "rto": "246",
+          "bytes_sent": "194715453",
+          "bytes_retrans": "6755",
+          "bytes_acked": "194643083",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "134154",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "27.657/3.785",
+          "rto": "228",
+          "bytes_sent": "198128250",
+          "bytes_retrans": "6755",
+          "bytes_acked": "198030536",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "136505",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "26.302/16.628",
+          "rto": "227",
+          "bytes_sent": "201707134",
+          "bytes_retrans": "6755",
+          "bytes_acked": "201682944",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "138970",
+          "minrtt": "7.283"
+        },
+        {
+          "rtt": "14.536/3.356",
+          "rto": "215",
+          "bytes_sent": "204974267",
+          "bytes_retrans": "6755",
+          "bytes_acked": "204862821",
+          "retrans": "0/6",
+          "dsack_dups": "6",
+          "data_segs_out": "141221",
+          "minrtt": "7.283"
+        }
+      ]
+    }
+  ],
+  "native_tls_paced_client_events": [
+    {
+      "unix": 1793286505.318568,
+      "stage": "ready",
+      "local": [
+        "10.29.33.171",
+        443
+      ],
+      "mapping": [
+        "208.58.177.214",
+        443
+      ],
+      "stun_peer": [
+        "46.225.95.169",
+        443
+      ]
+    },
+    {
+      "unix": 1793286507.1831229,
+      "stage": "peer",
+      "endpoint": [
+        "74.104.161.161",
+        443
+      ]
+    },
+    {
+      "unix": 1793286540.680237,
+      "stage": "dial",
+      "attempt": 1,
+      "errno": 36
+    },
+    {
+      "unix": 1793286540.683881,
+      "stage": "connect_result",
+      "errno": 0
+    },
+    {
+      "unix": 1793286540.684025,
+      "stage": "connected",
+      "local": [
+        "10.29.33.171",
+        443
+      ],
+      "peer": [
+        "74.104.161.161",
+        443
+      ]
+    },
+    {
+      "unix": 1793286540.9258509,
+      "stage": "tls_connected",
+      "local": [
+        "10.29.33.171",
+        443
+      ],
+      "peer": [
+        "74.104.161.161",
+        443
+      ],
+      "version": "TLSv1.3",
+      "elapsed_ms": 225.91058420948684
+    },
+    {
+      "unix": 1793286561.808728,
+      "stage": "audio_stream",
+      "bytes": 5120000,
+      "seconds": 20.57649587490596,
+      "max_gap_ms": 174.5209579821676
+    },
+    {
+      "unix": 1793286561.809403,
+      "stage": "authenticated",
+      "tls": true
+    }
+  ],
+  "native_tls_paced_server_events": [
+    {
+      "unix": 1793286501.4839375,
+      "stage": "ready",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "mapping": [
+        "74.104.161.161",
+        443
+      ],
+      "stun_peer": [
+        "46.225.95.169",
+        443
+      ]
+    },
+    {
+      "unix": 1793286508.2282202,
+      "stage": "peer",
+      "endpoint": [
+        "208.58.177.214",
+        443
+      ]
+    },
+    {
+      "unix": 1793286540.6829717,
+      "stage": "dial",
+      "attempt": 1,
+      "errno": 115
+    },
+    {
+      "unix": 1793286540.8291814,
+      "stage": "connect_result",
+      "errno": 0
+    },
+    {
+      "unix": 1793286540.829319,
+      "stage": "connected",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "peer": [
+        "208.58.177.214",
+        443
+      ]
+    },
+    {
+      "unix": 1793286541.1397166,
+      "stage": "tls_connected",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "peer": [
+        "208.58.177.214",
+        443
+      ],
+      "version": "TLSv1.3",
+      "elapsed_ms": 305.68563399720006
+    },
+    {
+      "unix": 1793286561.8005679,
+      "stage": "authenticated",
+      "tls": true
+    },
+    {
+      "unix": 1793286611.5351954,
+      "stage": "complete",
+      "attempts": 1,
+      "authenticated": 1
+    }
+  ],
+  "native_tls_ambra_manifest": {
+    "mode": "native",
+    "checks_start_unix": 1793286921.436647,
+    "server_key": "f21a746715016f59a52fd120f8ceb49c4218ba7252b8f7a37d2d5cfcf071dcc4",
+    "fixture_loopback": "127.0.0.1:44443",
+    "mac_port": 48504,
+    "home_port": 443,
+    "mac_requires_privileged_bind": false,
+    "start_unix": 1793286890.336103,
+    "warp_status": "Status update: Disconnected\nReason: Settings Changed\n",
+    "tailscale_status": "Tailscale is stopped.\n",
+    "route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+    "bench_exit": 0,
+    "end_unix": 1793286952.922163
+  },
+  "native_tls_ambra_client_events": [
+    {
+      "unix": 1793286887.8808022,
+      "stage": "ready",
+      "local": [
+        "10.29.33.171",
+        48504
+      ],
+      "mapping": [
+        "208.58.177.214",
+        48504
+      ],
+      "stun_peer": [
+        "46.225.95.169",
+        443
+      ]
+    },
+    {
+      "unix": 1793286888.818756,
+      "stage": "peer",
+      "endpoint": [
+        "74.104.161.161",
+        443
+      ]
+    },
+    {
+      "unix": 1793286921.509523,
+      "stage": "dial",
+      "attempt": 1,
+      "errno": 36
+    },
+    {
+      "unix": 1793286921.5142999,
+      "stage": "connect_result",
+      "errno": 0
+    },
+    {
+      "unix": 1793286921.514552,
+      "stage": "connected",
+      "local": [
+        "10.29.33.171",
+        48504
+      ],
+      "peer": [
+        "74.104.161.161",
+        443
+      ]
+    },
+    {
+      "unix": 1793286921.856074,
+      "stage": "tls_connected",
+      "local": [
+        "10.29.33.171",
+        48504
+      ],
+      "peer": [
+        "74.104.161.161",
+        443
+      ],
+      "version": "TLSv1.3",
+      "elapsed_ms": 326.46941603161395
+    },
+    {
+      "unix": 1793286922.22836,
+      "stage": "bridge_ready",
+      "address": [
+        "127.0.0.1",
+        48510
+      ]
+    },
+    {
+      "unix": 1793286952.8768299,
+      "stage": "bridge_complete",
+      "seconds": 30.55597595893778,
+      "tls_to_loopback": 100853647,
+      "loopback_to_tls": 14155
+    },
+    {
+      "unix": 1793286952.877003,
+      "stage": "authenticated",
+      "tls": true,
+      "fixture_bridge": true
+    }
+  ],
+  "native_tls_ambra_server_events": [
+    {
+      "unix": 1793286886.2998536,
+      "stage": "ready",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "mapping": [
+        "74.104.161.161",
+        443
+      ],
+      "stun_peer": [
+        "46.225.95.169",
+        443
+      ]
+    },
+    {
+      "unix": 1793286889.821584,
+      "stage": "peer",
+      "endpoint": [
+        "208.58.177.214",
+        48504
+      ]
+    },
+    {
+      "unix": 1793286921.470064,
+      "stage": "dial",
+      "attempt": 1,
+      "errno": 115
+    },
+    {
+      "unix": 1793286921.6024382,
+      "stage": "connect_result",
+      "errno": 0
+    },
+    {
+      "unix": 1793286921.6025774,
+      "stage": "connected",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "peer": [
+        "208.58.177.214",
+        48504
+      ]
+    },
+    {
+      "unix": 1793286922.0090609,
+      "stage": "tls_connected",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "peer": [
+        "208.58.177.214",
+        48504
+      ],
+      "version": "TLSv1.3",
+      "elapsed_ms": 401.65347800939344
+    },
+    {
+      "unix": 1793286952.8265207,
+      "stage": "bridge_complete",
+      "seconds": 30.799621067999396,
+      "tls_to_loopback": 14155,
+      "loopback_to_tls": 100853698
+    },
+    {
+      "unix": 1793286952.826599,
+      "stage": "authenticated",
+      "tls": true,
+      "fixture_bridge": true
+    },
+    {
+      "unix": 1793287006.3851125,
+      "stage": "complete",
+      "attempts": 1,
+      "authenticated": 1
+    }
+  ],
+  "native_tls_ambra_metrics": {
+    "body_gaps_over_250ms": 1,
+    "bytes": 100663296,
+    "max_body_gap_ms": 396.587375,
+    "poll_error": null,
+    "poll_latency_ms": [
+      126.78058300000001,
+      143.156583,
+      151.793541,
+      153.284167,
+      153.454458,
+      154.1585,
+      154.43954100000002,
+      154.92875,
+      158.474584,
+      160.578958,
+      161.52075,
+      162.95854200000002,
+      164.186208,
+      165.820042,
+      166.286625,
+      166.347083,
+      168.32625000000002,
+      168.67075,
+      169.1865,
+      169.958375,
+      171.191708,
+      174.15758300000002,
+      174.664333,
+      175.48404200000002,
+      175.62629199999998,
+      176.07025000000002,
+      176.32675,
+      176.495917,
+      176.829084,
+      178.023,
+      178.125042,
+      178.7195,
+      179.45308400000002,
+      180.570666,
+      180.734208,
+      182.228541,
+      182.323708,
+      183.50091700000002,
+      185.103625,
+      185.20108299999998,
+      185.934875,
+      186.540709,
+      187.43491600000002,
+      187.6,
+      188.20904199999998,
+      190.013583,
+      190.325583,
+      191.35633399999998,
+      191.742,
+      192.16649999999998,
+      192.630167,
+      193.423916,
+      194.743209,
+      195.65275,
+      196.93408300000002,
+      197.78079200000002,
+      198.6075,
+      199.032917,
+      200.210334,
+      200.331625,
+      200.931834,
+      201.433459,
+      203.5395,
+      206.017333,
+      207.351416,
+      207.85620799999998,
+      209.508625,
+      214.342583,
+      215.34129199999998,
+      215.913125,
+      217.365959,
+      218.46116600000002,
+      219.39529199999998,
+      219.86604200000002,
+      233.500916,
+      236.1445,
+      238.54600000000002,
+      241.99912500000002,
+      243.126416,
+      247.96829200000002,
+      249.568875,
+      249.80725,
+      249.839958,
+      251.854542,
+      254.104375,
+      254.253833,
+      260.00258399999996,
+      264.67308299999996,
+      266.18216700000005,
+      267.560917,
+      270.901291,
+      272.23220799999996,
+      278.165708,
+      288.07520800000003,
+      303.123834,
+      390.37787499999996,
+      399.355125,
+      484.527
+    ],
+    "poll_p50_ms": 191.742,
+    "poll_p95_ms": 288.07520800000003,
+    "poll_p99_ms": 484.527,
+    "polls": 98,
+    "responses": 48,
+    "result": "Ok(Ok(()))",
+    "seconds": 30.347410625,
+    "throughput_mib_s": 3.1632817892885225,
+    "transport": "lan_noise_http2"
+  },
+  "native_tls_packet_match": {
+    "mac_to_home": {
+      "mac_capture_packets": 548,
+      "home_capture_packets": 716,
+      "identical_tcp_headers_and_prefixes": 0,
+      "shared_32_byte_prefixes": 3,
+      "mac_syns": [
+        {
+          "seq": 1947508434,
+          "flags": 2,
+          "time": 1793286540.679951
+        }
+      ],
+      "home_syns": [
+        {
+          "seq": 3744271731,
+          "flags": 2,
+          "time": 1793286540.811008
+        }
+      ]
+    },
+    "home_to_mac": {
+      "mac_capture_packets": 1884,
+      "home_capture_packets": 2192,
+      "identical_tcp_headers_and_prefixes": 0,
+      "shared_32_byte_prefixes": 1773,
+      "mac_syns": [
+        {
+          "seq": 1862492772,
+          "flags": 18,
+          "time": 1793286540.683686
+        }
+      ],
+      "home_syns": [
+        {
+          "seq": 2503452049,
+          "flags": 2,
+          "time": 1793286540.68291
+        },
+        {
+          "seq": 2503452049,
+          "flags": 18,
+          "time": 1793286540.811091
+        }
+      ]
+    }
+  },
+  "native_udp_ice_manifest": {
+    "mode": "native",
+    "checks_start_unix": 1793286087.743853,
+    "start_unix": 1793286045.730119,
+    "warp_status": "Status update: Disconnected\nReason: Settings Changed\n",
+    "tailscale_status": "Tailscale is stopped.\n",
+    "route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+    "end_unix": 1793286132.7490299
+  },
+  "native_packet_counts": {
+    "native_udp_window": [
+      1793286087.743853,
+      1793286132.7490299
+    ],
+    "native_udp_mac_sent": {
+      "49392:55712:stun": 6,
+      "58562:42924:stun": 45,
+      "58562:42924:raw": 45,
+      "443:443:stun": 45,
+      "443:443:raw": 45,
+      "19302:19302:stun": 45,
+      "19302:19302:raw": 45,
+      "49737:49737:stun": 45,
+      "49737:49737:raw": 45,
+      "41641:41642:other": 8,
+      "41641:41641:other": 8
+    },
+    "native_udp_home_received": {},
+    "native_udp_home_sent": {
+      "42924:58562:stun": 45,
+      "42924:58562:raw": 45,
+      "443:443:stun": 45,
+      "443:443:raw": 45,
+      "19302:19302:stun": 45,
+      "19302:19302:raw": 45,
+      "49737:49737:stun": 45,
+      "49737:49737:raw": 45,
+      "55712:49392:stun": 6
+    },
+    "native_udp_mac_received": {},
+    "native_quic_window": [
+      1793286540.666135,
+      1793286548.766135
+    ],
+    "native_quic_mac_sent": {
+      "48501:443:other": 7
+    },
+    "native_quic_home_received": {}
+  },
+  "native_ice_client_events": [
+    {
+      "unix": 1793286028.201835,
+      "stage": "ready",
+      "candidates": [
+        "5287a064e221dbd42a50f6b787d1680b 1 udp 2130706431 10.29.33.171 49392 typ host",
+        "a4c2cace330d1c54331448ca8ae3fd32 1 udp 1694498815 209.6.175.114 49392 typ srflx raddr 10.29.33.171 rport 49392"
+      ],
+      "aioice_version": "0.10.2"
+    },
+    {
+      "unix": 1793286107.768288,
+      "stage": "failed",
+      "error": "TimeoutError()"
+    }
+  ],
+  "native_ice_server_events": [
+    {
+      "unix": 1793286027.0841703,
+      "stage": "ready",
+      "candidates": [
+        "5f5ef2b77ffb86ef214d7b250ed72de5 1 udp 2130706431 192.168.86.220 55712 typ host",
+        "dcb867084832c9ccd3a178a8af19202e 1 udp 1694498815 74.104.161.161 55712 typ srflx raddr 192.168.86.220 rport 55712"
+      ],
+      "aioice_version": "0.10.2"
+    },
+    {
+      "unix": 1793286107.792462,
+      "stage": "failed",
+      "error": "TimeoutError()"
+    }
+  ],
+  "native_quic_manifest": {
+    "quic_candidate_verified": true,
+    "mode": "native",
+    "start_unix": 1793286508.2170398,
+    "checks_start_unix": 1793286540.666135,
+    "warp_status": "Status update: Disconnected\nReason: Settings Changed\n",
+    "tailscale_status": "Tailscale is stopped.\n",
+    "route": "   route to: 74.104.161.161\ndestination: 74.104.161.161\n    gateway: 10.29.33.1\n  interface: en0\n      flags: <UP,GATEWAY,HOST,DONE,WASCLONED,IFSCOPE,IFREF,GLOBAL>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1500         0 \n",
+    "end_unix": 1793286570.670797
+  },
+  "native_quic_client_events": [
+    {
+      "unix": 1793286504.897729,
+      "stage": "ready",
+      "local": [
+        "10.29.33.171",
+        48501
+      ],
+      "observation": {
+        "target": [
+          "46.225.95.169",
+          443
+        ],
+        "mapping": [
+          "209.6.175.114",
+          48501
+        ],
+        "rtt_ms": 101.895707892254
+      }
+    },
+    {
+      "unix": 1793286548.6996322,
+      "stage": "failed",
+      "elapsed_ms": 8029.509542044252,
+      "error": "TimeoutError()"
+    }
+  ],
+  "native_quic_server_events": [
+    {
+      "unix": 1793286500.1612878,
+      "stage": "ready",
+      "local": [
+        "192.168.86.220",
+        443
+      ],
+      "observation": {
+        "target": [
+          "46.225.95.169",
+          443
+        ],
+        "mapping": [
+          "74.104.161.161",
+          443
+        ],
+        "rtt_ms": 201.49144998867996
+      }
+    }
+  ],
+  "native_http3_google": {
+    "host": "www.google.com",
+    "alpn": "h3",
+    "headers": [
+      [
+        ":status",
+        "404"
+      ],
+      [
+        "content-type",
+        "text/html; charset=UTF-8"
+      ],
+      [
+        "referrer-policy",
+        "no-referrer"
+      ],
+      [
+        "content-length",
+        "1574"
+      ],
+      [
+        "date",
+        "Thu, 29 Oct 2026 15:01:48 GMT"
+      ],
+      [
+        "alt-svc",
+        "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000"
+      ]
+    ],
+    "elapsed_ms": 203.11541692353785,
+    "paths": [
+      "('::ffff:216.239.38.120', 443, 0, 0)"
+    ]
+  },
+  "stun_school": [
+    {
+      "destination": [
+        "46.225.95.169",
+        443
+      ],
+      "change_port": true,
+      "local": [
+        "10.29.33.171",
+        53351
+      ],
+      "timeout": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        443
+      ],
+      "change_port": false,
+      "local": [
+        "10.29.33.171",
+        53351
+      ],
+      "source": [
+        "46.225.95.169",
+        443
+      ],
+      "response_kind": 257,
+      "mapping": [
+        "209.6.175.114",
+        53351
+      ],
+      "transaction_matches": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        3478
+      ],
+      "change_port": false,
+      "local": [
+        "10.29.33.171",
+        53351
+      ],
+      "timeout": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        3478
+      ],
+      "change_port": true,
+      "local": [
+        "10.29.33.171",
+        53351
+      ],
+      "timeout": true
+    }
+  ],
+  "stun_home": [
+    {
+      "destination": [
+        "46.225.95.169",
+        443
+      ],
+      "change_port": true,
+      "local": [
+        "192.168.86.220",
+        53352
+      ],
+      "timeout": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        443
+      ],
+      "change_port": false,
+      "local": [
+        "192.168.86.220",
+        53352
+      ],
+      "source": [
+        "46.225.95.169",
+        443
+      ],
+      "response_kind": 257,
+      "mapping": [
+        "74.104.161.161",
+        53352
+      ],
+      "transaction_matches": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        3478
+      ],
+      "change_port": false,
+      "local": [
+        "192.168.86.220",
+        53352
+      ],
+      "source": [
+        "46.225.95.169",
+        3478
+      ],
+      "response_kind": 257,
+      "mapping": [
+        "74.104.161.161",
+        53352
+      ],
+      "transaction_matches": true
+    },
+    {
+      "destination": [
+        "46.225.95.169",
+        3478
+      ],
+      "change_port": true,
+      "local": [
+        "192.168.86.220",
+        53352
+      ],
+      "source": [
+        "46.225.95.169",
+        443
+      ],
+      "response_kind": 257,
+      "mapping": [
+        "74.104.161.161",
+        53352
+      ],
+      "transaction_matches": true
+    }
+  ],
+  "warp": {
+    "warp_start": 1793285474.04674,
+    "warp_end": 1793285523.404094,
+    "warp_status": "Status update: Connected\nNetwork: healthy\n",
+    "tailscale_status": "Tailscale is stopped.\n",
+    "route": "   route to: 74.104.161.161\ndestination: 64.0.0.0\n       mask: 224.0.0.0\n  interface: utun11\n      flags: <UP,DONE,PRCLONING>\n recvpipe  sendpipe  ssthresh  rtt,msec    rttvar  hopcount      mtu     expire\n       0         0         0         0         0         0      1280         0 \n",
+    "stats_start": "Tunnel Protocol: MASQUE (HTTP/2)\nEndpoints: 162.159.198.2, ::\nTime since last handshake: 1s\nSent: 4.4kB; Received: 11.5kB\nEstimated latency: 11ms\nEstimated loss: 0.00%\nTLS Handshake:\n\tVersion: TLSv1.3\n\tPost-Quantum enabled: true\n\tElliptic curve: P256Kyber768Draft00\n\tCipher suite: TLS_AES_256_GCM_SHA384\nColo: BOS (1167f8)\n",
+    "stats_end": "Tunnel Protocol: MASQUE (HTTP/2)\nEndpoints: 162.159.198.2, ::\nTime since last handshake: 50s\nSent: 4.6MB; Received: 95.2MB\nEstimated latency: 5ms\nEstimated loss: 0.52%\nTLS Handshake:\n\tVersion: TLSv1.3\n\tPost-Quantum enabled: true\n\tElliptic curve: P256Kyber768Draft00\n\tCipher suite: TLS_AES_256_GCM_SHA384\nColo: BOS (1167f8)\n",
+    "trace": "fl=1167f43\nh=www.cloudflare.com\nip=104.28.203.246\nts=1793285474.000\nvisit_scheme=https\nuag=curl/8.7.1\ncolo=BOS\nsliver=none\nhttp=http/2\nloc=US\ntls=TLSv1.3\nsni=plaintext\nwarp=on\ngateway=off\nrbi=off\nkex=X25519\n",
+    "bench_exit": 0,
+    "stream_exit": 0,
+    "pwnat_exit": 1
+  },
+  "warp_hyperdht_connection_metrics": [
+    {
+      "client": 0,
+      "connection_ms": 25607.808334,
+      "ok": true,
+      "round": 0,
+      "throughput_mib_s": 1.8284469537538475
+    },
+    {
+      "client": 0,
+      "connection_ms": 7880.219999999999,
+      "ok": true,
+      "round": 1,
+      "throughput_mib_s": 1.7271178928022501
+    },
+    {
+      "client": 0,
+      "connection_ms": 4966.008833,
+      "ok": true,
+      "round": 2,
+      "throughput_mib_s": 2.3011990541496585
+    }
+  ],
+  "warp_hyperdht_stream_metrics": {
+    "body_gaps_over_250ms": 2,
+    "bytes": 83886080,
+    "max_body_gap_ms": 427.46441699999997,
+    "poll_error": null,
+    "poll_latency_ms": [
+      141.818959,
+      151.408416,
+      160.715333,
+      162.409541,
+      162.912584,
+      163.594084,
+      176.547459,
+      177.28912499999998,
+      180.82424999999998,
+      181.90075,
+      181.974875,
+      182.448209,
+      183.637666,
+      187.174083,
+      188.22345900000002,
+      191.6845,
+      198.697334,
+      198.73175,
+      199.71012499999998,
+      200.306042,
+      205.53758399999998,
+      206.167166,
+      207.713667,
+      208.059375,
+      209.012416,
+      210.29225,
+      211.53666700000002,
+      211.61350000000002,
+      214.47254199999998,
+      220.89000000000001,
+      221.42520900000002,
+      222.46087500000002,
+      222.6985,
+      224.36524999999997,
+      225.387625,
+      226.160208,
+      226.899625,
+      228.512666,
+      228.657333,
+      228.70295800000002,
+      229.793042,
+      229.92154100000002,
+      230.344209,
+      232.312625,
+      232.343875,
+      233.49800000000002,
+      233.615666,
+      237.238416,
+      238.99699999999999,
+      240.228375,
+      240.24975,
+      241.875,
+      244.488875,
+      245.598916,
+      246.12525,
+      249.336708,
+      250.856417,
+      253.90049999999997,
+      262.37075,
+      265.625,
+      267.238959,
+      267.504542,
+      270.158083,
+      270.518125,
+      272.34366700000004,
+      273.26104200000003,
+      278.286791,
+      278.41900000000004,
+      282.221084,
+      283.94012499999997,
+      285.07354200000003,
+      292.45858400000003,
+      296.166333,
+      301.944125,
+      302.43037499999997,
+      308.16837499999997,
+      346.529209,
+      410.768834,
+      423.498667,
+      477.185375,
+      487.757791,
+      498.679125,
+      598.129959,
+      671.421291,
+      695.544625
+    ],
+    "poll_p50_ms": 230.344209,
+    "poll_p95_ms": 487.757791,
+    "poll_p99_ms": 695.544625,
+    "polls": 85,
+    "responses": 40,
+    "result": "Ok(Ok(()))",
+    "seconds": 30.691739459,
+    "throughput_mib_s": 2.6065266961185736,
+    "transport": "hyperdht_udx"
+  },
+  "warp_udp_mappings": [
+    {
+      "requested_port": 0,
+      "local": [
+        "0.0.0.0",
+        52408
+      ],
+      "observations": [
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49415
+          ],
+          "rtt_ms": 32.974833000000004
+        },
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49415
+          ],
+          "rtt_ms": 25.597499999999997
+        },
+        {
+          "target": [
+            "46.225.95.169",
+            443
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49250
+          ],
+          "rtt_ms": 127.73574999999998
+        },
+        {
+          "target": [
+            "162.159.207.0",
+            3478
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49585
+          ],
+          "rtt_ms": 11.578166000000001
+        }
+      ]
+    },
+    {
+      "requested_port": 443,
+      "local": [
+        "0.0.0.0",
+        443
+      ],
+      "observations": [
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49331
+          ],
+          "rtt_ms": 27.04829200000003
+        },
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49331
+          ],
+          "rtt_ms": 26.575458999999967
+        },
+        {
+          "target": [
+            "46.225.95.169",
+            443
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49415
+          ],
+          "rtt_ms": 114.535875
+        },
+        {
+          "target": [
+            "162.159.207.0",
+            3478
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49429
+          ],
+          "rtt_ms": 19.428749999999994
+        }
+      ]
+    },
+    {
+      "requested_port": 19302,
+      "local": [
+        "0.0.0.0",
+        19302
+      ],
+      "observations": [
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49608
+          ],
+          "rtt_ms": 58.775999999999996
+        },
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49608
+          ],
+          "rtt_ms": 24.52404099999994
+        },
+        {
+          "target": [
+            "46.225.95.169",
+            443
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49430
+          ],
+          "rtt_ms": 97.357833
+        },
+        {
+          "target": [
+            "162.159.207.0",
+            3478
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49374
+          ],
+          "rtt_ms": 13.391041999999963
+        }
+      ]
+    },
+    {
+      "requested_port": 49737,
+      "local": [
+        "0.0.0.0",
+        49737
+      ],
+      "observations": [
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49257
+          ],
+          "rtt_ms": 41.379958999999914
+        },
+        {
+          "target": [
+            "74.125.250.129",
+            19302
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49257
+          ],
+          "rtt_ms": 25.301958000000013
+        },
+        {
+          "target": [
+            "46.225.95.169",
+            443
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49455
+          ],
+          "rtt_ms": 100.71254200000001
+        },
+        {
+          "target": [
+            "162.159.207.0",
+            3478
+          ],
+          "mapping": [
+            "104.28.235.246",
+            49269
+          ],
+          "rtt_ms": 20.332624999999993
+        }
+      ]
+    }
+  ],
+  "pwnat_native_client_log": "2026-10-29T14:49:31.754247Z  INFO ambra_net::pwnat: pwnat ICMP signaling and direct QUIC attempt; requires port-preserving NAT endpoint=74.104.161.161:48503 local=0.0.0.0:48503\n2026-10-29T14:49:36.754416Z  WARN ambra_net::pwnat: pwnat setup failed stage=\"quic_connect\" icmp_requests=17 elapsed_ms=5002\nError: \"pwnat stage=quic_connect icmp_requests=17: setup timed out; client NAT must translate ICMP errors and both NATs must preserve ICMP identifiers/UDP ports\"\n",
+  "pwnat_warp_client_log": "2026-10-29T14:51:14.563228Z  INFO ambra_net::pwnat: pwnat ICMP signaling and direct QUIC attempt; requires port-preserving NAT endpoint=74.104.161.161:48503 local=0.0.0.0:48503\n2026-10-29T14:51:19.555167Z  WARN ambra_net::pwnat: pwnat setup failed stage=\"quic_connect\" icmp_requests=17 elapsed_ms=5002\nError: \"pwnat stage=quic_connect icmp_requests=17: setup timed out; client NAT must translate ICMP errors and both NATs must preserve ICMP identifiers/UDP ports\"\n",
+  "pwnat_home_final_status": "PWNAT_STATUS {\"running\":true,\"listening\":\"0.0.0.0:48503\",\"configuredEndpoint\":null,\"publicEndpoint\":null,\"error\":null,\"discoveryError\":null,\"icmpEchoSent\":61,\"icmpErrors\":0,\"icmpQuotationsAccepted\":0,\"udpPunchesSent\":0}",
+  "home_hyperdht_accepted_endpoints": [
+    "2026-10-29T14:51:32.619435Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=695257939a0e9afbca4ebc9f6b4c8b38560a3454f91631e7805edfc176f3711a endpoint=104.28.235.246:49437",
+    "2026-10-29T14:51:39.861806Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=113e2da2fc08e343c03552c8ab90fcc3851c440e048432aba26426c57f16bfaa endpoint=104.28.235.246:49552",
+    "2026-10-29T14:51:49.095982Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=113e2da2fc08e343c03552c8ab90fcc3851c440e048432aba26426c57f16bfaa endpoint=104.28.235.246:49580",
+    "2026-10-29T14:51:55.430829Z  INFO ambra_net::hyperdht: HyperDHT accepted authenticated direct encrypted stream; data relay disabled peer=113e2da2fc08e343c03552c8ab90fcc3851c440e048432aba26426c57f16bfaa endpoint=104.28.235.246:49307"
+  ],
+  "validation": {
+    "ambra_net_unit": 22,
+    "ambra_net_direct_only": 4,
+    "ambra_net_native_integration": 15,
+    "protocol_and_signaling_tests": 4,
+    "python_compile": "pass",
+    "rust_example_check": "pass",
+    "isolated_capture_group_cleanup": "pass",
+    "credential_exclusion": "pass",
+    "git_diff_check": "pass"
+  },
+  "limitations": [
+    "TCP sequence translation or proxying is observed; no claim of an unmodified end-to-end TCP handshake. Peers authenticate end-to-end and exchange identical captured payload prefixes.",
+    "Bounded packet captures do not cover entire saturation streams; no physical packet-loss percentage is inferred.",
+    "WARP TCP control uses signaling across a tunnel reconnect and is not a definitive failure of all TCP traversal through WARP.",
+    "Early signaling races, failed STUN preparation, and the unsupported Apple Python TLS 1.3 setup are excluded from success/failure qualification.",
+    "One native diagnostic straddles WARP activation; its later successful pings are WARP-assisted, not native.",
+    "Native UDP counts include separately identified background Tailscale discovery datagrams; those are excluded from peer-probe totals. Native TCP data uses public TCP endpoints and en0/wlo1."
+  ],
+  "private_evidence_root": "/tmp/ambra-school-20261029",
+  "final_network_state": "WARP disconnected; Tailscale enabled for management; peer route en0/wlo1",
+  "native_peer_udp_probe_totals": {
+    "per_socket_and_payload_type": 45,
+    "socket_pairs": 4,
+    "payload_types": [
+      "authenticated STUN",
+      "HMAC opaque"
+    ],
+    "mac_emitted": 360,
+    "home_emitted": 360,
+    "observed_at_opposite_physical_interface": 0,
+    "additional_ice_checks_per_machine": 6,
+    "excluded_background_tailscale_discovery_packets_mac": 16
+  },
+  "binary_sha256_macos": {
+    "streaming_bench": "2d73d1386b9c9bb02fc28947a71210c259ceb653b030b90cf9a25384436a074d",
+    "hyperdht_server": "47250ac0b0af638ba86e39d816f21c0e395db3d39d41bbbadce54db3291f8c86",
+    "network_diagnose": "d7784b8908dc03cad116f716aa1657a3c4ad5403959baa64079ab8b51fe91272"
+  },
+  "binary_sha256_linux": {
+    "hyperdht_server": "e655a9c6cdd9dd340c3404c9c5b548ae8c09871871c30c64d127ddceb709fef3",
+    "network_diagnose": "9d31467885c3ddca382dec44ea4c35711487a6ecf15c279717372c76d15474ad"
+  },
+  "final_tailscale_health": {
+    "BackendState": "Running",
+    "SelfOnline": true,
+    "Health": [],
+    "management_ping": "DERP(nyc), 161 ms"
+  }
+}
