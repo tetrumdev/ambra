@@ -116,10 +116,12 @@ pub struct Core {
     wake: Notify,
     /// One queue change at a time, so none is lost between reading and writing it.
     queue_lock: Mutex<()>,
-    queue: SyncMutex<Option<Value>>,
+    queue: SyncMutex<Option<Arc<Value>>>,
     /// Commands and output acknowledgements commit together: a slow load must never
     /// overwrite a pause, seek or output change that arrived while it was in flight.
     operation: Mutex<()>,
+    /// Invalidates an in-flight output operation as soon as a new intent commits.
+    commands: watch::Sender<u64>,
     transport_path: std::path::PathBuf,
     instance_id: String,
 }
@@ -280,6 +282,7 @@ impl Core {
             queue_lock: Mutex::new(()),
             queue: SyncMutex::new(None),
             operation: Mutex::new(()),
+            commands: watch::channel(0).0,
             transport_path,
             instance_id: crate::server_config::random_hex(16),
         });
@@ -329,11 +332,13 @@ impl Core {
     }
 
     /// The queue as last read; read again whenever the shared state changes.
-    async fn queue(&self) -> Value {
+    async fn queue(&self) -> Arc<Value> {
         if let Some(queue) = self.queue.lock().ok().and_then(|queue| queue.clone()) {
             return queue;
         }
-        let queue = self
+        let _guard = self.queue_lock.lock().await;
+        if let Some(queue) = self.queue.lock().ok().and_then(|queue| queue.clone()) { return queue; }
+        let queue = Arc::new(self
             .state
             .value(QUEUE_KEY)
             .await
@@ -341,7 +346,7 @@ impl Core {
             .flatten()
             .and_then(|value| serde_json::from_str::<Value>(&value).ok())
             .filter(|queue| queue["version"] == 1)
-            .unwrap_or_else(empty_queue);
+            .unwrap_or_else(empty_queue));
         if let Ok(mut cached) = self.queue.lock() {
             *cached = Some(queue.clone());
         }
@@ -451,7 +456,7 @@ async fn view(core: &Core, known_queue: Option<u64>) -> SessionView {
         audio_quality: transport.audio_quality.clone(),
         output: transport.output.clone(),
         output_online,
-        queue: (known_queue != Some(queue_revision)).then_some(queue),
+        queue: (known_queue != Some(queue_revision)).then(|| queue.as_ref().clone()),
         queue_revision,
     }
 }
@@ -507,6 +512,8 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
     if change.queue["version"] != 1 {
         return error(StatusCode::BAD_REQUEST, "Unsupported queue");
     }
+    core.commands.send_modify(|revision| *revision += 1);
+    if let Some(manager) = &core.spotify_playback { manager.interrupt(); }
     let base = change.base;
     let mut queue = change.queue;
     let applied = core
@@ -539,6 +546,7 @@ async fn play_track(core: &Core, track_id: &str) {
     let mut transport = core.transport();
     if is_current {
         transport.generation += 1;
+        transport.pending_seek = None;
         transport.set_position(0.0);
         transport.playing = true;
         transport.buffering = true;
@@ -569,6 +577,9 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
         || matches!(&command, Command::Toggle) && core.transport().playing;
     if interrupts_live && let Some(manager) = &core.spotify_playback { manager.interrupt(); }
     let _operation = core.operation.lock().await;
+    if !matches!(&command, Command::Volume { .. }) {
+        core.commands.send_modify(|revision| *revision += 1);
+    }
     core.transport().failed_live_load = None;
     if retry_live && let Some(manager) = &core.spotify_playback { manager.retry_playback().await; }
     let result: Result<(), String> = match command {
@@ -647,6 +658,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
                 }
                 previous
             };
+            drop(_operation);
             // The song moves: the old output stops, and the driver loads it on the new one.
             if let Some(previous) = previous.filter(|previous| Some(previous) != output.as_ref()) {
                 let _ = core.endpoints.call(&previous.endpoint_id, "pause_native_audio", json!({})).await;
@@ -657,6 +669,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
         }
         Command::Volume { volume } => {
             let output = core.transport().output.clone();
+            drop(_operation);
             match output {
                 Some(output) => core.endpoints.call(&output.endpoint_id, "set_native_audio_volume", json!({ "volume": volume })).await.map(|_| ()),
                 None => Err("Choose an output first".into()),
@@ -678,6 +691,7 @@ async fn skip(core: &Core, forward: bool) -> Result<(), String> {
     if advanced {
         let mut transport = core.transport();
         transport.generation += 1;
+        transport.pending_seek = None;
         transport.set_position(0.0);
         transport.buffering = transport.playing;
         drop(transport);
@@ -703,6 +717,7 @@ async fn drive(core: Shared) {
             _ = tokio::time::sleep(TICK) => {}
         }
         if let Err(message) = step(&core).await {
+            if message == SUPERSEDED { continue; }
             let mut transport = core.transport();
             if transport.error.as_deref() != Some(&message) {
                 transport.error = Some(message);
@@ -722,23 +737,66 @@ async fn drive(core: Shared) {
     }
 }
 
+/// Private control flow: a cancelled output operation is not a playback failure.
+const SUPERSEDED: &str = "Session output operation superseded";
+
+/// State transitions remain serialized, but endpoint/provider I/O never owns the
+/// session operation lock. New commands cancel the wait before any stale commit.
+struct OutputOperation<'a> {
+    core: &'a Core,
+    operation: Option<tokio::sync::MutexGuard<'a, ()>>,
+    commands: watch::Receiver<u64>,
+}
+
+impl OutputOperation<'_> {
+    async fn wait<T>(&mut self, future: impl std::future::Future<Output = T>) -> Result<T, String> {
+        drop(self.operation.take());
+        // Provider shutdown owns child processes and must finish joining them.
+        let result = future.await;
+        self.operation = Some(self.core.operation.lock().await);
+        if self.commands.has_changed().unwrap_or(true) { return Err(SUPERSEDED.into()); }
+        Ok(result)
+    }
+
+    async fn interruptible<T>(&mut self, future: impl std::future::Future<Output = T>) -> Result<T, String> {
+        drop(self.operation.take());
+        let result = tokio::select! {
+            biased;
+            _ = self.commands.changed() => None,
+            result = future => Some(result),
+        };
+        self.operation = Some(self.core.operation.lock().await);
+        if self.commands.has_changed().unwrap_or(true) || result.is_none() {
+            return Err(SUPERSEDED.into());
+        }
+        Ok(result.expect("checked output result"))
+    }
+}
+
 /// One look at the session and the output: loads, play, pause, seeks, and moving on.
 async fn step(core: &Core) -> Result<(), String> {
-    let _operation = core.operation.lock().await;
+    let operation = core.operation.lock().await;
+    let mut io = OutputOperation { core, operation: Some(operation), commands: core.commands.subscribe() };
+    macro_rules! remote {
+        ($future:expr) => { io.interruptible($future).await? };
+    }
+    macro_rules! provider {
+        ($future:expr) => { io.wait($future).await? };
+    }
     let queue = core.queue().await;
     let (current, mut next) = current_and_next(&queue);
     let Some(output) = core.transport().output.clone() else {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
+        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
         return Ok(());
     };
     let endpoint = output.endpoint_id.clone();
 
     let Some((track, canonical_source)) = current else {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
+        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
         // Nothing to play: the output stops if it was playing something.
         let was_loaded = core.transport().loaded.take().is_some();
         if was_loaded {
-            let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
             let mut transport = core.transport();
             transport.playing = false;
             transport.set_position(0.0);
@@ -749,7 +807,7 @@ async fn step(core: &Core) -> Result<(), String> {
         return Ok(());
     };
     if crate::service_auth::disconnected(track["provider"].as_str().unwrap_or("")) {
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
+        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
         let was_loaded = {
             let mut transport = core.transport();
             let loaded = transport.loaded.take().is_some();
@@ -759,7 +817,7 @@ async fn step(core: &Core) -> Result<(), String> {
             loaded
         };
         if was_loaded {
-            let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
             core.changed();
         }
         return Err("This song's service is disconnected. Reconnect it or replace the song with Improve Playlist.".into());
@@ -769,7 +827,7 @@ async fn step(core: &Core) -> Result<(), String> {
     if next.as_deref() == Some(canonical_source.as_str()) { next = None; }
     let Some((status, reported_at, _, endpoint_instance)) = core.endpoints.status(&endpoint).await else {
         core.pause_disconnected_output();
-        if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; manager.clear_effective_renderer(); }
+        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
         return Err(format!("Audio output {} is offline", output.endpoint_name));
     };
 
@@ -808,8 +866,8 @@ async fn step(core: &Core) -> Result<(), String> {
         live = track["provider"] == "spotify" && !failed && pinned.unwrap_or_else(|| status["livePcmV1"] == true && manager.readiness().is_ok());
         if live && !playing {
             let was_loaded = core.transport().loaded.take().is_some();
-            if was_loaded { let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await; }
-            manager.pause().await;
+            if was_loaded { let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({}))); }
+            provider!(manager.pause());
             let mut transport = core.transport();
             transport.pending_play = None; transport.pending_seek = None;
             transport.buffering = false;
@@ -817,7 +875,7 @@ async fn step(core: &Core) -> Result<(), String> {
             return Ok(());
         }
         if live {
-            match manager.reserve(track["providerTrackId"].as_str().ok_or("Spotify track ID is missing")?, generation, &endpoint, position, track["durationSeconds"].as_f64().unwrap_or(0.0), seek || restarted).await {
+            match provider!(manager.reserve(track["providerTrackId"].as_str().ok_or("Spotify track ID is missing")?, generation, &endpoint, position, track["durationSeconds"].as_f64().unwrap_or(0.0), seek || restarted)) {
                 Ok(info) => {
                     live_position = Some(info.start_position_seconds);
                     source = crate::soloist::Manager::live_source(&info);
@@ -825,17 +883,17 @@ async fn step(core: &Core) -> Result<(), String> {
                 },
                 Err(_) => {
                     // Reserve failed before a stream opened. Stop the old renderer before fallback.
-                    manager.stop_playback().await;
+                    provider!(manager.stop_playback());
                     let loaded = core.transport().loaded.take();
                     if let Some(loaded) = loaded {
-                        let _ = core.endpoints.call(&loaded.endpoint_id, "pause_native_audio", json!({})).await;
+                        let _ = remote!(core.endpoints.call(&loaded.endpoint_id, "pause_native_audio", json!({})));
                     }
                     live_position = Some(position);
                     live = false;
                 }
             }
         }
-        if !live { manager.stop_playback().await; }
+        if !live { provider!(manager.stop_playback()); }
         // Optional lossless resolves its renderer at the next-track boundary.
         if manager.lossless_enabled() && queue["upcoming"].as_array().and_then(|items| items.first()).and_then(|item| track_of(&queue, item)).is_some_and(|track| track["provider"] == "spotify") { next = None; }
     }
@@ -848,24 +906,31 @@ async fn step(core: &Core) -> Result<(), String> {
         let changed_song = transport.loaded.as_ref().is_some_and(|loaded| loaded.track_source != canonical_source);
         let restarted = transport.loaded.as_ref().is_some_and(|loaded| loaded.endpoint_instance != endpoint_instance);
         let needs_load = empty_engine || transport.loaded.as_ref() != Some(&wanted);
-        (wanted, needs_device, live_position.unwrap_or_else(|| if changed_song { 0.0 } else if restarted || empty_engine { transport.position } else { transport.position_now() }), transport.playing, needs_load)
+        (wanted, needs_device, transport.pending_seek.or(live_position).unwrap_or_else(|| if changed_song { 0.0 } else if restarted || empty_engine { transport.position } else { transport.position_now() }), transport.playing, needs_load)
     };
     if needs_load {
+        // A pause also stops an already executing, superseded autoplay load.
+        if core.transport().pending_play == Some(false) {
+            remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})))?;
+            core.transport().pending_play = None;
+        }
         if needs_device {
-            core.endpoints.call(&endpoint, "select_native_audio_device", json!({ "deviceId": output.device_id })).await?;
+            remote!(core.endpoints.call(&endpoint, "select_native_audio_device", json!({ "deviceId": output.device_id })))?;
         }
         let duration = track["durationSeconds"].as_f64().unwrap_or(0.0);
-        if let Err(error) = core.endpoints
-            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay }))
-            .await {
+        if let Err(error) = remote!(core.endpoints
+            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay }))) {
             if live {
-                if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+                if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); }
                 core.transport().failed_live_load = Some(wanted);
                 core.transport().loaded = None;
                 core.transport().position = position;
                 core.transport().position_at = None;
             }
             return Err(error);
+        }
+        if core.endpoints.status(&endpoint).await.is_none_or(|(_, _, _, instance)| instance != endpoint_instance) {
+            return Ok(());
         }
         if let Some(manager) = &core.spotify_playback {
             if track["provider"] == "spotify" { manager.report_renderer(live); }
@@ -887,21 +952,24 @@ async fn step(core: &Core) -> Result<(), String> {
     }
 
     let (pending_play, pending_seek, queued_next) = {
-        let mut transport = core.transport();
-        (transport.pending_play.take(), transport.pending_seek.take(), transport.queued_next.clone())
+        let transport = core.transport();
+        (transport.pending_play, transport.pending_seek, transport.queued_next.clone())
     };
     if let Some(seek) = pending_seek {
-        core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek })).await?;
+        remote!(core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek })))?;
     }
     if let Some(playing) = pending_play {
         let command = if playing { "play_native_audio" } else { "pause_native_audio" };
-        core.endpoints.call(&endpoint, command, json!({})).await?;
+        remote!(core.endpoints.call(&endpoint, command, json!({})))?;
     }
     if pending_seek.is_some() || pending_play.is_some() {
-        core.transport().report_after = Some(Instant::now());
+        let mut transport = core.transport();
+        transport.pending_play = None;
+        transport.pending_seek = None;
+        transport.report_after = Some(Instant::now());
     }
     if queued_next.as_ref() != Some(&next) {
-        core.endpoints.call(&endpoint, "queue_native_audio", json!({ "source": next, "expectedSource": source })).await?;
+        remote!(core.endpoints.call(&endpoint, "queue_native_audio", json!({ "source": next, "expectedSource": source })))?;
         core.transport().queued_next = Some(next.clone());
     }
 
@@ -919,6 +987,7 @@ async fn step(core: &Core) -> Result<(), String> {
     // The output moved on to the queued song by itself, without a gap.
     if playing_source.is_some() && playing_source == next && next.as_deref() != Some(source.as_str()) {
         core.change_queue(|queue| Ok((advance(queue), ()))).await?;
+        let count = {
         let mut transport = core.transport();
         if let Some(loaded) = transport.loaded.as_mut() {
             loaded.source = next.clone().unwrap_or_default();
@@ -926,7 +995,13 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         transport.queued_next = None;
         transport.set_position(status["currentTime"].as_f64().unwrap_or(0.0));
-        drop(transport);
+        let count = transport.playing && status["isPlaying"] == true && status["buffering"] != true;
+        if count { transport.counted = Some((next.clone().unwrap_or_default(), transport.generation)); }
+        count
+        };
+        if count && let Some(track) = queue["upcoming"].as_array().and_then(|items| items.first()).and_then(|item| track_of(&queue, item)) {
+            core.record_play(track.clone()).await;
+        }
         core.changed();
         return Ok(());
     }
@@ -938,9 +1013,9 @@ async fn step(core: &Core) -> Result<(), String> {
         if let Some(manager) = &core.spotify_playback { manager.report_renderer(live); }
         if live && status["error"].is_string() {
             // Stop and retry the same generation. No queue advance and no new history entry.
-            if let Some(manager) = &core.spotify_playback { manager.stop_playback().await; }
+            if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); }
             let loaded = core.transport().loaded.take();
-            let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
             let mut transport = core.transport();
             transport.position = status["currentTime"].as_f64().unwrap_or(transport.position);
             transport.position_at = None;
@@ -1083,6 +1158,7 @@ mod driver_tests {
         status: Arc<SyncMutex<Value>>,
         /// One report at a time, as the real output app sends them, so none arrives out of order.
         sending: Arc<Mutex<()>>,
+        load_delay: Arc<SyncMutex<Duration>>,
     }
 
     impl Harness {
@@ -1098,7 +1174,7 @@ mod driver_tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default(), sending: Arc::default() };
+            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default(), sending: Arc::default(), load_delay: Arc::default() };
             harness.report(json!({})).await;
             harness.serve_commands();
             harness
@@ -1128,7 +1204,7 @@ mod driver_tests {
                         .json(&json!({ "name": "Desk", "instanceId": instance, "status": status })).send().await;
                 }
             });
-            let (base, http, received, status) = (self.base.clone(), self.http.clone(), self.received.clone(), self.status.clone());
+            let (base, http, received, status, load_delay) = (self.base.clone(), self.http.clone(), self.received.clone(), self.status.clone(), self.load_delay.clone());
             tokio::spawn(async move {
                 loop {
                     let Ok(response) = http.get(format!("{base}/api/endpoints/desk/commands?wait=5")).send().await else { continue };
@@ -1141,9 +1217,14 @@ mod driver_tests {
                                 "buffering": true, "ended": false, "error": null, "livePcmV1": true
                             });
                         }
-                        http.post(format!("{base}/api/endpoints/desk/results"))
-                            .json(&json!({ "id": command["id"], "ok": true, "value": null }))
-                            .send().await.unwrap();
+                        let delay = if command["command"] == "load_native_audio" { *load_delay.lock().unwrap() } else { Duration::ZERO };
+                        let (http, base) = (http.clone(), base.clone());
+                        tokio::spawn(async move {
+                            tokio::time::sleep(delay).await;
+                            http.post(format!("{base}/api/endpoints/desk/results"))
+                                .json(&json!({ "id": command["id"], "ok": true, "value": null }))
+                                .send().await.unwrap();
+                        });
                     }
                 }
             });
@@ -1196,6 +1277,43 @@ mod driver_tests {
 
     fn source(id: &str) -> String {
         format!("http://127.0.0.1:38147/api/providers/qobuz/tracks/{id}/stream")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn queue_readers_share_an_immutable_snapshot_and_changes_invalidate_it() {
+        let h = Harness::start().await;
+        let first = h.core.queue().await;
+        let same = h.core.queue().await;
+        assert!(Arc::ptr_eq(&first, &same));
+        h.core.change_queue(|queue| { queue["current"] = item("a"); Ok((true, ())) }).await.unwrap();
+        let changed = h.core.queue().await;
+        assert!(!Arc::ptr_eq(&first, &changed));
+        assert!(first["current"].is_null());
+        assert_eq!(changed["current"]["globalTrackId"], "a");
+        assert_eq!(queue_revision(&changed), queue_revision(&first) + 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn controls_interrupt_a_slow_load_without_committing_stale_results() {
+        let h = Harness::start().await;
+        *h.load_delay.lock().unwrap() = Duration::from_secs(2);
+        h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        let queued = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [track("a"), track("b")] });
+        h.post("/api/session/queue", json!({ "base": 0, "queue": queued, "playTrackId": "a" })).await;
+        h.wait_for_command("load_native_audio").await;
+        let started = Instant::now();
+        for body in [json!({ "action": "pause" }), json!({ "action": "next" }), json!({ "action": "seek", "positionSeconds": 37.0 })] {
+            let view = tokio::time::timeout(Duration::from_millis(400), h.post("/api/session/command", body)).await
+                .expect("a control must not wait behind remote preparation");
+            assert_eq!(view["playing"], false);
+        }
+        eprintln!("CONTROL_LATENCY_MS {}", started.elapsed().as_secs_f64() * 1000.0);
+        assert_eq!(h.queue().await["current"]["globalTrackId"], "b");
+        tokio::time::sleep(Duration::from_millis(2300)).await;
+        let transport = h.core.transport();
+        assert!(!transport.playing, "late autoplay result must not undo pause");
+        assert!(transport.loaded.as_ref().is_none_or(|loaded| loaded.track_source == source("b")), "obsolete track must never commit");
+        assert_eq!(transport.position, 37.0, "late load must not undo seek");
     }
 
     async fn check_reopened_output(with_instance: bool, paused: bool) {
