@@ -33,6 +33,10 @@ pub(crate) fn manager(directory: &Path, ready: bool) -> Arc<Manager> {
     })
 }
 
+pub(crate) async fn hold_playback_operation(manager: &Manager) -> tokio::sync::MutexGuard<'_, ()> {
+    manager.operation.lock().await
+}
+
 pub(crate) async fn configure_enabled(manager: &Manager, enabled: bool) {
     manager
         .configure(SettingsChange {
