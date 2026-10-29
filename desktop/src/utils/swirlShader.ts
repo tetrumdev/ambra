@@ -91,10 +91,12 @@ vec3 separateFromCover(vec3 color) {
   vec2 offset = gl_FragCoord.xy - u_cover.xy;
   vec2 outside = abs(offset) - u_cover.z;
   float gap = length(max(outside, 0.0));
-  // A broad glow makes even small corrections visible as stationary patches.
-  // Keep the adjustment within a soft, narrow strip beside the actual boundary.
-  float reach = min(u_cover.w, max(8.0, u_cover.z * 0.12));
+  // A narrow strip ends close enough to the cover to read as a ring around it.
+  // Keep full strength at the boundary, where the separation is read, then let
+  // it thin out over a long, soft tail so it fades into the field unnoticed.
+  float reach = min(u_cover.w, max(24.0, u_cover.z * 0.3));
   float nearby = 1.0 - smoothstep(0.0, reach, gap);
+  nearby *= nearby;
   // The artwork covers the interior; only visible pixels outside its edge need this work.
   if (nearby <= 0.0 || max(outside.x, outside.y) < 0.0) return color;
 
