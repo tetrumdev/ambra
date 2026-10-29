@@ -540,7 +540,7 @@ fn extract(source: &Path, dest: &Path, zip: bool) -> Result<(), Error> {
         }
         for index in 0..archive.len() {
             let mut member = archive.by_index(index).map_err(|_| invalid_archive())?;
-            let name = member.name().to_owned();
+            let name = member.name().map_err(|_| invalid_archive())?.into_owned();
             let mode = member.unix_mode().unwrap_or(0) & 0o170000;
             if !safe_name(&name)
                 || !matches!(mode, 0 | 0o100000 | 0o040000)
