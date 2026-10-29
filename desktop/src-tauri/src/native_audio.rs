@@ -39,6 +39,7 @@ const NETWORK_PRELOAD_MILLISECONDS: usize = 6_000;
 const NETWORK_MAX_BUFFER_MILLISECONDS: usize = 12_000;
 const STREAM_RECOVERY_ATTEMPTS: usize = 2;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+const AUDIO_SUPERSEDED: &str = "Audio preparation superseded";
 const AUDIO_PREPARE_TIMEOUT: Duration = Duration::from_secs(20);
 const PAUSED_DEVICE_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 const DECODE_BLOCKS: usize = 8;
@@ -83,6 +84,8 @@ struct PlaybackStatus {
     duration: f64,
     is_playing: bool,
     buffering: bool,
+    decoded_buffer_seconds: f64,
+    underruns: u64,
     ended: bool,
     error: Option<String>,
     audio_quality: Option<AudioQuality>,
@@ -115,6 +118,8 @@ pub struct NativeAudioStatus {
     duration: f64,
     is_playing: bool,
     buffering: bool,
+    decoded_buffer_seconds: f64,
+    underruns: u64,
     ended: bool,
     error: Option<String>,
     audio_quality: Option<AudioQuality>,
@@ -239,6 +244,23 @@ pub async fn load_native_audio(
     .await
 }
 
+/// Shared output loads report buffering/completion through the existing status
+/// channel. Acknowledging dispatch lets the endpoint collect pause/seek/skip
+/// while the native worker prepares the source.
+pub(crate) fn dispatch_remote_load(player: &NativeAudioPlayer, source: String, next_source: Option<String>, position_seconds: f64, autoplay: bool) -> Result<(), String> {
+    let position_seconds = valid_position(position_seconds)?;
+    let (reply, _) = bounded(1);
+    player.command_tx.send(WorkerCommand::Load { source, next_source, position_seconds, autoplay, reply })
+        .map_err(|_| "The native audio worker is unavailable".to_owned())
+}
+
+pub(crate) fn dispatch_remote_seek(player: &NativeAudioPlayer, position_seconds: f64) -> Result<(), String> {
+    let position_seconds = valid_position(position_seconds)?;
+    let (reply, _) = bounded(1);
+    player.command_tx.send(WorkerCommand::Seek { position_seconds, reply })
+        .map_err(|_| "The native audio worker is unavailable".to_owned())
+}
+
 #[tauri::command]
 pub fn warm_native_audio(
     player: State<'_, NativeAudioPlayer>,
@@ -314,6 +336,8 @@ pub async fn native_audio_status(
         duration: status.duration,
         is_playing: status.is_playing,
         buffering: status.buffering,
+        decoded_buffer_seconds: status.decoded_buffer_seconds,
+        underruns: status.underruns,
         ended: status.ended,
         error: status.error,
         audio_quality: status.audio_quality,
@@ -496,6 +520,7 @@ type PlaybackWorker = PlaybackEngine<PlatformOutput>;
 // including partial writes, stale padding and end-of-track transitions.
 struct PlaybackEngine<O: AudioOutput> {
     command_rx: Receiver<WorkerCommand>,
+    pending_command: Option<WorkerCommand>,
     status: Arc<Mutex<PlaybackStatus>>,
     decoder: Option<DecoderStream>,
     output: Option<O>,
@@ -656,15 +681,7 @@ impl QueuedSource {
         }
     }
 
-    fn into_foreground(self, timeout: Duration) -> Result<Option<PreparedSource>, String> {
-        match self.wait_for_preparation(timeout) {
-            Ok(prepared) => Ok(Some(prepared)),
-            // A failed speculative load can be retried, but a timed-out load
-            // must release the playback worker rather than start another wait.
-            Err(_) if !self.cancelled.load(Ordering::Acquire) => Ok(None),
-            Err(error) => Err(error),
-        }
-    }
+
 }
 
 impl<O: AudioOutput> PlaybackEngine<O> {
@@ -675,6 +692,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     ) -> Self {
         let mut worker = Self {
             command_rx,
+            pending_command: None,
             status,
             decoder: None,
             output: None,
@@ -744,7 +762,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         // alone would keep an exclusive device held forever.
         let mut release_at: Option<Instant> = None;
         loop {
-            let command = if self.desired_playing && self.current_source.is_some() {
+            let command = if self.pending_command.is_some() {
+                self.pending_command.take()
+            } else if self.desired_playing && self.current_source.is_some() {
                 release_at = None;
                 self.command_rx.try_recv().ok()
             } else if self.output.is_some() {
@@ -824,7 +844,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 reply,
             } => {
                 let result = self.load(source, next_source, position_seconds, autoplay);
-                if let Err(error) = &result {
+                if let Err(error) = &result && error != AUDIO_SUPERSEDED {
                     self.fail(error.clone());
                 }
                 let _ = reply.send(result);
@@ -839,14 +859,14 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             }
             WorkerCommand::Play { reply } => {
                 let result = self.play();
-                if let Err(error) = &result {
+                if let Err(error) = &result && error != AUDIO_SUPERSEDED {
                     self.fail(error.clone());
                 }
                 let _ = reply.send(result);
             }
             WorkerCommand::Pause { reply } => {
                 let result = self.pause();
-                if let Err(error) = &result {
+                if let Err(error) = &result && error != AUDIO_SUPERSEDED {
                     self.fail(error.clone());
                 }
                 let _ = reply.send(result);
@@ -856,7 +876,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 reply,
             } => {
                 let result = self.seek(position_seconds);
-                if let Err(error) = &result {
+                if let Err(error) = &result && error != AUDIO_SUPERSEDED {
                     self.fail(error.clone());
                 }
                 let _ = reply.send(result);
@@ -1161,6 +1181,34 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         Ok(true)
     }
 
+    /// Wait for decoder work without trapping newer playback intent behind a
+    /// network read. The outer loop executes the interrupting command next.
+    fn await_preparation(&mut self, queued: &QueuedSource, deadline: Instant) -> Result<PreparedSource, String> {
+        queued.foreground.store(true, Ordering::Release);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            crossbeam_channel::select! {
+                recv(queued.receiver) -> result => return result.map_err(|_| "The native audio preloader stopped unexpectedly".to_owned())?,
+                recv(self.command_rx) -> command => match command {
+                    Ok(command) if command.only_reads() || matches!(&command, WorkerCommand::Queue { .. } | WorkerCommand::SetVolume { .. }) => {
+                        self.handle_command(command);
+                    }
+                    Ok(command) => {
+                        queued.cancelled.store(true, Ordering::Release);
+                        self.pending_command = Some(command);
+                        return Err(AUDIO_SUPERSEDED.into());
+                    }
+                    // Direct engine tests need no command producer.
+                    Err(_) => return queued.wait_for_preparation(remaining),
+                },
+                default(remaining) => {
+                    queued.cancelled.store(true, Ordering::Release);
+                    return Err("Audio loading timed out. Check the streaming service connection or try another track.".into());
+                }
+            }
+        }
+    }
+
     fn load(
         &mut self,
         source: String,
@@ -1237,28 +1285,25 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         };
         // Drop unrelated hover work when a user selects another song.
         self.warm_source = None;
-        let reused = queued_next
-            .or(warmed)
-            .map(|queued| {
-                queued
-                    .into_foreground(preparation_deadline.saturating_duration_since(Instant::now()))
-            })
-            .transpose()?
-            .flatten();
+        let reused = if let Some(queued) = queued_next.or(warmed) {
+            match self.await_preparation(&queued, preparation_deadline) {
+                Ok(prepared) => Some(prepared),
+                Err(error) if queued.cancelled.load(Ordering::Acquire) || error == AUDIO_SUPERSEDED => return Err(error),
+                Err(_) => None, // A failed speculative preparation can retry normally.
+            }
+        } else { None };
         let prepared = match prepared_next.or(reused) {
             Some(prepared) => prepared,
-            None => prepare_source_at_with_timeout(
-                source.clone(),
-                position_seconds,
-                preparation_deadline.saturating_duration_since(Instant::now()),
-            )?,
+            None => {
+                let queued = QueuedSource::prepare_at(source.clone(), position_seconds, false)?;
+                self.await_preparation(&queued, preparation_deadline)?
+            }
         };
         let spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         let audio_quality = self.install_prepared(prepared)?;
         // Prioritize the selected song's initial download over preloading the next.
-        self.next_source = next_source.map(QueuedSource::prepare).transpose()?;
-        self.deferred_next_source = None;
+        self.next_source = self.deferred_next_source.take().map(QueuedSource::prepare).transpose()?;
         if autoplay && previous_spec == Some(spec) {
             self.output = previous_output.take();
             if self.output.is_some() && was_resyncing {
@@ -1297,7 +1342,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         {
             return Ok(());
         }
-        if self.spec.is_none() && !self.desired_playing {
+        if self.spec.is_none() {
             self.deferred_next_source = source;
             self.next_source = None;
             self.ready_next = None;
@@ -1375,6 +1420,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             });
             return Ok(());
         }
+        if self.spec.is_none() && let Some(source) = self.current_source.clone() {
+            return self.load(source, self.deferred_next_source.clone(), position_seconds, self.desired_playing);
+        }
         let spec = self
             .spec
             .ok_or_else(|| "No native audio track is loaded".to_owned())?;
@@ -1396,7 +1444,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.decoder = None;
         self.pcm.clear();
         self.reset_gain_buffer();
-        let prepared = prepare_source_at(source, position_seconds)?;
+        let timeout = if decoder::is_live_source(&source) { Duration::from_secs(40) } else { AUDIO_PREPARE_TIMEOUT };
+        let queued = QueuedSource::prepare_at(source, position_seconds, false)?;
+        let prepared = self.await_preparation(&queued, Instant::now() + timeout)?;
         let audio_quality = self.install_prepared(prepared)?;
         // A device still being waited for keeps its retries; seeking does not restart them.
         if self.desired_playing && self.output.is_none() && self.output_retry.is_none() {
@@ -1419,6 +1469,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             .ok_or_else(|| "The native audio format is unavailable".to_owned())?;
         let prebuffer = prebuffer_samples(spec, self.current_source.as_deref(), false);
         self.drain_decoder()?;
+        update_status(&self.status, |status| {
+            status.decoded_buffer_seconds = self.pcm.len() as f64 / spec.channels as f64 / f64::from(spec.sample_rate);
+        });
         // The song keeps buffering while an exclusive device is waited for.
         if self.retry_output()? {
             return Ok(());
@@ -1475,6 +1528,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             update_status(&self.status, |status| {
                 status.is_playing = false;
                 status.buffering = true;
+                status.underruns += 1;
             });
             return Ok(());
         }
@@ -1913,7 +1967,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             if attempt > 0 {
                 thread::sleep(Duration::from_millis(250 * attempt as u64));
             }
-            match prepare_source_at(source.clone(), position_seconds) {
+            let queued = QueuedSource::prepare_at(source.clone(), position_seconds, false)?;
+            match self.await_preparation(&queued, Instant::now() + AUDIO_PREPARE_TIMEOUT) {
                 Ok(prepared) => {
                     let spec = prepared.decoder.spec();
                     let duration = prepared.decoder.duration_seconds();
@@ -1937,6 +1992,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     });
                     return Ok(());
                 }
+                Err(error) if error == AUDIO_SUPERSEDED => return Ok(()),
                 Err(error) => recovery_error = error,
             }
         }
@@ -1968,21 +2024,6 @@ fn preset_alters_signal(settings: &AudioSettings) -> bool {
 /// Whether samples may be changed on their way to the device, by DSP or normalization.
 fn signal_processed(settings: &AudioSettings) -> bool {
     preset_alters_signal(settings) || settings.normalization != NormalizationMode::Off
-}
-
-fn prepare_source_at(source: String, position_seconds: f64) -> Result<PreparedSource, String> {
-    let timeout = if decoder::is_live_source(&source) { Duration::from_secs(40) } else { AUDIO_PREPARE_TIMEOUT };
-    prepare_source_at_with_timeout(source, position_seconds, timeout)
-}
-
-fn prepare_source_at_with_timeout(
-    source: String,
-    position_seconds: f64,
-    timeout: Duration,
-) -> Result<PreparedSource, String> {
-    // Keep slow decoding/network reads off the playback worker and bound the
-    // complete preparation, not just each individual HTTP retry.
-    QueuedSource::prepare_at(source, position_seconds, false)?.wait_for_preparation(timeout)
 }
 
 fn prepare_source_with_control(
@@ -2188,6 +2229,50 @@ mod tests {
         let (reply, result) = bounded(1);
         worker.handle_command(WorkerCommand::Play { reply });
         result.recv().unwrap()
+    }
+
+    #[test]
+    fn pause_interrupts_network_preparation_without_waiting_for_the_body() {
+        use std::io::{Read, Write};
+        let song = Song::missing();
+        song.create();
+        let bytes = std::fs::read(&song.0).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let source = format!("http://{}/stalled.wav", listener.local_addr().unwrap());
+        let (accepted_tx, accepted_rx) = bounded(1);
+        let (release_tx, release_rx) = bounded(1);
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            socket.read(&mut request).unwrap();
+            let count = bytes.len().min(128 * 1024);
+            write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-{}/{}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", count - 1, bytes.len(), count).unwrap();
+            socket.flush().unwrap();
+            accepted_tx.send(()).unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(3));
+            let _ = socket.write_all(&bytes[..count]);
+        });
+        let (command_tx, command_rx) = unbounded();
+        let status = Arc::new(Mutex::new(PlaybackStatus::default()));
+        let worker_status = status.clone();
+        let worker = thread::spawn(move || PlaybackEngine::<TestOutput>::new(command_rx, worker_status, None).run());
+        let (load_reply, _) = bounded(1);
+        command_tx.send(WorkerCommand::Load { source, next_source: None, position_seconds: 0.0, autoplay: true, reply: load_reply }).unwrap();
+        accepted_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let start = Instant::now();
+        let (reply, result) = bounded(1);
+        command_tx.send(WorkerCommand::Pause { reply }).unwrap();
+        let pause = result.recv_timeout(Duration::from_millis(400));
+        let elapsed = start.elapsed();
+        release_tx.send(()).unwrap();
+        server.join().unwrap();
+        command_tx.send(WorkerCommand::Shutdown).unwrap();
+        worker.join().unwrap();
+        assert!(pause.is_ok(), "pause blocked behind network preparation: {pause:?}");
+        pause.unwrap().unwrap();
+        assert!(!lock_status(&status).is_playing);
+        assert!(lock_status(&status).error.is_none(), "cancellation must not be a decoder error");
+        eprintln!("NATIVE_PAUSE_MS {}", elapsed.as_secs_f64() * 1000.0);
     }
 
     #[test]

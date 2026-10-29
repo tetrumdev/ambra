@@ -288,21 +288,20 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
     let player = agent.app.state::<NativeAudioPlayer>();
     let number = |key: &str| args[key].as_f64().ok_or_else(|| format!("`{key}` is missing"));
     match command {
-        "load_native_audio" => native_audio::load_native_audio(
-            player,
+        "load_native_audio" => native_audio::dispatch_remote_load(
+            &player,
             agent.arg_source(args, "source").ok_or("`source` is missing")?,
             agent.arg_source(args, "nextSource"),
             number("positionSeconds")?,
             args["autoplay"].as_bool().unwrap_or(false),
         )
-        .await
         .map(|()| Value::Null),
         "queue_native_audio" => native_audio::queue_native_audio(player, agent.arg_source(args, "source"), agent.arg_source(args, "expectedSource"))
             .await
             .map(|()| Value::Null),
         "play_native_audio" => native_audio::play_native_audio(player).await.map(|()| Value::Null),
         "pause_native_audio" => native_audio::pause_native_audio(player).await.map(|()| Value::Null),
-        "seek_native_audio" => native_audio::seek_native_audio(player, number("positionSeconds")?).await.map(|()| Value::Null),
+        "seek_native_audio" => native_audio::dispatch_remote_seek(&player, number("positionSeconds")?).map(|()| Value::Null),
         "warm_native_audio" => native_audio::warm_native_audio(player, agent.arg_source(args, "source").ok_or("`source` is missing")?).map(|()| Value::Null),
         "set_native_audio_volume" => native_audio::set_native_audio_volume(player, number("volume")?).await.map(|()| Value::Null),
         "native_audio_volume" => native_audio::native_audio_volume(player).await.map(|volume| json!(volume)),
