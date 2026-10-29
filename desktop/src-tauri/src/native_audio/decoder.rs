@@ -1,7 +1,7 @@
 use std::{
     collections::VecDeque,
     fs::File,
-    io::{self, Cursor, Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     path::Path,
     sync::{Mutex, OnceLock},
     thread,
@@ -11,7 +11,7 @@ use std::{
 use reqwest::{
     StatusCode, Url,
     blocking::Client,
-    header::{CONTENT_LENGTH, CONTENT_RANGE, RANGE},
+    header::{CONTENT_RANGE, RANGE},
 };
 use symphonia::core::{
     codecs::audio::{AudioDecoder, AudioDecoderOptions},
@@ -56,7 +56,31 @@ fn cacheable_audio_range(range: Option<&str>) -> bool {
     let (Ok(start), Ok(end)) = (start.parse::<u64>(), end.parse::<u64>()) else {
         return false;
     };
-    end.checked_sub(start).is_some_and(|length| length < HTTP_INITIAL_CACHE_BYTES)
+    end.checked_sub(start)
+        .is_some_and(|length| length < HTTP_INITIAL_CACHE_BYTES)
+}
+
+fn cached_http_range(url: &str, range: &str) -> Option<(reqwest::header::HeaderMap, Vec<u8>)> {
+    let mut cache = http_range_cache().lock().ok()?;
+    cache.retain(|entry| entry.saved_at.elapsed() < Duration::from_secs(120));
+    let index = cache
+        .iter()
+        .position(|entry| entry.url == url && entry.range == range)?;
+    let entry = cache.remove(index)?;
+    let result = (entry.headers.clone(), entry.bytes.clone());
+    cache.push_back(entry);
+    Some(result)
+}
+
+fn save_http_range(mut entry: CachedHttpRange) {
+    if let Ok(mut cache) = http_range_cache().lock() {
+        cache.retain(|saved| saved.url != entry.url || saved.range != entry.range);
+        while cache.len() >= 64 {
+            cache.pop_front();
+        }
+        entry.saved_at = Instant::now();
+        cache.push_back(entry);
+    }
 }
 
 pub struct DecodedSource(Decoded);
@@ -444,11 +468,12 @@ fn embedded_loudness(format: &mut dyn FormatReader) -> LoudnessInfo {
     let mut loudness = LoudnessInfo::default();
     loop {
         if let Some(revision) = metadata.current() {
-            let tags = revision
-                .media
-                .tags
-                .iter()
-                .chain(revision.per_track.iter().flat_map(|track| &track.metadata.tags));
+            let tags = revision.media.tags.iter().chain(
+                revision
+                    .per_track
+                    .iter()
+                    .flat_map(|track| &track.metadata.tags),
+            );
             loudness = loudness.or(LoudnessInfo::from_tags(tags));
         }
         if metadata.pop().is_none() {
@@ -477,7 +502,7 @@ fn file_path(source: &str) -> String {
 struct HlsSource {
     client: Client,
     resources: VecDeque<Url>,
-    current: Option<Cursor<Vec<u8>>>,
+    current: Option<StreamingResource>,
     position: u64,
     duration_seconds: f64,
     loudness: LoudnessInfo,
@@ -515,11 +540,12 @@ impl HlsSource {
     }
 
     fn open_next_resource(&mut self) -> io::Result<bool> {
-        let Some(url) = self.resources.pop_front() else {
+        let Some(url) = self.resources.front() else {
             return Ok(false);
         };
-        let (_, _, bytes) = get_bytes_with_retry(&self.client, url.as_str(), None)?;
-        self.current = Some(Cursor::new(bytes));
+        let resource = StreamingResource::open(self.client.clone(), url.to_string())?;
+        self.resources.pop_front();
+        self.current = Some(resource);
         Ok(true)
     }
 }
@@ -567,6 +593,147 @@ impl MediaSource for HlsSource {
 
     fn byte_len(&self) -> Option<u64> {
         None
+    }
+}
+
+/// One forward-only HLS resource. HTTP framing determines EOF when length is
+/// unknown; interrupted bodies resume after delivered bytes, never replay them.
+struct StreamingResource {
+    client: Client,
+    url: String,
+    response: Option<reqwest::blocking::Response>,
+    position: u64,
+    length: Option<u64>,
+    finished: bool,
+}
+
+impl StreamingResource {
+    fn open(client: Client, url: String) -> io::Result<Self> {
+        let response = get_response_with_retry(&client, &url, None)?;
+        if response.status() != StatusCode::OK {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unexpected HLS resource response",
+            ));
+        }
+        let length = response.content_length();
+        Ok(Self {
+            client,
+            url,
+            response: Some(response),
+            position: 0,
+            length,
+            finished: false,
+        })
+    }
+
+    fn resume(&mut self) -> io::Result<()> {
+        let range = format!("bytes={}-", self.position);
+        let mut response = get_response_with_retry(&self.client, &self.url, Some(&range))?;
+        let total = if response.status() == StatusCode::PARTIAL_CONTENT {
+            let total =
+                content_range_length(response.headers().get(CONTENT_RANGE)).ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "HLS Content-Range length is missing",
+                    )
+                })?;
+            if self.length.is_some_and(|length| length != total) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HLS resource length changed",
+                ));
+            }
+            let count = validated_range_length(
+                response.headers().get(CONTENT_RANGE),
+                self.position,
+                total.saturating_sub(1),
+                total,
+            )?;
+            if response
+                .content_length()
+                .is_some_and(|length| length != count)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HLS range body length is inconsistent",
+                ));
+            }
+            Some(total)
+        } else if response.status() == StatusCode::OK {
+            let total = response.content_length();
+            if self
+                .length
+                .zip(total)
+                .is_some_and(|(before, after)| before != after)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "HLS resource length changed",
+                ));
+            }
+            let skipped = io::copy(&mut response.by_ref().take(self.position), &mut io::sink())?;
+            if skipped != self.position {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "HLS resource ended before resume position",
+                ));
+            }
+            self.length.or(total)
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unexpected HLS resume response",
+            ));
+        };
+        self.length = total;
+        self.response = Some(response);
+        Ok(())
+    }
+}
+
+impl Read for StreamingResource {
+    fn read(&mut self, destination: &mut [u8]) -> io::Result<usize> {
+        if destination.is_empty() || self.finished {
+            return Ok(0);
+        }
+        let mut last_error = None;
+        for attempt in 0..HTTP_ATTEMPTS {
+            if self.length == Some(self.position) {
+                self.finished = true;
+                return Ok(0);
+            }
+            if self.response.is_none() {
+                self.resume()?;
+            }
+            match self
+                .response
+                .as_mut()
+                .expect("HLS response")
+                .read(destination)
+            {
+                Ok(read) if read > 0 => {
+                    self.position += read as u64;
+                    return Ok(read);
+                }
+                Ok(_) if self.length.is_none_or(|length| length == self.position) => {
+                    self.finished = true;
+                    return Ok(0);
+                }
+                Ok(_) => {
+                    last_error = Some(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "HLS resource was truncated",
+                    ))
+                }
+                Err(error) => last_error = Some(error),
+            }
+            self.response = None;
+            if attempt + 1 < HTTP_ATTEMPTS {
+                thread::sleep(Duration::from_millis(100 * (1 << attempt)));
+            }
+        }
+        Err(last_error.unwrap_or_else(|| io::Error::other("HLS resource read failed")))
     }
 }
 
@@ -668,6 +835,7 @@ struct HttpRangeSource {
     small_reads_until: u64,
     response: Option<reqwest::blocking::Response>,
     response_left: u64,
+    response_cache: Option<CachedHttpRange>,
     loudness: LoudnessInfo,
 }
 
@@ -675,31 +843,140 @@ impl HttpRangeSource {
     fn open(url: &str) -> io::Result<Self> {
         let client = http_client()?;
         let range = format!("bytes=0-{}", HTTP_INITIAL_CACHE_BYTES - 1);
-        let (status, headers, bytes) = get_bytes_with_retry(&client, url, Some(&range))?;
+        if let Some((headers, bytes)) = cached_http_range(url, &range) {
+            let length = content_range_length(headers.get(CONTENT_RANGE))
+                .ok_or_else(|| io::Error::other("Cached audio length is missing"))?;
+            validated_range_length(
+                headers.get(CONTENT_RANGE),
+                0,
+                HTTP_INITIAL_CACHE_BYTES - 1,
+                length,
+            )?;
+            return Ok(Self {
+                client,
+                url: url.to_owned(),
+                position: 0,
+                length,
+                cache_start: 0,
+                initial_cache: bytes.clone(),
+                cache: bytes,
+                small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
+                response: None,
+                response_left: 0,
+                response_cache: None,
+                loudness: LoudnessInfo::from_headers(&headers),
+            });
+        }
+        let response = get_response_with_retry(&client, url, Some(&range))?;
+        let status = response.status();
+        let headers = response.headers().clone();
         let length = if status == StatusCode::PARTIAL_CONTENT {
             content_range_length(headers.get(CONTENT_RANGE))
+        } else if status == StatusCode::OK {
+            response.content_length()
         } else {
-            headers
-                .get(CONTENT_LENGTH)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.parse().ok())
-        }
-        .or_else(|| (!bytes.is_empty()).then_some(bytes.len() as u64))
-        .ok_or_else(|| io::Error::other("The server did not report the audio stream length"))?;
-
-        Ok(Self {
+            None
+        };
+        let mut source = Self {
             client,
             url: url.to_owned(),
             position: 0,
-            length,
+            length: length.unwrap_or(0),
             cache_start: 0,
-            initial_cache: bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec(),
+            initial_cache: Vec::new(),
+            cache: Vec::new(),
             small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
-            cache: bytes,
             response: None,
             response_left: 0,
+            response_cache: None,
             loudness: LoudnessInfo::from_headers(&headers),
-        })
+        };
+        if length.is_none() && status == StatusCode::OK {
+            // A seekable source needs a byte length. Preserve compatibility with
+            // servers that ignore Range and omit it; ordinary ranges stream below.
+            let bytes = response
+                .bytes()
+                .map_err(|e| io_other(e.without_url()))?
+                .to_vec();
+            if bytes.is_empty() {
+                return Err(io::Error::other(
+                    "The server did not report the audio stream length",
+                ));
+            }
+            source.length = bytes.len() as u64;
+            source.initial_cache =
+                bytes[..bytes.len().min(HTTP_INITIAL_CACHE_BYTES as usize)].to_vec();
+            source.cache = bytes;
+        } else {
+            source.begin_response(
+                response,
+                (HTTP_INITIAL_CACHE_BYTES - 1).min(source.length.saturating_sub(1)),
+            )?;
+        }
+        Ok(source)
+    }
+
+    fn begin_response(
+        &mut self,
+        mut response: reqwest::blocking::Response,
+        end: u64,
+    ) -> io::Result<()> {
+        let status = response.status();
+        let range = format!("bytes={}-{}", self.position, end);
+        let remaining = if status == StatusCode::PARTIAL_CONTENT {
+            let count = validated_range_length(
+                response.headers().get(CONTENT_RANGE),
+                self.position,
+                end,
+                self.length,
+            )?;
+            if response
+                .content_length()
+                .is_some_and(|length| length != count)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Audio Content-Length does not match Content-Range",
+                ));
+            }
+            count
+        } else if status == StatusCode::OK {
+            if response
+                .content_length()
+                .is_some_and(|length| length != self.length)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Audio length changed during playback",
+                ));
+            }
+            let skipped = io::copy(&mut response.by_ref().take(self.position), &mut io::sink())?;
+            if skipped != self.position {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "Audio response ended before the requested position",
+                ));
+            }
+            end - self.position + 1
+        } else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Unexpected audio range response",
+            ));
+        };
+        self.response_cache = (status == StatusCode::PARTIAL_CONTENT
+            && cacheable_audio_range(Some(&range)))
+        .then(|| CachedHttpRange {
+            url: self.url.clone(),
+            range,
+            headers: response.headers().clone(),
+            bytes: Vec::new(),
+            saved_at: Instant::now(),
+        });
+        self.cache.clear();
+        self.response_left = remaining;
+        self.response = Some(response);
+        Ok(())
     }
 
     fn refill(&mut self) -> io::Result<()> {
@@ -707,81 +984,39 @@ impl HttpRangeSource {
             self.cache.clear();
             return Ok(());
         }
-        // Metadata probes may seek to the tail and then back to the audio header.
-        // Keep that small opening range instead of downloading it twice.
+        // Retain downloaded opening bytes for metadata probes without caching
+        // incomplete responses globally or increasing the bounded probe size.
         if self.position < self.initial_cache.len() as u64 {
             self.cache_start = 0;
             self.cache.clone_from(&self.initial_cache);
             return Ok(());
         }
-        // Accurate seeking probes several distant offsets. Fetch a small range
-        // at each probe, then return to larger reads once playback is sequential.
-        let cache_bytes = if self.position < self.small_reads_until {
+        let count = if self.position < self.small_reads_until {
             HTTP_INITIAL_CACHE_BYTES
         } else {
             HTTP_CACHE_BYTES
         };
-        let end = self
-            .position
-            .saturating_add(cache_bytes - 1)
-            .min(self.length - 1);
+        let end = self.position.saturating_add(count - 1).min(self.length - 1);
         let range = format!("bytes={}-{}", self.position, end);
-        if cache_bytes == HTTP_CACHE_BYTES {
-            let mut response = self
-                .client
-                .get(&self.url)
-                .header(RANGE, &range)
-                .send()
-                .map_err(|error| io_other(error.without_url()))?;
-            let status = response.status();
-            if !status.is_success() {
-                let kind = if status.is_client_error()
-                    && status != StatusCode::REQUEST_TIMEOUT
-                    && status != StatusCode::TOO_MANY_REQUESTS
-                {
-                    io::ErrorKind::PermissionDenied
-                } else {
-                    io::ErrorKind::Other
-                };
-                return Err(io::Error::new(kind, format!("HTTP status {status}")));
-            }
-            self.response_left = if status == StatusCode::PARTIAL_CONTENT {
-                validated_range_length(
-                    response.headers().get(CONTENT_RANGE),
-                    self.position,
-                    end,
-                    self.length,
-                )?
-            } else if status == StatusCode::OK {
-                // Some servers ignore Range. Discard only the prefix, without
-                // collecting the entire track or presenting wrong-offset bytes.
-                let skipped =
-                    io::copy(&mut response.by_ref().take(self.position), &mut io::sink())?;
-                if skipped != self.position {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "Audio response ended before the requested position",
-                    ));
-                }
-                self.length - self.position
-            } else {
+        if let Some((headers, bytes)) = cached_http_range(&self.url, &range) {
+            let expected = validated_range_length(
+                headers.get(CONTENT_RANGE),
+                self.position,
+                end,
+                self.length,
+            )?;
+            if bytes.len() as u64 != expected {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    "Unexpected audio range response",
+                    "Cached audio range is incomplete",
                 ));
-            };
-            self.cache.clear();
-            self.response = Some(response);
+            }
+            self.cache_start = self.position;
+            self.cache = bytes;
             return Ok(());
         }
-        let (status, _, bytes) = get_bytes_with_retry(&self.client, &self.url, Some(&range))?;
-        self.cache_start = if status == StatusCode::PARTIAL_CONTENT {
-            self.position
-        } else {
-            0
-        };
-        self.cache = bytes;
-        Ok(())
+        let response = get_response_with_retry(&self.client, &self.url, Some(&range))?;
+        self.begin_response(response, end)
     }
 
     fn cache_offset(&self) -> Option<usize> {
@@ -807,30 +1042,11 @@ fn http_client() -> io::Result<Client> {
         .map_err(|error| io::Error::other(error.clone()))
 }
 
-fn get_bytes_with_retry(
+fn get_response_with_retry(
     client: &Client,
     url: &str,
     range: Option<&str>,
-) -> io::Result<(StatusCode, reqwest::header::HeaderMap, Vec<u8>)> {
-    let cacheable = cacheable_audio_range(range);
-    if cacheable {
-        if let Ok(mut cache) = http_range_cache().lock() {
-            cache.retain(|entry| entry.saved_at.elapsed() < Duration::from_secs(120));
-            if let Some(index) = cache
-                .iter()
-                .position(|entry| entry.url == url && Some(entry.range.as_str()) == range)
-            {
-                let entry = cache.remove(index).unwrap();
-                let result = (
-                    StatusCode::PARTIAL_CONTENT,
-                    entry.headers.clone(),
-                    entry.bytes.clone(),
-                );
-                cache.push_back(entry);
-                return Ok(result);
-            }
-        }
-    }
+) -> io::Result<reqwest::blocking::Response> {
     let mut last_error = None;
     for attempt in 0..HTTP_ATTEMPTS {
         let mut request = client.get(url);
@@ -838,54 +1054,27 @@ fn get_bytes_with_retry(
             request = request.header(RANGE, range);
         }
         match request.send() {
+            Ok(response) if response.status().is_success() => return Ok(response),
             Ok(response) => {
                 let status = response.status();
-                let headers = response.headers().clone();
-                match response.bytes() {
-                    Ok(bytes) if status.is_success() => {
-                        if cacheable
-                            && status == StatusCode::PARTIAL_CONTENT
-                            && bytes.len() <= HTTP_INITIAL_CACHE_BYTES as usize
-                        {
-                            if let Ok(mut cache) = http_range_cache().lock() {
-                                cache.retain(|entry| {
-                                    !(entry.url == url && Some(entry.range.as_str()) == range)
-                                });
-                                while cache.len() >= 64 {
-                                    cache.pop_front();
-                                }
-                                cache.push_back(CachedHttpRange {
-                                    url: url.to_owned(),
-                                    range: range.unwrap().to_owned(),
-                                    headers: headers.clone(),
-                                    bytes: bytes.to_vec(),
-                                    saved_at: Instant::now(),
-                                });
-                            }
-                        }
-                        return Ok((status, headers, bytes.to_vec()));
-                    }
-                    Ok(bytes) => {
-                        let server_error = serde_json::from_slice::<serde_json::Value>(&bytes)
-                            .ok()
-                            .and_then(|body| body.get("error")?.as_str().map(str::to_owned));
-                        let message = server_error.as_ref().map_or_else(
-                            || format!("HTTP status {status}"),
-                            |message| format!("HTTP {status}: {message}"),
-                        );
-                        if server_error.is_some()
-                            || !(status.is_server_error()
-                                || status == StatusCode::REQUEST_TIMEOUT
-                                || status == StatusCode::TOO_MANY_REQUESTS)
-                        {
-                            return Err(io::Error::other(message));
-                        }
-                        last_error = Some(message);
-                    }
-                    Err(error) => last_error = Some(error.to_string()),
+                let bytes = response.bytes().unwrap_or_default();
+                let server_error = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|body| body.get("error")?.as_str().map(str::to_owned));
+                let message = server_error.as_ref().map_or_else(
+                    || format!("HTTP status {status}"),
+                    |message| format!("HTTP {status}: {message}"),
+                );
+                if server_error.is_some()
+                    || !(status.is_server_error()
+                        || status == StatusCode::REQUEST_TIMEOUT
+                        || status == StatusCode::TOO_MANY_REQUESTS)
+                {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
                 }
+                last_error = Some(message);
             }
-            Err(error) => last_error = Some(error.to_string()),
+            Err(error) => last_error = Some(error.without_url().to_string()),
         }
         if attempt + 1 < HTTP_ATTEMPTS {
             thread::sleep(Duration::from_millis(100 * (1_u64 << attempt)));
@@ -897,6 +1086,24 @@ fn get_bytes_with_retry(
     )))
 }
 
+fn get_bytes_with_retry(
+    client: &Client,
+    url: &str,
+    range: Option<&str>,
+) -> io::Result<(StatusCode, reqwest::header::HeaderMap, Vec<u8>)> {
+    let mut last_error = None;
+    for _ in 0..HTTP_ATTEMPTS {
+        let response = get_response_with_retry(client, url, range)?;
+        let status = response.status();
+        let headers = response.headers().clone();
+        match response.bytes() {
+            Ok(bytes) => return Ok((status, headers, bytes.to_vec())),
+            Err(error) => last_error = Some(error.without_url()),
+        }
+    }
+    Err(io_other(last_error.expect("body read failed")))
+}
+
 impl Read for HttpRangeSource {
     fn read(&mut self, destination: &mut [u8]) -> io::Result<usize> {
         if destination.is_empty() || self.position >= self.length {
@@ -906,12 +1113,10 @@ impl Read for HttpRangeSource {
         for attempt in 0..HTTP_ATTEMPTS {
             if self.cache_offset().is_none() && self.response.is_none() {
                 if let Err(error) = self.refill() {
-                    if self.position < self.small_reads_until
-                        || matches!(
-                            error.kind(),
-                            io::ErrorKind::InvalidData | io::ErrorKind::PermissionDenied
-                        )
-                    {
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::InvalidData | io::ErrorKind::PermissionDenied
+                    ) {
                         return Err(error);
                     }
                     last_error = Some(error);
@@ -931,10 +1136,23 @@ impl Read for HttpRangeSource {
                 let count = (destination.len() as u64).min(self.response_left) as usize;
                 match response.read(&mut destination[..count]) {
                     Ok(read) if read > 0 => {
+                        if self.position == self.initial_cache.len() as u64
+                            && self.position < HTTP_INITIAL_CACHE_BYTES
+                        {
+                            let count =
+                                read.min((HTTP_INITIAL_CACHE_BYTES - self.position) as usize);
+                            self.initial_cache.extend_from_slice(&destination[..count]);
+                        }
+                        if let Some(cache) = self.response_cache.as_mut() {
+                            cache.bytes.extend_from_slice(&destination[..read]);
+                        }
                         self.position += read as u64;
                         self.response_left -= read as u64;
                         if self.response_left == 0 {
                             self.response = None;
+                            if let Some(cache) = self.response_cache.take() {
+                                save_http_range(cache);
+                            }
                         }
                         return Ok(read);
                     }
@@ -949,6 +1167,7 @@ impl Read for HttpRangeSource {
                 // Resume at the first unread byte. Already delivered audio must
                 // never be discarded or replayed after a body timeout.
                 self.response = None;
+                self.response_cache = None;
                 self.response_left = 0;
             } else {
                 last_error = Some(io::Error::new(
@@ -981,6 +1200,7 @@ impl Seek for HttpRangeSource {
         if next != self.position {
             self.small_reads_until = next.saturating_add(HTTP_STARTUP_WINDOW_BYTES);
             self.response = None;
+            self.response_cache = None;
             self.response_left = 0;
         }
         self.position = next;
@@ -1048,6 +1268,165 @@ mod http_streaming_tests {
     use std::net::TcpListener;
     use std::sync::mpsc;
 
+    fn check_early_resource_read(hls: bool) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, gate) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = BufReader::new(socket.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            if hls {
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: 131072\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+            } else {
+                write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Length: 131072\r\nContent-Range: bytes 0-131071/131072\r\nConnection: close\r\n\r\n").unwrap();
+            }
+            socket.write_all(&[42; 8192]).unwrap();
+            let _ = gate.recv_timeout(Duration::from_secs(3));
+            let _ = socket.write_all(&vec![42; 131072 - 8192]);
+        });
+        let (finished, observed) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            let started = Instant::now();
+            let url = format!("http://{address}/audio");
+            let mut source: Box<dyn Read> = if hls {
+                Box::new(HlsSource {
+                    client: http_client().unwrap(),
+                    resources: VecDeque::from([Url::parse(&url).unwrap()]),
+                    current: None,
+                    position: 0,
+                    duration_seconds: 1.0,
+                    loudness: LoudnessInfo::default(),
+                })
+            } else {
+                Box::new(HttpRangeSource::open(&url).unwrap())
+            };
+            let mut bytes = [0; 8192];
+            let result = source.read_exact(&mut bytes);
+            finished.send((result, bytes, started.elapsed())).unwrap();
+        });
+        let early = observed.recv_timeout(Duration::from_millis(500));
+        let before_completion = early.is_ok();
+        release.send(()).unwrap();
+        let (result, bytes, elapsed) =
+            early.unwrap_or_else(|_| observed.recv_timeout(Duration::from_secs(3)).unwrap());
+        reader.join().unwrap();
+        server.join().unwrap();
+        result.unwrap();
+        assert_eq!(bytes, [42; 8192]);
+        eprintln!("EARLY_BODY_MS hls={hls} {}", elapsed.as_secs_f64() * 1000.0);
+        assert!(
+            before_completion,
+            "startup/HLS read waited for the complete HTTP body"
+        );
+    }
+
+    #[test]
+    fn startup_range_yields_before_its_body_finishes() {
+        check_early_resource_read(false);
+    }
+    #[test]
+    fn hls_resource_yields_before_its_body_finishes() {
+        check_early_resource_read(true);
+    }
+
+    #[test]
+    fn interrupted_startup_and_hls_resume_exactly_and_accept_200_fallback() {
+        for hls in [false, true] {
+            for ignores_range in [false, true] {
+                let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+                let address = listener.local_addr().unwrap();
+                let server = thread::spawn(move || {
+                    let bytes: Vec<u8> = (0..16384).map(|i| (i % 251) as u8).collect();
+                    for part in 0..2 {
+                        let (mut socket, _) = listener.accept().unwrap();
+                        let mut request = BufReader::new(socket.try_clone().unwrap());
+                        let mut range = None;
+                        loop {
+                            let mut line = String::new();
+                            request.read_line(&mut line).unwrap();
+                            if line == "\r\n" {
+                                break;
+                            }
+                            if let Some(value) =
+                                line.to_ascii_lowercase().strip_prefix("range: bytes=")
+                            {
+                                range = Some(
+                                    value.split_once('-').unwrap().0.parse::<usize>().unwrap(),
+                                );
+                            }
+                        }
+                        if part == 1 {
+                            assert_eq!(
+                                range,
+                                Some(8192),
+                                "resume must start after delivered bytes"
+                            );
+                        }
+                        let start = if part == 0 || ignores_range { 0 } else { 8192 };
+                        if ignores_range || hls && part == 0 {
+                            write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: 16384\r\nConnection: close\r\n\r\n").unwrap();
+                        } else {
+                            write!(socket, "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-16383/16384\r\nConnection: close\r\n\r\n", 16384-start).unwrap();
+                        }
+                        let end = if part == 0 { 8192 } else { 16384 };
+                        socket.write_all(&bytes[start..end]).unwrap();
+                    }
+                });
+                let url = format!("http://{address}/audio");
+                let mut source: Box<dyn Read> = if hls {
+                    Box::new(StreamingResource::open(http_client().unwrap(), url).unwrap())
+                } else {
+                    Box::new(HttpRangeSource::open(&url).unwrap())
+                };
+                let mut bytes = Vec::new();
+                source.read_to_end(&mut bytes).unwrap();
+                assert_eq!(
+                    bytes,
+                    (0..16384).map(|i| (i % 251) as u8).collect::<Vec<_>>()
+                );
+                server.join().unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn hls_accepts_a_complete_resource_without_content_length() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = BufReader::new(socket.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                request.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+            }
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nresource")
+                .unwrap();
+        });
+        let mut source =
+            StreamingResource::open(http_client().unwrap(), format!("http://{address}/hls"))
+                .unwrap();
+        let mut bytes = Vec::new();
+        source.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, b"resource");
+        server.join().unwrap();
+    }
+
     #[test]
     fn streaming_range_rejects_wrong_offsets_and_changed_files() {
         let valid = reqwest::header::HeaderValue::from_static("bytes 1048576-5242879/6291456");
@@ -1110,6 +1489,7 @@ mod http_streaming_tests {
             small_reads_until: HTTP_STARTUP_WINDOW_BYTES,
             response: None,
             response_left: 0,
+            response_cache: None,
             loudness: LoudnessInfo::default(),
         };
         let mut bytes = [0; 16384];
