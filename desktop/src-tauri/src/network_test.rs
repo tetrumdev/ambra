@@ -18,6 +18,8 @@ enum Command {
     UseDefaultOutput {},
     Play {},
     Pause {},
+    Next {},
+    QueueTrack { track_id: String },
     Seek { position_seconds: f64 },
     PlayTrack { track_id: String },
     Reconnect {},
@@ -162,28 +164,36 @@ async fn run(app: &AppHandle, command: Command) -> Result<Value, String> {
             client.post(format!("{}/api/session/command",connection.base_url)).json(&json!({"action":"output","output":output})).send().await
         }
         Command::Tracks {} => client.get(format!("{}/api/music/local/tracks", connection.base_url)).send().await,
-        Command::PlayTrack { track_id } => {
+        Command::PlayTrack { ref track_id } | Command::QueueTrack { ref track_id } => {
+            let enqueue = matches!(command, Command::QueueTrack { .. });
             let session: Value = client.get(format!("{}/api/session", connection.base_url)).send().await
                 .map_err(|error| error.without_url().to_string())?.error_for_status()
                 .map_err(|error| error.without_url().to_string())?.json().await
                 .map_err(|error| error.without_url().to_string())?;
             let mut queue = session["queue"].clone();
-            if !queue["tracks"].as_array().is_some_and(|tracks| tracks.iter().any(|track| track["globalId"] == track_id)) {
+            if !queue["tracks"].as_array().is_some_and(|tracks| tracks.iter().any(|track| track["globalId"].as_str() == Some(track_id.as_str()))) {
                 return Err("Track is absent from the server queue catalog".into());
             }
+            if enqueue {
+                queue["upcoming"].as_array_mut().ok_or("Invalid server queue")?.push(json!({ "globalTrackId": track_id, "source": { "kind": "library", "id": "network-test", "entryId": 0 }, "shufflePackageId": null }));
+            } else {
             // Keep the previous selection available; preserve history and all queued songs.
-            if !queue["current"].is_null() && queue["current"]["globalTrackId"] != track_id {
+            if !queue["current"].is_null() && queue["current"]["globalTrackId"].as_str() != Some(track_id.as_str()) {
                 let previous = queue["current"].take();
                 queue["upcoming"].as_array_mut().ok_or("Invalid server queue")?.insert(0, previous);
             }
             queue["current"] = json!({ "globalTrackId": track_id, "source": { "kind": "library", "id": "network-test", "entryId": 0 }, "shufflePackageId": null });
+            }
+            let mut change = json!({ "base": session["queueRevision"], "queue": queue });
+            if !enqueue { change["playTrackId"] = json!(track_id); }
             client.post(format!("{}/api/session/queue", connection.base_url))
-                .json(&json!({ "base": session["queueRevision"], "queue": queue, "playTrackId": track_id })).send().await
+                .json(&change).send().await
         }
         command => {
             let body = match command {
                 Command::Play {} => json!({ "action": "play" }),
                 Command::Pause {} => json!({ "action": "pause" }),
+                Command::Next {} => json!({ "action": "next" }),
                 Command::Seek { position_seconds } if position_seconds.is_finite() && position_seconds >= 0.0 => json!({ "action": "seek", "positionSeconds": position_seconds }),
                 _ => return Err("Invalid playback command".into()),
             };
