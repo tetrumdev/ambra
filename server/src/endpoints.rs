@@ -12,7 +12,7 @@ use std::{
 };
 
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -21,6 +21,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Notify, oneshot};
+
+use crate::access::Caller;
 
 /// An endpoint that hasn't reported for this long is offline.
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
@@ -98,6 +100,16 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
     (status, Json(json!({ "error": message.into() }))).into_response()
 }
 
+/// Only the device paired under an endpoint's ID may speak for it; the server machine itself
+/// is trusted. Otherwise any paired device could take another's commands or forge its reports.
+fn speaks_for(caller: &Caller, endpoint_id: &str) -> bool {
+    caller.client_id.as_deref().is_none_or(|client_id| client_id == endpoint_id)
+}
+
+fn not_this_device() -> Response {
+    error(StatusCode::FORBIDDEN, "Only that device can report for itself")
+}
+
 fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
 }
@@ -147,7 +159,10 @@ struct Presence {
     latency_ms: Option<f64>,
 }
 
-async fn presence(State(shared): State<Shared>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
+async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Caller>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
+    if !speaks_for(&caller, &endpoint_id) {
+        return not_this_device();
+    }
     if !valid_id(&endpoint_id) || report.name.trim().is_empty() || report.name.chars().count() > 64 {
         return error(StatusCode::BAD_REQUEST, "An endpoint needs an ID and a name");
     }
@@ -198,7 +213,10 @@ struct CollectQuery {
 }
 
 /// The endpoint's queued commands, waiting up to `wait` seconds for one to arrive.
-async fn collect(State(shared): State<Shared>, Path(endpoint_id): Path<String>, Query(query): Query<CollectQuery>) -> Response {
+async fn collect(State(shared): State<Shared>, Extension(caller): Extension<Caller>, Path(endpoint_id): Path<String>, Query(query): Query<CollectQuery>) -> Response {
+    if !speaks_for(&caller, &endpoint_id) {
+        return not_this_device();
+    }
     let deadline = Instant::now() + Duration::from_secs(query.wait.unwrap_or(0).min(MAX_WAIT_SECONDS));
     loop {
         let work = {
@@ -229,8 +247,17 @@ struct CommandResult {
     error: Option<String>,
 }
 
-async fn result(State(endpoints): State<Shared>, Json(result): Json<CommandResult>) -> Response {
-    if let Some(waiter) = endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&result.id) {
+async fn result(State(endpoints): State<Shared>, Extension(caller): Extension<Caller>, Path(endpoint_id): Path<String>, Json(result): Json<CommandResult>) -> Response {
+    if !speaks_for(&caller, &endpoint_id) {
+        return not_this_device();
+    }
+    let waiter = {
+        let mut waiting = endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        // An answer counts only from the endpoint the command was sent to.
+        let addressed = waiting.get(&result.id).is_some_and(|waiter| waiter.endpoint_id == endpoint_id);
+        if addressed { waiting.remove(&result.id) } else { None }
+    };
+    if let Some(waiter) = waiter {
         let _ = waiter.reply.send(if result.ok {
             Ok(result.value)
         } else {
@@ -350,6 +377,10 @@ mod tests {
         (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
     }
 
+    fn local() -> Extension<Caller> {
+        Extension(Caller { client_id: None })
+    }
+
     fn report(status: Value) -> Json<Presence> {
         Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None })
     }
@@ -357,7 +388,7 @@ mod tests {
     #[tokio::test]
     async fn cancelled_calls_remove_waiters_and_uncollected_commands() {
         let endpoints = Shared::default();
-        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({}))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({}))).await;
         for _ in 0..MAX_QUEUED + 2 {
             let call = tokio::spawn({ let endpoints = endpoints.clone(); async move {
                 endpoints.call("pc-1", "load_native_audio", json!({"source":"/api/test"})).await
@@ -367,7 +398,7 @@ mod tests {
             let _ = call.await;
             assert!(endpoints.waiting.lock().unwrap().is_empty());
         }
-        let (_, work) = body(collect(State(endpoints.clone()), Path("pc-1".into()), Query(CollectQuery { wait: Some(0) })).await).await;
+        let (_, work) = body(collect(State(endpoints.clone()), local(), Path("pc-1".into()), Query(CollectQuery { wait: Some(0) })).await).await;
         assert_eq!(work, json!([]), "a cancelled queued load must never execute later");
     }
 
@@ -375,13 +406,13 @@ mod tests {
     async fn output_restart_invalidates_waiters_before_the_command_timeout() {
         let endpoints = Shared::default();
         let mut first = report(json!({})); first.instance_id = Some("first".into());
-        presence(State(endpoints.clone()), Path("pc-1".into()), first).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), first).await;
         let call = tokio::spawn({ let endpoints = endpoints.clone(); async move {
             endpoints.call("pc-1", "load_native_audio", json!({"source":"/api/test"})).await
         }});
         tokio::task::yield_now().await;
         let mut second = report(json!({})); second.instance_id = Some("second".into());
-        presence(State(endpoints.clone()), Path("pc-1".into()), second).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), second).await;
         assert!(tokio::time::timeout(Duration::from_millis(100), call).await.unwrap().unwrap().is_err());
         assert!(endpoints.waiting.lock().unwrap().is_empty());
         assert!(endpoints.endpoints.lock().await["pc-1"].queue.is_empty());
@@ -390,7 +421,7 @@ mod tests {
     #[tokio::test]
     async fn a_command_reaches_the_endpoint_and_its_answer_comes_back() {
         let endpoints = Shared::default();
-        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({ "isPlaying": false }))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({ "isPlaying": false }))).await;
 
         let sender = tokio::spawn({
             let endpoints = endpoints.clone();
@@ -398,11 +429,11 @@ mod tests {
                 body(command(State(endpoints), Path("pc-1".into()), Json(CommandRequest { command: "set_output_settings".into(), args: json!({ "outputId": "d1", "change": { "enabled": true } }) })).await).await
             }
         });
-        let (_, work) = body(collect(State(endpoints.clone()), Path("pc-1".into()), Query(CollectQuery { wait: Some(2) })).await).await;
+        let (_, work) = body(collect(State(endpoints.clone()), local(), Path("pc-1".into()), Query(CollectQuery { wait: Some(2) })).await).await;
         assert_eq!(work[0]["command"], "set_output_settings");
         assert_eq!(work[0]["args"]["outputId"], "d1");
         let id = work[0]["id"].as_u64().unwrap();
-        result(State(endpoints.clone()), Json(CommandResult { id, ok: true, value: json!(null), error: None })).await;
+        result(State(endpoints.clone()), local(), Path("pc-1".into()), Json(CommandResult { id, ok: true, value: json!(null), error: None })).await;
         let (status, _) = tokio::time::timeout(Duration::from_secs(2), sender).await.unwrap().unwrap();
         assert_eq!(status, StatusCode::OK);
     }
@@ -410,7 +441,7 @@ mod tests {
     #[tokio::test]
     async fn a_remote_can_prepare_audio_without_directing_playback() {
         let endpoints = Shared::default();
-        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({}))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({}))).await;
         let args = json!({ "source": "http://remote:38147/api/providers/qobuz/tracks/1/stream" });
         let sender = tokio::spawn({
             let endpoints = endpoints.clone();
@@ -419,17 +450,17 @@ mod tests {
                 body(command(State(endpoints), Path("pc-1".into()), Json(CommandRequest { command: "warm_native_audio".into(), args })).await).await
             }
         });
-        let (_, work) = body(collect(State(endpoints.clone()), Path("pc-1".into()), Query(CollectQuery { wait: Some(2) })).await).await;
+        let (_, work) = body(collect(State(endpoints.clone()), local(), Path("pc-1".into()), Query(CollectQuery { wait: Some(2) })).await).await;
         assert_eq!(work[0]["command"], "warm_native_audio");
         assert_eq!(work[0]["args"], args);
-        result(State(endpoints), Json(CommandResult { id: work[0]["id"].as_u64().unwrap(), ok: true, value: Value::Null, error: None })).await;
+        result(State(endpoints), local(), Path("pc-1".into()), Json(CommandResult { id: work[0]["id"].as_u64().unwrap(), ok: true, value: Value::Null, error: None })).await;
         assert_eq!(sender.await.unwrap().0, StatusCode::OK);
     }
 
     #[tokio::test]
     async fn status_comes_from_the_last_report_and_unknown_commands_are_refused() {
         let endpoints = Shared::default();
-        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({ "isPlaying": true }))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({ "isPlaying": true }))).await;
         let (status, value) = body(command(State(endpoints.clone()), Path("pc-1".into()), Json(CommandRequest { command: "native_audio_status".into(), args: Value::Null })).await).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(value["isPlaying"], true);
@@ -444,7 +475,7 @@ mod tests {
     #[tokio::test]
     async fn the_list_shows_online_endpoints_with_their_outputs() {
         let endpoints = Shared::default();
-        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({}))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({}))).await;
         let Json(list) = list(State(endpoints)).await;
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].name, "Desk");
@@ -455,14 +486,14 @@ mod tests {
     async fn a_report_is_dated_by_when_it_was_sampled_not_when_it_arrived() {
         let endpoints = Shared::default();
         let sampled = |latency_ms| Json(Presence { latency_ms, ..report(json!({ "isPlaying": true })).0 });
-        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(200.0))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), sampled(Some(200.0))).await;
         let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
         assert_eq!(arrived - sampled_at, Duration::from_millis(200));
         // A stalled request isn't network delay; nonsense is ignored.
-        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(60_000.0))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), sampled(Some(60_000.0))).await;
         let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
         assert_eq!(arrived - sampled_at, Duration::from_secs(1));
-        presence(State(endpoints.clone()), Path("pc-1".into()), sampled(Some(f64::NAN))).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), sampled(Some(f64::NAN))).await;
         let (_, arrived, sampled_at, _) = endpoints.status("pc-1").await.unwrap();
         assert_eq!(arrived, sampled_at);
     }

@@ -145,6 +145,15 @@ impl AudioSettings {
         crate::write_file_atomic(&directory.join("audio-settings.json"), &bytes)
     }
     pub fn discover(&mut self, devices: &[super::NativeAudioDevice]) {
+        // CoreAudio outputs were once saved by their number, which changes on every reconnect;
+        // they are UIDs now, and the numbered entries could never be found again.
+        if cfg!(target_os = "macos") {
+            let numbered = |id: &str| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit());
+            if numbered(&self.selected_output_id) {
+                self.selected_output_id.clear();
+            }
+            self.outputs.retain(|output| !numbered(&output.id));
+        }
         for device in devices {
             if !self.outputs.iter().any(|o| o.id == device.id) {
                 self.outputs.push(OutputSettings {

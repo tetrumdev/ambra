@@ -274,8 +274,11 @@ async fn serve(agent: std::sync::Arc<Agent>) {
     }
 }
 
+/// Only the server's own media, which `local_source` moves onto this app's address for it.
+/// Any other URL would let a device that can send commands make this computer fetch it.
 fn server_media_source(source: &str) -> bool {
-    source.starts_with("/api/") || source.starts_with("http://") || source.starts_with("https://")
+    source.starts_with("/api/")
+        || source.strip_prefix("http://").or_else(|| source.strip_prefix("https://")).is_some_and(|url| url.contains("/api/"))
 }
 
 /// Only what the server asks for; the rest of the app stays private.

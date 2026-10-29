@@ -61,7 +61,10 @@ fn extract(source: &Path, directory: &Path) -> Result<(), Error> {
         let mut entry = archive
             .by_index(index)
             .map_err(|_| failed("Invalid driver ZIP entry."))?;
-        let name = entry.name().to_owned();
+        let name = entry
+            .name()
+            .map_err(|_| failed("Invalid driver ZIP entry."))?
+            .into_owned();
         let mode = entry.unix_mode().unwrap_or(0) & 0o170000;
         let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
         let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
