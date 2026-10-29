@@ -89,13 +89,69 @@ fn library_index_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     cache_directory(app).map(|directory| directory.join("library-index.v2.json"))
 }
 
+/// The app's own files. A server on the same machine keeps its data in `<app data>/data`
+/// (`server/src/storage.rs`), so the app must never write there.
+const CLIENT_DIRECTORY: &str = "client";
+/// What the app kept in the server's `data` directory before it had its own.
+const LEGACY_CLIENT_ENTRIES: &[&str] = &[
+    "audio-settings.json",
+    "server-link.json",
+    "client-network-identity.key",
+    "desktop-state",
+    "desktop-state.json",
+    "loudness-cache.json",
+    "dsp-impulses",
+];
+
 fn persistent_data_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     env::var_os("AMBRA_DATA_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .map(Ok)
-        .unwrap_or_else(|| app.path().app_data_dir().map(|path| path.join("data")))
+        .unwrap_or_else(|| app.path().app_data_dir().map(|path| path.join(CLIENT_DIRECTORY)))
         .map_err(|error| format!("Could not locate Ambra's data directory: {error}"))
+}
+
+/// Moves the app's files out of the directory it once shared with the server. The server
+/// also keeps convolution impulses under the same name, so those are copied, not moved.
+fn separate_client_data(app: &tauri::AppHandle) -> Result<(), String> {
+    if env::var_os("AMBRA_DATA_DIR").is_some_and(|value| !value.is_empty()) {
+        return Ok(());
+    }
+    let root = app.path().app_data_dir().map_err(|error| error.to_string())?;
+    let (legacy, client) = (root.join("data"), root.join(CLIENT_DIRECTORY));
+    fs::create_dir_all(&client).map_err(|error| error.to_string())?;
+    for name in LEGACY_CLIENT_ENTRIES {
+        let (from, to) = (legacy.join(name), client.join(name));
+        if !from.exists() || to.exists() {
+            continue;
+        }
+        // A failed copy leaves the original in place for the next start to try again.
+        if *name == "dsp-impulses" || fs::rename(&from, &to).is_err() {
+            let _ = copy_entry(&from, &to);
+        }
+    }
+    Ok(())
+}
+
+fn copy_entry(from: &Path, to: &Path) -> std::io::Result<()> {
+    // Copied beside the destination first, so an interrupted copy is never taken as done.
+    let partial = to.with_extension("partial");
+    if !from.is_dir() {
+        fs::copy(from, &partial)?;
+        return fs::rename(&partial, to);
+    }
+    let _ = fs::remove_dir_all(&partial);
+    for entry in WalkDir::new(from) {
+        let entry = entry.map_err(std::io::Error::other)?;
+        let target = partial.join(entry.path().strip_prefix(from).map_err(std::io::Error::other)?);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)?;
+        } else if entry.file_type().is_file() {
+            fs::copy(entry.path(), &target)?;
+        }
+    }
+    fs::rename(&partial, to)
 }
 
 // Persistence commands are `async` so Tauri runs them off the main thread, and
@@ -1031,6 +1087,7 @@ pub fn run() {
         .manage(remote_endpoint::SharedOutput::default())
         .setup(|app| {
             // The client never starts a server. Its optional bridge is separate from local playback.
+            let _ = separate_client_data(app.handle());
             let data = persistent_data_directory(app.handle()).map_err(std::io::Error::other)?;
             let link = server_link::ServerLink::start(data).map_err(std::io::Error::other)?;
             app.manage(link);

@@ -19,7 +19,12 @@ use coreaudio::audio_unit::{
     render_callback::{self, data},
 };
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
-use objc2_core_audio::AudioDeviceID;
+use objc2_core_audio::{
+    AudioDeviceID, AudioObjectGetPropertyData, AudioObjectPropertyAddress,
+    kAudioDevicePropertyDeviceUID, kAudioObjectPropertyElementMain,
+    kAudioObjectPropertyScopeGlobal,
+};
+use objc2_core_foundation::{CFRetained, CFString};
 
 use super::super::dither::Dither;
 use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed};
@@ -45,6 +50,50 @@ pub struct PlatformOutput {
     owns_hog_mode: bool,
 }
 
+/// Outputs by their current CoreAudio number.
+fn output_device_ids() -> Result<Vec<AudioDeviceID>, String> {
+    Ok(get_audio_device_ids_for_scope(Scope::Output)
+        .map_err(coreaudio_error)?
+        .into_iter()
+        .filter(|device_id| get_audio_device_supports_scope(*device_id, Scope::Output).unwrap_or(false))
+        .collect())
+}
+
+/// CoreAudio renumbers a device when it reconnects or the Mac restarts; its UID stays the
+/// same, so settings and other devices refer to it by UID.
+fn device_uid(device_id: AudioDeviceID) -> Option<String> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyDeviceUID,
+        mScope: kAudioObjectPropertyScopeGlobal,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut uid: *const CFString = std::ptr::null();
+    let mut size = std::mem::size_of::<*const CFString>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device_id,
+            std::ptr::NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            std::ptr::NonNull::from(&mut size),
+            std::ptr::NonNull::from(&mut uid).cast(),
+        )
+    };
+    if status != 0 {
+        return None;
+    }
+    // The UID is returned retained; taking ownership releases it.
+    let uid = unsafe { CFRetained::from_raw(std::ptr::NonNull::new(uid.cast_mut())?) };
+    Some(uid.to_string())
+}
+
+fn device_for_uid(uid: &str) -> Result<AudioDeviceID, String> {
+    output_device_ids()?
+        .into_iter()
+        .find(|device_id| device_uid(*device_id).as_deref() == Some(uid))
+        .ok_or_else(|| "The selected CoreAudio device is not connected".to_owned())
+}
+
 struct RenderBlock {
     generation: u64,
     samples: Vec<i32>,
@@ -52,19 +101,17 @@ struct RenderBlock {
 
 impl AudioOutput for PlatformOutput {
     fn list_devices() -> Result<Vec<NativeAudioDevice>, String> {
-        let device_ids = get_audio_device_ids_for_scope(Scope::Output).map_err(coreaudio_error)?;
         let default_device_id = get_default_device_id(false);
 
-        device_ids
+        output_device_ids()?
             .into_iter()
-            .filter(|device_id| {
-                get_audio_device_supports_scope(*device_id, Scope::Output).unwrap_or(false)
-            })
-            .map(|device_id| {
+            // A device without a UID can't be found again, so it can't be chosen.
+            .filter_map(|device_id| device_uid(device_id).map(|uid| (device_id, uid)))
+            .map(|(device_id, uid)| {
                 let name = get_device_name(device_id).map_err(coreaudio_error)?;
 
                 Ok(NativeAudioDevice {
-                    id: device_id.to_string(),
+                    id: uid,
                     name,
                     is_default: Some(device_id) == default_device_id,
                 })
@@ -87,9 +134,7 @@ impl AudioOutput for PlatformOutput {
         processed: bool,
     ) -> Result<Self, String> {
         let device_id = match selected_device_id {
-            Some(device_id) => device_id
-                .parse::<AudioDeviceID>()
-                .map_err(|_| "The selected CoreAudio device ID is invalid".to_owned())?,
+            Some(uid) => device_for_uid(uid)?,
             None => get_default_device_id(false)
                 .ok_or_else(|| "No default CoreAudio output device is available".to_owned())?,
         };

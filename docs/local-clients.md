@@ -80,11 +80,19 @@ This migration performs no destructive cleanup:
   directory per verified server. Credentials and client identity files retain their formats.
 - Saved legacy `host` and `fallback` settings remain readable. They no longer select or launch
   a local server. Legacy pairings without a cryptographic key require explicit re-pairing.
+- Desktop keeps its files in `<app data>/client`, apart from a server's `<app data>/data` on the
+  same machine. On first start it moves its own entries out of `data` (audio settings, server
+  link, client identity, `desktop-state`, loudness cache) and copies `dsp-impulses`, which the
+  server also uses. Server files in `data` are never touched.
+- macOS outputs are identified by their CoreAudio UID, which survives reconnects and restarts.
+  Entries saved under the old changing device numbers are dropped, and the output falls back to
+  System Default until chosen again.
 - Mobile adds a separate `local-music` document directory. Alternating JSON journal slots retain
   the previous valid snapshot after an interrupted write. Existing SecureStore pairing values
   remain unchanged. Loading rebases owned filenames if an iOS update moves the app container.
 
 To roll back, restore the previous client version and keep the existing data directories.
+A client older than the separate `client` directory reads `data`, so copy the moved entries back.
 Older clients continue to read the old key and pairing formats; new local keys and separate
 cache directories can remain. The old client will again use its former server-dependent
 behavior. Never clear browser storage or delete server data as a rollback step. State already
