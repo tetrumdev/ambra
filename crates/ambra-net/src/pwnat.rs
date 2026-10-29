@@ -36,6 +36,10 @@ pub struct Status {
     pub public_endpoint: Option<SocketAddr>,
     pub error: Option<String>,
     pub discovery_error: Option<String>,
+    pub icmp_echo_sent: u64,
+    pub icmp_errors: u64,
+    pub icmp_quotations_accepted: u64,
+    pub udp_punches_sent: u64,
 }
 pub type SharedStatus = Arc<std::sync::RwLock<Status>>;
 
@@ -161,7 +165,7 @@ fn privilege_guidance() -> &'static str {
     if cfg!(target_os = "linux") {
         "Raw ICMP unavailable; use the dedicated icmp-launch helper with CAP_NET_RAW, not a root Ambra process (see docs/networking/pwnat.md)"
     } else if cfg!(target_os = "macos") {
-        "Raw ICMP unavailable; operator must manually run icmp-launch through sudo in a separate Terminal (see docs/networking/pwnat.md)"
+        "Raw ICMP unavailable; launch through the installed one-shot icmp-launch helper using sudo (see docs/networking/pwnat.md)"
     } else {
         "pwnat is disabled on this platform"
     }
@@ -402,8 +406,22 @@ impl Client {
         identity: &Identity,
     ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
         validate_endpoint(server)?;
-        tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(self, server, key, identity)).await
-            .map_err(|_| "pwnat ICMP/QUIC/Noise setup timed out; client NAT must translate ICMP errors and both NATs must preserve ICMP identifiers/UDP ports")?
+        let mut stage = "icmp_socket";
+        let mut signals = 0u32;
+        let started = std::time::Instant::now();
+        let result = tokio::time::timeout(CONNECT_TIMEOUT, connect_inner(self, server, key, identity, &mut stage, &mut signals)).await;
+        match result {
+            Ok(Ok(connection)) => Ok(connection),
+            result => {
+                let detail = match result {
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => "setup timed out; client NAT must translate ICMP errors and both NATs must preserve ICMP identifiers/UDP ports".to_owned(),
+                    Ok(Ok(_)) => unreachable!(),
+                };
+                tracing::warn!(stage, icmp_requests=signals, elapsed_ms=started.elapsed().as_millis(), "pwnat setup failed");
+                Err(format!("pwnat stage={stage} icmp_requests={signals}: {detail}").into())
+            }
+        }
     }
     pub fn shutdown(&self) {
         if let Some(endpoint) = self
@@ -429,22 +447,29 @@ async fn connect_inner(
     server: SocketAddr,
     key: PublicKey,
     identity: &Identity,
+    stage: &mut &'static str,
+    signals: &mut u32,
 ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
     let SocketAddr::V4(server) = server else {
         return Err("pwnat requires IPv4".into());
     };
     let raw = raw_socket()?;
+    *stage = "udp_bind";
     let endpoint = client.endpoint(server.port())?;
     let message = time_exceeded(*server.ip(), key);
     tracing::info!(endpoint = %server, local = %endpoint.local_addr()?, "pwnat ICMP signaling and direct QUIC attempt; requires port-preserving NAT");
     let connection = endpoint.connect(SocketAddr::V4(server), "ambra")?;
+    *stage = "quic_connect";
     tokio::pin!(connection);
     let connection = loop {
         raw.send_to(&message, SocketAddr::V4(SocketAddrV4::new(*server.ip(), 0)))
             .await?;
+        *signals += 1;
         tokio::select! { result = &mut connection => break result?, _ = tokio::time::sleep(Duration::from_millis(300)) => {} }
     };
+    *stage = "quic_stream";
     let (send, recv) = connection.open_bi().await?;
+    *stage = "noise_identity";
     let (io, _, pump) = transport::secure(Bi { send, recv }, identity, Some(key)).await?;
     tracing::info!(peer = %key, endpoint = %connection.remote_address(), "pwnat authenticated direct QUIC/Noise stream; no LAN, DHT data stream or relay");
     // QUIC streams retain their connection; the Endpoint must also stay alive.
@@ -505,19 +530,30 @@ pub async fn serve(
             _ = cancel.cancelled() => break,
             _ = interval.tick() => {
                 recent.clear();
-                if let Err(error) = raw.send_to(&echo(identity.public_key()), SocketAddr::from((ECHO_TARGET, 0))).await {
-                    tracing::warn!(%error, "pwnat Echo transmission failed");
-                    status.write().unwrap_or_else(|p| p.into_inner()).error = Some(format!("ICMP Echo transmission failed: {error}"));
+                match raw.send_to(&echo(identity.public_key()), SocketAddr::from((ECHO_TARGET, 0))).await {
+                    Ok(_) => { status.write().unwrap_or_else(|p|p.into_inner()).icmp_echo_sent += 1; },
+                    Err(error) => {
+                        tracing::warn!(%error, "pwnat Echo transmission failed");
+                        let mut status = status.write().unwrap_or_else(|p|p.into_inner());
+                        status.icmp_errors += 1;
+                        status.error = Some(format!("ICMP Echo transmission failed: {error}"));
+                    }
                 }
             },
             result = raw.recv_from(&mut buffer) => {
                 let (length, source) = result?;
                 if validate_endpoint(SocketAddr::new(source.ip(), 1)).is_ok() && validate_time_exceeded(&buffer[..length], identity.public_key()) && recent.len() < 16 && !recent.contains_key(&source.ip()) {
                     recent.insert(source.ip(), ());
+                    status.write().unwrap_or_else(|p|p.into_inner()).icmp_quotations_accepted += 1;
                     let port = status.read().unwrap_or_else(|p| p.into_inner()).configured_endpoint.map_or(address.port(), |a| a.port());
                     let target = SocketAddr::new(source.ip(), port);
                     tracing::info!(%source, %target, "pwnat validated ICMP quotation; sending bounded UDP punches");
-                    for _ in 0..3 { if let Err(error) = punch.send_to(b"AMBRA-PUNCH/1", target).await { tracing::warn!(%error, %target, "pwnat UDP punch failed"); break; } }
+                    for _ in 0..3 {
+                        match punch.send_to(b"AMBRA-PUNCH/1", target).await {
+                            Ok(_) => { status.write().unwrap_or_else(|p|p.into_inner()).udp_punches_sent += 1; },
+                            Err(error) => { tracing::warn!(%error, %target, "pwnat UDP punch failed"); break; }
+                        }
+                    }
                 }
             },
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},

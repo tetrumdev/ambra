@@ -1,0 +1,1292 @@
+{
+  "schema": 1,
+  "generated_utc": "2026-10-28T23:21:46.578321+00:00",
+  "source_baseline": "3b6653dc335f52729146a2d51a1f3f9207b576e8",
+  "build_profile": "debug",
+  "physical_paths": {
+    "mac": "en0, personal hotspot",
+    "linux": "wlo1, home Wi-Fi",
+    "administration_only": "Tailscale SSH"
+  },
+  "quantile_method": "nearest rank; p95 is maximum for these small connection samples",
+  "server_pairing_baseline": {
+    "ok": true,
+    "pairings": 1,
+    "reconnect_successes": 5,
+    "reconnect_attempts": 5,
+    "pair_request_ms": 10406.18341579102,
+    "reconnect_ms": {
+      "n": 5,
+      "median": 2509.701916947961,
+      "p95": 2703.900417080149
+    },
+    "reconnect_samples_ms": [
+      2703.900417080149,
+      2656.8140420131385,
+      2509.701916947961,
+      2296.052958117798,
+      2278.9872088469565
+    ],
+    "transfer_mib_s": {
+      "n": 6,
+      "median": 0.464030273289913,
+      "p95": 0.4751187937488049
+    },
+    "exact_wav_transfers": 6,
+    "audio_http_first_byte_ms": {
+      "n": 0,
+      "median": null,
+      "p95": null
+    },
+    "authorization_ms": [],
+    "peak_probe_rss_kib": null
+  },
+  "server_pairing_fixed_same_policy": {
+    "ok": true,
+    "pairings": 1,
+    "reconnect_successes": 8,
+    "reconnect_attempts": 8,
+    "pair_request_ms": 8575.113042024896,
+    "reconnect_ms": {
+      "n": 8,
+      "median": 2382.352166576311,
+      "p95": 3096.1453749332577
+    },
+    "reconnect_samples_ms": [
+      2264.7678339853883,
+      2497.226000064984,
+      2297.888708068058,
+      2341.6187909897417,
+      2423.0855421628803,
+      3096.1453749332577,
+      2865.763833047822,
+      2221.0435420274734
+    ],
+    "transfer_mib_s": {
+      "n": 9,
+      "median": 0.48377180796517416,
+      "p95": 0.49809517755703725
+    },
+    "exact_wav_transfers": 9,
+    "audio_http_first_byte_ms": {
+      "n": 9,
+      "median": 128.65725,
+      "p95": 342.712
+    },
+    "authorization_ms": [
+      59.403916
+    ],
+    "peak_probe_rss_kib": 24544
+  },
+  "server_pairing_fixed_forced_hyperdht_extra": {
+    "ok": true,
+    "pairings": 1,
+    "reconnect_successes": 8,
+    "reconnect_attempts": 8,
+    "pair_request_ms": 4385.667874943465,
+    "reconnect_ms": {
+      "n": 8,
+      "median": 2063.3510624757037,
+      "p95": 2303.978707874194
+    },
+    "reconnect_samples_ms": [
+      2068.6240419745445,
+      2272.053000051528,
+      2303.978707874194,
+      2058.078082976863,
+      2021.182875148952,
+      2105.162040796131,
+      1972.1462498418987,
+      1993.5130421072245
+    ],
+    "transfer_mib_s": {
+      "n": 9,
+      "median": 0.5149948353670082,
+      "p95": 0.5353433451706899
+    },
+    "exact_wav_transfers": 9,
+    "audio_http_first_byte_ms": {
+      "n": 9,
+      "median": 108.816,
+      "p95": 766.492084
+    },
+    "authorization_ms": [
+      60.591417
+    ],
+    "peak_probe_rss_kib": 24208
+  },
+  "native_before_owner_fix": {
+    "ok": true,
+    "samples": [
+      {
+        "wall_ms": 156.37083281762898,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": true,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 1218.224290991202,
+        "position_s": 0.8707482993197279,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 2239.848207915202,
+        "position_s": 1.8459863945578232,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 3255.3357498254627,
+        "position_s": 2.8908843537414968,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 4272.382166003808,
+        "position_s": 3.81968253968254,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 5286.521124886349,
+        "position_s": 4.934240362811791,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 6305.118374992162,
+        "position_s": 5.863038548752835,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 7321.624374948442,
+        "position_s": 6.977596371882086,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 8335.99687484093,
+        "position_s": 7.90639455782313,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 9344.094540923834,
+        "position_s": 9.02095238095238,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 10363.681790884584,
+        "position_s": 9.949750566893425,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 11382.200790802017,
+        "position_s": 11.064308390022676,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 12401.235374854878,
+        "position_s": 11.993106575963719,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 13422.315332805738,
+        "position_s": 13.10766439909297,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectingHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 14437.984250020236,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": false,
+        "network": "Authenticating",
+        "error": null
+      },
+      {
+        "wall_ms": 15455.346915870905,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 16475.182915804908,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 17495.070582954213,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 18510.04970795475,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 19526.70154091902,
+        "position_s": 12.132426303854876,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 20538.046832894906,
+        "position_s": 13.14249433106576,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 21555.56737491861,
+        "position_s": 14.129342403628119,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 22575.443249894306,
+        "position_s": 15.139410430839003,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 23588.925832882524,
+        "position_s": 16.068208616780048,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 24603.584249969572,
+        "position_s": 17.182766439909297,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 25621.80699990131,
+        "position_s": 18.11156462585034,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 26637.322957860306,
+        "position_s": 19.226122448979595,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 27653.53720798157,
+        "position_s": 20.154920634920636,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 28671.78141581826,
+        "position_s": 21.26947845804989,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 29689.25275001675,
+        "position_s": 22.19827664399093,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 30709.19183292426,
+        "position_s": 23.312834467120183,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 31730.388541007414,
+        "position_s": 24.241632653061224,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 32750.22979080677,
+        "position_s": 25.356190476190477,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 33755.344207864255,
+        "position_s": 26.28498866213152,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 34775.87199979462,
+        "position_s": 27.213786848072566,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 35797.09087498486,
+        "position_s": 28.32834467120182,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 36816.07362488285,
+        "position_s": 29.25714285714286,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 37836.47162490524,
+        "position_s": 30.371700680272113,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 38845.84679082036,
+        "position_s": 31.300498866213154,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 39858.05762489326,
+        "position_s": 32.41505668934241,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 40867.42066591978,
+        "position_s": 33.34385487528345,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 41879.113332834095,
+        "position_s": 34.4584126984127,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 42899.03304097243,
+        "position_s": 35.38721088435374,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 43908.570749918,
+        "position_s": 36.501768707482995,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 44921.615707920864,
+        "position_s": 37.430566893424036,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      }
+    ],
+    "status_sample_interval_seconds": 1,
+    "first_playing_sample_ms": 1218.224290991202,
+    "paused_samples_after_start": 5,
+    "buffering_samples_after_start": 0,
+    "backward_position_steps_after_start": 1,
+    "last_position_seconds": 37.430566893424036,
+    "forced_close_ms": 12413.797415792942,
+    "peak_rss_kib": 129952,
+    "ps_cpu_percent": {
+      "n": 45,
+      "median": 22.1,
+      "p95": 28.4
+    },
+    "quality": {
+      "bitDepth": 16,
+      "bitrateIsEstimate": false,
+      "bitrateKbps": 1411.2,
+      "channels": 2,
+      "codec": "pcm_s16le",
+      "normalizationGainDb": null,
+      "sampleRateHz": 44100
+    },
+    "audible_output_measured": false
+  },
+  "native_after_owner_fix": {
+    "ok": true,
+    "samples": [
+      {
+        "wall_ms": 607.0722909644246,
+        "position_s": 0.0,
+        "playing": false,
+        "buffering": true,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 1651.3409158214927,
+        "position_s": 0.19736961451247165,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 2670.3390828333795,
+        "position_s": 1.1609977324263039,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 3680.640540784225,
+        "position_s": 2.2291156462585033,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 4697.678165975958,
+        "position_s": 3.239183673469388,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 5716.799415880814,
+        "position_s": 4.167981859410431,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 6731.144540943205,
+        "position_s": 5.282539682539682,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 7748.380374861881,
+        "position_s": 6.211337868480726,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 8753.811249975115,
+        "position_s": 7.325895691609977,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 9763.960040872917,
+        "position_s": 8.25469387755102,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 10771.798665868118,
+        "position_s": 9.369251700680271,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 11780.814082827419,
+        "position_s": 10.298049886621316,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 12798.920165980235,
+        "position_s": 11.226848072562358,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 13817.57349986583,
+        "position_s": 12.34140589569161,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectingHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 14829.84379096888,
+        "position_s": 13.270204081632652,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectingHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 15846.202332992107,
+        "position_s": 14.384761904761906,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 16862.88833292201,
+        "position_s": 15.313560090702948,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 17880.533332936466,
+        "position_s": 16.4281179138322,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 18897.795124910772,
+        "position_s": 17.356916099773244,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 19915.49079096876,
+        "position_s": 18.471473922902494,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 20930.93508295715,
+        "position_s": 19.400272108843538,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 21951.670749811456,
+        "position_s": 20.514829931972788,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 22970.918582985178,
+        "position_s": 21.443628117913832,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 23993.060749955475,
+        "position_s": 22.558185941043085,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 25014.348207972944,
+        "position_s": 23.486984126984126,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 26035.94020800665,
+        "position_s": 24.60154195011338,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 27056.63316580467,
+        "position_s": 25.530340136054424,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 28078.757874900475,
+        "position_s": 26.644897959183673,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 29101.48441581987,
+        "position_s": 27.573696145124718,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 30122.35258286819,
+        "position_s": 28.688253968253967,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 31144.232999999076,
+        "position_s": 29.61705215419501,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 32166.36391589418,
+        "position_s": 30.731609977324265,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 33188.867249991745,
+        "position_s": 31.660408163265306,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 34210.4059997946,
+        "position_s": 32.774965986394555,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 35228.83449983783,
+        "position_s": 33.7037641723356,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 36247.28474998847,
+        "position_s": 34.81832199546485,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 37263.77012487501,
+        "position_s": 35.7471201814059,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 38280.44004086405,
+        "position_s": 36.86167800453515,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 39289.844249840826,
+        "position_s": 37.79047619047619,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 40307.499249931425,
+        "position_s": 38.905034013605444,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 41323.665832867846,
+        "position_s": 39.833832199546485,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 42346.79116588086,
+        "position_s": 40.94839002267574,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 43367.277124896646,
+        "position_s": 41.87718820861678,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 44379.82712499797,
+        "position_s": 42.80598639455782,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      },
+      {
+        "wall_ms": 45400.78304079361,
+        "position_s": 43.92054421768707,
+        "playing": true,
+        "buffering": false,
+        "network": "ConnectedHyperDHT",
+        "error": null
+      }
+    ],
+    "status_sample_interval_seconds": 1,
+    "first_playing_sample_ms": 1651.3409158214927,
+    "paused_samples_after_start": 0,
+    "buffering_samples_after_start": 0,
+    "backward_position_steps_after_start": 0,
+    "last_position_seconds": 43.92054421768707,
+    "forced_close_ms": 12806.890540989116,
+    "peak_rss_kib": 124688,
+    "ps_cpu_percent": {
+      "n": 45,
+      "median": 12.5,
+      "p95": 28.6
+    },
+    "quality": {
+      "bitDepth": 16,
+      "bitrateIsEstimate": false,
+      "bitrateKbps": 1411.2,
+      "channels": 2,
+      "codec": "pcm_s16le",
+      "normalizationGainDb": null,
+      "sampleRateHz": 44100
+    },
+    "audible_output_measured": false
+  },
+  "fixture_baseline": {
+    "cold": [
+      {
+        "client": 0,
+        "connection_ms": 8673.514792,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4787501461052688
+      },
+      {
+        "client": 0,
+        "connection_ms": 5085.8564590000005,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.43512388534518254
+      },
+      {
+        "client": 0,
+        "connection_ms": 9867.016791999999,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4630136809671165
+      },
+      {
+        "client": 0,
+        "connection_ms": 4634.951709,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4776332365244956
+      },
+      {
+        "client": 0,
+        "connection_ms": 4956.076875,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4524799819451075
+      }
+    ],
+    "stream": {
+      "body_gaps_over_250ms": 11,
+      "bytes": 46137344,
+      "max_body_gap_ms": 402.140416,
+      "poll_p50_ms": 578.29825,
+      "poll_p95_ms": 996.5298329999999,
+      "polls": 134,
+      "responses": 22,
+      "result": "Ok(Ok(()))",
+      "seconds": 93.770407208,
+      "throughput_mib_s": 0.4692241221521433
+    },
+    "stream_returncode": 0,
+    "bbr_mode_counts": {
+      "Startup": 373,
+      "Drain": 11,
+      "ProbeBw": 16301,
+      "ProbeRtt": 110
+    },
+    "fast_retransmit_events": 8,
+    "rto_events": 10
+  },
+  "fixture_first_fixed_stress_failed": {
+    "cold": [
+      {
+        "client": 0,
+        "connection_ms": 7406.75025,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.5103799696371026
+      },
+      {
+        "client": 0,
+        "connection_ms": 8098.556042,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.481112196687326
+      },
+      {
+        "client": 0,
+        "connection_ms": 8197.736417,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.44873928234435545
+      },
+      {
+        "client": 0,
+        "connection_ms": 11372.607083,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4041470812343409
+      },
+      {
+        "client": 0,
+        "connection_ms": 9803.2,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.32386310387564954
+      }
+    ],
+    "stream_returncode": 1,
+    "bbr_mode_counts": {
+      "Startup": 406,
+      "Drain": 33,
+      "ProbeBw": 14606,
+      "ProbeRtt": 77
+    },
+    "fast_retransmit_events": 49,
+    "rto_events": 14,
+    "failure": "Concurrent control poll timed out; original benchmark discarded transfer metrics before printing them."
+  },
+  "fixture_fixed_stress_retry": {
+    "cold": [],
+    "stream": {
+      "body_gaps_over_250ms": 1,
+      "bytes": 46137344,
+      "max_body_gap_ms": 615.253625,
+      "poll_error": null,
+      "poll_p50_ms": 533.3797089999999,
+      "poll_p95_ms": 747.205875,
+      "polls": 141,
+      "responses": 22,
+      "result": "Ok(Ok(()))",
+      "seconds": 90.173923166,
+      "throughput_mib_s": 0.4879457737433485
+    },
+    "stream_returncode": 0,
+    "bbr_mode_counts": {
+      "Startup": 57,
+      "Drain": 0,
+      "ProbeBw": 15004,
+      "ProbeRtt": 97
+    },
+    "fast_retransmit_events": 52,
+    "rto_events": 0
+  },
+  "fixture_interleaved": {
+    "cold": [
+      {
+        "client": 0,
+        "connection_ms": 4495.9527499999995,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4922362347521366,
+        "variant": "baseline_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4030.623833,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.523151651266063,
+        "variant": "fixed_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4947.49175,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.5267161110442657,
+        "variant": "baseline_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4314.681084,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4854166036145894,
+        "variant": "fixed_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4967.429375,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.3930604811228244,
+        "variant": "baseline_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4114.898333,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.41136301194590397,
+        "variant": "fixed_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 3884.5034160000005,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.5041624756847952,
+        "variant": "baseline_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 5575.2522500000005,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.40123701709409204,
+        "variant": "fixed_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 4369.275167,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4124185586684405,
+        "variant": "baseline_client"
+      },
+      {
+        "client": 0,
+        "connection_ms": 3742.679875,
+        "ok": true,
+        "round": 0,
+        "throughput_mib_s": 0.4910717628948386,
+        "variant": "fixed_client"
+      }
+    ],
+    "stream": {
+      "skipped": "interleaved cold connection comparison only"
+    },
+    "bbr_mode_counts": {
+      "Startup": 575,
+      "Drain": 43,
+      "ProbeBw": 6056,
+      "ProbeRtt": 0
+    },
+    "fast_retransmit_events": 12,
+    "rto_events": 16,
+    "baseline_client": {
+      "successes": 5,
+      "attempts": 5,
+      "connection_ms": {
+        "n": 5,
+        "median": 4495.9527499999995,
+        "p95": 4967.429375
+      }
+    },
+    "fixed_client": {
+      "successes": 5,
+      "attempts": 5,
+      "connection_ms": {
+        "n": 5,
+        "median": 4114.898333,
+        "p95": 5575.2522500000005
+      }
+    }
+  },
+  "direct_udp_ephemeral": {
+    "mac": {
+      "interface": "en0",
+      "sent": 100,
+      "answered": 93,
+      "unanswered": 7,
+      "rtt_ms": {
+        "n": 93,
+        "median": 42.79387486167252,
+        "p95": 122.02345812693238
+      },
+      "successive_rtt_jitter_ms": 14.549066502418693,
+      "stun_mapping_preserved_local_48489": null
+    },
+    "linux": {
+      "interface": "wlo1",
+      "sent": 100,
+      "answered": 100,
+      "unanswered": 0,
+      "rtt_ms": {
+        "n": 100,
+        "median": 46.036777494009584,
+        "p95": 116.57038600242231
+      },
+      "successive_rtt_jitter_ms": 11.768013535530748,
+      "stun_mapping_preserved_local_48489": null
+    }
+  },
+  "direct_udp_fixed_port_control": {
+    "mac": {
+      "interface": "en0",
+      "sent": 100,
+      "answered": 99,
+      "unanswered": 1,
+      "rtt_ms": {
+        "n": 99,
+        "median": 90.62091703526676,
+        "p95": 458.1365829799324
+      },
+      "successive_rtt_jitter_ms": 53.73333502389795,
+      "stun_mapping_preserved_local_48489": false
+    },
+    "linux": {
+      "interface": "wlo1",
+      "sent": 100,
+      "answered": 100,
+      "unanswered": 0,
+      "rtt_ms": {
+        "n": 100,
+        "median": 84.03880200057756,
+        "p95": 419.3520699918736
+      },
+      "successive_rtt_jitter_ms": 55.01026722292105,
+      "stun_mapping_preserved_local_48489": true
+    }
+  },
+  "physical_pwnat": {
+    "successful_attempts": 0,
+    "attempts": 2,
+    "failure_stage": "quic_connect",
+    "icmp_requests_last_attempt": 17,
+    "server_echoes_sent": 2,
+    "server_send_errors": 0,
+    "accepted_icmp_quotations": 0,
+    "udp_punches": 0,
+    "physical_throughput_mib_s": null,
+    "limitation": "Client Time Exceeded packets leave en0 but do not arrive at wlo1; fixed-port control separately observes client port remapping."
+  },
+  "pwnat_simulation": {
+    "strict_conntrack_client": "expected timeout",
+    "blocked_icmp": "expected timeout; firewall counter verified",
+    "compatible_client": "pairing, exact WAV/range and reconnect pass with explicit ICMP translation; not physical validation"
+  },
+  "helper_health": {
+    "mac_nonroot_after_socket": true,
+    "linux_nonroot_after_socket": true,
+    "linux_effective_capabilities": 0,
+    "linux_no_new_privs": 1
+  },
+  "checks": {
+    "ambra_net_mac": "41 tests and STUN parser example pass",
+    "ambra_net_linux": "41 tests and STUN parser example pass",
+    "udx_mac": "69 unit + 37 focused integration pass",
+    "udx_linux": "69 unit + 37 focused integration pass",
+    "server_mac": "202 passed, 1 ignored",
+    "server_linux_controlled": "199 passed, 1 failed, 2 ignored; umask 022 and one test thread",
+    "server_linux_remaining_failure": "write_behind::tests::write_behind_benchmark; unchanged benchmark reads missing asynchronous output",
+    "desktop_rust": "50 passed, 1 pre-existing failure, 1 ignored",
+    "desktop_rust_remaining_failure": "native_audio::tests::releasing_a_paused_device_does_not_reopen_the_song",
+    "desktop_stdin_driver": "2 passed",
+    "frontend_recovery": "2 new regressions pass; clean-HEAD startup baseline 8 passed/2 failed; changed suite 10 passed/2 same failures",
+    "local_playback": "3 passed",
+    "typescript_and_vite_build": "passed",
+    "client_bundle_separation": "passed",
+    "udx_clippy": "passed with -D warnings",
+    "net_clippy": "one existing collapsible-if advisory in unchanged endpoint reuse code",
+    "sensitive_content_guard": "passed",
+    "git_diff_check": "passed",
+    "terminal_server_bootstrap": "Closed-bootstrap regression fails before fix; returns failure with cleaned listener state after fix."
+  },
+  "limits": [
+    "No long-duration reliability guarantee from short runs.",
+    "One raw-transport stress run had long retransmission backoff and a timed-out control poll.",
+    "Native status sampling cannot prove absence of subsecond audible defects.",
+    "Provider-specific FLAC/CDN playback and additional network topologies were not validated.",
+    "No physical pwnat success is claimed.",
+    "Cold and warm timing samples are small and vary with public DHT and cellular conditions."
+  ],
+  "source_sha256": {
+    "crates/ambra-net/examples/network_diagnose.rs": "35a5c99bd336c49556c433c6c578220e31d46f558b69e8e9bc05da49546f6ad6",
+    "crates/ambra-net/examples/pairing_probe.rs": "916dd7903b96d1091fd1e9aca045e4b82bab588a7a5c8ce9e7d748601af68061",
+    "crates/ambra-net/examples/streaming_bench.rs": "050288c532e593541be892fe7ba63b5693a621109b25f03258f2e8c2c7d1fefe",
+    "crates/ambra-net/src/hyperdht.rs": "ae29666cde09228ab6330db8e043cef5e07503755dc84c16fab84053531e5c84",
+    "crates/ambra-net/src/pwnat.rs": "00e47753ea7c73f0cbdbf2df01a091b5034affbe7cbd55f9684c0d1ec06ca260",
+    "desktop/src-tauri/src/network_test.rs": "d7d9a847f6a42e703aaebcde89828a1793d788905a945f7762d218b22cddfc62",
+    "desktop/src/Root.tsx": "283fb45861d4cf8b624ffc52234f503da52d23590553fdac1f9dae09016b37ed",
+    "desktop/src/components/settings/ServerSettings.tsx": "153315051531bbbb72801d550b695eac6fc5a922ab0d5426ece48fee63e014ce",
+    "desktop/tests/clientStartup.test.tsx": "a7eb01bed4d9727551c990448a7bf37f1ff2f65261b46aa93bdf8122fa78f8de",
+    "scripts/pwnat/cross-network.py": "d43a7e4505a5283df7a98ac0f394258d3200d7b022d2455ca4ac7912d2a851ba",
+    "scripts/pwnat/icmp-launch.c": "e52147aa8e77a2354f829255ecefcf216974674d31648fdb7978907fcd2c6d9a",
+    "scripts/pwnat/install-helper.sh": "88f586f96d495213a93c7a9253898d56fde9bb82af628549490be6581982bbbc",
+    "scripts/pwnat/udp-peer.py": "4858f895db14f59acbab1bfde1a8c143bcf514d2fef1dcc6b3bd46842c823fbc",
+    "server/Cargo.toml": "18bb443ebe1ccf01a146e0f9d71d30e5d43b9595d754eb8dc650646eca3dd765",
+    "server/src/p2p.rs": "6fa4f094f89a407e38f5b796ba24ebed31840654d5fbae598f9952ffd69a2143",
+    "server/src/session.rs": "be3f6e2cf1ebcdcc9c5d35d8bbe0dc7645f656a964ccd501dab4fde43156c4a0",
+    "vendor/libudx/src/native/async_stream.rs": "40f82bd46bb1b6c9921c6a1b955d3c3ffea2a599e42e883ada594f7745930c7a",
+    "vendor/libudx/src/native/congestion/mod.rs": "3401e183bdb5a10629f0d14bf083b6338defc83de03df2e0d9697eac189c7edb",
+    "vendor/libudx/src/native/stream.rs": "e87e78b8a51dc38c1884bd533a86bceb2e85b70fe91db21225bb119f6e5e3b61",
+    "vendor/libudx/tests/async_stream.rs": "36972de2d7719fd739d66fb3971ff3e906f827dff3fc77c439279deaf4871e4e",
+    "vendor/libudx/tests/network_sim.rs": "8a8c6eea063bf8be54a47372871d733926ed1c7f6df578fbde4ca6df692410b2"
+  },
+  "source_sync": {
+    "matched": true,
+    "files": 21,
+    "mismatches": [],
+    "head": "3b6653dc335f52729146a2d51a1f3f9207b576e8"
+  },
+  "final_startup_guard_physical": {
+    "ok": true,
+    "physical_path_verified": true,
+    "pair_request_ms": 5327.429958153516,
+    "reconnect_ms": 2336.877166060731,
+    "exact_wav_transfers": 2,
+    "bytes_per_transfer": 176444,
+    "client_interfaces": [
+      "en0"
+    ],
+    "server_interfaces": [
+      "wlo1"
+    ]
+  }
+}

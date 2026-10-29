@@ -554,7 +554,7 @@ impl StreamInner {
         let mut rtt_measured = false;
         let mut acked_rate_info: Vec<(u32, super::congestion::rate::PacketRateInfo)> = Vec::new();
         for (&seq, pkt) in &removed {
-            if !rtt_measured && pkt.retransmit_count == 0 {
+            if !rtt_measured && !pkt.sacked && pkt.retransmit_count == 0 {
                 let elapsed = pkt.time_sent.elapsed().as_millis() as u32;
                 self.update_rtt(elapsed);
                 rtt_measured = true;
@@ -593,15 +593,17 @@ impl StreamInner {
     ) -> Vec<(u32, super::congestion::rate::PacketRateInfo)> {
         let mut sack_rate_info = Vec::new();
         for range in ranges {
-            for seq in range.start..range.end {
-                if let Some(pkt) = self.outgoing.get_mut(&seq) {
+            if range.start >= range.end { continue; }
+            // Bound work by packets actually in flight, not an untrusted
+            // numeric range supplied by the peer.
+            for (&seq, pkt) in self.outgoing.range_mut(range.start..range.end) {
                     if !pkt.sacked {
                         pkt.sacked = true;
-                        if let Some(info) = pkt.rate_info {
+                        // A later cumulative ACK must not deliver it twice.
+                        if let Some(info) = pkt.rate_info.take() {
                             sack_rate_info.push((seq, super::congestion::rate::PacketRateInfo { retransmitted: pkt.retransmit_count > 0, ..info }));
                         }
                     }
-                }
             }
         }
         sack_rate_info
@@ -627,11 +629,17 @@ impl StreamInner {
         let Some(highest_sacked) = highest_sacked else {
             return 0;
         };
+        let latest_sacked_send = self.outgoing.values().filter(|pkt|pkt.sacked)
+            .map(|pkt|pkt.time_sent).max().unwrap();
 
         let lost_seqs: Vec<u32> = self
             .outgoing
             .iter()
-            .filter(|&(&seq, pkt)| !pkt.sacked && !pkt.lost && seq_after(highest_sacked, seq))
+            .filter(|&(&seq, pkt)| !pkt.sacked && !pkt.lost && seq_after(highest_sacked, seq)
+                // A SACK for a packet sent before this retransmission cannot
+                // establish that the retransmission was lost. RTO remains the
+                // fallback until newer delivery supplies fresh evidence.
+                && pkt.time_sent <= latest_sacked_send)
             .map(|(&seq, _)| seq)
             .collect();
 
@@ -1463,10 +1471,11 @@ async fn process_incoming(
                         None
                     };
 
-                    let (completed, outgoing_empty, fast_retransmits, udp_for_retransmit, addr_for_retransmit) = {
+                    let (completed, outgoing_empty, ack_advanced, fast_retransmits, udp_for_retransmit, addr_for_retransmit) = {
                         let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
                         guard.send_rwnd = header.recv_window;
 
+                        let ack_advanced = has_ack && seq_after(header.ack, guard.remote_acked);
                         let (write_completions, mut acked_rate_info) = if has_ack {
                             guard.on_cumulative_ack(header.ack)
                         } else {
@@ -1491,7 +1500,7 @@ async fn process_incoming(
                         let addr = guard.remote_addr;
 
                         let empty = guard.outgoing.is_empty();
-                        (write_completions, empty, retransmits, udp, addr)
+                        (write_completions, empty, ack_advanced, retransmits, udp, addr)
                     };
 
                     // Notify completed writes (outside lock)
@@ -1515,7 +1524,10 @@ async fn process_incoming(
                     // Reset RTO timer based on outgoing state
                     if outgoing_empty {
                         rto_sleep.as_mut().reset(TokioInstant::now() + FAR_FUTURE);
-                    } else {
+                    } else if ack_advanced {
+                        // Duplicate ACKs, SACK-only traffic and keepalives do
+                        // not resolve the oldest missing packet. They must not
+                        // postpone its RTO indefinitely on a busy duplex link.
                         let rto = inner.lock().unwrap_or_else(|e| e.into_inner()).rto as u64;
                         rto_sleep.as_mut().reset(
                             TokioInstant::now() + Duration::from_millis(rto),
@@ -1923,6 +1935,72 @@ fn send_ack(
 #[cfg(test)]
 mod mtu_tests {
     use super::*;
+
+    #[test]
+    fn sack_then_cumulative_ack_counts_delivery_once() {
+        let mut stream = make_stream_inner();
+        stream.register_sent(0, vec![0; HEADER_SIZE], false);
+        stream.register_sent(1, vec![0; HEADER_SIZE], false);
+        let selective = stream.on_sack(&[SackRange { start: 1, end: 2 }]);
+        assert_eq!(selective.len(), 1);
+        assert!(stream.on_sack(&[SackRange { start: 1, end: 2 }]).is_empty());
+        let (_, cumulative) = stream.on_cumulative_ack(2);
+        assert_eq!(cumulative.len(), 1, "SACKed packet was already delivered");
+        assert_eq!(cumulative[0].0, 0);
+    }
+
+    #[test]
+    fn old_sack_does_not_retransmit_same_packet_repeatedly() {
+        let mut stream = make_stream_inner();
+        stream.register_sent(0,vec![0;HEADER_SIZE],false);
+        stream.register_sent(1,vec![0;HEADER_SIZE],false);
+        stream.on_sack(&[SackRange { start:1,end:2 }]);
+        assert_eq!(stream.detect_losses(),1);
+        assert_eq!(stream.fast_retransmit().len(),1);
+        assert_eq!(stream.detect_losses(),0,"old SACK gives no evidence a retransmission was lost");
+    }
+
+    #[tokio::test]
+    async fn duplicate_acks_do_not_starve_retransmission_timer() {
+        use std::time::Duration;
+        use tokio::io::AsyncWriteExt;
+        let runtime = crate::UdxRuntime::new().unwrap();
+        let socket = runtime.create_socket().await.unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let address = socket.local_addr().await.unwrap();
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let stream = runtime.create_stream(1).await.unwrap();
+        stream.connect(&socket, 2, peer.local_addr().unwrap()).await.unwrap();
+        let mut stream = stream.into_async_stream();
+        stream.write_all(b"seed").await.unwrap();
+        let mut buffer = [0;2048];
+        let receive_data = |buffer: &[u8], size| Header::decode(&buffer[..size]).ok()
+            .filter(|h| h.has_flag(FLAG_DATA));
+        loop {
+            let n = peer.recv(&mut buffer).await.unwrap();
+            if receive_data(&buffer,n).is_some() { break; }
+        }
+        let ack = Header { type_flags: 0, data_offset: 0, remote_id: 1,
+            recv_window: DEFAULT_RWND, seq: 0, ack: 1 }.encode();
+        peer.send_to(&ack,address).await.unwrap();
+        stream.flush().await.unwrap();
+        stream.write_all(b"lost ack").await.unwrap();
+        loop {
+            let n = peer.recv(&mut buffer).await.unwrap();
+            if receive_data(&buffer,n).is_some_and(|h|h.seq==1) { break; }
+        }
+        let mut duplicates = tokio::time::interval(Duration::from_millis(50));
+        tokio::time::timeout(Duration::from_millis(1600),async {
+            loop {
+                tokio::select! {
+                    _ = duplicates.tick() => { peer.send_to(&ack,address).await.unwrap(); },
+                    result = peer.recv(&mut buffer) => {
+                        if receive_data(&buffer,result.unwrap()).is_some_and(|h|h.seq==1) { break; }
+                    }
+                }
+            }
+        }).await.expect("duplicate ACKs must not postpone the one-second RTO");
+    }
 
     fn make_stream_inner() -> StreamInner {
         let (read_tx, _read_rx) = mpsc::unbounded_channel();

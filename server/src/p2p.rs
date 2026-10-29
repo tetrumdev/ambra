@@ -3,6 +3,39 @@ use std::{net::SocketAddr, time::Duration};
 use tokio_util::sync::CancellationToken;
 use crate::network::SharedNetwork;
 
+// A listener can exit after a runtime/socket failure while configuration stays
+// enabled. Its owner must restart it; a completed JoinSet entry alone cannot
+// reset the configuration edge that originally started the listener.
+async fn supervise_listener<F, Fut>(cancel: CancellationToken, mut listen: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
+    let mut delay = Duration::from_secs(1);
+    loop {
+        if cancel.is_cancelled() { break; }
+        let started = tokio::time::Instant::now();
+        let operation = listen();
+        tokio::pin!(operation);
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                // Let the listener unannounce and close its owned sockets.
+                let _ = tokio::time::timeout(Duration::from_secs(3),&mut operation).await;
+                break;
+            },
+            _ = &mut operation => {},
+        }
+        if started.elapsed() >= Duration::from_secs(30) { delay = Duration::from_secs(1); }
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break,
+            _ = tokio::time::sleep(delay) => {},
+        }
+        delay = (delay * 2).min(Duration::from_secs(30));
+    }
+}
+
 pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr, cancel: CancellationToken) {
     let port = network.config.read().unwrap_or_else(|p| p.into_inner()).secure_port;
     let secure = SocketAddr::new(address.ip(), port);
@@ -44,10 +77,15 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
                 let stop = cancel.child_token(); pwnat_cancel = Some(stop.clone());
                 let identity = network.identity.clone(); let app = app.clone(); let status = network.pwnat_status.clone();
                 pwnat_tasks.spawn(async move {
-                    if let Err(error) = ambra_net::pwnat::serve(secure, identity, app, stop, status.clone()).await {
-                        eprintln!("Optional pwnat unavailable: {error}");
-                        status.write().unwrap_or_else(|p| p.into_inner()).error = Some(error.to_string());
-                    }
+                    supervise_listener(stop.clone(), || async {
+                        let result = ambra_net::pwnat::serve(secure, identity.clone(), app.clone(), stop.clone(), status.clone()).await;
+                        if !stop.is_cancelled() {
+                            let message = result.err().map_or_else(|| "pwnat listener stopped unexpectedly".to_owned(), |e|e.to_string());
+                            eprintln!("Optional pwnat unavailable; retrying: {message}");
+                            let mut status = status.write().unwrap_or_else(|p|p.into_inner());
+                            status.running = false; status.error = Some(message);
+                        }
+                    }).await;
                 });
             }
         }
@@ -56,9 +94,13 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
             let status = network.dht_status.clone(); let identity = network.identity.clone(); let dht_app = app.clone(); let stop_dht = stop.clone();
             let pwnat_status = network.pwnat_status.clone();
             remote_tasks.spawn(async move {
-                if let Err(error) = ambra_net::hyperdht::serve(identity, dht_app, status.clone(), stop_dht, Some(pwnat_status)).await {
-                    if let Ok(mut status) = status.write() { status.running = false; status.error = Some(error.to_string()); }
-                }
+                supervise_listener(stop_dht.clone(), || async {
+                    let result = ambra_net::hyperdht::serve(identity.clone(), dht_app.clone(), status.clone(), stop_dht.clone(), Some(pwnat_status.clone())).await;
+                    if !stop_dht.is_cancelled() {
+                        let message = result.err().map_or_else(|| "HyperDHT listener stopped unexpectedly".to_owned(), |e|e.to_string());
+                        if let Ok(mut status) = status.write() { status.running = false; status.announced = false; status.error = Some(message); }
+                    }
+                }).await;
             });
         } else if !enabled && remote_cancel.is_some() {
             if let Some(stop) = remote_cancel.take() { stop.cancel(); }
@@ -79,4 +121,52 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
     pwnat_tasks.shutdown().await;
     let _ = tokio::time::timeout(Duration::from_secs(3), async { while remote_tasks.join_next().await.is_some() {} }).await;
     remote_tasks.shutdown().await; tasks.shutdown().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+    #[tokio::test(start_paused = true)]
+    async fn failed_listener_restarts_with_backoff_and_cancellation_stops_retries() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let calls = calls.clone(); let cancel = cancel.clone();
+            async move { supervise_listener(cancel, || {
+                calls.fetch_add(1,Ordering::SeqCst);
+                std::future::ready(())
+            }).await }
+        });
+        tokio::task::yield_now().await;
+        assert_eq!(calls.load(Ordering::SeqCst),1);
+        for (seconds, expected) in [(1,2),(1,2),(1,3),(3,3),(1,4)] {
+            tokio::time::advance(Duration::from_secs(seconds)).await;
+            tokio::task::yield_now().await;
+            assert_eq!(calls.load(Ordering::SeqCst),expected);
+        }
+        cancel.cancel();task.await.unwrap();
+        tokio::time::advance(Duration::from_secs(60)).await;
+        assert_eq!(calls.load(Ordering::SeqCst),4);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn cancellation_allows_active_listener_cleanup() {
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();let cleaned = cleaned.clone();
+            async move {
+                supervise_listener(cancel.clone(),|| async {
+                    cancel.cancelled().await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    cleaned.fetch_add(1,Ordering::SeqCst);
+                }).await;
+            }
+        });
+        tokio::task::yield_now().await;
+        cancel.cancel();task.await.unwrap();
+        assert_eq!(cleaned.load(Ordering::SeqCst),1,"listener was dropped before cleanup");
+    }
 }

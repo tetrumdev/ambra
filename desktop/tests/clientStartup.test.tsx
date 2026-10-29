@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useState, type ReactNode } from "react";
+import { act, useContext, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 
 const calls: string[] = [];
@@ -29,7 +29,9 @@ mock.module("@tauri-apps/api/core", () => ({ ...tauriCore, isTauri: () => true, 
 } }));
 mock.module("../src/App", () => ({ default: ({ localOnly }: { localOnly: boolean }) => {
   const [instance] = useState(() => ++mounts);
+  const { reconnect } = useContext(ClientConnectionContext);
   return <main data-instance={instance}>Normal local player {String(localOnly)}
+    <button onClick={reconnect}>Refresh network</button>
     <input aria-label="Retained navigation state" defaultValue="local state" />
     {showSettings && <ServerSettings active />}
   </main>;
@@ -45,6 +47,8 @@ beforeAll(() => {
   Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, localStorage: dom.localStorage, Event: dom.Event, IS_REACT_ACT_ENVIRONMENT: true });
   globalThis.fetch = (async () => { throw new TypeError("No server installed"); }) as typeof fetch;
 });
+
+
 afterAll(() => { globalThis.fetch = originalFetch; dom.happyDOM.abort(); });
 for (const configured of [false, true]) test(`normal UI opens with ${configured ? "unreachable paired server" : "no server configured"}`, async () => {
   paired = configured;
@@ -153,14 +157,14 @@ test("runtime pairing, server switching, disconnect and failure keep the same ap
       await act(async () => { await new Promise(resolve => setTimeout(resolve, 1550)); });
       expect(container.textContent).toContain("Normal local player false");
       expect(container.textContent).toContain("Disconnect");
-      expect(container.querySelector("main")).toBe(main);
+      expect(container.querySelector("main") === main).toBe(true);
       expect(input.value).toBe("keep open settings and navigation");
       expect(mounts).toBe(initialMounts);
       if (index === 0) {
         commandFailure = "leave_server";
         await click("Disconnect");
         expect(container.textContent).toContain("Connection failed safely");
-        expect(container.querySelector("main")).toBe(main);
+        expect(container.querySelector("main") === main).toBe(true);
         expect(paired).toBe(true);
         commandFailure = null;
       }
@@ -173,7 +177,7 @@ test("runtime pairing, server switching, disconnect and failure keep the same ap
     commandFailure = "start_pairing";
     await click("Connect to Ambra Server"); await click("Connect");
     expect(container.textContent).toContain("Connection failed safely");
-    expect(container.querySelector("main")).toBe(main);
+    expect(container.querySelector("main") === main).toBe(true);
     const changes = calls.slice(callStart);
     expect(changes).toContain("join_server"); expect(changes).toContain("leave_server");
     expect(changes).not.toContain("restart_app");
@@ -305,5 +309,66 @@ test("switching servers from shared playback commits pairing before releasing th
   } finally {
     await act(async () => root.unmount()); showSettings = false; networkState = "Offline";
     globalThis.fetch = previousFetch;
+  }
+});
+
+test("shared playback retains its owner through bounded reconnect and releases after failure", async () => {
+  paired = true; identity = "7".repeat(64); bridge = "http://127.0.0.1:54000";
+  networkState = "ConnectedHyperDHT";
+  const preference = localStorage.getItem("ambra.shared-playback.v1");
+  localStorage.setItem("ambra.shared-playback.v1", "true");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async url => String(url).includes("?since=") ? new Promise<Response>(() => {})
+    : Response.json({ revision: 0, values: {} })) as typeof fetch;
+  const container = document.createElement("div"); const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<Root />); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+    const main = container.querySelector("main");
+    const started = calls.length;
+    for (const state of ["Reconnecting", "ConnectingHyperDHT", "Authenticating", "ConnectedHyperDHT"]) {
+      networkState = state;
+      await act(async () => container.querySelector<HTMLButtonElement>("main button")!.click());
+      expect(container.querySelector("main") === main).toBe(true);
+      expect(calls.slice(started)).not.toContain("pause_native_audio");
+      expect(calls.slice(started)).not.toContain("set_shared_output");
+    }
+    networkState = "Offline";
+    await act(async () => container.querySelector<HTMLButtonElement>("main button")!.click());
+    expect(calls.slice(started)).toContain("pause_native_audio");
+    expect(container.querySelector("main") === main).toBe(false);
+    expect(container.textContent).toContain("Normal local player true");
+  } finally {
+    await act(async () => root.unmount());networkState = "Offline";globalThis.fetch = previousFetch;
+    if (preference === null) localStorage.removeItem("ambra.shared-playback.v1");else localStorage.setItem("ambra.shared-playback.v1",preference);
+  }
+});
+
+test("shared playback can be turned off during reconnect without restarting on recovery", async () => {
+  paired = true; identity = "8".repeat(64); bridge = "http://127.0.0.1:55000";
+  networkState = "ConnectedHyperDHT";showSettings = true;
+  const preference = localStorage.getItem("ambra.shared-playback.v1");
+  localStorage.setItem("ambra.shared-playback.v1", "true");
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = (async url => String(url).includes("?since=") ? new Promise<Response>(() => {})
+    : Response.json({ revision: 0, values: {} })) as typeof fetch;
+  const container = document.createElement("div");const root = createRoot(container);
+  try {
+    await act(async () => { root.render(<Root />); });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve,0)); });
+    networkState = "Reconnecting";
+    await act(async () => container.querySelector<HTMLButtonElement>("main button")!.click());
+    const toggle = () => container.querySelector<HTMLInputElement>('input[aria-label="Shared playback session"]')!;
+    expect(toggle().checked).toBe(true);expect(toggle().disabled).toBe(false);
+    await act(async () => toggle().click());
+    expect(toggle().checked).toBe(false);
+    const local = container.querySelector("main");
+    networkState = "ConnectedHyperDHT";
+    await act(async () => container.querySelector<HTMLButtonElement>("main button")!.click());
+    expect(toggle().checked).toBe(false);
+    expect(container.querySelector("main") === local).toBe(true);
+  } finally {
+    await act(async () => root.unmount());networkState = "Offline";showSettings = false;globalThis.fetch = previousFetch;
+    if (preference === null) localStorage.removeItem("ambra.shared-playback.v1");else localStorage.setItem("ambra.shared-playback.v1",preference);
   }
 });
