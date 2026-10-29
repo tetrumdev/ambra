@@ -257,6 +257,11 @@ impl CongestionController {
 
     /// Computes pacing delay for the requested byte count.
     pub(crate) fn pacing_delay(&mut self, bytes: u32, now: Instant) -> Duration {
+        // Upstream UDX credits elapsed pacing time. A fixed two-packet ceiling
+        // instead caps throughput at two packets per scheduler wake, regardless
+        // of measured bandwidth. Keep the initial credit and bound accumulated
+        // credit by the existing congestion window, without adding a time knob.
+        self.pacing.set_burst_limit(self.cwnd.max(2).saturating_mul(self.mss));
         self.pacing.refill(now);
         self.pacing.delay_for(bytes, now)
     }
@@ -344,5 +349,22 @@ mod tests {
         c.on_ack(&[],1,1,now+Duration::from_millis(60));
         assert_eq!(c.rate.current.delivered,0,"loss-only ACK must not invent another delivery sample");
         assert_eq!(c.rate.current.rtt_ms,0);
+    }    #[test]
+    fn pacing_preserves_the_rate_across_coarse_timer_wakes() {
+        let mut controller = CongestionController::new(1200, 1000);
+        controller.cwnd = 64;
+        controller.pacing.set_rate(2400); // Two packets/ms, not a requested burst.
+        let start = Instant::now();
+        let mut sent = 0;
+        for wake in 0..=25 {
+            let now = start + Duration::from_millis(wake * 4);
+            while controller.pacing_delay(1200, now).is_zero() {
+                assert!(controller.pacing.try_consume(1200, now));
+                sent += 1;
+            }
+        }
+        eprintln!("COARSE_WAKE_PACKETS {sent}");
+        assert!(sent >= 200, "100 ms of earned pacing credit was discarded: {sent} packets");
     }
+
 }
