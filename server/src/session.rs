@@ -513,7 +513,6 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
         return error(StatusCode::BAD_REQUEST, "Unsupported queue");
     }
     core.commands.send_modify(|revision| *revision += 1);
-    if let Some(manager) = &core.spotify_playback { manager.interrupt(); }
     let base = change.base;
     let mut queue = change.queue;
     let applied = core
