@@ -32,7 +32,7 @@ test("ownership refresh omits unchanged queue and fetches a full snapshot after 
     const path = new URL(String(url)).pathname + new URL(String(url)).search;
     paths.push(path);
     return respond(snapshot(replacement ? "replacement" : "first", !path.includes("queue=")));
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   const stop = new AbortController();
   await client.refreshSession(stop.signal);
   await client.refreshSession(stop.signal);
@@ -48,15 +48,17 @@ test("polling removes foreground abort listeners on every successful poll and te
   const added = AbortSignal.prototype.addEventListener;
   const removed = AbortSignal.prototype.removeEventListener;
   const listeners = new Map<AbortSignal, Set<unknown>>();
-  AbortSignal.prototype.addEventListener = function(type, listener, options) {
+  AbortSignal.prototype.addEventListener = function(this: AbortSignal, ...args: Parameters<AbortSignal["addEventListener"]>) {
+    const [type, listener] = args;
     if (type === "abort") {
       const set = listeners.get(this) ?? new Set(); set.add(listener); listeners.set(this, set);
     }
-    return added.call(this, type, listener, options);
+    return added.apply(this, args);
   };
-  AbortSignal.prototype.removeEventListener = function(type, listener, options) {
+  AbortSignal.prototype.removeEventListener = function(this: AbortSignal, ...args: Parameters<AbortSignal["removeEventListener"]>) {
+    const [type, listener] = args;
     if (type === "abort") listeners.get(this)?.delete(listener);
-    return removed.call(this, type, listener, options);
+    return removed.apply(this, args);
   };
   const stop = new AbortController();
   let polls = 0;
@@ -64,7 +66,7 @@ test("polling removes foreground abort listeners on every successful poll and te
     polls++;
     if (polls === 100) stop.abort();
     return respond(snapshot());
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
   try {
     await client.follow(stop.signal);
     expect(polls).toBe(100);
