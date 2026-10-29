@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -281,6 +281,9 @@ pub(crate) struct StreamInner {
     // ── Congestion control (BBR) ──
     pub(crate) congestion: super::congestion::CongestionController,
     send_queue: VecDeque<QueuedPacket>,
+    queued_bytes: usize,
+    #[cfg(test)]
+    pacing_wakeups: u64,
 
     // ── Relay ──
     relay_target: Option<Arc<Mutex<StreamInner>>>,
@@ -484,6 +487,7 @@ impl StreamInner {
     pub(crate) fn queue_for_send(&mut self, packets: Vec<(u32, Vec<u8>)>, remote_addr: SocketAddr) {
         let count = packets.len();
         for (seq, packet) in packets {
+            self.queued_bytes += packet.len();
             self.send_queue.push_back(QueuedPacket {
                 packet,
                 seq,
@@ -499,6 +503,63 @@ impl StreamInner {
             let _ = tx.send(StreamNotify::DataQueued);
         }
     }
+
+    /// Returns packets ready now and the token deadline, if pacing blocks the next one.
+    fn collect_send_batch(&mut self) -> (Vec<(Vec<u8>, SocketAddr)>, Option<Duration>) {
+        let mut batch = Vec::new();
+        let mut pacing_delay = None;
+        while !self.send_queue.is_empty() {
+            let inflight = self.inflight();
+            let queued_bytes = self.queued_bytes;
+            self.congestion.check_app_limited(queued_bytes, inflight);
+
+            if !self.congestion.can_send(inflight, self.send_rwnd) {
+                break;
+            }
+
+            let Some(front) = self.send_queue.front() else {
+                break;
+            };
+            let packet_len = front.packet.len() as u32;
+
+            let now = std::time::Instant::now();
+            let delay = self.congestion.pacing_delay(packet_len, now);
+            if delay > std::time::Duration::ZERO {
+                pacing_delay = Some(delay);
+                break;
+            }
+
+            let Some(queued) = self.send_queue.pop_front() else {
+                break;
+            };
+            self.queued_bytes -= queued.packet.len();
+            let mut packet = queued.packet;
+
+            let is_data = packet.len() >= HEADER_SIZE && packet[2] & FLAG_DATA != 0;
+            if is_data && self.mtu_state == MtuState::Base {
+                self.mtu_state = MtuState::Search;
+                self.mtu_probe_wanted = true;
+            }
+
+            let is_mtu_probe = if is_data
+                && self.mtu_state == MtuState::Search
+                && self.mtu_probe_wanted
+            {
+                self.mtu_probeify_packet(&mut packet)
+            } else {
+                false
+            };
+
+            self.register_sent(queued.seq, packet.clone(), is_mtu_probe);
+            self.congestion.pacing.try_consume(
+                packet.len() as u32, std::time::Instant::now(),
+            );
+            batch.push((packet, queued.remote_addr));
+        }
+
+        (batch, pacing_delay)
+    }
+
 
     pub(crate) fn send_idle(&self) -> bool {
         self.outgoing.is_empty() && self.send_queue.is_empty()
@@ -921,6 +982,9 @@ impl UdxStream {
                 INITIAL_RTO_MS,
             ),
             send_queue: VecDeque::new(),
+            queued_bytes: 0,
+            #[cfg(test)]
+            pacing_wakeups: 0,
             relay_target: None,
             firewall_hook: None,
         };
@@ -1545,6 +1609,11 @@ async fn process_incoming(
                     // No ACK/SACK — still update recv window
                     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
                     guard.send_rwnd = header.recv_window;
+                    if !guard.send_queue.is_empty()
+                        && guard.congestion.can_send(guard.inflight(), guard.send_rwnd)
+                    {
+                        pacing_sleep.as_mut().reset(TokioInstant::now());
+                    }
                 }
 
                 // ── DATA / END processing (unified — handles combined DATA+END packets) ──
@@ -1615,6 +1684,8 @@ async fn process_incoming(
             }
 
             _ = &mut pacing_sleep => {
+                #[cfg(test)]
+                { inner.lock().unwrap_or_else(|p| p.into_inner()).pacing_wakeups += 1; }
                 // A listening stream may queue its SecretStream greeting before
                 // the firewall hook learns the remote endpoint. Sending it to
                 // 0.0.0.0:0 loses the greeting and starts needless RTO recovery.
@@ -1622,59 +1693,16 @@ async fn process_incoming(
                     pacing_sleep.as_mut().reset(TokioInstant::now() + FAR_FUTURE);
                     continue;
                 }
+                // Idle and window-blocked senders wait for notifications/ACKs.
+                // Only an exhausted token bucket supplies a timer deadline.
+                pacing_sleep.as_mut().reset(TokioInstant::now() + FAR_FUTURE);
                 let (packets_to_send, should_arm_rto, new_rto_ms) = {
                     let mut guard = inner.lock().unwrap_or_else(|e| e.into_inner());
-                    let mut batch: Vec<(Vec<u8>, SocketAddr)> = Vec::new();
                     let was_outgoing_empty = guard.outgoing.is_empty();
 
-                    while !guard.send_queue.is_empty() {
-                        let inflight = guard.inflight() + batch.len() as u32;
-                        let queued_bytes = guard.send_queue.iter()
-                            .map(|q| q.packet.len())
-                            .sum::<usize>();
-                        guard.congestion.check_app_limited(queued_bytes, inflight);
-
-                        if !guard.congestion.can_send(inflight, guard.send_rwnd) {
-                            break;
-                        }
-
-                        let Some(front) = guard.send_queue.front() else {
-                            break;
-                        };
-                        let packet_len = front.packet.len() as u32;
-
-                        let now = std::time::Instant::now();
-                        let delay = guard.congestion.pacing_delay(packet_len, now);
-                        if delay > std::time::Duration::ZERO {
-                            pacing_sleep.as_mut().reset(TokioInstant::now() + delay);
-                            break;
-                        }
-
-                        let Some(queued) = guard.send_queue.pop_front() else {
-                            break;
-                        };
-                        let mut packet = queued.packet;
-
-                        let is_data = packet.len() >= HEADER_SIZE && packet[2] & FLAG_DATA != 0;
-                        if is_data && guard.mtu_state == MtuState::Base {
-                            guard.mtu_state = MtuState::Search;
-                            guard.mtu_probe_wanted = true;
-                        }
-
-                        let is_mtu_probe = if is_data
-                            && guard.mtu_state == MtuState::Search
-                            && guard.mtu_probe_wanted
-                        {
-                            guard.mtu_probeify_packet(&mut packet)
-                        } else {
-                            false
-                        };
-
-                        guard.register_sent(queued.seq, packet.clone(), is_mtu_probe);
-                        guard.congestion.pacing.try_consume(
-                            packet.len() as u32, std::time::Instant::now(),
-                        );
-                        batch.push((packet, queued.remote_addr));
+                    let (batch, pacing_delay) = guard.collect_send_batch();
+                    if let Some(delay) = pacing_delay {
+                        pacing_sleep.as_mut().reset(TokioInstant::now() + delay);
                     }
 
                     let should_arm = was_outgoing_empty && !guard.outgoing.is_empty();
@@ -1698,12 +1726,7 @@ async fn process_incoming(
                     );
                 }
 
-                let has_more = !inner.lock().unwrap_or_else(|e| e.into_inner()).send_queue.is_empty();
-                if has_more {
-                    pacing_sleep.as_mut().reset(TokioInstant::now() + Duration::from_millis(1));
-                } else {
-                    pacing_sleep.as_mut().reset(TokioInstant::now() + FAR_FUTURE);
-                }
+
             }
 
             _ = &mut rto_sleep => {
@@ -1937,6 +1960,69 @@ mod mtu_tests {
     use super::*;
 
     #[test]
+    fn send_batch_fills_exactly_the_available_window() {
+        for (existing, window, expected) in [(0, 10, 10), (5, 10, 5), (0, 1, 1)] {
+            let mut stream = make_stream_inner();
+            stream.congestion.cwnd = window;
+            stream.mtu_state = MtuState::SearchComplete;
+            for seq in 0..existing { stream.register_sent(seq, vec![0; HEADER_SIZE + 1], false); }
+            stream.queue_for_send((existing..existing + 20).map(|seq| (seq, vec![0; HEADER_SIZE + 1])).collect(), "127.0.0.1:1234".parse().unwrap());
+            let (batch, delay) = stream.collect_send_batch();
+            assert_eq!(batch.len(), expected, "newly registered packets count once");
+            assert_eq!(stream.inflight(), window);
+            assert_eq!(stream.queued_bytes, stream.send_queue.iter().map(|p| p.packet.len()).sum::<usize>());
+            assert_eq!(delay, None, "window blocking must await ACKs");
+        }
+    }
+
+    #[tokio::test]
+    async fn sender_keeps_the_calculated_token_deadline() {
+        let runtime = crate::UdxRuntime::new().unwrap();
+        let socket = runtime.create_socket().await.unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let stream = runtime.create_stream(1).await.unwrap();
+        stream.connect(&socket, 2, peer.local_addr().unwrap()).await.unwrap();
+        {
+            let mut inner = stream.inner.lock().unwrap();
+            inner.congestion.pacing.set_rate(1); // 1 byte/ms, unchanged two-packet burst.
+            inner.mtu_state = MtuState::SearchComplete;
+            inner.queue_for_send((0..3).map(|seq| (seq, build_data_packet(2, seq, 0, &vec![42; MAX_PAYLOAD]))).collect(), peer.local_addr().unwrap());
+        }
+        let mut buffer = [0; 2048];
+        tokio::time::timeout(Duration::from_secs(1), peer.recv(&mut buffer)).await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let wakes = stream.inner.lock().unwrap().pacing_wakeups;
+        assert!(wakes <= 2, "40 ms token deadline must not become 1 ms polling: {wakes}");
+    }
+
+    #[tokio::test]
+    async fn full_window_waits_for_events_instead_of_polling_every_millisecond() {
+        let runtime = crate::UdxRuntime::new().unwrap();
+        let socket = runtime.create_socket().await.unwrap();
+        socket.bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let stream = runtime.create_stream(1).await.unwrap();
+        stream.connect(&socket, 2, peer.local_addr().unwrap()).await.unwrap();
+        {
+            let mut inner = stream.inner.lock().unwrap();
+            inner.send_rwnd = 0;
+            inner.queue_for_send(vec![(0, vec![0; HEADER_SIZE + 1])], peer.local_addr().unwrap());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let wakes = stream.inner.lock().unwrap().pacing_wakeups;
+        eprintln!("BLOCKED_PACING_WAKEUPS {wakes}");
+        assert!(wakes <= 3, "no ACK and no window space: {wakes} useless pacing wakes");
+        // A window-only ACK must wake a parked sender (including ack=0).
+        let ack = Header { type_flags: 0, data_offset: 0, remote_id: 1,
+            recv_window: DEFAULT_RWND, seq: 0, ack: 0 }.encode();
+        peer.send_to(&ack, socket.local_addr().await.unwrap()).await.unwrap();
+        let mut buffer = [0; 2048];
+        tokio::time::timeout(Duration::from_secs(1), peer.recv(&mut buffer)).await
+            .expect("receive-window update must wake sender").unwrap();
+    }
+
+    #[test]
     fn sack_then_cumulative_ack_counts_delivery_once() {
         let mut stream = make_stream_inner();
         stream.register_sent(0, vec![0; HEADER_SIZE], false);
@@ -2034,6 +2120,9 @@ mod mtu_tests {
                 INITIAL_RTO_MS,
             ),
             send_queue: VecDeque::new(),
+            queued_bytes: 0,
+            #[cfg(test)]
+            pacing_wakeups: 0,
             relay_target: None,
             ended: false,
             firewall_hook: None,
