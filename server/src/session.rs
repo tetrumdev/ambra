@@ -575,12 +575,17 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
     let interrupts_live = retry_live || matches!(&command, Command::Pause | Command::Stop | Command::Seek { .. } | Command::Next | Command::Previous | Command::PlayTrack { .. } | Command::Output { .. })
         || matches!(&command, Command::Toggle) && core.transport().playing;
     if interrupts_live && let Some(manager) = &core.spotify_playback { manager.interrupt(); }
-    let _operation = core.operation.lock().await;
+    let guard = core.operation.lock().await;
     if !matches!(&command, Command::Volume { .. }) {
         core.commands.send_modify(|revision| *revision += 1);
     }
+    let mut operation = OutputOperation { core: &core, operation: Some(guard), commands: core.commands.subscribe() };
     core.transport().failed_live_load = None;
-    if retry_live && let Some(manager) = &core.spotify_playback { manager.retry_playback().await; }
+    if retry_live && let Some(manager) = &core.spotify_playback {
+        if operation.wait(manager.retry_playback()).await.is_err() {
+            return Json(view(&core, query.queue).await).into_response();
+        }
+    }
     let result: Result<(), String> = match command {
         Command::PlayTrack { track_id } => {
             play_track(&core, &track_id).await;
@@ -657,7 +662,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
                 }
                 previous
             };
-            drop(_operation);
+            drop(operation.operation.take());
             // The song moves: the old output stops, and the driver loads it on the new one.
             if let Some(previous) = previous.filter(|previous| Some(previous) != output.as_ref()) {
                 let _ = core.endpoints.call(&previous.endpoint_id, "pause_native_audio", json!({})).await;
@@ -668,7 +673,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
         }
         Command::Volume { volume } => {
             let output = core.transport().output.clone();
-            drop(_operation);
+            drop(operation.operation.take());
             match output {
                 Some(output) => core.endpoints.call(&output.endpoint_id, "set_native_audio_volume", json!({ "volume": volume })).await.map(|_| ()),
                 None => Err("Choose an output first".into()),
@@ -1276,6 +1281,26 @@ mod driver_tests {
 
     fn source(id: &str) -> String {
         format!("http://127.0.0.1:38147/api/providers/qobuz/tracks/{id}/stream")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pause_during_provider_retry_does_not_wait_or_get_overwritten() {
+        let h = Harness::start_backend(true).await;
+        let manager = h.core.spotify_playback.as_ref().unwrap();
+        let provider = crate::soloist::tests::hold_playback_operation(manager).await;
+        h.core.transport().error = Some("fixture capture failure".into());
+        let mut started = h.core.commands.subscribe();
+        let (http, base) = (h.http.clone(), h.base.clone());
+        let retry = tokio::spawn(async move {
+            http.post(format!("{base}/api/session/command")).json(&json!({"action":"play"})).send().await.unwrap()
+        });
+        started.changed().await.unwrap();
+        let paused = tokio::time::timeout(Duration::from_millis(400), h.post("/api/session/command", json!({"action":"pause"}))).await
+            .expect("provider cleanup must not own the session operation lock");
+        assert_eq!(paused["playing"], false);
+        drop(provider);
+        tokio::time::timeout(Duration::from_secs(2), retry).await.unwrap().unwrap();
+        assert!(!h.core.transport().playing, "a superseded retry must not restore Play");
     }
 
     #[tokio::test(flavor = "multi_thread")]
