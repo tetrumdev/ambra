@@ -15,6 +15,7 @@ use tauri::{AppHandle, Manager};
 enum Command {
     Status {},
     Tracks {},
+    UseDefaultOutput {},
     Play {},
     Pause {},
     Seek { position_seconds: f64 },
@@ -141,6 +142,25 @@ async fn run(app: &AppHandle, command: Command) -> Result<Value, String> {
         .build()
         .map_err(|error| error.to_string())?;
     let response = match command {
+        Command::UseDefaultOutput {} => {
+            // The frontend owns switching between local and shared playback.
+            // Wait for its own output agent; starting another one races that
+            // transition and can pause the player after the test starts it.
+            let output = tokio::time::timeout(std::time::Duration::from_secs(15),async {
+                loop {
+                    let endpoints: Value = client.get(format!("{}/api/endpoints",connection.base_url)).send().await
+                        .map_err(|e|e.without_url().to_string())?.error_for_status().map_err(|e|e.without_url().to_string())?
+                        .json().await.map_err(|e|e.without_url().to_string())?;
+                    if let Some(endpoint) = endpoints.as_array().into_iter().flatten().find(|e|e["id"]==connection.client_id) {
+                        if let Some(device) = endpoint["devices"].as_array().into_iter().flatten().find(|d|d["isDefault"]==true && d["enabled"]!=false) {
+                            break Ok::<_,String>(json!({"endpointId":connection.client_id,"deviceId":device["id"],"endpointName":endpoint["name"],"deviceName":device["name"]}));
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+                }
+            }).await.map_err(|_|"This Desktop's default output did not register within 15 seconds".to_owned())??;
+            client.post(format!("{}/api/session/command",connection.base_url)).json(&json!({"action":"output","output":output})).send().await
+        }
         Command::Tracks {} => client.get(format!("{}/api/music/local/tracks", connection.base_url)).send().await,
         Command::PlayTrack { track_id } => {
             let session: Value = client.get(format!("{}/api/session", connection.base_url)).send().await

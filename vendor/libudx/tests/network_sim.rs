@@ -9,6 +9,33 @@ use std::time::{Duration, Instant};
 const LONG_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[tokio::test]
+async fn pipelined_audio_survives_bidirectional_loss_delay_and_jitter() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    with_timeout(Duration::from_secs(90),async {
+        let runtime = create_runtime();
+        let config = ProxyConfig::symmetric(DirectionConfig {
+            loss_rate:0.02,
+            delay:Duration::from_millis(20),
+            jitter:Duration::from_millis(5),
+            ..Default::default()
+        });
+        let (sender,receiver,_a,_b,_proxy) = create_lossy_pair(&runtime,config).await;
+        let mut sender = sender.into_async_stream();
+        let mut receiver = receiver.into_async_stream();
+        let expected = random_payload(2*1024*1024);
+        let data = expected.clone();
+        let writer = tokio::spawn(async move {
+            for chunk in data.chunks(16*1024) { sender.write_all(chunk).await.unwrap(); }
+            sender.shutdown().await.unwrap();
+        });
+        let mut received = Vec::new();
+        receiver.read_to_end(&mut received).await.unwrap();
+        writer.await.unwrap();
+        verify_payload(&expected,&received);
+    }).await;
+}
+
+#[tokio::test]
 async fn proxy_passthrough_no_impairments() {
     let _ = tracing_subscriber::fmt::try_init();
 

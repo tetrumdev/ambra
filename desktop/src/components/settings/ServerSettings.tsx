@@ -156,7 +156,7 @@ export function ServerSettings({ active }: { active: boolean }) {
         </SettingRow>
         {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
         <SettingRow label="Shared playback session" hint="Control the server queue and share this device’s output. Turn off to play your private local queue.">
-          <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
+          <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
         </SettingRow>
         <div className="serverJoinActions">
           <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>

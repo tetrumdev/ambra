@@ -168,10 +168,46 @@ pub async fn serve(
     config.local_connection = false;
     config.relay_through = None;
     config.relay_address = None;
+    serve_with_config(identity,app,status,cancel,pwnat_status,config).await
+}
+
+async fn serve_with_config(
+    identity: Identity,
+    app: axum::Router,
+    status: SharedStatus,
+    cancel: CancellationToken,
+    pwnat_status: Option<pwnat::SharedStatus>,
+    config: peeroxide::SwarmConfig,
+) -> Result<()> {
     let (task, swarm, mut incoming) = peeroxide::spawn(config).await?;
     let mut task = AbortOnDropHandle::new(task);
     if let Ok(mut status) = status.write() {
         status.running = true;
+        status.announced = false;
+        status.error = None;
+    }
+    // Bootstrap failure is terminal for this actor. Retrying announcements on
+    // the same failed node can never recover; return to the server's supervisor
+    // so it can allocate fresh sockets after backoff. The acceptor already runs
+    // independently, and LAN startup does not wait on this task.
+    let bootstrap = tokio::select! {
+        _ = cancel.cancelled() => None,
+        result = tokio::time::timeout(Duration::from_secs(30),swarm.dht().bootstrapped()) => Some(result),
+    };
+    if !matches!(bootstrap,Some(Ok(Ok(())))) {
+        let error = match bootstrap {
+            Some(Ok(Err(error))) => Some(error.to_string()),
+            Some(Err(_)) => Some("HyperDHT bootstrap timed out".to_owned()),
+            _ => None,
+        };
+        if let Ok(mut status) = status.write() {
+            status.running = false;
+            status.error = error.clone();
+        }
+        let _ = tokio::time::timeout(Duration::from_secs(2),swarm.destroy()).await;
+        task.abort();
+        let _ = (&mut task).await;
+        return error.map_or(Ok(()),|error|Err(error.into()));
     }
     let target = peeroxide_dht::crypto::hash(&identity.public_key().0);
     swarm.dht().register_server(&target);
@@ -309,6 +345,25 @@ pub async fn serve(
 #[cfg(test)]
 mod client_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn server_does_not_keep_a_terminally_failed_bootstrap_node_alive() {
+        let reserved = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let address = reserved.local_addr().unwrap();
+        drop(reserved);
+        let identity = Identity::generate().unwrap();
+        let mut config = peeroxide::SwarmConfig::default();
+        config.key_pair = Some(identity.key_pair());
+        config.dht.dht.bootstrap = vec![address.to_string()];
+        let status = Arc::new(std::sync::RwLock::new(Status::default()));
+        let result = tokio::time::timeout(Duration::from_secs(8),serve_with_config(
+            identity, axum::Router::new(), status.clone(), CancellationToken::new(), None, config,
+        )).await.expect("failed bootstrap must return to the listener supervisor");
+        assert!(result.is_err());
+        let status = status.read().unwrap();
+        assert!(!status.running && !status.announced);
+        assert!(status.error.as_ref().is_some_and(|e|e.contains("bootstrap")));
+    }
 
     fn isolated_client() -> Client {
         Client {

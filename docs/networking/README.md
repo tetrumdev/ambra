@@ -1,5 +1,7 @@
 # Native networking: implementation and validation report
 
+**Autonomous diagnostics and physical validation (October 28, 2026):** see [the autonomous investigation](autonomous-2026-10-28.md) for native hotspot/home measurements, UDX and playback recovery fixes, helper health/install commands, repeatable headless tests, and remaining pwnat limitations. Start with `cargo run --manifest-path crates/ambra-net/Cargo.toml --example network_diagnose --locked` when the GUI cannot connect. Reports redact addresses by default.
+
 **Hotspot traversal follow-up:** see [hotspot traversal fixes](hotspot-traversal.md) for candidate-socket handoff, probe TTL isolation, NAT sampling retries, corrected timeout budgets, and outstanding live-device verification.
 
 **Windows server / Mac Desktop update (October 28, 2026):** see [the Windows cross-network session](cross-network-2026-10-28-windows.md) for the school UDP port allowlist, four UDX/BBR/pacing/Windows-timer throughput fixes, installed builds, and remaining congestion-control work.

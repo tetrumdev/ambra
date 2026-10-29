@@ -145,8 +145,11 @@ impl CongestionController {
         now: Instant,
     ) {
         let acked_count = acked_packets.len() as u32;
-        self.delivered += acked_count;
-        self.delivered_ts = Some(now);
+        self.delivered = self.delivered.wrapping_add(acked_count);
+        if acked_count > 0 { self.delivered_ts = Some(now); }
+        // Samples describe this ACK batch only. A loss-only or duplicate ACK
+        // must not reuse old delivery timestamps or an old RTT measurement.
+        self.rate.current = rate::RateSample::default();
 
         // Recovery/Loss exit: once the highest ACK'd seq reaches the recovery
         // boundary, all packets from the loss epoch have been resolved.
@@ -158,7 +161,9 @@ impl CongestionController {
         }
 
         // Clear app-limited once enough data has been delivered (C: udx__rate_gen)
-        if self.app_limited > 0 && self.delivered > self.app_limited {
+        // Delivery counters are serial numbers. In particular the initial ~0
+        // sentinel precedes delivery zero, as in C libudx's seq_compare().
+        if self.app_limited > 0 && (self.delivered.wrapping_sub(self.app_limited) as i32) > 0 {
             self.app_limited = 0;
         }
 
@@ -209,7 +214,7 @@ impl CongestionController {
 
         // Mark app-limited during ProbeRtt (C: bbr_main sets app_limited after ProbeRtt)
         if self.bbr.mode() == BbrMode::ProbeRtt {
-            self.app_limited = (self.delivered + inflight).max(1);
+            self.app_limited = self.delivered.wrapping_add(inflight).max(1);
         }
         tracing::debug!(
             mode = ?self.bbr.mode(),
@@ -277,7 +282,7 @@ impl CongestionController {
     /// Update app-limited state before each packet send (C: `udx__rate_check_app_limited`).
     pub(crate) fn check_app_limited(&mut self, queued_bytes: usize, inflight: u32) {
         if self.is_app_limited(queued_bytes, inflight, false) {
-            self.app_limited = (self.delivered + inflight).max(1);
+            self.app_limited = self.delivered.wrapping_add(inflight).max(1);
         }
     }
 }
@@ -316,5 +321,28 @@ mod tests {
         assert!(c.cwnd >= BBR_CWND_MIN_TARGET);
         assert!(c.can_send(0, 4_194_304));
         assert!(!c.can_send(c.cwnd, 4_194_304));
+    }
+
+    #[test]
+    fn initial_app_limit_clears_after_first_delivery() {
+        let mut controller = CongestionController::new(1180, 100);
+        let start = Instant::now();
+        let packet = controller.on_packet_sent(0, 0, start);
+        controller.on_ack(&[(0, packet)], 0, 0, start + Duration::from_millis(50));
+        assert_eq!(controller.app_limited, 0, "initial sentinel must clear like C seq_compare");
+        let packet = controller.on_packet_sent(1, 0, start + Duration::from_millis(51));
+        assert!(!packet.is_app_limited, "a backlogged sender must supply Startup bandwidth samples");
+    }
+
+    #[test]
+    fn loss_only_ack_does_not_reuse_previous_rate_sample() {
+        let mut c = CongestionController::new(1180,100);
+        let now = Instant::now();
+        let packet = c.on_packet_sent(0,0,now);
+        c.on_ack(&[(0,packet)],0,1,now+Duration::from_millis(50));
+        assert_eq!(c.rate.current.delivered,1);
+        c.on_ack(&[],1,1,now+Duration::from_millis(60));
+        assert_eq!(c.rate.current.delivered,0,"loss-only ACK must not invent another delivery sample");
+        assert_eq!(c.rate.current.rtt_ms,0);
     }
 }

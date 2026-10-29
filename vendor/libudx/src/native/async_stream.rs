@@ -143,6 +143,9 @@ impl AsyncWrite for UdxAsyncStream {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if buf.is_empty() {
+            return Poll::Ready(Ok(0));
+        }
         if let Poll::Ready(Err(e)) = self.poll_acks(cx) {
             return Poll::Ready(Err(e));
         }
@@ -156,6 +159,10 @@ impl AsyncWrite for UdxAsyncStream {
         if self.unacked_bytes >= limit {
             return Poll::Pending;
         }
+
+        // AsyncWrite permits a partial write. Large callers must obey the
+        // same byte budget as many small writes; never copy an unbounded slice.
+        let buf = &buf[..buf.len().min(limit - self.unacked_bytes)];
 
         let (prep, max_payload) = {
             let mut inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());

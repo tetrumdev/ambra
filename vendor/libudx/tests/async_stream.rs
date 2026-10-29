@@ -10,6 +10,27 @@ use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 struct VecWriter(Vec<u8>);
 
+#[tokio::test]
+async fn oversized_write_obeys_unacknowledged_byte_limit() {
+    let runtime = common::create_runtime();
+    let (a, _b, _sa, _sb) = common::create_connected_pair(&runtime).await;
+    let mut a = a.into_async_stream();
+    let bytes = vec![1; 4 * 1024 * 1024];
+    let written = a.write(&bytes).await.expect("write");
+    assert!(written <= 64 * 1024, "single write bypassed initial 64 KiB window: {written}");
+}
+
+#[tokio::test]
+async fn empty_writes_do_not_consume_packet_sequence_numbers() {
+    let runtime = common::create_runtime();
+    let (a, _b, _sa, _sb) = common::create_connected_pair(&runtime).await;
+    let mut a = a.into_async_stream();
+    for _ in 0..1000 { assert_eq!(a.write(&[]).await.unwrap(),0); }
+    // A no-op write must not enqueue a packet or wait for remote ACKs.
+    tokio::time::timeout(std::time::Duration::from_millis(1),a.flush()).await
+        .expect("empty writes created ACK work").unwrap();
+}
+
 impl AsyncWrite for VecWriter {
     fn poll_write(
         self: Pin<&mut Self>,
