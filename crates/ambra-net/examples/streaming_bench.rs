@@ -48,14 +48,17 @@ async fn main() -> ambra_net::Result<()> {
                 if &bytes[..] != b"update" { return Err("poll body".into()); }
                 Ok::<_, ambra_net::Error>(())
             };
-            tokio::select! {
+            let result = tokio::select! {
                 _ = stop.cancelled() => break,
-                result = tokio::time::timeout(Duration::from_secs(10), operation) => result??,
+                result = tokio::time::timeout(Duration::from_secs(10), operation) => result,
+            };
+            if !matches!(result,Ok(Ok(()))) {
+                return Ok::<_,ambra_net::Error>((timings,Some(format!("{result:?}"))));
             }
             timings.push(start.elapsed().as_secs_f64() * 1000.);
             tokio::select! { _ = stop.cancelled() => break, _ = tokio::time::sleep(Duration::from_millis(100)) => {} }
         }
-        Ok::<_, ambra_net::Error>(timings)
+        Ok::<_, ambra_net::Error>((timings,None))
     });
     let start = Instant::now();
     let mut bytes = 0u64;
@@ -93,7 +96,14 @@ async fn main() -> ambra_net::Result<()> {
     };
     let result = tokio::time::timeout(Duration::from_secs(seconds + 45), transfer).await;
     cancel.cancel();
-    let mut polls = polling.join_next().await.unwrap()??;
+    // Preserve transfer diagnostics even when concurrent control polling fails.
+    // Returning early here previously discarded every byte/gap measurement.
+    let (mut polls, poll_error) = match polling.join_next().await {
+        Some(Ok(Ok((timings,error)))) => (timings,error),
+        Some(Ok(Err(error))) => (Vec::new(),Some(error.to_string())),
+        Some(Err(error)) => (Vec::new(),Some(error.to_string())),
+        None => (Vec::new(),Some("poll task disappeared".to_owned())),
+    };
     polls.sort_by(f64::total_cmp);
     let percentile = |p: f64| {
         polls
@@ -105,10 +115,11 @@ async fn main() -> ambra_net::Result<()> {
         serde_json::json!({"seconds":start.elapsed().as_secs_f64(),"bytes":bytes,"responses":responses,
         "throughput_mib_s":bytes as f64/1048576./start.elapsed().as_secs_f64(),"polls":polls.len(),
         "poll_p50_ms":percentile(0.5),"poll_p95_ms":percentile(0.95),"max_body_gap_ms":max_gap_ms,
-        "body_gaps_over_250ms":gaps_over_250ms,"result":format!("{result:?}")})
+        "body_gaps_over_250ms":gaps_over_250ms,"result":format!("{result:?}"),"poll_error":poll_error})
     );
     connection.close();
     node.shutdown().await;
     result??;
+    if let Some(error) = poll_error { return Err(error.into()); }
     Ok(())
 }

@@ -785,13 +785,10 @@ async fn step(core: &Core) -> Result<(), String> {
             && status["ended"] != true
             && status["error"].is_null()
     };
-    let restarted = core.transport().loaded.as_ref().is_some_and(|loaded|
-        loaded.endpoint_id == endpoint && loaded.endpoint_instance != endpoint_instance);
-    // Reopening faster than the presence timeout is still a disconnect. Reload
-    // paused rather than carrying the old process's play intent into the new one.
-    if restarted || empty_engine {
-        core.pause_disconnected_output();
-    }
+    // A fresh authorized output needs a reload, but it does not change the
+    // user's play/pause intent. The load below resumes the confirmed position
+    // and preserves generation/history. Truly offline outputs still pause in
+    // the status(None) branch above.
 
     let mut source = canonical_source.clone();
     let mut live = false;
@@ -1265,6 +1262,11 @@ mod driver_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn reopening_a_legacy_output_keeps_a_paused_song_paused() {
         check_reopened_output(false, true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopening_an_identified_output_keeps_a_paused_song_paused() {
+        check_reopened_output(true, true).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]

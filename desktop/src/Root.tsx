@@ -26,6 +26,14 @@ export function Root() {
   const releasePlayer = useRef<() => Promise<void>>(async () => {});
   const registerPlaybackRelease = useCallback((release: () => Promise<void>) => { releasePlayer.current = release; }, []);
   const connected = networkServer === connection?.baseUrl && network.state.startsWith("Connected");
+  // A transport retry does not transfer ownership of buffered audio to the
+  // local player. Keep the established shared owner while the same server's
+  // bounded connection attempt runs. Terminal failure and explicit selection
+  // changes still release it so local playback remains independent.
+  const recoveringSharedPlayback = sharedPlayback && !!connection?.server
+    && networkServer === connection.baseUrl
+    && (network.state === "Reconnecting" || network.state === "DiscoveringLocal"
+      || network.state.startsWith("Connecting") || network.state === "Authenticating");
   setServerOnline(connected);
   useStartupWindow(ready);
 
@@ -106,8 +114,8 @@ export function Root() {
   }, [ready, connection]);
   useEffect(installServerStateLifecycle, []);
   useEffect(() => {
-    if (ready) void applySharedPlayback(connected && preferSharedPlayback).catch(() => {});
-  }, [ready, connected, preferSharedPlayback, applySharedPlayback]);
+    if (ready) void applySharedPlayback((connected || recoveringSharedPlayback) && preferSharedPlayback).catch(() => {});
+  }, [ready, connected, recoveringSharedPlayback, preferSharedPlayback, applySharedPlayback]);
 
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-tauri-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={{ connected, network, sharedPlayback, setSharedPlayback, reconnect }}>
