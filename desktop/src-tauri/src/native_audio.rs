@@ -1190,6 +1190,12 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             crossbeam_channel::select! {
                 recv(queued.receiver) -> result => return result.map_err(|_| "The native audio preloader stopped unexpectedly".to_owned())?,
                 recv(self.command_rx) -> command => match command {
+                    Ok(WorkerCommand::Play { reply }) => {
+                        // Repeating Play keeps the same preparation. Restarting
+                        // it would waste the in-flight request and its buffer.
+                        self.desired_playing = true;
+                        let _ = reply.send(Ok(()));
+                    }
                     Ok(command) if command.only_reads() || matches!(&command, WorkerCommand::Queue { .. } | WorkerCommand::SetVolume { .. }) => {
                         self.handle_command(command);
                     }
@@ -1263,6 +1269,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 *status = PlaybackStatus {
                     current_source: Some(source),
                     current_time: position_seconds,
+                    underruns: status.underruns,
                     ..PlaybackStatus::default()
                 };
             });
@@ -1444,6 +1451,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.decoder = None;
         self.pcm.clear();
         self.reset_gain_buffer();
+        let duration = lock_status(&self.status).duration;
+        self.set_buffering(Some(source.clone()), position_seconds, duration);
         let timeout = if decoder::is_live_source(&source) { Duration::from_secs(40) } else { AUDIO_PREPARE_TIMEOUT };
         let queued = QueuedSource::prepare_at(source, position_seconds, false)?;
         let prepared = self.await_preparation(&queued, Instant::now() + timeout)?;
@@ -1860,6 +1869,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             status.duration = duration;
             status.is_playing = false;
             status.buffering = true;
+            status.decoded_buffer_seconds = 0.0;
             status.ended = false;
             status.error = None;
         });
@@ -1905,6 +1915,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     /// Keep the song and audible position without retaining a decoder or a device format.
     fn defer_stream(&mut self, position_seconds: f64) {
+        update_status(&self.status, |status| status.decoded_buffer_seconds = 0.0);
         self.decoder = None;
         self.spec = None;
         self.pcm.clear();
@@ -1932,6 +1943,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         update_status(&self.status, |status| {
             status.is_playing = false;
             status.buffering = false;
+            status.decoded_buffer_seconds = 0.0;
             status.error = Some(error);
         });
     }
@@ -2259,6 +2271,9 @@ mod tests {
         let (load_reply, _) = bounded(1);
         command_tx.send(WorkerCommand::Load { source, next_source: None, position_seconds: 0.0, autoplay: true, reply: load_reply }).unwrap();
         accepted_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let (play_reply, play_result) = bounded(1);
+        command_tx.send(WorkerCommand::Play { reply: play_reply }).unwrap();
+        let repeated_play = play_result.recv_timeout(Duration::from_millis(400));
         let start = Instant::now();
         let (reply, result) = bounded(1);
         command_tx.send(WorkerCommand::Pause { reply }).unwrap();
@@ -2268,11 +2283,22 @@ mod tests {
         server.join().unwrap();
         command_tx.send(WorkerCommand::Shutdown).unwrap();
         worker.join().unwrap();
+        assert!(matches!(repeated_play, Ok(Ok(()))), "repeated Play must reuse preparation: {repeated_play:?}");
         assert!(pause.is_ok(), "pause blocked behind network preparation: {pause:?}");
         pause.unwrap().unwrap();
         assert!(!lock_status(&status).is_playing);
         assert!(lock_status(&status).error.is_none(), "cancellation must not be a decoder error");
         eprintln!("NATIVE_PAUSE_MS {}", elapsed.as_secs_f64() * 1000.0);
+    }
+
+    #[test]
+    fn paused_restore_clears_the_buffer_gauge_without_erasing_underruns() {
+        let mut worker = engine();
+        update_status(&worker.status, |status| { status.underruns = 3; status.decoded_buffer_seconds = 12.0; });
+        worker.load("unavailable.wav".into(), None, 4.0, false).unwrap();
+        let status = lock_status(&worker.status);
+        assert_eq!(status.underruns, 3);
+        assert_eq!(status.decoded_buffer_seconds, 0.0);
     }
 
     #[test]
