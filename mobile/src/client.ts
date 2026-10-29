@@ -264,7 +264,9 @@ export async function follow(signal: AbortSignal) {
       const stop = new AbortController();
       const abort = () => stop.abort();
       signal.addEventListener("abort", abort);
-      wake.signal.addEventListener("abort", abort);
+      const wakeSignal = wake.signal;
+      wakeSignal.addEventListener("abort", abort);
+      if (signal.aborted || wakeSignal.aborted) stop.abort();
       try {
         const next = await request<ArrivingView>(`/api/session${since}`, { signal: stop.signal, timeoutMs: 35_000 });
         if (!accept(next)) accept(await request<ArrivingView>("/api/session", { signal }));
@@ -274,6 +276,7 @@ export async function follow(signal: AbortSignal) {
         if (!wake.signal.aborted && !signal.aborted) await new Promise(resolve => setTimeout(resolve, 2000));
       } finally {
         signal.removeEventListener("abort", abort);
+        wakeSignal.removeEventListener("abort", abort);
       }
       if (wake.signal.aborted) wake = new AbortController();
     }
@@ -322,7 +325,10 @@ export async function refreshSession(signal: AbortSignal, options: { clock?: "re
       } catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
     }));
   }
-  accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+  const path = `/api/session${view ? `?queue=${view.queueRevision}` : ""}`;
+  if (!accept(await request<ArrivingView>(path, { signal, timeoutMs: 10_000 }))) {
+    accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+  }
 }
 
 /** Keep the core's source unchanged in reports; authenticate/rebase only the native media URL. */
