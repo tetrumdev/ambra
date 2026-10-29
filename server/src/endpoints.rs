@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Arc,
+        Arc, Mutex as SyncMutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -62,10 +62,24 @@ struct Endpoint {
 #[derive(Default)]
 pub struct Endpoints {
     endpoints: Mutex<HashMap<String, Endpoint>>,
-    waiting: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
+    waiting: SyncMutex<HashMap<u64, WaitingCommand>>,
     next_id: AtomicU64,
     /// Signalled by every playback report, so the core acts on it at once.
     reported: Notify,
+}
+
+struct WaitingCommand {
+    endpoint_id: String,
+    reply: oneshot::Sender<Result<Value, String>>,
+}
+
+/// Removing a dropped waiter is synchronous, including cancellation while an
+/// output is preparing audio. Late results are ignored by their unique ID.
+struct PendingCall<'a> { endpoints: &'a Endpoints, id: u64 }
+impl Drop for PendingCall<'_> {
+    fn drop(&mut self) {
+        self.endpoints.waiting.lock().unwrap_or_else(|p| p.into_inner()).remove(&self.id);
+    }
 }
 
 type Shared = Arc<Endpoints>;
@@ -138,7 +152,7 @@ async fn presence(State(shared): State<Shared>, Path(endpoint_id): Path<String>,
         return error(StatusCode::BAD_REQUEST, "An endpoint needs an ID and a name");
     }
     let mut endpoints = shared.endpoints.lock().await;
-    let endpoint = endpoints.entry(endpoint_id).or_insert_with(|| Endpoint {
+    let endpoint = endpoints.entry(endpoint_id.clone()).or_insert_with(|| Endpoint {
         name: String::new(),
         instance_id: None,
         devices: json!([]),
@@ -152,6 +166,10 @@ async fn presence(State(shared): State<Shared>, Path(endpoint_id): Path<String>,
     });
     endpoint.name = report.name.trim().to_owned();
     if let Some(instance) = report.instance_id {
+        if endpoint.instance_id.as_ref().is_some_and(|previous| previous != &instance) {
+            endpoint.queue.clear();
+            shared.waiting.lock().unwrap_or_else(|p| p.into_inner()).retain(|_, waiting| waiting.endpoint_id != endpoint_id);
+        }
         endpoint.instance_id = Some(instance);
     }
     endpoint.seen = Instant::now();
@@ -180,15 +198,16 @@ struct CollectQuery {
 }
 
 /// The endpoint's queued commands, waiting up to `wait` seconds for one to arrive.
-async fn collect(State(endpoints): State<Shared>, Path(endpoint_id): Path<String>, Query(query): Query<CollectQuery>) -> Response {
+async fn collect(State(shared): State<Shared>, Path(endpoint_id): Path<String>, Query(query): Query<CollectQuery>) -> Response {
     let deadline = Instant::now() + Duration::from_secs(query.wait.unwrap_or(0).min(MAX_WAIT_SECONDS));
     loop {
         let work = {
-            let mut endpoints = endpoints.endpoints.lock().await;
+            let mut endpoints = shared.endpoints.lock().await;
             let Some(endpoint) = endpoints.get_mut(&endpoint_id) else {
                 return error(StatusCode::NOT_FOUND, "Report presence before collecting commands");
             };
             endpoint.seen = Instant::now();
+            endpoint.queue.retain(|command| shared.waiting.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&command.id));
             if !endpoint.queue.is_empty() {
                 return Json(endpoint.queue.drain(..).collect::<Vec<_>>()).into_response();
             }
@@ -211,8 +230,8 @@ struct CommandResult {
 }
 
 async fn result(State(endpoints): State<Shared>, Json(result): Json<CommandResult>) -> Response {
-    if let Some(waiter) = endpoints.waiting.lock().await.remove(&result.id) {
-        let _ = waiter.send(if result.ok {
+    if let Some(waiter) = endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&result.id) {
+        let _ = waiter.reply.send(if result.ok {
             Ok(result.value)
         } else {
             Err(result.error.unwrap_or_else(|| "The device couldn't do that".into()))
@@ -243,16 +262,17 @@ async fn command(State(endpoints): State<Shared>, Path(endpoint_id): Path<String
     let (reply, answer) = oneshot::channel();
     // The waiter is registered first, so an answer can't arrive before anyone listens for it.
     let id = next_id(&endpoints);
-    endpoints.waiting.lock().await.insert(id, reply);
+    let _pending = PendingCall { endpoints: &endpoints, id };
+    endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, WaitingCommand { endpoint_id: endpoint_id.clone(), reply });
     if let Err(response) = enqueue(&endpoints, &endpoint_id, id, &request.command, request.args).await {
-        endpoints.waiting.lock().await.remove(&id);
+        endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
         return response;
     }
     match tokio::time::timeout(COMMAND_TIMEOUT, answer).await {
         Ok(Ok(Ok(value))) => Json(value).into_response(),
         Ok(Ok(Err(message))) => error(StatusCode::BAD_GATEWAY, message),
         _ => {
-            endpoints.waiting.lock().await.remove(&id);
+            endpoints.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
             error(StatusCode::GATEWAY_TIMEOUT, "That device didn't answer in time")
         }
     }
@@ -269,15 +289,16 @@ impl Endpoints {
         let timeout = if command == "load_native_audio" && args["source"].as_str().is_some_and(|source| source.starts_with("/api/playback/live/")) { Duration::from_secs(45) } else { COMMAND_TIMEOUT };
         let (reply, answer) = oneshot::channel();
         let id = next_id(self);
-        self.waiting.lock().await.insert(id, reply);
+        let _pending = PendingCall { endpoints: self, id };
+        self.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(id, WaitingCommand { endpoint_id: endpoint_id.to_owned(), reply });
         if enqueue(self, endpoint_id, id, command, args).await.is_err() {
-            self.waiting.lock().await.remove(&id);
+            self.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
             return Err(format!("{} is offline", self.name(endpoint_id).await.unwrap_or_else(|| "That device".into())));
         }
         match tokio::time::timeout(timeout, answer).await {
             Ok(Ok(result)) => result,
             _ => {
-                self.waiting.lock().await.remove(&id);
+                self.waiting.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).remove(&id);
                 Err("The device didn't answer in time".into())
             }
         }
@@ -305,6 +326,7 @@ async fn enqueue(endpoints: &Endpoints, endpoint_id: &str, id: u64, command: &st
     let Some(endpoint) = all.get_mut(endpoint_id).filter(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER) else {
         return Err(error(StatusCode::SERVICE_UNAVAILABLE, "That device is offline"));
     };
+    endpoint.queue.retain(|command| endpoints.waiting.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&command.id));
     if endpoint.queue.len() >= MAX_QUEUED {
         return Err(error(StatusCode::SERVICE_UNAVAILABLE, "That device isn't keeping up"));
     }
@@ -330,6 +352,39 @@ mod tests {
 
     fn report(status: Value) -> Json<Presence> {
         Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None })
+    }
+
+    #[tokio::test]
+    async fn cancelled_calls_remove_waiters_and_uncollected_commands() {
+        let endpoints = Shared::default();
+        presence(State(endpoints.clone()), Path("pc-1".into()), report(json!({}))).await;
+        for _ in 0..MAX_QUEUED + 2 {
+            let call = tokio::spawn({ let endpoints = endpoints.clone(); async move {
+                endpoints.call("pc-1", "load_native_audio", json!({"source":"/api/test"})).await
+            }});
+            tokio::task::yield_now().await;
+            call.abort();
+            let _ = call.await;
+            assert!(endpoints.waiting.lock().unwrap().is_empty());
+        }
+        let (_, work) = body(collect(State(endpoints.clone()), Path("pc-1".into()), Query(CollectQuery { wait: Some(0) })).await).await;
+        assert_eq!(work, json!([]), "a cancelled queued load must never execute later");
+    }
+
+    #[tokio::test]
+    async fn output_restart_invalidates_waiters_before_the_command_timeout() {
+        let endpoints = Shared::default();
+        let mut first = report(json!({})); first.instance_id = Some("first".into());
+        presence(State(endpoints.clone()), Path("pc-1".into()), first).await;
+        let call = tokio::spawn({ let endpoints = endpoints.clone(); async move {
+            endpoints.call("pc-1", "load_native_audio", json!({"source":"/api/test"})).await
+        }});
+        tokio::task::yield_now().await;
+        let mut second = report(json!({})); second.instance_id = Some("second".into());
+        presence(State(endpoints.clone()), Path("pc-1".into()), second).await;
+        assert!(tokio::time::timeout(Duration::from_millis(100), call).await.unwrap().unwrap().is_err());
+        assert!(endpoints.waiting.lock().unwrap().is_empty());
+        assert!(endpoints.endpoints.lock().await["pc-1"].queue.is_empty());
     }
 
     #[tokio::test]
