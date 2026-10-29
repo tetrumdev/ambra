@@ -47,12 +47,27 @@ getcap /usr/local/libexec/ambra-icmp-launch
 
 The filesystem must support capability xattrs and honor executable capabilities; a `nosuid` mount or a restricted capability bounding set can prevent this. Replacing the helper can remove its capability and requires an administrator to grant it again. Roll back by removing the installed helper or running `sudo setcap -r /usr/local/libexec/ambra-icmp-launch`. No capability is applied to Ambra itself.
 
-On macOS, the operator must manually run the launcher through sudo in a separate Terminal. Only socket creation runs privileged; the test probe runs as the operator. Never supply a Mac password to an agent. No automatic elevation or cached-credential workaround exists. macOS datagram ping sockets are insufficient: the tested OS permits Echo but rejects the required Time Exceeded transmission with `Invalid argument`.
+On macOS, launch the installed helper explicitly through sudo. Only socket creation runs privileged; the test probe runs as the invoking user. The helper does not request, store, or process a password. macOS datagram ping sockets are insufficient: the tested OS permits Echo but rejects the required Time Exceeded transmission with `Invalid argument`.
+
+The installer accepts a prebuilt launcher and makes a root-owned copy. Linux grants only `CAP_NET_RAW` to a copy executable by the invoking user's group. macOS installs an ordinary executable without a setuid bit, daemon, or sudoers change. A one-shot sudo invocation remains necessary on macOS:
+
+```sh
+cc -O2 -Wall -Wextra -Werror scripts/pwnat/icmp-launch.c -o /tmp/ambra-icmp-launch
+sudo sh scripts/pwnat/install-helper.sh /tmp/ambra-icmp-launch
+# Linux:
+/usr/local/libexec/ambra-icmp-launch --health
+# macOS:
+sudo /usr/local/libexec/ambra-icmp-launch --health
+# Remove the installed helper on either platform:
+sudo sh scripts/pwnat/install-helper.sh --uninstall
+```
+
+`--health` opens and closes one raw socket, drops privileges, and emits structured health with UID/EUID. Socket permission failures also emit a structured stage and OS error number. The command mode executes an absolute path only after dropping privileges. The unprivileged child still receives a raw ICMP descriptor; this is not a packet-filtering sandbox. Do not grant untrusted users access through a broad sudoers rule.
 
 | Platform | Current behavior | Privilege requirement and verification |
 | --- | --- | --- |
 | Linux | Optional, verified with the dedicated launcher | Helper needs `CAP_NET_RAW`; Ambra runs without root or process capabilities. Real Echo transmission/reception and compatible simulated traversal pass. |
-| macOS | Optional; raw socket denied in ordinary application | Manual sudo for the one-shot helper is required. Helper builds; privileged operation and physical pwnat remain untested pending operator action. |
+| macOS | Optional; raw socket denied in ordinary application | Explicit sudo for the one-shot helper is required. Privilege drop and raw signaling were physically tested on October 28. Hotspot-to-home pwnat still fails before QUIC establishment: no ICMP quotations arrive at the server. |
 | Windows | Explicitly disabled | Windows raw sockets require Administrator access. No supported socket broker is implemented or tested; ordinary Ambra does not request elevation. Shared library cross-compiles for Windows. |
 | iOS | Explicitly disabled | Normal application sandbox does not provide these raw socket privileges. No device validation or sandbox-compatible implementation is claimed. |
 | Android | Explicitly disabled | Normal application sandbox does not provide `CAP_NET_RAW`. No rooted-device exception is enabled. |
@@ -68,6 +83,8 @@ A failed pwnat listener does not stop LAN or HyperDHT. Its DHT publication has a
 `network status` reports capability, opt-in state, running listener, public candidate, and separate listener/publication errors. Client logs identify each transport attempt, deadline, verified public peer endpoint, and pinned Noise authentication. A connected state still requires `/api/network/session` authorization. Failed enrollment never becomes a successful connection. Application mutations are not replayed on ambiguous disconnects.
 
 A log saying `Pwnat` proves selection of the pwnat QUIC transport, not by itself that ICMP crossed a physical NAT. Combine it with the validated ICMP quotation, public UDP tuples, route/interface evidence, and deliberate exclusion of other data transports.
+
+Connection errors now identify `icmp_socket`, `udp_bind`, `quic_connect`, `quic_stream`, or `noise_identity`, plus the bounded ICMP request count. Listener status includes `icmpEchoSent`, `icmpErrors`, `icmpQuotationsAccepted`, and `udpPunchesSent`. The standalone server retries an exited HyperDHT or pwnat listener with capped exponential backoff; changing transport configuration or shutting down cancels retries.
 
 ## Reproducible tests
 
@@ -90,3 +107,14 @@ sudo python3 scripts/pwnat/test-nat.py
 The lab tests ordinary Linux client SNAT failure, independently blocks Time Exceeded traffic and checks the firewall counter, then models a compatible client NAT with an **explicit stateless ICMP translation rule inside its namespace**. The positive result is conditional simulation, not proof that default Linux NAT or a physical router supports this protocol. Its transit namespace has no Internet route and no Tailscale interface. All namespaces and processes are removed in `finally`; logs remain in its printed artifact directory. Host firewall and forwarding settings are not changed.
 
 `scripts/pwnat/test-macos.py` is the prepared physical-device test. Run it only through the launcher, with a separately running isolated Kubuntu server. It obtains a signed endpoint record automatically, disables LAN and HyperDHT data attempts, performs server-approved pairing over the pwnat stream, checks exact WAV/range bytes, and reconnects. SSH is used only for management and approval. The script refuses to run as root and never requests or processes a password. See the dated investigation report for the prepared command and results.
+
+The newer `cross-network.py` manages its own isolated server and automates approval and cleanup. Its default mode checks real HyperDHT pairing, authorization, exact WAV/range bytes, repeated reconnects, and both peers' physical routes. pwnat-only mode needs the inherited ICMP descriptor and the installed Linux helper. Neither mode touches the normal server profile:
+
+```sh
+python3 scripts/pwnat/cross-network.py llewyn@100.106.252.60 --rounds 8
+sudo /usr/local/libexec/ambra-icmp-launch /usr/bin/python3 \
+  "$PWD/scripts/pwnat/cross-network.py" llewyn@100.106.252.60 \
+  --transport pwnat --rounds 2
+```
+
+Artifacts use a private temporary directory. Preserve that directory for debugging; it can contain test pairing credentials. Only sanitized aggregates should be committed. `udp-peer.py` separately tests authenticated, bounded direct UDP with an explicitly selected physical source address; its coordination token travels over stdin and is never logged.
