@@ -28,14 +28,24 @@ async fn main() -> ambra_net::Result<()> {
         .transpose()?
         .unwrap_or(1)
         .clamp(1, 8);
+    let lan = match args.next().as_deref() {
+        None => None,
+        Some("--lan") => Some(
+            args.next()
+                .ok_or("Pass LAN address")?
+                .parse::<std::net::SocketAddr>()?,
+        ),
+        _ => return Err("Expected --lan ADDRESS".into()),
+    };
     let mut tasks = tokio::task::JoinSet::new();
     for client in 0..parallel {
         tasks.spawn(async move {
-            let node = Arc::new(Client::new(Identity::generate()?));
+            let identity = Identity::generate()?;
+            let node = Arc::new(Client::new(identity.clone()));
             for round in 0..rounds {
                 let start = Instant::now();
                 let result = tokio::time::timeout(Duration::from_secs(45), async {
-                    let (io, pump) = node.connect(key).await?;
+                    let (io, pump) = if let Some(address) = lan { ambra_net::lan::connect(address, key, &identity).await? } else { node.connect(key).await? };
                     let connection = HttpConnection::new(io, pump).await?;
                     let response = connection.request(hyper::Request::builder().uri("/api/test").header("authorization", "Bearer interop-fixture").body(Body::empty())?).await?;
                     if !response.status().is_success() { return Err("Fixture authorization failed".into()); }

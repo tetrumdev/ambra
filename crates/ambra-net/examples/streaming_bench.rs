@@ -27,9 +27,23 @@ async fn main() -> ambra_net::Result<()> {
         .transpose()?
         .unwrap_or(60)
         .clamp(1, 120);
-    let node = Client::new(Identity::generate()?);
+    let lan = match args.next().as_deref() {
+        None => None,
+        Some("--lan") => Some(
+            args.next()
+                .ok_or("Pass LAN address")?
+                .parse::<std::net::SocketAddr>()?,
+        ),
+        _ => return Err("Expected --lan ADDRESS".into()),
+    };
+    let identity = Identity::generate()?;
+    let node = Client::new(identity.clone());
     let connection = tokio::time::timeout(Duration::from_secs(45), async {
-        let (io, pump) = node.connect(key).await?;
+        let (io, pump) = if let Some(address) = lan {
+            ambra_net::lan::connect(address, key, &identity).await?
+        } else {
+            node.connect(key).await?
+        };
         HttpConnection::new(io, pump).await
     })
     .await??;
@@ -99,10 +113,10 @@ async fn main() -> ambra_net::Result<()> {
     // Preserve transfer diagnostics even when concurrent control polling fails.
     // Returning early here previously discarded every byte/gap measurement.
     let (mut polls, poll_error) = match polling.join_next().await {
-        Some(Ok(Ok((timings,error)))) => (timings,error),
-        Some(Ok(Err(error))) => (Vec::new(),Some(error.to_string())),
-        Some(Err(error)) => (Vec::new(),Some(error.to_string())),
-        None => (Vec::new(),Some("poll task disappeared".to_owned())),
+        Some(Ok(Ok((timings, error)))) => (timings, error),
+        Some(Ok(Err(error))) => (Vec::new(), Some(error.to_string())),
+        Some(Err(error)) => (Vec::new(), Some(error.to_string())),
+        None => (Vec::new(), Some("poll task disappeared".to_owned())),
     };
     polls.sort_by(f64::total_cmp);
     let percentile = |p: f64| {
@@ -114,12 +128,15 @@ async fn main() -> ambra_net::Result<()> {
         "{}",
         serde_json::json!({"seconds":start.elapsed().as_secs_f64(),"bytes":bytes,"responses":responses,
         "throughput_mib_s":bytes as f64/1048576./start.elapsed().as_secs_f64(),"polls":polls.len(),
-        "poll_p50_ms":percentile(0.5),"poll_p95_ms":percentile(0.95),"max_body_gap_ms":max_gap_ms,
+        "transport":if lan.is_some() { "lan_noise_http2" } else { "hyperdht_udx" },
+        "poll_p50_ms":percentile(0.5),"poll_p95_ms":percentile(0.95),"poll_p99_ms":percentile(0.99),"poll_latency_ms":polls,"max_body_gap_ms":max_gap_ms,
         "body_gaps_over_250ms":gaps_over_250ms,"result":format!("{result:?}"),"poll_error":poll_error})
     );
     connection.close();
     node.shutdown().await;
     result??;
-    if let Some(error) = poll_error { return Err(error.into()); }
+    if let Some(error) = poll_error {
+        return Err(error.into());
+    }
     Ok(())
 }

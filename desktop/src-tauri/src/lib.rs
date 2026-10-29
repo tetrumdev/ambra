@@ -1010,6 +1010,18 @@ fn startup_elapsed_ms() -> u64 {
 pub fn run() {
     let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).with_ansi(false).try_init();
     let _ = PROCESS_STARTED.set(Instant::now());
+    let context = tauri::generate_context!();
+    #[cfg(debug_assertions)]
+    let context = {
+        let mut context = context;
+        if env::var_os("AMBRA_DATA_DIR").is_some_and(|path| !path.is_empty())
+            && env::args().any(|argument| argument == "--network-test-stdin")
+        {
+            // Isolated test credentials must also have isolated browser storage.
+            for window in &mut context.config_mut().app.windows { window.incognito = true; }
+        }
+        context
+    };
     let app = tauri::Builder::default()
         .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
@@ -1083,7 +1095,7 @@ pub fn run() {
             service_login::submit_service_login,
             local_import::import_local_music,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while building tauri application");
 
     app.run(|_app, event| {
