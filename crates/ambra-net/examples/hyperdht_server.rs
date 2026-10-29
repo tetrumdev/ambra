@@ -45,6 +45,34 @@ async fn main() -> ambra_net::Result<()> {
             },
         ));
     let cancel = CancellationToken::new();
+    let args: Vec<_> = std::env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == "--pwnat") {
+        let address = args
+            .get(index + 1)
+            .ok_or("--pwnat requires IPv4 bind address")?
+            .parse()?;
+        let status = Arc::new(RwLock::new(ambra_net::pwnat::Status::default()));
+        let task = tokio::spawn(ambra_net::pwnat::serve(
+            address,
+            identity,
+            app,
+            cancel.clone(),
+            status.clone(),
+        ));
+        for _ in 0..120 {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            println!(
+                "PWNAT_STATUS {}",
+                serde_json::to_string(&*status.read().unwrap())?
+            );
+            if task.is_finished() {
+                break;
+            }
+        }
+        cancel.cancel();
+        task.await??;
+        return Ok(());
+    }
     if std::env::args().any(|arg| arg == "--loopback") {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         println!("ADDRESS {}", listener.local_addr()?);
