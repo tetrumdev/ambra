@@ -74,7 +74,7 @@ impl UdpSocket {
         self.socket.writable().await
     }
 
-    fn try_send_to(&self, data: &[u8], addr: SocketAddr) -> std::io::Result<usize> {
+    pub(crate) fn try_send_to(&self, data: &[u8], addr: SocketAddr) -> std::io::Result<usize> {
         self.try_send_to_with_ttl(data, addr, None)
     }
 
