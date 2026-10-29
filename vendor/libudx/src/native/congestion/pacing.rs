@@ -29,6 +29,14 @@ impl TokenBucket {
         self.rate_bytes_per_ms = bytes_per_ms;
     }
 
+    /// Scheduler delays must not discard credit earned at the BBR pacing rate.
+    /// Bound catch-up to one congestion window; the sender separately enforces
+    /// both congestion and receive windows. Growing the limit adds no tokens.
+    pub(crate) fn set_burst_limit(&mut self, bytes: u32) {
+        self.max_burst = bytes;
+        self.available = self.available.min(bytes);
+    }
+
     /// Credits tokens for elapsed time at microsecond precision. Time too short
     /// to earn a whole byte stays uncredited, so frequent calls do not lose it.
     pub(crate) fn refill(&mut self, now: Instant) {
@@ -94,6 +102,22 @@ impl TokenBucket {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_growth_does_not_mint_tokens_and_shrink_clips_credit() {
+        let mut bucket = TokenBucket::new(1200);
+        let now = Instant::now();
+        bucket.set_burst_limit(12000);
+        assert_eq!(bucket.available, 2400);
+        bucket.set_rate(2400);
+        bucket.refill(now);
+        bucket.refill(now + Duration::from_millis(10));
+        assert_eq!(bucket.available, 12000, "catch-up stays within the send window");
+        bucket.set_burst_limit(2400);
+        assert_eq!(bucket.available, 2400);
+        assert!(bucket.try_consume(2400, now + Duration::from_millis(10)));
+        assert!(!bucket.try_consume(1, now + Duration::from_millis(10)));
+    }
 
     #[test]
     fn test_new_has_initial_burst() {
