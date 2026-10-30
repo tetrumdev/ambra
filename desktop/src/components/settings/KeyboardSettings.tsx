@@ -1,15 +1,11 @@
 import { useEffect, useState } from "react";
 import {
-  bindingFromEvent, bindingKeys, isModifierCode, sameBinding, shortcutBindings, shortcutCategories, shortcutDefinition,
+  bindingFromEvent, formatBinding, isModifierCode, sameBinding, shortcutBindings, shortcutCategories, shortcutDefinition,
   shortcutIds, shortcutsUsing, suspendShortcuts, type ShortcutBinding, type ShortcutId, type ShortcutOverrides,
 } from "../../utils/shortcuts";
 import { SettingRow } from "./SettingsControls";
 
 type Recording = { id: ShortcutId; index: number | "new" };
-
-function Keys({ binding }: { binding: ShortcutBinding }) {
-  return <>{bindingKeys(binding).map((key, index) => <kbd key={index} className="shortcutKey">{key}</kbd>)}</>;
-}
 
 /** Every shortcut, its keys, and a way to record new ones. */
 export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutOverrides; onChange: (overrides: ShortcutOverrides) => void }) {
@@ -68,7 +64,7 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
       <button type="button" className="settingsPill" disabled={!customized} onClick={() => { onChange({}); setNotice(null); }}>Reset all</button>
     </header>
     <p className="settingsMuted">Click a shortcut, then press the keys for it. Esc cancels.</p>
-    {notice && <p className="settingsMuted shortcutNotice" role="status">{notice}</p>}
+    {notice && <p className="settingsMuted" role="status">{notice}</p>}
     {shortcutCategories.map(category => <div className="settingsGroup" key={category}>
       <h2>{category}</h2>
       {shortcutIds.filter(id => shortcutDefinition(id).category === category && !shortcutDefinition(id).unavailable).map(id => {
@@ -80,7 +76,7 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
             {bindings.map((binding, index) => <span className="shortcutBinding" key={index} data-recording={isRecording(index) || undefined}>
               <button type="button" className="shortcutBindingKeys" aria-label={`Change ${definition.label} shortcut`}
                 onClick={() => setRecording(isRecording(index) ? null : { id, index })}>
-                {isRecording(index) ? <span className="shortcutPrompt">Press keys…</span> : <Keys binding={binding} />}
+                {isRecording(index) ? "Press keys…" : formatBinding(binding)}
               </button>
               <button type="button" className="shortcutRemove" aria-label={`Remove ${definition.label} shortcut`}
                 onClick={() => onChange(setBindings(id, bindings.filter((_, other) => other !== index)))}>×</button>
@@ -88,7 +84,7 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
             {!bindings.length && !isRecording("new") && <span className="settingsMuted">None</span>}
             <button type="button" className="shortcutAdd" data-recording={isRecording("new") || undefined}
               aria-label={`Add a ${definition.label} shortcut`} onClick={() => setRecording(isRecording("new") ? null : { id, index: "new" })}>
-              {isRecording("new") ? "Press keys…" : "+"}
+              {isRecording("new") ? "Press keys…" : "Add"}
             </button>
             {overrides[id] && <button type="button" className="settingsLink" onClick={() => onChange(setBindings(id, definition.defaults))}>Reset</button>}
           </span>

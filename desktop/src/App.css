@@ -188,6 +188,17 @@ button img {
         filter 0.15s;
 }
 
+/* Opened from the keyboard, the player starts with these already hidden (App.tsx). */
+:root[data-bigscreen-snap] :is(
+    .bigscreenClose,
+    .bigscreenViewPicker,
+    .volumeControlContainer,
+    .devAudioControls,
+    #extraCtrls #queueBtn
+) {
+    transition: none;
+}
+
 /* Children inherit visibility, so their own transitions must not include it. */
 .volumeControlContainer #volumeBtn {
     transition-property: filter;

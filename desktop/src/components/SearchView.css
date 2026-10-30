@@ -267,6 +267,7 @@
 }
 
 .searchAlbum:hover .searchEntityTitle strong,
+.searchArtist:hover .searchEntityInfo strong,
 .searchEntityTitle:focus-visible strong {
     text-decoration: underline;
     text-underline-offset: 3px;

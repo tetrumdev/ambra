@@ -18,9 +18,8 @@
 .shortcutToastBody {
     display: flex;
     align-items: center;
-    gap: 10px;
     max-width: min(480px, 80vw);
-    padding: 8px 10px 8px 16px;
+    padding: 8px 16px;
     border: 1px solid #535353;
     border-radius: 100px;
     background: rgba(22, 22, 22, 0.6);
@@ -37,25 +36,15 @@
     text-overflow: ellipsis;
 }
 
-.shortcutToastBody kbd,
-.shortcutKey {
-    padding: 2px 8px;
-    border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.08);
-    color: #d0d0d0;
-    font: 500 0.8rem "Stack Sans Text", Inter, sans-serif;
-}
-
 @keyframes shortcutToastIn {
     from { opacity: 0; transform: translateY(6px) scale(0.97); }
 }
 
-/* The list item holding the keyboard cursor, shown only while the keyboard is in use (keyboardNav.ts). */
-:root[data-keyboard-nav] [data-nav-cursor] {
-    background-color: rgba(255, 255, 255, 0.1);
-    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
-    border-radius: 8px;
+/* The pointer stays hidden while the keyboard is in use; the item the keyboard is on looks
+   hovered instead (keyboardHover.ts). */
+:root[data-keyboard-nav],
+:root[data-keyboard-nav] * {
+    cursor: none !important;
 }
 
 /* An action just taken on an item, such as queueing it. */
@@ -65,19 +54,6 @@
 
 @keyframes navFlash {
     from { background-color: rgba(255, 255, 255, 0.3); }
-}
-
-/* Outlines are off app-wide (App.css), so keyboard focus in the sidebar shows as hover does. */
-:root[data-keyboard-nav] :is(.sidebarBtn, #createPlaylistBtn, .settingsBack):focus-visible {
-    color: white;
-    text-decoration: underline;
-    text-underline-offset: 4px;
-}
-
-:root[data-keyboard-nav] .sidebarPlaylistGroup > summary:focus-visible {
-    color: white;
-    text-decoration: underline;
-    text-underline-offset: 4px;
 }
 
 @media (prefers-reduced-motion: reduce) {

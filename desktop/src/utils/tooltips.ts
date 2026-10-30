@@ -106,6 +106,8 @@ export function installTooltips(): () => void {
 
   const onPointerMove = (event: PointerEvent) => {
     if (event.pointerType === "touch" || event.buttons !== 0) return;
+    // A hidden pointer hovers nothing, even as the page scrolls under it (keyboardNav.ts).
+    if (document.documentElement.hasAttribute("data-keyboard-nav")) return;
     const next = tooltipAnchor(event.target);
     if (suppressed && next !== suppressed) suppressed = null;
     if (next !== anchor) {

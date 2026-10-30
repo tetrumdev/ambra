@@ -185,7 +185,7 @@ export function TrackList({
     const track = tracks.find(candidate => candidate.globalId === item.dataset.trackId);
     if (!track) return null;
     if (!isTrackAvailable(track, connected)) return `“${track.name}” isn't available`;
-    if (action === "play") { playTrack(track.globalId); return `Playing “${track.name}”`; }
+    if (action === "play") { playTrack(track.globalId); return ""; }
     if (action === "queue") { addToQueue(track.globalId); return `Added “${track.name}” to the queue`; }
     playNext(track.globalId);
     return `“${track.name}” plays next`;
