@@ -93,11 +93,12 @@ async fn fetch_with(client: &ProviderClient<'_>, request: &LyricsRequest) -> Lyr
     for provider in [Provider::Amll, Provider::Red, Provider::Lrclib] {
         match client.fetch(provider, request).await {
             Ok(Some(lyrics)) => {
+                selection.answered = true;
                 if let Some(selected) = selection.consider(provider, lyrics) {
                     return selected;
                 }
             }
-            Ok(None) => {}
+            Ok(None) => selection.answered = true,
             Err(_) => selection.failed.push(provider.name()),
         }
     }
@@ -110,6 +111,7 @@ struct Selection {
     red: Option<LyricsResponse>,
     lrclib: Option<LyricsResponse>,
     failed: Vec<&'static str>,
+    answered: bool,
 }
 
 impl Selection {
@@ -146,7 +148,12 @@ impl Selection {
                 }
             })
             .unwrap_or_else(|| LyricsResponse::empty(None));
-        lyrics.failed_providers = self.failed;
+        // A miss is only a failure when no provider could be asked at all. LRCLIB in particular
+        // answers most misses with 503 "ServerOverloaded", so one failed provider beside others
+        // that found nothing still means the song has no lyrics, not that the lookup broke.
+        if lyrics.status != "unavailable" || !self.answered {
+            lyrics.failed_providers = self.failed;
+        }
         lyrics
     }
 }

@@ -10,6 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
+import { nativeAudioSource } from "../utils/nativeAudioSource";
 
 const noDeck = () => {};
 
@@ -21,6 +22,20 @@ const ENGINE_FRESH_MS = 1500;
 const PENDING_MS = 4000;
 /** The server starts the song over instead of going back once it's past this (session.rs). */
 const RESTART_AFTER_SECONDS = 3;
+
+/** The endpoint reports the server's URL; the UI uses its own bridge address and access token. */
+function sameSource(left: string | null | undefined, right: string | null | undefined) {
+  if (!left || !right) return false;
+  const key = (source: string) => {
+    const api = source.indexOf("/api/");
+    if (api < 0) return source;
+    const url = new URL(source.slice(api), "http://ambra.local");
+    url.searchParams.delete("access_token");
+    url.searchParams.sort();
+    return url.pathname + url.search;
+  };
+  return key(left) === key(right);
+}
 
 /** Where the song is now, carrying `view`'s position forward while it plays. */
 function positionOf(view: CoreView) {
@@ -43,29 +58,55 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const [nextActivation, setNextActivation] = useState(0);
   const firstAudioRef = useRef<HTMLAudioElement>(null);
   const secondAudioRef = useRef<HTMLAudioElement>(null);
+  const latestQueue = useRef(queue);
+  latestQueue.current = queue;
+  const [enginePlaying, setEnginePlaying] = useState<boolean | null>(null);
 
   // While this device is the output and its engine plays the server's song, the clock follows the
   // engine itself: what's heard here, with no trip to the server and back in between.
   const engine = useRef<{ status: EngineStatus; at: number } | null>(null);
   // A skip shown at once: the server's view of the song it leaves is ignored until it loads the next.
-  const skipping = useRef<{ from: string | undefined; at: number } | null>(null);
+  const skipping = useRef<{ to: string; outputId: string | undefined; at: number } | null>(null);
   const followsEngine = useCallback(() => {
     const current = coreView();
     const heard = engine.current;
-    if (skipping.current && (performance.now() - skipping.current.at > PENDING_MS || current?.loadedSource !== skipping.current.from)) skipping.current = null;
-    return !!current && !!heard && !skipping.current && ownsPlaybackOutput(current.output, serverConnection?.clientId)
-      && performance.now() - heard.at < ENGINE_FRESH_MS
-      && !!current.loadedSource && heard.status.currentSource === current.loadedSource;
+    const fresh = !!heard && performance.now() - heard.at < ENGINE_FRESH_MS;
+    const pending = skipping.current;
+    if (pending && (current?.output?.endpointId !== pending.outputId || sameSource(current?.loadedSource, pending.to)
+      || (performance.now() - pending.at > PENDING_MS && !(fresh && sameSource(heard.status.currentSource, pending.to))))) {
+      skipping.current = null;
+    }
+    const track = latestQueue.current.currentEntry?.track;
+    // Direct streams belong to the selected track, even before the server confirms its load.
+    // Live PCM has a session URL instead of the track URL, so use the server's source for it.
+    const source = skipping.current?.to ?? (current?.loadedSource?.includes("/api/playback/live/")
+      ? current.loadedSource : (track && nativeAudioSource(track)) ?? current?.loadedSource);
+    return !!current && fresh && ownsPlaybackOutput(current.output, serverConnection?.clientId)
+      && sameSource(heard.status.currentSource, source);
   }, []);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen<EngineStatus>("shared-output-status", ({ payload }) => {
+      if (disposed) return;
       engine.current = { status: payload, at: performance.now() };
+      const queue = latestQueue.current;
+      const next = queue.peekNext()?.track;
+      const current = queue.currentEntry?.track;
+      // A gapless handoff is already audible here, even if the server still shows the old song.
+      if (!skipping.current && next && ownsPlaybackOutput(coreView()?.output, serverConnection?.clientId)
+        && sameSource(payload.currentSource, nativeAudioSource(next))
+        && !sameSource(payload.currentSource, current && nativeAudioSource(current))) {
+        skipping.current = { to: nativeAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
+        queue.next(false);
+        clock.setRunning(false);
+        clock.set(0);
+      }
       if (!followsEngine()) return;
       clock.set(payload.currentTime);
       clock.setRunning(payload.isPlaying && !payload.buffering);
+      setEnginePlaying(payload.isPlaying || payload.buffering);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); };
   }, [clock, followsEngine]);
@@ -76,11 +117,12 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     const sample = () => {
       // Mid-skip the server still describes the song being left; the clock waits at the start.
       if (followsEngine() || skipping.current) return;
+      setEnginePlaying(null);
       clock.set(positionOf(view));
       clock.setRunning(view.playing && !view.buffering && view.outputOnline);
     };
     sample();
-    if (!view.playing) return;
+    if (!view.playing && !ownsPlaybackOutput(view.output, serverConnection?.clientId)) return;
     const timer = setInterval(sample, 500);
     return () => clearInterval(timer);
   }, [view, clock, followsEngine]);
@@ -117,7 +159,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     return () => clearTimeout(timer);
   }, [pendingPlaying, view?.playing]);
   const playingNow = useRef(false);
-  playingNow.current = pendingPlaying?.playing ?? view?.playing ?? false;
+  playingNow.current = pendingPlaying?.playing ?? (followsEngine() ? enginePlaying : null) ?? view?.playing ?? false;
   /** Asks this device's engine directly, when it's the one playing the server's song. */
   const controlEngine = useCallback((action: "play" | "pause" | "seek", positionSeconds?: number) => {
     if (!followsEngine()) return;
@@ -147,17 +189,22 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       // This device's engine usually has the next song ready already: it starts it at once, and
       // the server follows from its report as it does when a song ends.
       const from = coreView()?.loadedSource;
+      const next = queue.peekNext()?.track;
+      if (!next) { queue.next(); return; }
+      const pending = { to: nativeAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
+      skipping.current = pending;
       clock.setRunning(false);
       clock.set(0);
       void invoke<boolean>("shared_output_skip").catch(() => false).then(skipped => {
-        if (coreView()?.loadedSource !== from) return;
-        if (queue.next(!skipped)) skipping.current = { from, at: performance.now() };
+        if (skipping.current !== pending) return;
+        if (coreView()?.loadedSource !== from) { skipping.current = null; return; }
+        if (!queue.next(!skipped)) skipping.current = null;
       });
       return;
     }
     const moved = direction === "next" ? queue.next() : queue.previous();
     if (!moved) return;
-    skipping.current = { from: coreView()?.loadedSource, at: performance.now() };
+    skipping.current = { to: nativeAudioSource(moved.track), outputId: coreView()?.output?.endpointId, at: performance.now() };
     clock.setRunning(false);
     clock.set(0);
   }, [clock, followsEngine, queue, seekTo]);
@@ -230,14 +277,14 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     };
     update();
     return clock.subscribe(update);
-  }, [clock, currentTrack, view?.playing, pendingPlaying, localOutput]);
+  }, [clock, currentTrack, view?.playing, pendingPlaying, enginePlaying, localOutput]);
 
   return {
     currentTrack,
     audioQuality: view?.audioQuality ?? null,
     clock,
     duration: view?.duration || currentTrack?.durationSeconds || 0,
-    isPlaying: pendingPlaying?.playing ?? view?.playing ?? false,
+    isPlaying: playingNow.current,
     previousActivation,
     nextActivation,
     playbackError: view?.error ?? null,

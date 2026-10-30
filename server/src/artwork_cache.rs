@@ -65,7 +65,7 @@ fn entry_paths(directory: &Path, url: &str) -> (PathBuf, PathBuf) {
     let key = format!("{:016x}-{:x}", hasher.finish(), url.len());
     (
         directory.join(format!("{key}.jpg")),
-        directory.join(format!("{key}.colors-v3.json")),
+        directory.join(format!("{key}.colors-v4.json")),
     )
 }
 
@@ -106,7 +106,7 @@ fn read_from_disk(directory: &Path, url: &str) -> Option<Artwork> {
     let colors = fs::read(&colors_path)
         .ok()
         .and_then(|encoded| serde_json::from_slice::<ArtworkPalette>(&encoded).ok())
-        .filter(|palette| palette.colors.len() == 4 && palette.weights.len() == 4);
+        .filter(|palette| palette.colors.len() == 4 && palette.weights.len() == 4 && palette.edge_colors.len() == 96);
     Some(Artwork {
         bytes: Bytes::from(bytes),
         colors: OnceCell::new_with(colors),

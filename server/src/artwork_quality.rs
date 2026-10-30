@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 pub struct ArtworkPalette {
     pub colors: Vec<String>,
     pub weights: Vec<f32>,
+    /// Shared display-sRGB boundary samples, so every client uses identical cover contrast.
+    #[serde(default, rename = "edgeColors", skip_serializing_if = "Vec::is_empty")]
+    pub edge_colors: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -117,6 +120,18 @@ pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
         return None;
     }
 
+    let mut edge_colors = Vec::with_capacity(96);
+    for zone in 0..8 {
+        let along_x = (2 * zone + 1) * image.width() / 16;
+        let along_y = (2 * zone + 1) * image.height() / 16;
+        for (x, y) in [
+            (along_x, 0), (image.width() - 1, along_y),
+            (along_x, image.height() - 1), (0, along_y),
+        ] {
+            edge_colors.extend(image.get_pixel(x, y).0.map(|channel| f32::from(channel) / 255.0));
+        }
+    }
+
     let average = pixels.iter().fold([0.0_f32; 3], |mut sum, pixel| {
         for channel in 0..3 {
             sum[channel] += pixel[channel];
@@ -223,6 +238,7 @@ pub fn dominant_palette(bytes: &[u8]) -> Option<ArtworkPalette> {
     }
 
     Some(ArtworkPalette {
+        edge_colors,
         colors: selected
             .into_iter()
             .map(|cluster| {

@@ -11,6 +11,7 @@ import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
 import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection, serverConnectionSignal } from "./serverConnection";
+import { artworkPalettePath, parseArtworkPalette, type ArtworkPalette } from "../utils/artworkPalette";
 
 export { serverBaseUrl } from "./serverConnection";
 
@@ -250,31 +251,29 @@ export function thumbnailSource(source: string): string {
   return provider ? serverUrl(`/api/artwork/thumbnail?${new URLSearchParams({ provider, url: source })}`) : source;
 }
 
-export type ArtworkPalette = { colors: string[]; weights: number[] };
+export type { ArtworkPalette } from "../utils/artworkPalette";
 
 const paletteRequests = new Map<string, Promise<ArtworkPalette>>();
 export function artworkPalette(track: Track): Promise<ArtworkPalette> {
-  const query = artworkQuery(track);
-  if (!query) return Promise.resolve({ colors: [], weights: [] });
-  const cached = paletteRequests.get(query);
+  const path = artworkPalettePath(track.provider, track.nativeCover, track.cover);
+  if (!path) return Promise.resolve({ colors: [], weights: [] });
+  const cached = paletteRequests.get(path);
   if (cached) {
-    paletteRequests.delete(query);
-    paletteRequests.set(query, cached);
+    paletteRequests.delete(path);
+    paletteRequests.set(path, cached);
     return cached;
   }
-  const request = fetch(`${serverBaseUrl}/api/artwork/palette?${query}&weighted=true`)
+  const request = fetch(`${serverBaseUrl}${path}`)
     .then(async response => {
       if (!response.ok) throw new Error(`Artwork palette HTTP ${response.status}`);
-      const palette = await response.json() as ArtworkPalette | string[];
-      // Older servers don't include coverage; fall back to the original blend.
-      return Array.isArray(palette)
-        ? { colors: palette, weights: palette.map(() => 1 / palette.length) }
-        : palette;
+      const palette = parseArtworkPalette(await response.json());
+      if (!palette) throw new Error("Invalid artwork palette");
+      return palette;
     }).catch(() => {
-      if (paletteRequests.get(query) === request) paletteRequests.delete(query);
+      if (paletteRequests.get(path) === request) paletteRequests.delete(path);
       return { colors: [], weights: [] };
     });
-  paletteRequests.set(query, request);
+  paletteRequests.set(path, request);
   if (paletteRequests.size > 512) paletteRequests.delete(paletteRequests.keys().next().value!);
   return request;
 }

@@ -15,7 +15,6 @@ import { NavigationSwipe } from "./components/NavigationSwipe";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { LyricsView } from "./components/LyricsView";
-import { LYRICS_COVER_DIM } from "./utils/lyricsMotion";
 import { SearchBar, type SearchFocusRequest } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -1290,7 +1289,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       {(player.currentTrack || isPlayerView) && (
         <div className="playerStage" data-open={isPlayerView}>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
-            playing={player.isPlaying} coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
+            playing={player.isPlaying} />
           {isPlayerView && [
             ...leavingLyrics.map((track) => ({ track, leaving: true })),
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),

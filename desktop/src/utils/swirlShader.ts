@@ -18,6 +18,8 @@ export const NOISE_TEXTURE_SIZE = 256;
 export const MIN_FRAME_INTERVAL_MS = 1000 / 60 - 2;
 /** Time constant for the swirl easing between still and full speed. */
 export const SWIRL_EASE_SECONDS = 0.9;
+/** One noise lattice for every renderer, including clients opened later. */
+export const SWIRL_NOISE_SEED = 42;
 
 export const vertexShaderSource = `
 attribute vec2 a_position;
