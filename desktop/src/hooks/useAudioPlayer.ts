@@ -18,7 +18,8 @@ import {
 } from "../utils/nativeAudioSource";
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
-import { acceptsPlaybackShortcut, isCharacterKey, isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
+import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
+import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
 
@@ -896,7 +897,7 @@ export function useAudioPlayer(
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isUnmodifiedKey(event, "Space")) return;
+      if (!matchesShortcut(event, "playPause")) return;
 
       // Only text entry keeps Space for itself. A slider such as the progress bar keeps focus
       // after it's dragged, and the page puts focus back on it whenever the window refocuses
@@ -904,7 +905,9 @@ export function useAudioPlayer(
       if (isTypingTarget(event.target)) return;
 
       event.preventDefault();
-      if (!event.repeat) void togglePlayback();
+      if (event.repeat) return;
+      announceShortcut("playPause", isPlayingRef.current ? "Paused" : "Playing");
+      void togglePlayback();
     };
 
     window.addEventListener("keydown", handleKeyDown);
@@ -917,20 +920,23 @@ export function useAudioPlayer(
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const { previous, next, seek, duration, hasTrack } = transport.current;
-      const step = isUnmodifiedKey(event, "ArrowLeft") ? -SEEK_STEP_SECONDS
-        : isUnmodifiedKey(event, "ArrowRight") ? SEEK_STEP_SECONDS : 0;
+      const step = matchesShortcut(event, "seekBackward") ? -SEEK_STEP_SECONDS
+        : matchesShortcut(event, "seekForward") ? SEEK_STEP_SECONDS : 0;
       if (step !== 0) {
         if (!hasTrack || !acceptsPlaybackShortcut(event, true)) return;
         event.preventDefault();
         // Holding Right stops short of the end instead of running on into the next song.
         const end = duration > 0 ? Math.max(0, duration - 1) : Infinity;
         seek(Math.min(end, Math.max(0, clock.get() + step)));
+        announceShortcut(step < 0 ? "seekBackward" : "seekForward");
         return;
       }
-      const skip = isCharacterKey(event, ",") ? previous : isCharacterKey(event, ".") ? next : null;
+      const skip = matchesShortcut(event, "previousTrack") ? previous : matchesShortcut(event, "nextTrack") ? next : null;
       if (!skip || !acceptsPlaybackShortcut(event)) return;
       event.preventDefault();
-      if (!event.repeat && hasTrack) skip();
+      if (event.repeat || !hasTrack) return;
+      skip();
+      announceShortcut(skip === previous ? "previousTrack" : "nextTrack");
     };
 
     window.addEventListener("keydown", handleKeyDown);

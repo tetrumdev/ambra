@@ -392,3 +392,28 @@
         border: none;
     }
 }
+
+/* Summoned by the filter shortcut at the top of the sidebar, dressed like the search bar (SearchBar.css). */
+.sidebarFilterInput {
+    box-sizing: border-box;
+    width: calc(100% - 30px);
+    height: 34px;
+    margin: 0 0 18px;
+    padding: 0 14px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.4);
+    color: white;
+    font: inherit;
+    font-size: 0.9rem;
+    transition: filter 0.25s ease, border-color 0.25s ease;
+}
+
+.sidebarFilterInput:focus {
+    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.3));
+    border-color: rgb(100, 100, 100);
+}
+
+.sidebarFilterInput::-webkit-search-cancel-button {
+    display: none;
+}

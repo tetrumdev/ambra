@@ -1,6 +1,7 @@
 import "./LibraryView.css";
 import {
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,6 +14,9 @@ import { formatTotalDuration } from "../utils/totalDuration";
 import { staggerRows } from "../utils/viewMotion";
 import { useTrackColumns } from "../hooks/useTrackColumns";
 import { optionalColumnsTemplate } from "../utils/trackColumnWidths";
+import { acceptsPlaybackShortcut } from "../utils/keyboard";
+import { announceShortcut, matchingShortcut } from "../utils/shortcuts";
+import { useStableCallback } from "../hooks/useStableCallback";
 
 // Gap between the stuck playlist header's contents and the top of the view.
 const COLLAPSED_HEADER_INSET = 16;
@@ -24,6 +28,7 @@ const COLLAPSE_PROPERTIES = [
   "--playlist-title-shift",
   "--playlist-actions-progress",
   "--playlist-actions-shift",
+  "--playlist-title-text-width",
   "--playlist-details-shift",
   "--playlist-expanded-header-height",
   "--playlist-current-header-height",
@@ -37,6 +42,7 @@ type HeaderGeometry = {
   actionsHeight: number;
   detailsHeight: number;
   actions: HTMLElement | null;
+  compactActions: HTMLElement | null;
 };
 
 export type TrackCollectionViewProps = TrackListProps & {
@@ -44,6 +50,8 @@ export type TrackCollectionViewProps = TrackListProps & {
   className?: string;
   headerNavigation?: ReactNode;
   playbackActions?: ReactNode;
+  /** Icon-only versions of playbackActions, beside the title once the header collapses. */
+  compactActions?: ReactNode;
   registerScrollElement: (element: HTMLDivElement | null) => void;
   headerContent?: ReactNode;
   headerArtwork?: ReactNode;
@@ -67,6 +75,7 @@ export function TrackCollectionView({
   className = "",
   headerNavigation,
   playbackActions,
+  compactActions,
   registerScrollElement,
   headerContent,
   headerArtwork,
@@ -159,7 +168,10 @@ export function TrackCollectionView({
     );
     const actionsHidden = actionsProgress >= 0.999;
     element.toggleAttribute("data-playlist-actions-hidden", actionsHidden);
-    if (geometry.actions) geometry.actions.inert = actionsHidden;
+    // The full and compact buttons trade places halfway, so one set is always there to press.
+    const compact = actionsProgress >= 0.5;
+    if (geometry.actions) geometry.actions.inert = compact;
+    if (geometry.compactActions) geometry.compactActions.inert = !compact;
   }, [collapsibleHeader]);
 
   const scheduleCollapsibleHeader = useCallback((element: HTMLDivElement) => {
@@ -192,6 +204,8 @@ export function TrackCollectionView({
     const titleElement = header?.querySelector<HTMLElement>(".libraryTitle");
     if (!header || !body || !titleElement) return;
     const actions = body.querySelector<HTMLElement>(".libraryPlayActions");
+    const compactActions = body.querySelector<HTMLElement>(".libraryCompactActions");
+    const titleText = titleElement.querySelector<HTMLElement>(".libraryTitleText");
     const details = body.querySelector<HTMLElement>(".libraryInfo");
     let measureFrame: number | null = null;
 
@@ -207,8 +221,11 @@ export function TrackCollectionView({
         actionsHeight: actions?.offsetHeight ?? 0,
         detailsHeight: details?.offsetHeight ?? 0,
         actions,
+        compactActions,
       };
       element.style.setProperty("--playlist-expanded-header-height", `${expandedHeight}px`);
+      // Untransformed, so the compact buttons can follow the title's end as it shrinks.
+      if (titleText) element.style.setProperty("--playlist-title-text-width", `${titleText.offsetWidth}px`);
       updateCollapsibleHeader(element);
     };
     const scheduleMeasure = () => {
@@ -223,8 +240,12 @@ export function TrackCollectionView({
       resizeObserver.observe(sibling);
     }
     window.addEventListener("resize", scheduleMeasure);
+    // The title's width changes once its font arrives.
+    let disposed = false;
+    void document.fonts.ready.then(() => { if (!disposed) scheduleMeasure(); });
 
     return () => {
+      disposed = true;
       if (measureFrame !== null) cancelAnimationFrame(measureFrame);
       if (collapseFrameRef.current !== null) cancelAnimationFrame(collapseFrameRef.current);
       collapseFrameRef.current = null;
@@ -234,6 +255,7 @@ export function TrackCollectionView({
       for (const property of COLLAPSE_PROPERTIES) element.style.removeProperty(property);
       element.removeAttribute("data-playlist-actions-hidden");
       if (actions) actions.inert = false;
+      if (compactActions) compactActions.inert = false;
     };
   }, [collapsibleHeader, updateCollapsibleHeader, title, headerNavigation, showPlaybackActions, summary === null]);
 
@@ -251,6 +273,23 @@ export function TrackCollectionView({
       playTrack(randomTrack.globalId);
     }
   }
+
+  // Play and Shuffle by keyboard, while this list is the page on screen.
+  const handleShortcut = useStableCallback((event: KeyboardEvent) => {
+    const id = matchingShortcut(event, ["playCollection", "shuffleCollection"] as const);
+    if (!id || !showPlaybackActions || !acceptsPlaybackShortcut(event)) return;
+    if (scrollElementRef.current?.closest("[inert]")) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    if (isEmpty) { announceShortcut(id, "No songs to play"); return; }
+    if (id === "playCollection") handlePlay();
+    else handleShuffle();
+    announceShortcut(id, `${id === "playCollection" ? "Playing" : "Shuffling"} “${title}”`);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [handleShortcut]);
 
   return (
     <div
@@ -272,7 +311,20 @@ export function TrackCollectionView({
           <div className="libraryHeaderArtwork">{headerArtwork}</div>
         )}
         <div className={headerArtwork || collapsibleHeader ? "libraryHeaderBody" : undefined}>
-          <h1 className="libraryTitle">{title}</h1>
+          <h1 className="libraryTitle">
+            {collapsibleHeader ? <span className="libraryTitleText">{title}</span> : title}
+          </h1>
+          {collapsibleHeader && showPlaybackActions && (
+            <div className="libraryCompactActions">
+              <button type="button" className="libraryCompactBtn libraryCompactPlay" onClick={handlePlay} disabled={isEmpty} aria-label="Play">
+                <img src="/play.svg" alt="" aria-hidden="true" />
+              </button>
+              <button type="button" className="libraryCompactBtn" onClick={handleShuffle} disabled={isEmpty} aria-label="Shuffle">
+                <img src="/shuffle.svg" alt="" aria-hidden="true" />
+              </button>
+              {compactActions}
+            </div>
+          )}
           {headerContent}
           {showPlaybackActions && (
             <div className="libraryPlayActions">
