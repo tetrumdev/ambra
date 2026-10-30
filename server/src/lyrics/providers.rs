@@ -3,7 +3,10 @@ use futures_util::StreamExt;
 use serde::{Deserialize, de::DeserializeOwned};
 use std::{
     io,
-    sync::LazyLock,
+    sync::{
+        LazyLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, SystemTime},
 };
 use tokio::{sync::Mutex, time::Instant};
@@ -50,6 +53,8 @@ pub(super) struct ProviderClient<'a> {
     pub bases: [&'a str; 3],
     pub rates: &'a [Mutex<RateState>; 3],
     pub budget: Duration,
+    /// Providers that gave a definite answer (a body or a 404) during this lookup.
+    pub answered: [AtomicBool; 3],
 }
 
 impl<'a> ProviderClient<'a> {
@@ -63,6 +68,7 @@ impl<'a> ProviderClient<'a> {
             ],
             rates: &RATES,
             budget: Duration::from_secs(6),
+            answered: Default::default(),
         }
     }
 
@@ -83,6 +89,12 @@ impl<'a> ProviderClient<'a> {
         // A later search failure must never discard an already validated result.
         if best.is_some() {
             return Ok(best);
+        }
+        // Once the provider has answered, later trouble (an unparseable record, an overloaded
+        // fallback search, the time budget) means it has nothing usable, not that it's down:
+        // a retry would only bring the same miss, so the listener isn't asked for one.
+        if self.answered[provider.index()].load(Ordering::Relaxed) {
+            return Ok(None);
         }
         result
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "Lyrics provider timed out"))??;
@@ -135,6 +147,7 @@ impl<'a> ProviderClient<'a> {
             ));
         }
         if response.status() == reqwest::StatusCode::NOT_FOUND {
+            self.answered[provider.index()].store(true, Ordering::Relaxed);
             return Ok(None);
         }
         let response = response.error_for_status().map_err(io::Error::other)?;
@@ -168,6 +181,7 @@ impl<'a> ProviderClient<'a> {
             body.extend_from_slice(&chunk);
         }
         rate.next = Instant::now() + Duration::from_millis(250);
+        self.answered[provider.index()].store(true, Ordering::Relaxed);
         Ok(Some(body))
     }
 

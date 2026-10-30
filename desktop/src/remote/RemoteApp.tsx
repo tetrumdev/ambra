@@ -1,13 +1,8 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type PointerEvent } from "react";
 import { serverUrl } from "../api/serverConnection";
 import { FluidGradientBackground } from "../components/FluidGradientBackground";
 import { PlayerControls } from "../components/PlayerControls";
-import {
-  sampleCoverEdges,
-  separateCollapsedPalette,
-  separatePaletteFromCover,
-  type CoverEdgeSamples,
-} from "../utils/backgroundPalette";
+import { artworkPalettePath, parseArtworkPalette, swirlPalette, type ArtworkPalette } from "../utils/artworkPalette";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
 import type { Track } from "../types/music";
 import {
@@ -25,40 +20,26 @@ import {
 } from "./client";
 
 const COVER_ID = "remoteCover";
-const blackPalette = { colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK], weights: [1, 0, 0, 0] };
-
-function artworkQuery(track: Track) {
-  const url = track.nativeCover;
-  if (track.provider === "local" || !url?.startsWith("https://")) return null;
-  return new URLSearchParams({ provider: track.provider, url }).toString();
-}
+const blackPalette: ArtworkPalette = { colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK], weights: [1, 0, 0, 0] };
 
 /** The bigscreen's swirl, colored from the cover. */
 function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
   const [palette, setPalette] = useState(blackPalette);
-  const [edges, setEdges] = useState<CoverEdgeSamples | null>(null);
-  const query = track ? artworkQuery(track) : null;
+  const path = track ? artworkPalettePath(track.provider, track.nativeCover, track.cover) : null;
   useEffect(() => {
-    if (!query) return;
+    if (!path) { setPalette(blackPalette); return; }
     let cancelled = false;
-    void Promise.all([
-      fetch(serverUrl(`/api/artwork/palette?${query}&weighted=true`))
-        .then(response => response.ok ? response.json() as Promise<{ colors: string[]; weights: number[] }> : null)
-        .catch(() => null),
-      sampleCoverEdges(serverUrl(`/api/artwork/thumbnail?${query}`)),
-    ]).then(([next, edges]) => {
-      if (cancelled || next?.colors.length !== 4) return;
-      setPalette({ colors: separateCollapsedPalette(next.colors), weights: next.weights });
-      setEdges(edges);
-    });
+    void fetch(serverUrl(path))
+      .then(async response => response.ok ? parseArtworkPalette(await response.json()) : null)
+      .catch(() => null)
+      .then(next => { if (!cancelled) setPalette(next ? swirlPalette(next) : blackPalette); });
     return () => { cancelled = true; };
-  }, [query]);
-  const colors = useMemo(() => separatePaletteFromCover(palette.colors, edges), [edges, palette]);
+  }, [path]);
   return (
     <div className="remoteSwirl" aria-hidden="true">
       <FluidGradientBackground
-        colors={colors}
-        weights={palette.weights}
+        colors={track ? palette.colors : blackPalette.colors}
+        weights={track ? palette.weights : blackPalette.weights}
         active
         animate={!!track}
         playing={playing}
