@@ -44,7 +44,8 @@ export type QueueController = {
   playNext: (entry: QueueItem) => void;
   shuffleContext: (context: QueueContext) => QueueItem | undefined;
   addShuffledToQueue: (context: QueueContext) => void;
-  next: () => QueueItem | undefined;
+  /** `tellServer` false: the output already moved on by itself, and the server follows its report. */
+  next: (tellServer?: boolean) => QueueItem | undefined;
   completeCurrent: () => QueueItem | undefined;
   previous: () => QueueItem | undefined;
   jumpTo: (queueId: number) => QueueItem | undefined;

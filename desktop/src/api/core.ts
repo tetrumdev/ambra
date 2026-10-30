@@ -24,6 +24,8 @@ export type CoreView = {
   positionSeconds: number;
   /** When `positionSeconds` was true, on the server's clock. Missing from older servers. */
   serverTimeMs?: number;
+  /** What the output was told to play, as the server sent it. Missing from older servers. */
+  loadedSource?: string;
   duration: number;
   buffering: boolean;
   error: string | null;
@@ -140,6 +142,9 @@ export function followCore() {
   document.addEventListener("visibilitychange", visible);
   signal.addEventListener("abort", cleanup, { once: true });
   void (async () => {
+    // Servers that stream the session send every change and position as it happens; older
+    // ones are polled instead.
+    let streams = true;
     while (!signal.aborted) {
       const immediate = refreshPending;
       refreshPending = false;
@@ -148,9 +153,14 @@ export function followCore() {
       const requestSignal = AbortSignal.any([signal, current.signal]);
       let failed = false;
       try {
-        const since = view && !immediate ? `?since=${view.revision}&wait=5&${knownQueue()}` : `?${knownQueue()}`;
-        const next = await request<ArrivingView>(`/api/session${since}`, undefined, requestSignal);
-        if (!requestSignal.aborted) accept(next, signal);
+        if (streams) {
+          streams = await followStream(requestSignal, signal);
+          if (streams && !requestSignal.aborted) failed = true;
+        } else {
+          const since = view && !immediate ? `?since=${view.revision}&wait=5&${knownQueue()}` : `?${knownQueue()}`;
+          const next = await request<ArrivingView>(`/api/session${since}`, undefined, requestSignal);
+          if (!requestSignal.aborted) accept(next, signal);
+        }
       } catch {
         if (signal.aborted) break;
         failed = true;
@@ -165,6 +175,46 @@ export function followCore() {
     }
   })();
   return () => controller.abort();
+}
+
+/** A stream that sends nothing for this long has stalled on the way and is opened again. */
+const STREAM_SILENCE_MS = 15_000;
+
+/**
+ * Follows the session stream until it ends; false when this server has none. Every line is
+ * a whole view: the first is the session as it is, the rest arrive as it changes.
+ */
+async function followStream(requestSignal: AbortSignal, signal: AbortSignal): Promise<boolean> {
+  const silence = new AbortController();
+  let timer = setTimeout(() => silence.abort(), STREAM_SILENCE_MS);
+  const heard = () => { clearTimeout(timer); timer = setTimeout(() => silence.abort(), STREAM_SILENCE_MS); };
+  try {
+    const response = await fetch(`${serverBaseUrl}/api/session/stream?${knownQueue()}`, {
+      cache: "no-store", signal: AbortSignal.any([requestSignal, silence.signal]),
+    });
+    if (response.status === 404) return false;
+    if (!response.ok || !response.body) throw new Error(`The server answered ${response.status}`);
+    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+    let buffered = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return true;
+      heard();
+      buffered += value;
+      let end: number;
+      while ((end = buffered.indexOf("\n")) >= 0) {
+        const line = buffered.slice(0, end).trim();
+        buffered = buffered.slice(end + 1);
+        if (line && !requestSignal.aborted) accept(JSON.parse(line) as ArrivingView, signal);
+      }
+    }
+  } catch (error) {
+    // Gone quiet: it is opened again, like one the server ended.
+    if (silence.signal.aborted && !requestSignal.aborted) return true;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function inOrder<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {

@@ -3,13 +3,16 @@ import type { GlobalTrackId, QueueContext, QueueItem, QueueId, Track } from "../
 import { coreChangeQueue, coreCommand, coreQueue, coreView, subscribeCore } from "../api/core";
 import { contextEntriesFrom, shuffledContextEntries } from "../utils/queueModel";
 import {
+  advanceQueue,
   jumpQueue,
   removeQueueEntries,
   removeQueueHistory,
   reorderQueue,
   replayQueueHistory,
+  rewindQueue,
   type QueueEntryRef,
   type QueueState,
+  type QueueTransition,
 } from "../utils/queueNavigation";
 import type { QueueController } from "./useQueue";
 
@@ -82,10 +85,23 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
       : { ...state, upcoming: [...state.upcoming, ...shuffled] });
   }, [change]);
 
-  // Moving through the queue happens on the server, which knows where playback is.
-  const next = useCallback(() => { void coreCommand("next").catch(() => {}); return stateRef.current.upcoming[0]; }, []);
-  const previous = useCallback(() => { void coreCommand("previous").catch(() => {}); const history = stateRef.current.history; return history[history.length - 1]; }, []);
-  const completeCurrent = next;
+  // Moving through the queue happens on the server, which knows where playback is; the song it
+  // moves to is shown at once, until the server's queue confirms it.
+  const move = useCallback((transition: QueueTransition, command: "next" | "previous" | null) => {
+    const moved = transition.item ? transition.state : null;
+    if (moved) {
+      stateRef.current = moved;
+      setOptimistic({ state: moved, after: coreQueue(tracksRef.current).revision });
+    }
+    const settle = () => { if (moved) setOptimistic(current => current?.state === moved ? null : current); };
+    // With nothing to ask, the server's own move replaces this one once it hears of it.
+    if (command === null) setTimeout(settle, 5000);
+    else void coreCommand(command).catch(() => {}).finally(settle);
+    return transition.item;
+  }, []);
+  const next = useCallback((tellServer = true) => move(advanceQueue(stateRef.current, historyEntry), tellServer ? "next" : null), [move]);
+  const previous = useCallback(() => move(rewindQueue(stateRef.current), "previous"), [move]);
+  const completeCurrent = useCallback(() => next(), [next]);
 
   const jumpTo = useCallback((queueId: number) => {
     const item = stateRef.current.upcoming[queueId - 2];
