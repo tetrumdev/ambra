@@ -281,10 +281,10 @@ export function TrackCollectionView({
     if (scrollElementRef.current?.closest("[inert]")) return;
     event.preventDefault();
     if (event.repeat) return;
-    if (isEmpty) { announceShortcut(id, "No songs to play"); return; }
+    if (isEmpty) { announceShortcut("No songs to play"); return; }
     if (id === "playCollection") handlePlay();
     else handleShuffle();
-    announceShortcut(id, `${id === "playCollection" ? "Playing" : "Shuffling"} “${title}”`);
+    announceShortcut(`${id === "playCollection" ? "Playing" : "Shuffling"} “${title}”`);
   });
   useEffect(() => {
     window.addEventListener("keydown", handleShortcut);

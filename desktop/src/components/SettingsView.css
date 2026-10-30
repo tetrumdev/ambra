@@ -1165,57 +1165,55 @@
 .settingsCallbackForm select { width: 100%; min-height: 36px; padding: 6px 10px; color: inherit; background: #171717; border: 1px solid #333; border-radius: 6px; }
 .settingsCallbackForm .soloistActions { flex-wrap: wrap; }
 
-/* Keyboard: each shortcut's keys as small caps, recorded by clicking them (KeyboardSettings.tsx). */
+/* Keyboard: each shortcut's keys as a pill like the segmented controls', recorded by clicking it (KeyboardSettings.tsx). */
 .shortcutBindings {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
 
 .shortcutBinding {
     display: inline-flex;
     align-items: center;
-    border: 1px solid #5a5a5a;
-    border-radius: 8px;
+    height: 34px;
+    border: 1px solid #3a3a3a;
+    border-radius: 100px;
+    background: #111;
+    transition: border-color var(--motion-hover), background-color var(--motion-hover);
 }
 
 .shortcutBinding:hover,
-.shortcutBinding:focus-within,
-.shortcutBinding[data-recording] {
-    border-color: white;
+.shortcutBinding:focus-within {
+    border-color: #8a8a8a;
 }
 
 .shortcutBindingKeys {
-    display: inline-flex;
-    gap: 4px;
-    min-height: 30px;
-    padding: 3px 4px 3px 6px;
+    height: 100%;
+    min-width: 34px;
+    padding: 0 4px 0 14px;
     border: 0;
+    border-radius: 100px;
     background: transparent;
     color: white;
-    align-items: center;
-}
-
-.shortcutBindingKeys .shortcutKey {
-    padding: 1px 7px;
-}
-
-.shortcutPrompt {
-    padding: 0 6px;
-    color: #d0d0d0;
-    font-size: 0.85rem;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
 .shortcutRemove {
-    width: 24px;
-    height: 30px;
-    padding: 0 6px 0 2px;
+    width: 26px;
+    height: 100%;
+    padding: 0 10px 0 2px;
     border: 0;
+    border-radius: 0 100px 100px 0;
     background: transparent;
     color: #8f8f8f;
-    font-size: 1rem;
+    font: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
 }
 
 .shortcutRemove:hover,
@@ -1224,23 +1222,34 @@
 }
 
 .shortcutAdd {
-    min-width: 32px;
-    height: 32px;
-    padding: 0 10px;
-    border: 1px dashed #5a5a5a;
-    border-radius: 8px;
+    height: 34px;
+    padding: 0 14px;
+    border: 1px solid #3a3a3a;
+    border-radius: 100px;
     background: transparent;
     color: #b3b3b3;
-    font-size: 0.85rem;
+    font: inherit;
+    font-size: 0.8rem;
+    font-weight: 600;
+    white-space: nowrap;
+    transition: border-color var(--motion-hover), color var(--motion-hover);
 }
 
 .shortcutAdd:hover,
-.shortcutAdd:focus-visible,
-.shortcutAdd[data-recording] {
-    border-color: white;
+.shortcutAdd:focus-visible {
+    border-color: #8a8a8a;
     color: white;
 }
 
-.shortcutNotice {
-    color: #e0c070;
+/* Waiting for keys: lit like the chosen option of a segmented control. */
+.shortcutBinding[data-recording],
+.shortcutAdd[data-recording] {
+    border-color: transparent;
+    background: white;
+}
+
+.shortcutBinding[data-recording] .shortcutBindingKeys,
+.shortcutBinding[data-recording] .shortcutRemove,
+.shortcutAdd[data-recording] {
+    color: black;
 }

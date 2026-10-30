@@ -278,7 +278,7 @@ export function SearchView({
     if (!root.current?.contains(item) || !item.matches(".searchResult")) return null;
     const track = shownTracks.find(candidate => candidate.globalId === item.dataset.trackId);
     if (!track) return null;
-    if (action === "play") { playStandalone(track.globalId); return `Playing “${track.name}”`; }
+    if (action === "play") { playStandalone(track.globalId); return ""; }
     if (action === "queue") { addToQueue(track.globalId); return `Added “${track.name}” to the queue`; }
     playNext(track.globalId);
     return `“${track.name}” plays next`;
