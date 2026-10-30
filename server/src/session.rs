@@ -113,6 +113,8 @@ pub struct Core {
     transport: SyncMutex<Transport>,
     /// Bumped whenever what apps show changes; apps wait on it.
     revision: watch::Sender<u64>,
+    /// Bumped with every position the output reports, for apps following the stream.
+    positions: watch::Sender<u64>,
     wake: Notify,
     /// One queue change at a time, so none is lost between reading and writing it.
     queue_lock: Mutex<()>,
@@ -278,6 +280,7 @@ impl Core {
             spotify_playback,
             transport: SyncMutex::new(transport),
             revision: watch::channel(1).0,
+            positions: watch::channel(0).0,
             wake: Notify::new(),
             queue_lock: Mutex::new(()),
             queue: SyncMutex::new(None),
@@ -420,6 +423,10 @@ struct SessionView {
     /// When `position_seconds` was true, on the clock `/api/session/clock` reads, so an app
     /// can carry it forward from then rather than from when the view reached it.
     server_time_ms: f64,
+    /// What the output was told to play, as the core sent it. The output's own app compares
+    /// it with its engine, and while they match follows the engine's position directly.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    loaded_source: Option<String>,
     duration: f64,
     buffering: bool,
     error: Option<String>,
@@ -450,6 +457,7 @@ async fn view(core: &Core, known_queue: Option<u64>) -> SessionView {
         playing: transport.playing,
         position_seconds: transport.position_now(),
         server_time_ms: server_time_ms(),
+        loaded_source: transport.loaded.as_ref().map(|loaded| loaded.source.clone()),
         duration: transport.duration,
         buffering: transport.buffering,
         error: transport.error.clone(),
@@ -475,6 +483,7 @@ async fn clock() -> Json<Value> {
 pub fn router<S: Clone + Send + Sync + 'static>(core: Shared) -> Router<S> {
     Router::new()
         .route("/api/session", get(read))
+        .route("/api/session/stream", get(stream))
         .route("/api/session/clock", get(clock))
         .route("/api/session/queue", post(set_queue))
         .route("/api/session/command", post(command))
@@ -495,6 +504,53 @@ async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Jso
         let _ = tokio::time::timeout(Duration::from_secs(wait.min(MAX_WAIT_SECONDS)), revision.wait_for(|current| *current != since)).await;
     }
     Json(view(&core, query.queue).await)
+}
+
+#[derive(Deserialize)]
+struct StreamQuery {
+    /// The queue revision the app has; the queue is sent only when it's different.
+    queue: Option<u64>,
+}
+
+/// Positions are sent at most this often; anything else that changes is sent at once.
+const STREAM_POSITION_EVERY: Duration = Duration::from_millis(250);
+/// Sent anyway after this long, so a quiet stream still shows it's alive.
+const STREAM_HEARTBEAT: Duration = Duration::from_secs(10);
+
+/// The session as it changes, one view per line: at once for anything an app shows, and with
+/// each position the output reports. Apps following it don't wait on a poll to see either.
+async fn stream(State(core): State<Shared>, Query(query): Query<StreamQuery>) -> Response {
+    struct Follow { core: Shared, revision: watch::Receiver<u64>, positions: watch::Receiver<u64>, queue: Option<u64>, sent: Option<Instant> }
+    let follow = Follow { revision: core.revision.subscribe(), positions: core.positions.subscribe(), core, queue: query.queue, sent: None };
+    let lines = futures_util::stream::unfold(follow, |mut follow| async move {
+        if let Some(sent) = follow.sent {
+            tokio::select! {
+                changed = follow.revision.changed() => { if changed.is_err() { return None; } }
+                changed = follow.positions.changed() => {
+                    if changed.is_err() { return None; }
+                    // Only the position moved: wait out the interval, unless something else changes.
+                    tokio::select! {
+                        _ = follow.revision.changed() => {}
+                        () = tokio::time::sleep_until((sent + STREAM_POSITION_EVERY).into()) => {}
+                    }
+                }
+                () = tokio::time::sleep(STREAM_HEARTBEAT) => {}
+            }
+        }
+        follow.revision.mark_unchanged();
+        follow.positions.mark_unchanged();
+        let view = view(&follow.core, follow.queue).await;
+        follow.queue = Some(view.queue_revision);
+        follow.sent = Some(Instant::now());
+        let mut line = serde_json::to_vec(&view).unwrap_or_default();
+        line.push(b'\n');
+        Some((Ok::<_, std::convert::Infallible>(line), follow))
+    });
+    Response::builder()
+        .header("content-type", "application/x-ndjson")
+        .header("cache-control", "no-store")
+        .body(axum::body::Body::from_stream(lines))
+        .map_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response(), IntoResponse::into_response)
 }
 
 #[derive(Deserialize)]
@@ -1036,6 +1092,7 @@ async fn step(core: &Core) -> Result<(), String> {
         let before = (transport.buffering, transport.error.clone(), transport.duration, transport.audio_quality.clone());
         transport.position = status["currentTime"].as_f64().unwrap_or(transport.position);
         transport.position_at = Some(sampled_at);
+        core.positions.send_modify(|count| *count += 1);
         if let Some(duration) = status["duration"].as_f64().filter(|duration| *duration > 0.0) {
             transport.duration = duration;
         }

@@ -29,6 +29,11 @@ const WATCH_EVERY: Duration = Duration::from_millis(20);
 /// Report round trips remembered; the quickest is the one least delayed by anything but the network.
 const ROUND_TRIPS_KEPT: usize = 8;
 
+/// How often this app's own screens hear the engine's position while it's the shared output.
+const LOCAL_STATUS_EVERY: Duration = Duration::from_millis(100);
+/// How long a play, pause or seek taken here waits for the core's matching command.
+const LOCAL_INTENT_FOR: Duration = Duration::from_secs(5);
+
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
 fn monotonic_ms() -> f64 {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -47,10 +52,35 @@ struct Agent {
     /// The URL each source was sent as, by the URL it plays as here.
     sent_as: Mutex<HashMap<String, String>>,
     device_report: Mutex<Value>,
+    /// Plays, pauses and seeks already done here, which the core will also ask for.
+    local_intents: Mutex<VecDeque<(Intent, Instant)>>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Intent {
+    Play,
+    Pause,
+    Seek(f64),
+}
+
+impl Intent {
+    fn matches(self, command: &str, args: &Value) -> bool {
+        match self {
+            Intent::Play => command == "play_native_audio",
+            Intent::Pause => command == "pause_native_audio",
+            Intent::Seek(position) => command == "seek_native_audio"
+                && args["positionSeconds"].as_f64().is_some_and(|asked| (asked - position).abs() < 0.05),
+        }
+    }
+}
+
+struct Running {
+    tasks: [tauri::async_runtime::JoinHandle<()>; 3],
+    agent: std::sync::Arc<Agent>,
 }
 
 #[derive(Default)]
-pub struct SharedOutput(tokio::sync::Mutex<Option<[tauri::async_runtime::JoinHandle<()>; 3]>>);
+pub struct SharedOutput(tokio::sync::Mutex<Option<Running>>);
 
 /// Only an explicit shared session may report or control this device's player.
 #[tauri::command]
@@ -73,17 +103,57 @@ pub async fn stop_shared_output(app: &AppHandle) {
     let state = app.state::<SharedOutput>();
     let mut tasks = state.0.lock().await;
     if let Some(previous) = tasks.take() {
-        for task in previous { task.abort(); let _ = task.await; }
+        for task in previous.tasks { task.abort(); let _ = task.await; }
     }
 }
 
-fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<[tauri::async_runtime::JoinHandle<()>; 3], String> {
+/// Plays, pauses or seeks this device's engine at once, for the listener in front of it, while
+/// the app tells the core. The core's own command for it then finds the engine already there and
+/// is skipped, so a seek isn't repeated from a moment later and nothing stutters.
+#[tauri::command]
+pub async fn shared_output_control(app: AppHandle, action: String, position_seconds: Option<f64>) -> Result<(), String> {
+    let agent = app.state::<SharedOutput>().0.lock().await.as_ref().map(|running| running.agent.clone())
+        .ok_or("This device isn't playing for the server")?;
+    let intent = match action.as_str() {
+        "play" => Intent::Play,
+        "pause" => Intent::Pause,
+        "seek" => Intent::Seek(position_seconds.ok_or("`positionSeconds` is missing")?),
+        _ => return Err(format!("Unknown action `{action}`")),
+    };
+    if let Ok(mut intents) = agent.local_intents.lock() {
+        intents.retain(|(_, at)| at.elapsed() < LOCAL_INTENT_FOR);
+        intents.push_back((intent, Instant::now()));
+    }
+    let player = app.state::<NativeAudioPlayer>();
+    match intent {
+        Intent::Play => native_audio::play_native_audio(player).await,
+        Intent::Pause => native_audio::pause_native_audio(player).await,
+        Intent::Seek(position) => native_audio::seek_native_audio(player, position).await,
+    }
+}
+
+/// Skips to the next song at once when this device already has it ready, the core following
+/// from the next report as it does when a song ends. False when it isn't ready; the app then
+/// asks the core to skip instead.
+#[tauri::command]
+pub async fn shared_output_skip(app: AppHandle) -> Result<bool, String> {
+    if app.state::<SharedOutput>().0.lock().await.is_none() {
+        return Err("This device isn't playing for the server".into());
+    }
+    native_audio::skip_to_next_native_audio(app.state::<NativeAudioPlayer>()).await
+}
+
+fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, name: String) -> Result<Running, String> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(COMMANDS_WAIT_SECONDS + 10)).build().map_err(|error| error.to_string())?;
     let mut instance = [0_u8; 16];
     getrandom::fill(&mut instance).expect("the operating system's random source is available");
     let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
-    let agent = std::sync::Arc::new(Agent { app, client, base_url, token, id, name, instance_id, sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})) });
-    Ok([tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent))])
+    let agent = std::sync::Arc::new(Agent {
+        app, client, base_url, token, id, name, instance_id,
+        sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), local_intents: Mutex::new(VecDeque::new()),
+    });
+    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone()))];
+    Ok(Running { tasks, agent })
 }
 
 impl Agent {
@@ -119,6 +189,34 @@ impl Agent {
 
     fn arg_source(&self, args: &Value, key: &str) -> Option<String> {
         args[key].as_str().map(|source| self.local_source(source))
+    }
+
+    /// Whether this command from the core was already carried out here, at the listener's hand.
+    fn already_done(&self, command: &str, args: &Value) -> bool {
+        let Ok(mut intents) = self.local_intents.lock() else { return false };
+        intents.retain(|(_, at)| at.elapsed() < LOCAL_INTENT_FOR);
+        let Some(index) = intents.iter().position(|(intent, _)| intent.matches(command, args)) else { return false };
+        intents.remove(index);
+        true
+    }
+
+    /// The engine's status, with its song named as the core sent it.
+    async fn status(&self) -> Value {
+        let player = self.app.state::<NativeAudioPlayer>();
+        let mut status = native_audio::native_audio_status(player)
+            .await
+            .ok()
+            .and_then(|status| serde_json::to_value(status).ok())
+            .unwrap_or(Value::Null);
+        if let Some(source) = status["currentSource"].as_str() {
+            status["currentSource"] = Value::String(self.sent_source(source));
+        }
+        status
+    }
+
+    /// Tells this app's own screens where the engine is, so they follow it rather than the core.
+    fn show_status(&self, status: &Value) {
+        let _ = self.app.emit("shared-output-status", status);
     }
 }
 
@@ -193,24 +291,18 @@ async fn refresh_devices(agent: std::sync::Arc<Agent>) {
 async fn report(agent: std::sync::Arc<Agent>) {
     let mut round_trips = VecDeque::<Duration>::with_capacity(ROUND_TRIPS_KEPT);
     loop {
-        let player = agent.app.state::<NativeAudioPlayer>();
         // Device queries use the audio worker and may wait behind a seek. Heartbeats
         // must continue independently, including while that worker prepares audio.
         let mut body = agent.device_report.lock().map(|report| report.clone()).unwrap_or_else(|_| json!({}));
         body["name"] = json!(agent.name);
         body["instanceId"] = json!(agent.instance_id);
         // Sampled last, so the position is as fresh as it can be when it leaves.
-        let mut status = native_audio::native_audio_status(player.clone())
-            .await
-            .ok()
-            .and_then(|status| serde_json::to_value(status).ok())
-            .unwrap_or(Value::Null);
+        let mut status = agent.status().await;
         // When the position was read, on this device's clock: a report held up on the way (a
         // stalled tunnel, say) is then placed when it was true, not when it finally arrived.
         body["sampledAtMs"] = json!(monotonic_ms());
-        if let Some(source) = status["currentSource"].as_str() {
-            status["currentSource"] = Value::String(agent.sent_source(source));
-        }
+        agent.show_status(&status);
+        let mut shown = Instant::now();
         status["livePcmV1"] = Value::Bool(true);
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
         let reported = transitions(&status);
@@ -242,12 +334,12 @@ async fn report(agent: std::sync::Arc<Agent>) {
         let next_beat = Instant::now() + wait;
         while Instant::now() < next_beat {
             tokio::time::sleep(WATCH_EVERY.min(next_beat.saturating_duration_since(Instant::now()))).await;
-            let changed = native_audio::native_audio_status(player.clone())
-                .await
-                .ok()
-                .and_then(|status| serde_json::to_value(status).ok())
-                .is_some_and(|status| transitions(&status) != reported);
-            if changed {
+            let status = agent.status().await;
+            if shown.elapsed() >= LOCAL_STATUS_EVERY {
+                agent.show_status(&status);
+                shown = Instant::now();
+            }
+            if transitions(&status) != reported {
                 break;
             }
         }
@@ -296,6 +388,9 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         if let Some(source) = args[key].as_str() {
             if !server_media_source(source) { return Err("Shared playback cannot read private device files".into()); }
         }
+    }
+    if agent.already_done(command, args) {
+        return Ok(Value::Null);
     }
     let player = agent.app.state::<NativeAudioPlayer>();
     let number = |key: &str| args[key].as_f64().ok_or_else(|| format!("`{key}` is missing"));

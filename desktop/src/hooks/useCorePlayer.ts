@@ -13,6 +13,15 @@ import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/ou
 
 const noDeck = () => {};
 
+/** This device's engine, as the shared output reports it (remote_endpoint.rs `show_status`). */
+type EngineStatus = { currentSource: string | null; currentTime: number; isPlaying: boolean; buffering: boolean };
+/** The engine is followed only while it keeps reporting. */
+const ENGINE_FRESH_MS = 1500;
+/** How long a play, pause or skip shown at once waits for the server to agree. */
+const PENDING_MS = 4000;
+/** The server starts the song over instead of going back once it's past this (session.rs). */
+const RESTART_AFTER_SECONDS = 3;
+
 /** Where the song is now, carrying `view`'s position forward while it plays. */
 function positionOf(view: CoreView) {
   const running = view.playing && !view.buffering && view.outputOnline;
@@ -35,10 +44,38 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const firstAudioRef = useRef<HTMLAudioElement>(null);
   const secondAudioRef = useRef<HTMLAudioElement>(null);
 
-  // The clock follows the server, sampled often enough to stay smooth between its updates.
+  // While this device is the output and its engine plays the server's song, the clock follows the
+  // engine itself: what's heard here, with no trip to the server and back in between.
+  const engine = useRef<{ status: EngineStatus; at: number } | null>(null);
+  // A skip shown at once: the server's view of the song it leaves is ignored until it loads the next.
+  const skipping = useRef<{ from: string | undefined; at: number } | null>(null);
+  const followsEngine = useCallback(() => {
+    const current = coreView();
+    const heard = engine.current;
+    if (skipping.current && (performance.now() - skipping.current.at > PENDING_MS || current?.loadedSource !== skipping.current.from)) skipping.current = null;
+    return !!current && !!heard && !skipping.current && ownsPlaybackOutput(current.output, serverConnection?.clientId)
+      && performance.now() - heard.at < ENGINE_FRESH_MS
+      && !!current.loadedSource && heard.status.currentSource === current.loadedSource;
+  }, []);
+  useEffect(() => {
+    if (!isTauri()) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<EngineStatus>("shared-output-status", ({ payload }) => {
+      engine.current = { status: payload, at: performance.now() };
+      if (!followsEngine()) return;
+      clock.set(payload.currentTime);
+      clock.setRunning(payload.isPlaying && !payload.buffering);
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; });
+    return () => { disposed = true; unlisten?.(); };
+  }, [clock, followsEngine]);
+
+  // Otherwise the clock follows the server, sampled often enough to stay smooth between its updates.
   useEffect(() => {
     if (!view) return;
     const sample = () => {
+      // Mid-skip the server still describes the song being left; the clock waits at the start.
+      if (followsEngine() || skipping.current) return;
       clock.set(positionOf(view));
       clock.setRunning(view.playing && !view.buffering && view.outputOnline);
     };
@@ -46,7 +83,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     if (!view.playing) return;
     const timer = setInterval(sample, 500);
     return () => clearInterval(timer);
-  }, [view, clock]);
+  }, [view, clock, followsEngine]);
 
   const latestAudio = useRef(audio);
   latestAudio.current = audio;
@@ -69,6 +106,63 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
 
   const currentTrack = queue.currentEntry?.track;
   const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
+
+  // Play and pause show at once, and on this device's own output take effect at once; the server
+  // hears of it alongside and its view is shown again once it agrees.
+  const [pendingPlaying, setPendingPlaying] = useState<{ playing: boolean; at: number } | null>(null);
+  useEffect(() => {
+    if (!pendingPlaying) return;
+    if (view?.playing === pendingPlaying.playing) { setPendingPlaying(null); return; }
+    const timer = setTimeout(() => setPendingPlaying(null), Math.max(0, pendingPlaying.at + PENDING_MS - performance.now()));
+    return () => clearTimeout(timer);
+  }, [pendingPlaying, view?.playing]);
+  const playingNow = useRef(false);
+  playingNow.current = pendingPlaying?.playing ?? view?.playing ?? false;
+  /** Asks this device's engine directly, when it's the one playing the server's song. */
+  const controlEngine = useCallback((action: "play" | "pause" | "seek", positionSeconds?: number) => {
+    if (!followsEngine()) return;
+    void invoke("shared_output_control", { action, positionSeconds }).catch(() => {});
+  }, [followsEngine]);
+  const setPlaying = useCallback((playing: boolean) => {
+    if (playing) ensureOutput();
+    setPendingPlaying({ playing, at: performance.now() });
+    controlEngine(playing ? "play" : "pause");
+    clock.setRunning(playing && !!coreView()?.output);
+    return coreCommand(playing ? "play" : "pause");
+  }, [clock, controlEngine, ensureOutput]);
+  const seekTo = useCallback((positionSeconds: number) => {
+    controlEngine("seek", positionSeconds);
+    clock.setRunning(false);
+    clock.set(positionSeconds);
+    void coreCommand("seek", { positionSeconds }).catch(() => {});
+  }, [clock, controlEngine]);
+  const skip = useCallback((direction: "next" | "previous") => {
+    if (direction === "previous" && clock.get() > RESTART_AFTER_SECONDS) {
+      // Starting the song over, as the server will.
+      seekTo(0);
+      void coreCommand("previous").catch(() => {});
+      return;
+    }
+    if (direction === "next" && followsEngine()) {
+      // This device's engine usually has the next song ready already: it starts it at once, and
+      // the server follows from its report as it does when a song ends.
+      const from = coreView()?.loadedSource;
+      clock.setRunning(false);
+      clock.set(0);
+      void invoke<boolean>("shared_output_skip").catch(() => false).then(skipped => {
+        if (coreView()?.loadedSource !== from) return;
+        if (queue.next(!skipped)) skipping.current = { from, at: performance.now() };
+      });
+      return;
+    }
+    const moved = direction === "next" ? queue.next() : queue.previous();
+    if (!moved) return;
+    skipping.current = { from: coreView()?.loadedSource, at: performance.now() };
+    clock.setRunning(false);
+    clock.set(0);
+  }, [clock, followsEngine, queue, seekTo]);
+  const transport = useRef({ setPlaying, seekTo, skip });
+  transport.current = { setPlaying, seekTo, skip };
   // App shortcuts control the shared transport; hardware controls only affect local playback.
   const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0 });
   shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0 };
@@ -77,10 +171,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       const current = shortcutState.current;
       if (matchesShortcut(event, "playPause") && !isTypingTarget(event.target)) {
         event.preventDefault();
-        if (!event.repeat) {
-          ensureOutput();
-          void coreCommand("toggle").catch(() => {});
-        }
+        if (!event.repeat) void transport.current.setPlaying(!playingNow.current).catch(() => {});
         return;
       }
       if (!current.track) return;
@@ -88,28 +179,34 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       if (step && acceptsPlaybackShortcut(event, true)) {
         event.preventDefault();
         const end = current.duration > 0 ? Math.max(0, current.duration - 1) : Infinity;
-        const positionSeconds = Math.min(end, Math.max(0, clock.get() + step));
-        clock.setRunning(false);
-        clock.set(positionSeconds);
-        void coreCommand("seek", { positionSeconds }).catch(() => {});
+        transport.current.seekTo(Math.min(end, Math.max(0, clock.get() + step)));
       } else if (acceptsPlaybackShortcut(event)) {
         const action = matchesShortcut(event, "previousTrack") ? "previous" : matchesShortcut(event, "nextTrack") ? "next" : null;
         if (action) {
           event.preventDefault();
           if (event.repeat) return;
-          void coreCommand(action).catch(() => {});
+          if (action === "next") setNextActivation(activation => activation + 1);
+          else setPreviousActivation(activation => activation + 1);
+          transport.current.skip(action);
         }
       }
     };
     window.addEventListener("keydown", keydown);
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const mediaControl = createOutputMediaControlHandler(serverConnection?.clientId, () => coreView()?.output, coreCommand);
+    // Headset and system controls go the same way as the app's own buttons.
+    const mediaControl = createOutputMediaControlHandler(serverConnection?.clientId, () => coreView()?.output, async action => {
+      if (action === "play" || action === "pause" || action === "toggle") {
+        await transport.current.setPlaying(action === "toggle" ? !playingNow.current : action === "play");
+      } else if (action === "next" || action === "previous") {
+        transport.current.skip(action);
+      }
+    });
     if (isTauri()) void listen<string>("native-media-control", ({ payload }) => {
       if (!disposed) mediaControl(payload);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); window.removeEventListener("keydown", keydown); clock.setRunning(false); };
-  }, [clock, ensureOutput]);
+  }, [clock]);
 
   useEffect(() => {
     if (!isTauri()) return;
@@ -129,39 +226,34 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       const positionSeconds = localOutput ? Math.floor(clock.get()) : 0;
       if (positionSeconds === lastSecond) return;
       lastSecond = positionSeconds;
-      void invoke("set_native_media_playback", { isPlaying: localOutput && !!currentTrack && (view?.playing ?? false), positionSeconds }).catch(() => {});
+      void invoke("set_native_media_playback", { isPlaying: localOutput && !!currentTrack && playingNow.current, positionSeconds }).catch(() => {});
     };
     update();
     return clock.subscribe(update);
-  }, [clock, currentTrack, view?.playing, localOutput]);
+  }, [clock, currentTrack, view?.playing, pendingPlaying, localOutput]);
 
   return {
     currentTrack,
     audioQuality: view?.audioQuality ?? null,
     clock,
     duration: view?.duration || currentTrack?.durationSeconds || 0,
-    isPlaying: view?.playing ?? false,
+    isPlaying: pendingPlaying?.playing ?? view?.playing ?? false,
     previousActivation,
     nextActivation,
     playbackError: view?.error ?? null,
     isSessionRestored: view !== null,
     togglePlayback: async () => {
-      if (!coreView()?.playing) ensureOutput();
-      await coreCommand("toggle");
+      await setPlaying(!playingNow.current);
     },
     previous: () => {
       setPreviousActivation(activation => activation + 1);
-      void coreCommand("previous").catch(() => {});
+      skip("previous");
     },
     next: () => {
       setNextActivation(activation => activation + 1);
-      void coreCommand("next").catch(() => {});
+      skip("next");
     },
-    seek: (time: number) => {
-      clock.setRunning(false);
-      clock.set(time);
-      void coreCommand("seek", { positionSeconds: time }).catch(() => {});
-    },
+    seek: seekTo,
     audioDecks,
     // The queue change just before this carries it, so the server starts the song once.
     playTrack: (trackId: string) => {
