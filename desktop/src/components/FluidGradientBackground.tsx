@@ -3,6 +3,7 @@ import {
   COLOR_TRANSITION_MS,
   MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
+  SWIRL_NOISE_SEED,
   createNoiseTexture,
   createShader,
   easedProgress,
@@ -37,7 +38,7 @@ export function FluidGradientBackground({
   // Swirl time advances at `speed`, which eases rather than switching, so pausing never freezes a frame mid-motion.
   const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number; speed: number } | null>(null);
   if (journeyRef.current === null) {
-    journeyRef.current = { seed: Math.random() * 64, seconds: 0, updatedAt: performance.now(), speed: animate && playing ? 1 : 0 };
+    journeyRef.current = { seed: SWIRL_NOISE_SEED, seconds: 0, updatedAt: performance.now(), speed: animate && playing ? 1 : 0 };
   }
   const journey = journeyRef.current;
   const transitionRef = useRef({

@@ -4,6 +4,7 @@ import { normalizePackages } from "./queueModel";
 import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
 import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { SessionClock } from "./sessionClock";
+import { artworkPalettePath, parseArtworkPalette } from "../../desktop/src/utils/artworkPalette";
 
 /**
  * The remote's line to the Ambra server: pairing, following the core's session
@@ -399,36 +400,13 @@ export function currentTrack(current: SessionView | null): Track | null {
   return (id && current?.queue.tracks?.find(track => track.globalId === id)) || null;
 }
 
-export type Palette = { colors: string[]; weights: number[] };
+export type Palette = import("../../desktop/src/utils/artworkPalette").ArtworkPalette;
 
 /** The cover's colors as the server measures them, for the swirl. */
 export async function coverPalette(provider: string, url: string | null, cover?: string): Promise<Palette | null> {
-  let path: string;
-  if (provider === "local") {
-    // Only content-addressed artwork in the paired server's library can be sampled.
-    const file = [url, cover].map(source => {
-      try { return new URL(source ?? "", baseUrl).pathname.match(/^\/api\/music\/local\/files\/([a-f0-9]{64}\.[a-z0-9]{1,8})$/)?.[1]; } catch { return null; }
-    }).find(Boolean);
-    if (!file) return null;
-    path = `/api/music/local/files/${file}/palette`;
-  } else {
-    // Older saved tracks can have only a display URL, including a server artwork proxy.
-    if (!url?.startsWith("https://")) {
-      try {
-        const displayed = new URL(cover ?? "", baseUrl);
-        url = displayed.searchParams.get("url") ?? (displayed.protocol === "https:" ? displayed.href : null);
-      } catch { return null; }
-    }
-    if (!url?.startsWith("https://")) return null;
-    path = `/api/artwork/palette?${new URLSearchParams({ provider, url, weighted: "true" })}`;
-  }
+  const path = artworkPalettePath(provider, url, cover);
+  if (!path) return null;
   try {
-    const result = await request<Palette | string[]>(path);
-    const palette = Array.isArray(result) ? { colors: result, weights: result.map(() => 1 / result.length) } : result;
-    if (!palette || palette.colors?.length !== 4 || palette.weights?.length !== 4
-      || !palette.colors.every(color => /^#[0-9a-f]{6}$/i.test(color))
-      || !palette.weights.every(weight => Number.isFinite(weight) && weight >= 0)
-      || !palette.weights.some(weight => weight > 0)) return null;
-    return palette;
+    return parseArtworkPalette(await request<unknown>(path));
   } catch { return null; }
 }

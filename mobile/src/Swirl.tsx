@@ -1,12 +1,13 @@
 import { GLView, type ExpoWebGLRenderingContext } from "expo-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, PixelRatio, StyleSheet, View, useWindowDimensions } from "react-native";
-import { separateCollapsedPalette } from "../../desktop/src/utils/backgroundPalette";
+import { swirlPalette } from "../../desktop/src/utils/artworkPalette";
 import { colors as theme } from "./theme";
 import {
   COLOR_TRANSITION_MS,
   MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
+  SWIRL_NOISE_SEED,
   createNoiseTexture,
   createShader,
   easedProgress,
@@ -17,7 +18,7 @@ import {
   type SwirlGL,
 } from "../../desktop/src/utils/swirlShader";
 import { backdropShader, backdropAlphas } from "./Backdrop";
-import { coverPalette, type Track } from "./client";
+import { coverPalette, type Palette, type Track } from "./client";
 
 // The field is soft and slow; drawing it this many pixels tall and letting the compositor scale
 // it up looks the same as full resolution for a fraction of the GPU time.
@@ -35,7 +36,7 @@ export function Swirl({ track, playing, darkened = false }: {
   const { width, height } = useWindowDimensions();
   const scale = Math.max(1, (height * PixelRatio.get()) / RENDER_HEIGHT);
 
-  const [palette, setPalette] = useState(black);
+  const [palette, setPalette] = useState<Palette>(black);
   const provider = track?.provider;
   const nativeCover = track?.nativeCover;
   const artwork = track?.cover;
@@ -44,7 +45,7 @@ export function Swirl({ track, playing, darkened = false }: {
     if (!provider) return;
     let cancelled = false;
     void coverPalette(provider, nativeCover ?? null, artwork).then(next => {
-      if (!cancelled) setPalette(next ? { colors: separateCollapsedPalette(next.colors), weights: next.weights } : black);
+      if (!cancelled) setPalette(next ? swirlPalette(next) : black);
     });
     return () => { cancelled = true; };
   }, [provider, nativeCover, artwork, trackId]);
@@ -74,6 +75,8 @@ export function Swirl({ track, playing, darkened = false }: {
   const onContextCreate = (gl: ExpoWebGLRenderingContext) => {
     stop.current();
     const context = gl as unknown as SwirlGL;
+    // Match the browser renderer's fixed shader dithering across GPU backends.
+    gl.disable(gl.DITHER);
     const vertex = createShader(context, gl.VERTEX_SHADER, vertexShaderSource);
     const fragment = createShader(context, gl.FRAGMENT_SHADER, mobileFragmentShader);
     const program = gl.createProgram();
@@ -92,7 +95,7 @@ export function Swirl({ track, playing, darkened = false }: {
     const position = gl.getAttribLocation(program, "a_position");
     gl.enableVertexAttribArray(position);
     gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-    journey.current.seed ??= Math.random() * 64;
+    journey.current.seed ??= SWIRL_NOISE_SEED;
     createNoiseTexture(context, journey.current.seed);
     const uniform = (name: string) => gl.getUniformLocation(program, name);
     const u = {

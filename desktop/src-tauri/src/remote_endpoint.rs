@@ -75,7 +75,7 @@ impl Intent {
 }
 
 struct Running {
-    tasks: [tauri::async_runtime::JoinHandle<()>; 3],
+    tasks: [tauri::async_runtime::JoinHandle<()>; 4],
     agent: std::sync::Arc<Agent>,
 }
 
@@ -152,7 +152,7 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
         app, client, base_url, token, id, name, instance_id,
         sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), local_intents: Mutex::new(VecDeque::new()),
     });
-    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone()))];
+    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone()))];
     Ok(Running { tasks, agent })
 }
 
@@ -288,6 +288,16 @@ async fn refresh_devices(agent: std::sync::Arc<Agent>) {
     }
 }
 
+// Local screens must keep hearing the engine even while a presence request waits on the network.
+async fn show_local_status(agent: std::sync::Arc<Agent>) {
+    let mut ticks = tokio::time::interval(LOCAL_STATUS_EVERY);
+    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticks.tick().await;
+        agent.show_status(&agent.status().await);
+    }
+}
+
 async fn report(agent: std::sync::Arc<Agent>) {
     let mut round_trips = VecDeque::<Duration>::with_capacity(ROUND_TRIPS_KEPT);
     loop {
@@ -301,8 +311,6 @@ async fn report(agent: std::sync::Arc<Agent>) {
         // When the position was read, on this device's clock: a report held up on the way (a
         // stalled tunnel, say) is then placed when it was true, not when it finally arrived.
         body["sampledAtMs"] = json!(monotonic_ms());
-        agent.show_status(&status);
-        let mut shown = Instant::now();
         status["livePcmV1"] = Value::Bool(true);
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
         let reported = transitions(&status);
@@ -335,10 +343,6 @@ async fn report(agent: std::sync::Arc<Agent>) {
         while Instant::now() < next_beat {
             tokio::time::sleep(WATCH_EVERY.min(next_beat.saturating_duration_since(Instant::now()))).await;
             let status = agent.status().await;
-            if shown.elapsed() >= LOCAL_STATUS_EVERY {
-                agent.show_status(&status);
-                shown = Instant::now();
-            }
             if transitions(&status) != reported {
                 break;
             }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { motion } from "../utils/motion";
 import {
   artworkPalette,
@@ -12,12 +12,7 @@ import {
   settledBigscreenArtwork,
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
-import {
-  sampleCoverEdges,
-  separateCollapsedPalette,
-  separatePaletteFromCover,
-  type CoverEdgeSamples,
-} from "../utils/backgroundPalette";
+import { swirlPalette } from "../utils/artworkPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
@@ -32,8 +27,6 @@ type BackgroundArtworkProps = ArtworkProps & {
   active: boolean;
   animate?: boolean;
   playing?: boolean;
-  /** Visible share of the background beside the cover; see separatePaletteFromCover. */
-  coverDim?: number;
 };
 
 type CoverLayer = {
@@ -178,35 +171,28 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
   );
 }
 
-export function BackgroundArtwork({ track, active, animate, playing, coverDim = 1 }: BackgroundArtworkProps) {
+export function BackgroundArtwork({ track, active, animate, playing }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
     colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK],
     weights: [1, 0, 0, 0],
   });
-  const [edges, setEdges] = useState<CoverEdgeSamples | null>(null);
-  // Recomputed when the view's overlay changes, so both views separate the cover by what is visible.
-  const colors = useMemo(
-    () => separatePaletteFromCover(palette.colors, edges, coverDim),
-    [edges, palette, coverDim],
-  );
 
   useEffect(() => {
-    if (!track) return;
+    if (!track) {
+      setPalette({ colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK], weights: [1, 0, 0, 0] });
+      return;
+    }
     let cancelled = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
     let attempt = 0;
 
-    const load = () => void Promise.all([
-      artworkPalette(track),
-      sampleCoverEdges(thumbnailArtwork(track)),
-    ]).then(([palette, edges]) => {
+    const load = () => void artworkPalette(track).then(palette => {
       if (cancelled) return;
       if (palette.colors.length === 4) {
-        const colors = separateCollapsedPalette(palette.colors);
-        setPalette({ ...palette, colors });
-        setEdges(edges);
+        setPalette(swirlPalette(palette));
       } else {
         // A failed request would otherwise leave an earlier song's swirl up for this whole song.
+        setPalette({ colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK], weights: [1, 0, 0, 0] });
         retry = setTimeout(load, [1000, 3000, 10_000, 30_000][Math.min(attempt++, 3)]);
       }
     });
@@ -227,7 +213,7 @@ export function BackgroundArtwork({ track, active, animate, playing, coverDim = 
   return (
     <div id="backgroundFX" aria-hidden="true" data-active={active} data-empty={!track}>
       <FluidGradientBackground
-        colors={colors}
+        colors={palette.colors}
         weights={palette.weights}
         active={active && !!track}
         animate={track ? animate : false}
