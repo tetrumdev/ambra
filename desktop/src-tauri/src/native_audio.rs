@@ -1702,16 +1702,20 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     }
                 }
                 self.rendered_frames = self.rendered_frames.saturating_add(frames as u64);
-                let queued_frames = output.queued_frames()? as u64;
+            }
+            let queued_frames = output.queued_frames()? as u64;
+            if frames > 0 {
                 let queued_samples = (queued_frames as usize).saturating_mul(spec.channels);
                 if self.output_history.len() > queued_samples {
                     self.output_history.drain(..self.output_history.len() - queued_samples);
                 }
-                let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
-                let current_time =
-                    self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
-                update_status(&self.status, |status| status.current_time = current_time);
             }
+            // Also while the device buffer is full and nothing was written: the device keeps
+            // playing, and a position held until the next block lags by up to a block.
+            let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
+            let current_time =
+                self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
+            update_status(&self.status, |status| status.current_time = current_time);
         }
 
         self.drain_decoder()?;

@@ -5,7 +5,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     sync::{
-        Arc, Mutex as SyncMutex,
+        Arc, Mutex as SyncMutex, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -26,6 +26,10 @@ use crate::access::Caller;
 
 /// An endpoint that hasn't reported for this long is offline.
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
+/// How long an output's report timings are compared, to tell a delayed report from a prompt one.
+const CLOCK_SAMPLES_FOR: Duration = Duration::from_secs(60);
+/// A report seemingly held up longer than this means the output's clock jumped (it slept).
+const MAX_REPORT_DELAY: Duration = Duration::from_secs(10);
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_WAIT_SECONDS: u64 = 30;
 const MAX_QUEUED: usize = 64;
@@ -54,8 +58,11 @@ struct Endpoint {
     selected_device_id: Value,
     status: Value,
     status_at: Instant,
-    /// When the output sampled `status`: its arrival, less the trip the output measured.
+    /// When the output sampled `status`: its arrival, less the trip the output measured and
+    /// however long this report was held up beyond the quickest recent one.
     status_sampled_at: Instant,
+    /// Recent arrivals, each with this server's time less the output's at sampling (ms).
+    clock_samples: VecDeque<(Instant, f64)>,
     seen: Instant,
     queue: VecDeque<QueuedCommand>,
     work: Arc<Notify>,
@@ -157,6 +164,28 @@ struct Presence {
     status: Option<Value>,
     /// The output's estimate of how long a report takes to reach the server.
     latency_ms: Option<f64>,
+    /// When the output read `status`, on its own clock that only moves forward.
+    sampled_at_ms: Option<f64>,
+}
+
+impl Endpoint {
+    /// How much longer than usual a report sampled at `sampled_ms`, on the output's clock, took
+    /// to arrive. The quickest recent report shows the clocks' difference plus the shortest trip;
+    /// anything slower was held up on the way, and its status was true that much earlier.
+    fn report_delay(&mut self, arrived: Instant, sampled_ms: f64) -> Duration {
+        static EPOCH: OnceLock<Instant> = OnceLock::new();
+        let difference = arrived.duration_since(*EPOCH.get_or_init(Instant::now)).as_secs_f64() * 1000.0 - sampled_ms;
+        self.clock_samples.retain(|(at, _)| arrived.duration_since(*at) < CLOCK_SAMPLES_FOR);
+        let quickest = self.clock_samples.iter().map(|(_, difference)| *difference).fold(difference, f64::min);
+        let delay = Duration::from_secs_f64(((difference - quickest) / 1000.0).max(0.0));
+        if delay > MAX_REPORT_DELAY {
+            self.clock_samples.clear();
+            self.clock_samples.push_back((arrived, difference));
+            return Duration::ZERO;
+        }
+        self.clock_samples.push_back((arrived, difference));
+        delay
+    }
 }
 
 async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Caller>, Path(endpoint_id): Path<String>, Json(report): Json<Presence>) -> Response {
@@ -175,6 +204,7 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
         status: Value::Null,
         status_at: Instant::now(),
         status_sampled_at: Instant::now(),
+        clock_samples: VecDeque::new(),
         seen: Instant::now(),
         queue: VecDeque::new(),
         work: Arc::new(Notify::new()),
@@ -183,6 +213,7 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
     if let Some(instance) = report.instance_id {
         if endpoint.instance_id.as_ref().is_some_and(|previous| previous != &instance) {
             endpoint.queue.clear();
+            endpoint.clock_samples.clear();
             shared.waiting.lock().unwrap_or_else(|p| p.into_inner()).retain(|_, waiting| waiting.endpoint_id != endpoint_id);
         }
         endpoint.instance_id = Some(instance);
@@ -198,9 +229,10 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
         let now = Instant::now();
         // Beyond a second it's a stalled request, not the network's usual delay.
         let latency = report.latency_ms.filter(|ms| ms.is_finite()).map_or(0.0, |ms| ms.clamp(0.0, 1000.0));
+        let held = report.sampled_at_ms.filter(|ms| ms.is_finite()).map_or(Duration::ZERO, |ms| endpoint.report_delay(now, ms));
         endpoint.status = status;
         endpoint.status_at = now;
-        endpoint.status_sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0)).unwrap_or(now);
+        endpoint.status_sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0) + held).unwrap_or(now);
         drop(endpoints);
         shared.reported.notify_one();
     }
@@ -382,7 +414,7 @@ mod tests {
     }
 
     fn report(status: Value) -> Json<Presence> {
-        Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None })
+        Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None, sampled_at_ms: None })
     }
 
     #[tokio::test]
