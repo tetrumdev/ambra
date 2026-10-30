@@ -1138,6 +1138,8 @@ pub fn run() {
             display_wake::set_display_wake,
             playlist_export::export_playlist_csv,
             remote_endpoint::set_shared_output,
+            remote_endpoint::shared_output_control,
+            remote_endpoint::shared_output_skip,
             server_link::server_connection,
             server_link::network_connection_status,
             server_link::discover_servers,

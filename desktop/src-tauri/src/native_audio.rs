@@ -159,6 +159,10 @@ enum WorkerCommand {
         position_seconds: f64,
         reply: Sender<Result<(), String>>,
     },
+    /// Moves onto the queued next song now, if it's already prepared; false when it isn't.
+    SkipToNext {
+        reply: Sender<Result<bool, String>>,
+    },
     ListDevices {
         reply: Sender<Result<Vec<NativeAudioDevice>, String>>,
     },
@@ -323,6 +327,12 @@ pub async fn seek_native_audio(
         reply,
     })
     .await
+}
+
+/// Starts the next song the core queued here at once, when it's already downloaded and decoded,
+/// rather than waiting for the core to load it. False when it isn't ready yet.
+pub(crate) async fn skip_to_next_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<bool, String> {
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::SkipToNext { reply }).await
 }
 
 #[tauri::command]
@@ -866,6 +876,13 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             }
             WorkerCommand::Pause { reply } => {
                 let result = self.pause();
+                if let Err(error) = &result && error != AUDIO_SUPERSEDED {
+                    self.fail(error.clone());
+                }
+                let _ = reply.send(result);
+            }
+            WorkerCommand::SkipToNext { reply } => {
+                let result = self.skip_to_next();
                 if let Err(error) = &result && error != AUDIO_SUPERSEDED {
                     self.fail(error.clone());
                 }
@@ -1784,6 +1801,25 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 eprintln!("The native audio preloader stopped unexpectedly");
             }
         }
+    }
+
+    /// The handoff a song's end makes into the prepared next one, made now: what's still buffered
+    /// of this song is dropped, and the output starts again on the next.
+    fn skip_to_next(&mut self) -> Result<bool, String> {
+        self.poll_next_source();
+        if self.ready_next.is_none() {
+            return Ok(false);
+        }
+        let (source, prepared) = self.ready_next.take().expect("ready source disappeared");
+        if let Some(output) = self.output.as_mut() {
+            output.reset()?;
+        }
+        self.rendering = false;
+        self.decoder = None;
+        self.pcm.clear();
+        self.reset_gain_buffer();
+        self.advance(source, prepared)?;
+        Ok(true)
     }
 
     fn advance(&mut self, source: String, prepared: PreparedSource) -> Result<(), String> {
