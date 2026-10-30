@@ -35,16 +35,6 @@ export function backdropAlphas(colors: string[], weights: number[]) {
     : Math.min(MOST, Math.max(band.least, 1 - (band.ceiling / brightest) ** (1 / 2.2))));
 }
 
-/** Share of the field still visible through the backdrop at `fraction` of the screen's height. */
-export function visibleThrough(alphas: readonly number[], fraction: number) {
-  const at = Math.min(1, Math.max(0, fraction));
-  const upper = Math.max(1, BANDS.findIndex(band => band.at >= at));
-  const from = BANDS[upper - 1];
-  const to = BANDS[upper];
-  const progress = to.at > from.at ? (at - from.at) / (to.at - from.at) : 0;
-  return 1 - (alphas[upper - 1] + (alphas[upper] - alphas[upper - 1]) * progress);
-}
-
 /** Applied in the swirl's draw, so darkness and palette always share the same transition. */
 export const backdropShader = `
 uniform vec4 u_backdrop;

@@ -1,6 +1,5 @@
 // Oklab's linear-sRGB matrices, published by Björn Ottosson:
 // https://bottosson.github.io/posts/oklab/#converting-from-linear-srgb-to-oklab
-// Keep the CPU edge samples and the fragment shader on the same coefficients.
 const rgbToLms = [
   [0.4122214708, 0.5363325363, 0.0514459929],
   [0.2119034982, 0.6806995451, 0.1073969566],
@@ -11,9 +10,21 @@ const lmsToLab = [
   [1.9779984951, -2.4285922050, 0.4505937099],
   [0.0259040371, 0.7827717662, -0.8086757660],
 ];
+// The inverse, from the same source.
+const labToLms = [
+  [1, 0.3963377774, 0.2158037573],
+  [1, -0.1055613458, -0.0638541728],
+  [1, -0.0894841775, -1.2914855480],
+];
+const lmsToRgb = [
+  [4.0767416621, -3.3077115913, 0.2309699292],
+  [-1.2684380046, 2.6097574011, -0.3413193965],
+  [-0.0041960863, -0.7034186147, 1.7076147010],
+];
 const dot = (left: number[], right: number[]) => left.reduce((sum, value, index) => sum + value * right[index], 0);
 
 export const linearChannel = (value: number) => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+const srgbChannel = (value: number) => value <= 0.0031308 ? 12.92 * value : 1.055 * value ** (1 / 2.4) - 0.055;
 
 /** Display sRGB to perceptual lightness and two opponent color coordinates. */
 export function perceptualColor(rgb: number[]): number[] {
@@ -22,22 +33,8 @@ export function perceptualColor(rgb: number[]): number[] {
   return lmsToLab.map(row => dot(row, lms));
 }
 
-const glslDots = (matrix: number[][], input: string) => matrix.map(row => `dot(${input}, vec3(${row.join(", ")}))`).join(",\n    ");
-
-export const perceptualColorShader = `
-vec3 linearFromSrgb(vec3 color) {
-  return mix(color / 12.92, pow((color + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), color));
+/** The inverse of perceptualColor, clamped into display sRGB. */
+export function srgbFromPerceptual(lab: number[]): number[] {
+  const lms = labToLms.map(row => dot(row, lab) ** 3);
+  return lmsToRgb.map(row => Math.min(1, Math.max(0, srgbChannel(Math.max(0, dot(row, lms))))));
 }
-vec3 srgbFromLinear(vec3 color) {
-  color = max(color, 0.0);
-  return mix(12.92 * color, 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), color));
-}
-vec3 perceptualFromLinear(vec3 linear) {
-  vec3 lms = pow(max(vec3(
-    ${glslDots(rgbToLms, "linear")}
-  ), 0.0), vec3(1.0 / 3.0));
-  return vec3(
-    ${glslDots(lmsToLab, "lms")}
-  );
-}
-`;

@@ -1,11 +1,10 @@
 import { GLView, type ExpoWebGLRenderingContext } from "expo-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AccessibilityInfo, AppState, PixelRatio, StyleSheet, View, useWindowDimensions } from "react-native";
-import { coverSeparation, separateCollapsedPalette } from "../../desktop/src/utils/backgroundPalette";
+import { separateCollapsedPalette } from "../../desktop/src/utils/backgroundPalette";
 import { colors as theme } from "./theme";
 import {
   COLOR_TRANSITION_MS,
-  EDGE_COMPONENTS,
   MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
   createNoiseTexture,
@@ -17,25 +16,19 @@ import {
   vertexShaderSource,
   type SwirlGL,
 } from "../../desktop/src/utils/swirlShader";
-import { backdropShader, backdropAlphas, visibleThrough } from "./Backdrop";
+import { backdropShader, backdropAlphas } from "./Backdrop";
 import { coverPalette, type Track } from "./client";
-
-/** Where the cover sits on screen, in points, so the swirl can keep the art from sitting flush. */
-export type CoverFrame = { x: number; y: number; size: number };
 
 // The field is soft and slow; drawing it this many pixels tall and letting the compositor scale
 // it up looks the same as full resolution for a fraction of the GPU time.
 const RENDER_HEIGHT = 720;
-/** Where the cover usually sits, as a share of the screen's height, until it has been measured. */
-const TYPICAL_COVER_CENTER = 0.3;
 const black = { colors: [theme.black, theme.black, theme.black, theme.black], weights: [1, 0, 0, 0] };
 const mobileFragmentShader = fragmentShaderSource.replace("void main()", "void swirlMain()") + backdropShader;
 
 /** The desktop bigscreen's swirl (desktop/src/utils/swirlShader.ts), colored from the cover. */
-export function Swirl({ track, playing, cover, darkened = false }: {
+export function Swirl({ track, playing, darkened = false }: {
   track: Track | null;
   playing: boolean;
-  cover: React.RefObject<CoverFrame | null>;
   /** Lays the backdrop over the field, so white controls read against any cover. */
   darkened?: boolean;
 }) {
@@ -58,23 +51,16 @@ export function Swirl({ track, playing, cover, darkened = false }: {
 
   const colors = provider ? palette : black;
   const alphas = useMemo(() => darkened ? backdropAlphas(colors.colors, colors.weights) : [0, 0, 0, 0], [colors, darkened]);
-  const target = useMemo(() => [
-    ...paletteComponents(colors.colors, colors.weights, coverSeparation(null, colors.colors, colors.weights, visibleThrough(alphas, TYPICAL_COVER_CENTER))),
-    ...alphas,
-  ], [colors, alphas]);
+  const target = useMemo(() => [...paletteComponents(colors.colors, colors.weights), ...alphas], [colors, alphas]);
   const transition = useRef({ from: target, to: target, startedAt: 0 });
   const motion = useRef({ playing: playing && !!track, reduced: false, wake: () => {} });
   useEffect(() => {
     const now = performance.now();
     const previous = transition.current;
     const current = mixPalette(previous.from, previous.to, easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS));
-    const art = cover.current;
-    const dim = visibleThrough(alphas, art ? (art.y + art.size / 2) / height : TYPICAL_COVER_CENTER);
-    // Read the settled cover here, outside render, and transition its separation with the field.
-    const next = [...paletteComponents(colors.colors, colors.weights, coverSeparation(null, colors.colors, colors.weights, dim)), ...alphas];
-    transition.current = { from: current, to: next, startedAt: now };
+    transition.current = { from: current, to: target, startedAt: now };
     motion.current.wake();
-  }, [colors, alphas, cover, height]);
+  }, [target]);
   useEffect(() => {
     motion.current.playing = playing && !!track;
     motion.current.wake();
@@ -115,11 +101,7 @@ export function Swirl({ track, playing, cover, darkened = false }: {
       noise: uniform("u_noise"),
       colors: uniform("u_colors[0]"),
       bias: uniform("u_bias"),
-      cover: uniform("u_cover"),
-      coverDim: uniform("u_coverDim"),
       backdrop: uniform("u_backdrop"),
-      edgeLuma: uniform("u_edgeLuma[0]"),
-      edgeDirection: uniform("u_edgeDirection[0]"),
     };
     gl.uniform1i(u.noise, 0);
 
@@ -148,26 +130,9 @@ export function Swirl({ track, playing, cover, darkened = false }: {
       const palette = mixPalette(from, to, progress);
       gl.viewport(0, 0, bufferWidth, bufferHeight);
       gl.uniform3fv(u.colors, new Float32Array(palette.slice(0, 12)));
-      gl.uniform4fv(u.edgeLuma, new Float32Array(palette.slice(12, 12 + EDGE_COMPONENTS)));
-      gl.uniform4fv(u.edgeDirection, new Float32Array(palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2)));
-      gl.uniform4fv(u.bias, new Float32Array(palette.slice(12 + EDGE_COMPONENTS * 2, 16 + EDGE_COMPONENTS * 2)));
+      gl.uniform4fv(u.bias, new Float32Array(palette.slice(12, 16)));
       gl.uniform2f(u.resolution, bufferWidth, bufferHeight);
-
-      // The cover in buffer pixels: center (GL's y runs up), half size, glow falloff.
-      const art = cover.current;
-      const alphas = palette.slice(-4);
-      const dim = visibleThrough(alphas, art ? (art.y + art.size / 2) / height : TYPICAL_COVER_CENTER);
-      gl.uniform4fv(u.backdrop, new Float32Array(alphas));
-      gl.uniform1f(u.coverDim, Math.min(1, Math.max(0.05, dim)));
-      const toBuffer = bufferWidth / width;
-      gl.uniform4f(u.cover, ...(art
-        ? [
-          (art.x + art.size / 2) * toBuffer,
-          bufferHeight - (art.y + art.size / 2) * toBuffer,
-          (art.size / 2) * toBuffer,
-          Math.max(1, (art.size / 2) * toBuffer * 0.36),
-        ] as const
-        : [0, 0, 0, 1] as const));
+      gl.uniform4fv(u.backdrop, new Float32Array(palette.slice(-4)));
 
       // The swirl drifts to a stop on pause and gathers pace again on play, never freezing mid-motion.
       const elapsed = Math.min(0.1, Math.max(0, (now - travel.updatedAt) / 1000));

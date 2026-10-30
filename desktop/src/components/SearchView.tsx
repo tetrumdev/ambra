@@ -19,6 +19,7 @@ import "./LibraryView.css";
 import "./SearchView.css";
 import { motion } from "../utils/motion";
 import { reducedMotion } from "../utils/reducedMotion";
+import { useNavActions } from "../utils/keyboardNav";
 
 type SearchViewProps = {
   onOpenEntity: (entity: BrowseEntity) => void;
@@ -271,6 +272,17 @@ export function SearchView({
   const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
   const count = shownTracks.length + shownArtists.length + shownAlbums.length;
   const status = isSearching ? `Searching ${providerNames[provider]}…` : `${count} results from ${error ? "available services" : providerNames[provider]}`;
+
+  // The keyboard's selected result (utils/keyboardNav.ts); albums, artists and "Show all" open as clicked.
+  useNavActions((action, item) => {
+    if (!root.current?.contains(item) || !item.matches(".searchResult")) return null;
+    const track = shownTracks.find(candidate => candidate.globalId === item.dataset.trackId);
+    if (!track) return null;
+    if (action === "play") { playStandalone(track.globalId); return `Playing “${track.name}”`; }
+    if (action === "queue") { addToQueue(track.globalId); return `Added “${track.name}” to the queue`; }
+    playNext(track.globalId);
+    return `“${track.name}” plays next`;
+  });
 
   function openActions(event: React.MouseEvent, trackId: GlobalTrackId) {
     event.preventDefault();

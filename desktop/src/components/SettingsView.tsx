@@ -15,6 +15,8 @@ import { LocalSettings } from "./settings/LocalSettings";
 import { Segmented, SettingRow, Toggle } from "./settings/SettingsControls";
 import "./SettingsView.css";
 import { ServerSettings } from "./settings/ServerSettings";
+import { KeyboardSettings } from "./settings/KeyboardSettings";
+import type { ShortcutOverrides } from "../utils/shortcuts";
 import { invokeOn, useEndpoints, type RemoteEndpoint } from "../utils/playbackTarget";
 import { coreCommand, coreView, subscribeCore } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
@@ -27,11 +29,11 @@ function usePlayingOn() {
   return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
 }
 
-type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; shortcuts: ShortcutOverrides; onShortcutsChange: (shortcuts: ShortcutOverrides) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
 const DESKTOP_ONLY = "Desktop app only";
 
-export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, reduceMotion, onReduceMotion, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, registerScrollElement }: Props) {
+export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, reduceMotion, onReduceMotion, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, shortcuts, onShortcutsChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
@@ -136,6 +138,10 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
 
     <section id="settings-panel-local" role="region" aria-labelledby="settings-tab-local" hidden={tab !== "local"}>
       <LocalSettings onRescanLocalMusic={onRescanLocalMusic} />
+    </section>
+
+    <section id="settings-panel-keyboard" role="region" aria-labelledby="settings-tab-keyboard" hidden={tab !== "keyboard"}>
+      <KeyboardSettings overrides={shortcuts} onChange={onShortcutsChange} />
     </section>
   </div>;
 }

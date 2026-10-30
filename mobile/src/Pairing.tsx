@@ -44,7 +44,7 @@ export function Pairing({ savedAddress, onPaired, initialError = null }: { saved
 
   return (
     <View style={styles.screen}>
-      <Swirl track={null} playing={false} cover={{ current: null }} />
+      <Swirl track={null} playing={false} />
       <KeyboardAvoidingView behavior="padding" style={styles.content}>
         <Text style={styles.title}>Pair with Ambra</Text>
         {pairing ? <>

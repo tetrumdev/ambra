@@ -12,6 +12,9 @@ import { DropdownChevron } from "./DropdownChevron";
 import { slideDetails } from "../utils/detailsMotion";
 import type { PlaylistGroup } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
+import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
+import { moveSidebar } from "../utils/keyboardNav";
+import { useStableCallback } from "../hooks/useStableCallback";
 
 type SidebarProps = {
   onOpenHome: () => void;
@@ -58,6 +61,59 @@ export function Sidebar({
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [createError, setCreateError] = useState(false);
   const createDialog = useRef<HTMLDialogElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
+  const filterInput = useRef<HTMLInputElement>(null);
+  // Narrows the sidebar to the playlists and services matching it; null while closed.
+  const [filter, setFilter] = useState<string | null>(null);
+  const query = filter?.trim().toLowerCase() ?? "";
+  const matches = (text: string) => !query || text.toLowerCase().includes(query);
+  const filterPlaylists = (group: string, items: Playlist[]) => matches(group) ? items : items.filter(playlist => matches(playlist.name));
+  const ambraPlaylists = filterPlaylists("AMBRA", playlists);
+
+  const handleFilterShortcut = useStableCallback((event: KeyboardEvent) => {
+    if (!matchesShortcut(event, "filterSidebar") || sidebarRef.current?.closest("[inert]")) return;
+    event.preventDefault();
+    if (event.repeat) return;
+    setFilter(current => current ?? "");
+    requestAnimationFrame(() => { filterInput.current?.focus(); filterInput.current?.select(); });
+    announceShortcut("filterSidebar");
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handleFilterShortcut);
+    return () => window.removeEventListener("keydown", handleFilterShortcut);
+  }, [handleFilterShortcut]);
+
+  // Picking something from the sidebar by keyboard hands the keyboard back to the page.
+  function handleSidebarKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    if (event.key !== "Enter" || !target.matches(".sidebarBtn")) return;
+    requestAnimationFrame(() => {
+      if (document.activeElement === target) target.blur();
+      setFilter(null);
+    });
+  }
+
+  function handleFilterKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      event.stopPropagation();
+      moveSidebar(sidebarRef.current?.parentElement, event.key === "ArrowDown" ? 1 : -1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      // The best match: a playlist, else whatever page is left.
+      const first = sidebarRef.current?.querySelector<HTMLElement>(".sidebarPlaylistName")
+        ?? sidebarRef.current?.querySelector<HTMLElement>("#libraryContainer .sidebarBtn");
+      first?.click();
+      event.currentTarget.blur();
+      setFilter(null);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.blur();
+      setFilter(null);
+    }
+  }
 
   useEffect(() => {
     if (isCreatingPlaylist) openDialog(createDialog.current);
@@ -77,17 +133,30 @@ export function Sidebar({
 
   return (
     <>
-      <div id="sidebarMain">
+      <div id="sidebarMain" ref={sidebarRef} onKeyDown={handleSidebarKeyDown}>
         <div id="libraryContainer">
-          <button
+          {filter !== null && <input
+            ref={filterInput}
+            className="sidebarFilterInput"
+            type="search"
+            placeholder="Filter playlists"
+            aria-label="Filter playlists and services"
+            spellCheck={false}
+            autoComplete="off"
+            value={filter}
+            onChange={event => setFilter(event.currentTarget.value)}
+            onKeyDown={handleFilterKeyDown}
+            onBlur={event => { if (!event.currentTarget.value.trim()) setFilter(null); }}
+          />}
+          {matches("Home") && <button
             type="button"
             onClick={onOpenHome}
             className="sidebarBtn sidebarLibraryButton sidebarHomeButton"
             aria-current={isHomeActive ? "page" : undefined}
           >
             Home
-          </button>
-          <button
+          </button>}
+          {matches("My Library") && <button
             type="button"
             onClick={onOpenLibrary}
             className="sidebarBtn sidebarLibraryButton"
@@ -96,9 +165,9 @@ export function Sidebar({
             }
           >
             My Library
-          </button>
-          <nav className="sidebarLibrarySections" aria-label="Library sections">
-            {librarySections.map(({ id, label }) => (
+          </button>}
+          {librarySections.some(({ label }) => matches(label)) && <nav className="sidebarLibrarySections" aria-label="Library sections">
+            {librarySections.filter(({ label }) => matches(label)).map(({ id, label }) => (
               <button
                 type="button"
                 className="sidebarBtn sidebarLibraryButton"
@@ -109,12 +178,14 @@ export function Sidebar({
                 {label}
               </button>
             ))}
-          </nav>
+          </nav>}
           <div id="playlistContainer">
-            <details className="sidebarPlaylistGroup playlistDropdown" open={playlistGroups.ambra} onToggle={event => onTogglePlaylistGroup("ambra", event.currentTarget.open)}>
+            {/* While filtering, every group with a match stays open, without changing what's remembered. */}
+            {ambraPlaylists.length > 0 && <details className="sidebarPlaylistGroup playlistDropdown" open={query ? true : playlistGroups.ambra}
+              onToggle={event => { if (!query) onTogglePlaylistGroup("ambra", event.currentTarget.open); }}>
               <summary onClick={slideDetails}><DropdownChevron />AMBRA ({playlists.length})</summary>
               <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label="AMBRA playlists">
-            {playlists.map((playlist) => (
+            {ambraPlaylists.map((playlist) => (
               <div key={playlist.id} className="sidebarPlaylistRow">
                 <button
                   type="button"
@@ -137,14 +208,17 @@ export function Sidebar({
               </div>
             ))}
               </nav>
-            </details>
+            </details>}
             {(["spotify", "qobuz", "tidal"] as const).map(provider => {
               const group = serviceGroups.find(group => group.provider === provider);
               if (!group || !servicePlaylistVisibility[provider]) return null;
-              return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={playlistGroups[provider]} onToggle={event => onTogglePlaylistGroup(provider, event.currentTarget.open)}>
+              const shown = filterPlaylists(musicProviderName(provider), group.playlists);
+              if (query && !shown.length) return null;
+              return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={query ? true : playlistGroups[provider]}
+                onToggle={event => { if (!query) onTogglePlaylistGroup(provider, event.currentTarget.open); }}>
                 <summary onClick={slideDetails}><DropdownChevron /><ProviderIcon provider={provider} /> ({group.playlists.length})</summary>
                 <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
-                {group.playlists.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
+                {shown.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
                   <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" data-tooltip={playlist.name} data-tooltip-overflow="" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
                   <PlaylistActions playlist={playlist} onRename={playlist.editable ? onRenamePlaylist : undefined} onDelete={playlist.editable ? onDeletePlaylist : undefined} actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]} />
                 </div>)}

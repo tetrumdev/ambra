@@ -7,7 +7,8 @@ import type { AudioDeckController, AudioPlayer } from "./useAudioPlayer";
 import type { QueueController } from "./useQueue";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { acceptsPlaybackShortcut, isCharacterKey, isTypingTarget, isUnmodifiedKey } from "../utils/keyboard";
+import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
+import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
 import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
 
 const noDeck = () => {};
@@ -69,18 +70,22 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const currentTrack = queue.currentEntry?.track;
   const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
   // App shortcuts control the shared transport; hardware controls only affect local playback.
-  const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0 });
-  shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0 };
+  const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0, playing: view?.playing ?? false });
+  shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0, playing: view?.playing ?? false };
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const current = shortcutState.current;
-      if (isUnmodifiedKey(event, "Space") && !isTypingTarget(event.target)) {
+      if (matchesShortcut(event, "playPause") && !isTypingTarget(event.target)) {
         event.preventDefault();
-        if (!event.repeat) { ensureOutput(); void coreCommand("toggle").catch(() => {}); }
+        if (!event.repeat) {
+          announceShortcut("playPause", current.playing ? "Paused" : "Playing");
+          ensureOutput();
+          void coreCommand("toggle").catch(() => {});
+        }
         return;
       }
       if (!current.track) return;
-      const step = isUnmodifiedKey(event, "ArrowLeft") ? -5 : isUnmodifiedKey(event, "ArrowRight") ? 5 : 0;
+      const step = matchesShortcut(event, "seekBackward") ? -5 : matchesShortcut(event, "seekForward") ? 5 : 0;
       if (step && acceptsPlaybackShortcut(event, true)) {
         event.preventDefault();
         const end = current.duration > 0 ? Math.max(0, current.duration - 1) : Infinity;
@@ -88,9 +93,15 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
         clock.setRunning(false);
         clock.set(positionSeconds);
         void coreCommand("seek", { positionSeconds }).catch(() => {});
+        announceShortcut(step < 0 ? "seekBackward" : "seekForward");
       } else if (acceptsPlaybackShortcut(event)) {
-        const action = isCharacterKey(event, ",") ? "previous" : isCharacterKey(event, ".") ? "next" : null;
-        if (action) { event.preventDefault(); if (!event.repeat) void coreCommand(action).catch(() => {}); }
+        const action = matchesShortcut(event, "previousTrack") ? "previous" : matchesShortcut(event, "nextTrack") ? "next" : null;
+        if (action) {
+          event.preventDefault();
+          if (event.repeat) return;
+          void coreCommand(action).catch(() => {});
+          announceShortcut(action === "previous" ? "previousTrack" : "nextTrack");
+        }
       }
     };
     window.addEventListener("keydown", keydown);

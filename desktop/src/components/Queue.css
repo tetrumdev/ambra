@@ -19,7 +19,8 @@
     flex: none;
     position: relative;
     z-index: 9;
-    padding-top: calc(var(--content-top-spacer) + 8px);
+    /* Below the close button and search bar, as a playlist's title sits (LibraryView.css). */
+    padding-top: calc(var(--content-top-spacer) + 43px);
     background: var(--surface-black);
 }
 
@@ -323,24 +324,36 @@
     }
 }
 
-/* Left of the search bar, level with it, following its edge as it widens
-   (the bar's collapsed and expanded widths in SearchBar.css, plus its border). */
+/* Top left, where the player keeps its close button, past the sidebar and in line with the
+   title, level with the search bar and dressed like it (SearchBar.css). */
 .queueClose {
     position: absolute;
     top: 10px;
-    right: 20px;
+    left: calc(230px + 30px);
     z-index: 10;
     display: grid;
     place-items: center;
+    box-sizing: border-box;
+    width: 42px;
     height: 42px;
-    padding: 0 8px;
-    border: 0;
-    background: transparent;
-    transition: right var(--motion-snappy);
+    padding: 0;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.4);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: filter 0.25s ease, border-color 0.25s ease;
 }
-.queueClose[data-beside-search] {
-    right: calc(20px + 82px + 12px);
+
+.queueClose:focus-visible {
+    outline: none;
+    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.3));
+    border-color: rgb(100, 100, 100);
 }
-.appScreen:has(.searchInputControl[data-expanded="true"]) .queueClose[data-beside-search] {
-    right: calc(20px + 266px + 12px);
+
+/* Narrow windows hide the sidebar (App.css). */
+@media screen and (width <= 799px) {
+    .queueClose {
+        left: 30px;
+    }
 }

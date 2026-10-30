@@ -5,7 +5,7 @@ import { Root } from "./Root";
 import "./interaction.css";
 import "./scrollbars.css";
 import { installTooltips } from "./utils/tooltips";
-import { isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
+import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 
 mark("js-start");
@@ -25,11 +25,11 @@ document.documentElement.dataset.platform = navigator.userAgent.includes(
 
 installTooltips();
 window.addEventListener("keydown", (event) => {
-  if (isBrowserFindShortcut(event)) event.preventDefault();
+  if (isBrowserFindShortcut(event)) blockBrowserDefault(event);
 }, true);
 // Development blocks them too; code changes still reload through Vite.
 window.addEventListener("keydown", (event) => {
-  if (isBrowserShortcut(event)) event.preventDefault();
+  if (isBrowserShortcut(event)) blockBrowserDefault(event);
 }, true);
 
 mark("first-render");

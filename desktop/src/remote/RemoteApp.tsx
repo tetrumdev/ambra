@@ -3,10 +3,9 @@ import { serverUrl } from "../api/serverConnection";
 import { FluidGradientBackground } from "../components/FluidGradientBackground";
 import { PlayerControls } from "../components/PlayerControls";
 import {
-  coverSeparation,
-  neutralCoverSeparation,
   sampleCoverEdges,
   separateCollapsedPalette,
+  separatePaletteFromCover,
   type CoverEdgeSamples,
 } from "../utils/backgroundPalette";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
@@ -37,7 +36,7 @@ function artworkQuery(track: Track) {
 /** The bigscreen's swirl, colored from the cover. */
 function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
   const [palette, setPalette] = useState(blackPalette);
-  const [edges, setEdges] = useState<CoverEdgeSamples | null | undefined>();
+  const [edges, setEdges] = useState<CoverEdgeSamples | null>(null);
   const query = track ? artworkQuery(track) : null;
   useEffect(() => {
     if (!query) return;
@@ -54,17 +53,12 @@ function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
     });
     return () => { cancelled = true; };
   }, [query]);
-  const separation = useMemo(
-    () => edges === undefined ? neutralCoverSeparation : coverSeparation(edges, palette.colors, palette.weights),
-    [edges, palette],
-  );
+  const colors = useMemo(() => separatePaletteFromCover(palette.colors, edges), [edges, palette]);
   return (
     <div className="remoteSwirl" aria-hidden="true">
       <FluidGradientBackground
-        colors={palette.colors}
+        colors={colors}
         weights={palette.weights}
-        separation={separation}
-        coverId={COVER_ID}
         active
         animate={!!track}
         playing={playing}

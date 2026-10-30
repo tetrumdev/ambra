@@ -4,16 +4,42 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-  COVER_EDGE_ZONES, coverEdgeSamples, coverSeparation, neutralCoverSeparation,
+  COVER_EDGE_ZONES, SWIRL_SATURATION, SWIRL_SHADE_MIN, SWIRL_SHADE_RANGE,
+  coverEdgeSamples, separatePaletteFromCover, type CoverEdgeSamples,
 } from "../src/utils/backgroundPalette";
-import { EDGE_COLORS_OFFSET, EDGE_COMPONENTS, fragmentShaderSource, paletteComponents, vertexShaderSource } from "../src/utils/swirlShader";
-import { perceptualColor } from "../src/utils/perceptualColor";
+import { fragmentShaderSource, paletteComponents, vertexShaderSource } from "../src/utils/swirlShader";
+import { perceptualColor, srgbFromPerceptual } from "../src/utils/perceptualColor";
 
-test("perceptual color conversion preserves reference black, white, and saturated red", () => {
-  const near = (rgb: number[], expected: number[]) => perceptualColor(rgb).forEach((value, index) => expect(value).toBeCloseTo(expected[index], 5));
-  near([0, 0, 0], [0, 0, 0]);
-  near([1, 1, 1], [1, 0, 0]);
-  near([1, 0, 0], [0.627955, 0.224863, 0.125846]);
+const rgb = (hex: string) => [1, 3, 5].map(offset => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+const lightness = (hex: string) => perceptualColor(rgb(hex))[0];
+const edgesOf = (colors: number[][]): CoverEdgeSamples => ({
+  colors: Array.from({ length: COVER_EDGE_ZONES * 4 }, (_, index) => colors[index % colors.length]).flat(),
+});
+/** The least perceptual distance, beyond what each edge needs, at every shade the swirl draws `hex`. */
+function clearance(hex: string, edges: CoverEdgeSamples, dim = 1) {
+  const color = rgb(hex);
+  const gray = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
+  const vivid = color.map(channel => gray + (channel - gray) * SWIRL_SATURATION);
+  let least = Infinity;
+  for (let step = 0; step <= 20; step++) {
+    const shade = SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE * step / 20;
+    const field = perceptualColor(vivid.map(channel => dim * Math.min(1, Math.max(0, channel * shade))));
+    for (let index = 0; index < COVER_EDGE_ZONES * 4; index++) {
+      const edge = perceptualColor(edges.colors.slice(index * 3, index * 3 + 3));
+      least = Math.min(least, Math.hypot(field[0] - edge[0], field[1] - edge[1], field[2] - edge[2]) - Math.max(0.07, 0.16 - edge[0]));
+    }
+  }
+  return least;
+}
+
+test("perceptual color conversion preserves reference black, white, and saturated red, both ways", () => {
+  const near = (actual: number[], expected: number[]) => actual.forEach((value, index) => expect(value).toBeCloseTo(expected[index], 5));
+  near(perceptualColor([0, 0, 0]), [0, 0, 0]);
+  near(perceptualColor([1, 1, 1]), [1, 0, 0]);
+  near(perceptualColor([1, 0, 0]), [0.627955, 0.224863, 0.125846]);
+  for (const color of [[0, 0, 0], [1, 1, 1], [1, 0, 0], [0.2, 0.5, 0.7], [0, 0.07, 0.1]]) {
+    near(srgbFromPerceptual(perceptualColor(color)), color);
+  }
 });
 
 test("contrast samples actual boundary colors instead of averaging unrelated interior pixels", () => {
@@ -27,48 +53,72 @@ test("contrast samples actual boundary colors instead of averaging unrelated int
   const samples = coverEdgeSamples(pixels, size);
   for (let zone = 0; zone < COVER_EDGE_ZONES; zone++) {
     const value = (zone % 2 ? 240 : 8) / 255;
-    expect(samples.luminances[zone * 4]).toBeCloseTo(value);
     expect(samples.colors.slice(zone * 12, zone * 12 + 3)).toEqual([value, value, value]);
   }
 });
 
 test("an unreadable edge never invents a contrast problem from the cover palette", () => {
-  for (const dim of [1, 0.25]) {
-    expect(coverSeparation(null, ["#101010"], [1], dim)).toBe(neutralCoverSeparation);
+  const colors = ["#101010", "#202020", "#303030", "#404040"];
+  expect(separatePaletteFromCover(colors, null)).toBe(colors);
+  expect(separatePaletteFromCover(colors, { colors: [0, 0, 0] })).toBe(colors);
+});
+
+test("colors that already contrast with every edge sample are left exactly as they are", () => {
+  const colors = ["#5a6066", "#868a8f", "#c0392b", "#2e86c1"];
+  expect(separatePaletteFromCover(colors, edgesOf([[0, 0.07, 0.1]]))).toEqual(colors);
+  // A multi-colored edge: the same palette is still distinct from both of its colors.
+  expect(separatePaletteFromCover(colors, edgesOf([[0, 0.07, 0.1], [0.98, 0.95, 0.9]]))).toEqual(colors);
+});
+
+test("a swirl color matching the cover's border moves just far enough, keeping its hue", () => {
+  // Joy Division, Unknown Pleasures: the swirl's dominant color is the border itself.
+  const edges = edgesOf([[0, 18 / 255, 25 / 255]]);
+  const colors = ["#001219", "#5a6066", "#333b41", "#868a8f"];
+  for (const dim of [1, 0.59]) {
+    const separated = separatePaletteFromCover(colors, edges, dim);
+    expect(clearance(colors[0], edges, dim)).toBeLessThan(0);
+    // Checked at more shades than the solver samples; a sliver of tolerance between them.
+    expect(clearance(separated[0], edges, dim)).toBeGreaterThan(-0.003);
+    // Not further than needed: one step less would not be enough.
+    expect(Math.abs(lightness(separated[0]) - lightness(colors[0]))).toBeLessThan(0.12);
+    const [, a, b] = perceptualColor(rgb(separated[0]));
+    const [, a0, b0] = perceptualColor(rgb(colors[0]));
+    expect(Math.atan2(b, a)).toBeCloseTo(Math.atan2(b0, a0), 0);
+    expect(separated.slice(1).filter((color, index) => color !== colors[index + 1]).length).toBeLessThanOrEqual(1);
   }
 });
 
-test("RGB samples follow palette transitions without moving the mobile renderer's existing uniform offsets", () => {
-  const samples = coverEdgeSamples(new Uint8Array(16 * 16 * 4).fill(64), 16);
-  const separation = coverSeparation(samples, ["#101010"], [1]);
-  const components = paletteComponents(["#101010"], [1], separation);
-  const perceptual = Array.from({ length: EDGE_COMPONENTS }, (_, index) => perceptualColor(samples.colors.slice(index * 3, index * 3 + 3)));
-  expect(components.slice(12, 12 + EDGE_COMPONENTS)).toEqual(perceptual.map(color => color[0]));
-  expect(components.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2)).toEqual(separation.directions);
-  expect(components.slice(EDGE_COLORS_OFFSET)).toEqual(perceptual.flat());
-  expect(paletteComponents(["#101010"], [1], neutralCoverSeparation).length).toBe(components.length);
+test("lighter swirl colors stay lighter, and a black border lifts a black swirl", () => {
+  const edges = edgesOf([[0, 0, 0]]);
+  const colors = ["#000000", "#050505", "#0a0a0a", "#808080"];
+  const separated = separatePaletteFromCover(colors, edges);
+  for (const color of separated) expect(clearance(color, edges)).toBeGreaterThan(-0.003);
+  const order = (palette: string[]) => palette.map(lightness);
+  const before = order(colors);
+  const after = order(separated);
+  for (let index = 1; index < colors.length; index++) {
+    if (before[index] > before[index - 1]) expect(after[index]).toBeGreaterThan(after[index - 1]);
+  }
+  expect(separated[3]).toBe("#808080");
 });
 
-// Set AMBRA_TEST_CHROME to a Chromium executable to run the production GLSL in
-// a real WebGL context. No JavaScript replica of the contrast algorithm is used.
-test.skipIf(!process.env.AMBRA_TEST_CHROME)("rendered contrast has no invented bands, respects color contrast, and stays smooth and local", async () => {
+test("a saturated border too bright to clear by lifting darkens the matching swirl color instead", () => {
+  const red = [226 / 255, 0, 1 / 255];
+  const edges = edgesOf([red]);
+  const separated = separatePaletteFromCover(["#e20001", "#202020", "#202020", "#202020"], edges);
+  expect(lightness(separated[0])).toBeLessThan(lightness("#e20001"));
+  expect(clearance(separated[0], edges)).toBeGreaterThan(-0.003);
+  const [r, g, b] = rgb(separated[0]);
+  expect(r).toBeGreaterThan(g * 4);
+  expect(r).toBeGreaterThan(b * 4);
+});
+
+// Set AMBRA_TEST_CHROME to a Chromium executable to run the production GLSL in a real WebGL context.
+test.skipIf(!process.env.AMBRA_TEST_CHROME)("the swirl draws only its palette, with no treatment anywhere near the cover", async () => {
   const directory = await mkdtemp(join(tmpdir(), "ambra-cover-contrast-"));
   try {
-    const fixtureColors = [[0,0,0], [.03,.03,.03], [.85,.85,.85], [.12,.26,.08], [.3,.3,.3], [.08,.08,.08], [226/255,0,1/255]];
-    const metrics = Object.fromEntries(fixtureColors.map(rgb => {
-      const edges = { colors: Array.from({ length: EDGE_COMPONENTS }, () => rgb).flat(), luminances: Array(EDGE_COMPONENTS).fill(rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722) };
-      const hex = "#" + rgb.map(channel => Math.round(channel * 255).toString(16).padStart(2, "0")).join("");
-      return [JSON.stringify(rgb), {
-        color: perceptualColor(rgb),
-        directions: Object.fromEntries([1, .1].map(dim => [dim, coverSeparation(edges, [hex], [1], dim).directions[0]])),
-      }];
-    }));
-    const shader = fragmentShaderSource.slice(0, fragmentShaderSource.indexOf("void main()")) + `
-uniform vec3 u_testColor;
-void main() {
-  gl_FragColor = vec4(clamp(u_coverDim * separateFromCover(u_testColor), 0.0, 1.0), 1.0);
-}`;
-    const html = `<!doctype html><canvas width="512" height="512"></canvas><pre id="result"></pre><script>
+    const components = paletteComponents(["#808080"], [1]);
+    const html = `<!doctype html><canvas width="256" height="256"></canvas><pre id="result"></pre><script>
 try {
   const gl = document.querySelector('canvas').getContext('webgl', { antialias: false });
   if (!gl) throw new Error('WebGL unavailable');
@@ -79,84 +129,34 @@ try {
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(shader));
     return shader;
   }
-  function program(fragment) {
-    const result = gl.createProgram();
-    gl.attachShader(result, compile(gl.VERTEX_SHADER, ${JSON.stringify(vertexShaderSource)}));
-    gl.attachShader(result, compile(gl.FRAGMENT_SHADER, fragment));
-    gl.linkProgram(result);
-    if (!gl.getProgramParameter(result, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(result));
-    return result;
-  }
-  // Compile the complete animated shader too, including its WebGL 1 uniform arrays.
-  program(${JSON.stringify(fragmentShaderSource)});
-  const p = program(${JSON.stringify(shader)});
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, ${JSON.stringify(vertexShaderSource)}));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, ${JSON.stringify(fragmentShaderSource)}));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
   gl.useProgram(p);
   const buffer = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
   gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,3,-1,-1,3]), gl.STATIC_DRAW);
   const position = gl.getAttribLocation(p, 'a_position');
   gl.enableVertexAttribArray(position); gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
-  const uniform = name => gl.getUniformLocation(p, name);
-  gl.uniform4fv(uniform('u_cover'), [256,256,128,46.08]);
-  const metrics = ${JSON.stringify(metrics)};
-  function render(background, samples, dim = 1, enabled = true) {
-    gl.uniform3fv(uniform('u_testColor'), background);
-    gl.uniform1f(uniform('u_coverDim'), dim);
-    const edges = samples.map(color => metrics[JSON.stringify(color)]);
-    gl.uniform3fv(uniform('u_edgeColors[0]'), edges.flatMap(edge => edge.color));
-    gl.uniform4fv(uniform('u_edgeLuma[0]'), edges.map(edge => edge.color[0]));
-    gl.uniform4fv(uniform('u_edgeDirection[0]'), edges.map(edge => enabled ? edge.directions[dim] : 0));
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    const pixels = new Uint8Array(512*512*4); gl.readPixels(0,0,512,512,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
-    if (gl.getError() !== gl.NO_ERROR) throw new Error('WebGL draw failed');
-    return pixels;
+  const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array([128]));
+  const components = ${JSON.stringify(components)};
+  gl.uniform3fv(gl.getUniformLocation(p, 'u_colors[0]'), components.slice(0, 12));
+  gl.uniform4fv(gl.getUniformLocation(p, 'u_bias'), components.slice(12, 16));
+  gl.uniform2f(gl.getUniformLocation(p, 'u_resolution'), 256, 256);
+  gl.uniform1f(gl.getUniformLocation(p, 'u_time'), 3);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  const pixels = new Uint8Array(256*256*4); gl.readPixels(0,0,256,256,gl.RGBA,gl.UNSIGNED_BYTE,pixels);
+  // A constant noise texture leaves one shade; it must be the palette's at the shader's own range.
+  const low = Math.floor(128 * ${SWIRL_SHADE_MIN}) - 1, high = Math.ceil(128 * ${SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE}) + 1;
+  for (let index = 0; index < pixels.length; index += 4) {
+    if (pixels[index] < low || pixels[index] > high || pixels[index] !== pixels[0]) throw new Error('Unexpected shade ' + pixels[index]);
   }
-  const constant = color => Array.from({ length: ${EDGE_COMPONENTS} }, () => color);
-  const at = (pixels, x, y, channel = 0) => pixels[(y*512+x)*4+channel];
-  const assert = (condition, message) => { if (!condition) throw new Error(message); };
-  function unchanged(background, samples, message) {
-    const actual = render(background, samples);
-    const original = render(background, samples, 1, false);
-    for (let y = 0; y < 512; y++) for (let x = 0; x < 512; x++) {
-      if (x >= 128 && x < 384 && y >= 128 && y < 384) continue;
-      for (let c = 0; c < 3; c++) assert(at(actual,x,y,c) === at(original,x,y,c), message);
-    }
-  }
-  unchanged([.25,.25,.25], Array.from({length:${EDGE_COMPONENTS}}, (_, i) => i < 16 ? [.03,.03,.03] : [.85,.85,.85]),
-    'Interpolated bright/dark samples invented an unnecessary contrast band');
-  unchanged([.42,.1708,.08], constant([.12,.26,.08]), 'Different hues with the same brightness were altered');
-  unchanged([.08,.08,.08], constant([.3,.3,.3]), 'A distinct dark background was altered');
-  const black = render([0,0,0], constant([0,0,0]));
-  assert(at(black,385,256) >= 8 && at(black,385,256) <= 16, 'Black-on-black boundary still has no visible separation');
-  // Screenshot regression: the cover is #e20001 and the adjacent swirl is
-  // nearly the same saturated red. Adding a few white levels cannot separate it.
-  const redEdge = constant([226/255,0,1/255]);
-  unchanged([.42,0,0], redEdge, 'An already distinct darker red was altered');
-  unchanged([0,.45,0], redEdge, 'A distinct green background was altered beside a red edge');
-  const correctedReds = [];
-  for (const background of [[227/255,2/255,3/255], [235/255,2/255,3/255]]) {
-    const red = render(background, redEdge);
-    correctedReds.push(at(red,385,256));
-    assert(at(red,385,256) <= 206, 'Saturated red still disappears into the matching swirl');
-    assert(at(red,385,256,1) <= 3 && at(red,385,256,2) <= 4, 'Red contrast correction introduced a pink halo');
-  }
-  assert(correctedReds[1] > correctedReds[0], 'Contrast correction flattened the moving red field into a fixed stripe');
-  const edge = constant([.08,.08,.08]);
-  const match = render([.08,.08,.08], edge);
-  const original = render([.08,.08,.08], edge, 1, false);
-  const near = at(match,385,256) - at(original,385,256);
-  assert(near >= 10 && near <= 25, 'Missing or excessive correction at an indistinguishable dark edge');
-  for (let x = 384; x < 450; x++) {
-    assert(Math.abs(at(match,x+1,256)-at(match,x,256)) <= 3, 'Hard boundary in the radial fade');
-  }
-  assert(at(match,420,256) === at(original,420,256), 'Correction spread beyond the edge strip');
-  const shaded = render([.8,.8,.8], edge, .1);
-  assert(at(shaded,385,256) < at(original,385,256) - 8, 'Overlay left too little headroom to lift, but the field did not darken instead');
-  const mixed = render([.08,.08,.08], Array.from({length:${EDGE_COMPONENTS}}, (_, i) => Math.floor(i/4)%2 ? [.85,.85,.85] : [.08,.08,.08]));
-  for (let y = 110; y < 404; y++) {
-    assert(Math.abs(at(mixed,385,y+1)-at(mixed,385,y)) <= 2, 'Hard band between edge samples');
-  }
-  document.getElementById('result').textContent = JSON.stringify({ok:true, nearCorrectionLevels:near});
-} catch (error) { document.getElementById('result').textContent = JSON.stringify({error:String(error)}); }
+  document.getElementById('result').textContent = JSON.stringify({ ok: true, shade: pixels[0] });
+} catch (error) { document.getElementById('result').textContent = JSON.stringify({ error: String(error) }); }
 </script>`;
     const path = join(directory, "contrast.html");
     await writeFile(path, html);

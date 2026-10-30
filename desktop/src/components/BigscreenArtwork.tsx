@@ -13,11 +13,9 @@ import {
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
 import {
-  coverSeparation,
-  neutralCoverSeparation,
   sampleCoverEdges,
   separateCollapsedPalette,
-  type CoverSeparation,
+  separatePaletteFromCover,
   type CoverEdgeSamples,
 } from "../utils/backgroundPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
@@ -34,11 +32,8 @@ type BackgroundArtworkProps = ArtworkProps & {
   active: boolean;
   animate?: boolean;
   playing?: boolean;
-  coverId?: string;
-  /** Visible share of the background beside the cover; see coverSeparation. */
+  /** Visible share of the background beside the cover; see separatePaletteFromCover. */
   coverDim?: number;
-  /** How long a change in coverDim eases, in step with the lyrics backdrop fading. */
-  coverDimMs?: number;
 };
 
 type CoverLayer = {
@@ -183,37 +178,43 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
   );
 }
 
-export function BackgroundArtwork({ track, active, animate, playing, coverId = "albumCover", coverDim = 1, coverDimMs }: BackgroundArtworkProps) {
+export function BackgroundArtwork({ track, active, animate, playing, coverDim = 1 }: BackgroundArtworkProps) {
   const [palette, setPalette] = useState<ArtworkPalette>({
     colors: [SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK, SURFACE_BLACK],
     weights: [1, 0, 0, 0],
   });
-  const [edges, setEdges] = useState<CoverEdgeSamples | null | undefined>();
+  const [edges, setEdges] = useState<CoverEdgeSamples | null>(null);
   // Recomputed when the view's overlay changes, so both views separate the cover by what is visible.
-  const separation = useMemo<CoverSeparation>(
-    () => edges === undefined
-      ? neutralCoverSeparation
-      : coverSeparation(edges, palette.colors, palette.weights, coverDim),
+  const colors = useMemo(
+    () => separatePaletteFromCover(palette.colors, edges, coverDim),
     [edges, palette, coverDim],
   );
 
   useEffect(() => {
     if (!track) return;
     let cancelled = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
 
-    void Promise.all([
+    const load = () => void Promise.all([
       artworkPalette(track),
       sampleCoverEdges(thumbnailArtwork(track)),
     ]).then(([palette, edges]) => {
-      if (!cancelled && palette.colors.length === 4) {
+      if (cancelled) return;
+      if (palette.colors.length === 4) {
         const colors = separateCollapsedPalette(palette.colors);
         setPalette({ ...palette, colors });
         setEdges(edges);
+      } else {
+        // A failed request would otherwise leave an earlier song's swirl up for this whole song.
+        retry = setTimeout(load, [1000, 3000, 10_000, 30_000][Math.min(attempt++, 3)]);
       }
     });
+    load();
 
     return () => {
       cancelled = true;
+      clearTimeout(retry);
     };
   }, [
     track?.albumId,
@@ -226,12 +227,8 @@ export function BackgroundArtwork({ track, active, animate, playing, coverId = "
   return (
     <div id="backgroundFX" aria-hidden="true" data-active={active} data-empty={!track}>
       <FluidGradientBackground
-        colors={palette.colors}
+        colors={colors}
         weights={palette.weights}
-        separation={separation}
-        coverId={coverId}
-        coverDim={coverDim}
-        coverDimMs={coverDimMs}
         active={active && !!track}
         animate={track ? animate : false}
         playing={playing}
