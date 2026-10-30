@@ -33,7 +33,9 @@ import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { getServerConnection, subscribeServerConnection } from "./api/serverConnection";
+import { serverStateStatus, subscribeServerState } from "./utils/serverState";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { usePageNavigation } from "./hooks/usePageNavigation";
 import { useLyricsAvailability } from "./hooks/useLyricsAvailability";
@@ -52,7 +54,7 @@ import {
 } from "./utils/queueModel";
 import { acceptsPlaybackShortcut, isTypingTarget, wasKeyHandled } from "./utils/keyboard";
 import { announceShortcut, matchesShortcut, matchingShortcut, setShortcutOverrides, type ShortcutOverrides } from "./utils/shortcuts";
-import { actOnCursor, flashItem, installPointerCursor, moveCursor, moveSidebar, SIDEBAR_ROOT } from "./utils/keyboardNav";
+import { actOnCursor, flashItem, hidePointer, installPointerCursor, moveCursor, moveSidebar, SIDEBAR_ROOT } from "./utils/keyboardNav";
 import { ShortcutToast } from "./components/ShortcutToast";
 import { PageFilterBar } from "./components/PageFilterBar";
 import { UpdateNotice } from "./components/UpdateNotice";
@@ -310,6 +312,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     withoutSettings(preferences.ui.navigation?.playerReturnScreen ?? "library"),
   );
   if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "settings") playerReturnScreenRef.current = screen;
+  const playerOpenedByKeyRef = useRef(false);
   // While the player is open, the screen hidden behind it keeps what it showed.
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
   const isQueueView = libraryScreen === "queue";
@@ -385,6 +388,15 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const selectedPlaylist = playlists.find((playlist) => {
     return playlist.id === selectedPlaylistId;
   });
+  // The app often opens before the server answers, so a saved playlist can't be found yet. Its
+  // page waits for it instead of dropping back to the library, until its source has answered.
+  const serverConnectionInfo = useSyncExternalStore(subscribeServerConnection, getServerConnection);
+  const serverState = useSyncExternalStore(subscribeServerState, serverStateStatus);
+  const selectedPlaylistProvider = selectedPlaylistId?.match(/^service:([^:]+):/)?.[1];
+  const selectedPlaylistGone = selectedPlaylistProvider
+    ? servicePlaylistStore.groups.some(group => group.provider === selectedPlaylistProvider)
+    : !serverConnectionInfo?.server || (!localOnly && serverState.ready);
+  const playlistPending = selectedPlaylistId !== null && !selectedPlaylist && !selectedPlaylistGone;
   const servicePlaylistError = servicePlaylistStore.error
     ?? (selectedPlaylist ? servicePlaylistStore.errors[selectedPlaylist.id] : null);
   const [playlistErrorDismissed, setPlaylistErrorDismissed] = useState(false);
@@ -399,8 +411,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       ? "search"
     : isHomeView
       ? "home"
-      : selectedPlaylist
-        ? `playlist:${selectedPlaylist.id}`
+      : selectedPlaylist || playlistPending
+        ? `playlist:${selectedPlaylistId}`
         : `library:${librarySection}`;
   const registerScrollElement = useCallback(
     (element: HTMLDivElement | null) => {
@@ -570,7 +582,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         const nextFullscreen = !(await getCurrentWindow().isFullscreen());
         await setWindowFullscreen(nextFullscreen);
         setIsFullscreen(nextFullscreen);
-        announceShortcut("toggleFullscreen", nextFullscreen ? "Fullscreen" : "Left fullscreen");
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -652,7 +663,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         // A text field in settings keeps Escape for itself.
         if (isTypingTarget(event.target)) return;
         event.preventDefault();
-        if (!event.repeat) { closeCurrentScreen(); announceShortcut("closeScreen", "Closed settings"); }
+        if (!event.repeat) closeCurrentScreen();
         return;
       }
       if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") return;
@@ -661,14 +672,13 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
       if (event.repeat) return;
       leaveScreen();
-      announceShortcut("closeScreen", screen === "queue" ? "Closed queue" : "Closed player");
     };
 
     const handleNavigationKey = (event: KeyboardEvent) => {
       const direction = matchingShortcut(event, ["back", "forward"] as const);
       if (!direction || wasKeyHandled(event)) return;
       event.preventDefault();
-      if (!event.repeat && navigate(direction)) announceShortcut(direction);
+      if (!event.repeat) navigate(direction);
     };
     const handleMouseNavigation = (event: MouseEvent) => {
       if (event.button !== 3 && event.button !== 4) return;
@@ -724,7 +734,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     };
   }, []);
 
-  useEffect(() => {
+  // Before paint, so a player opened from the keyboard is never seen with its controls showing.
+  useLayoutEffect(() => {
     const root = document.documentElement;
     if (!isPlayerView) {
       root.removeAttribute("data-bigscreen-idle");
@@ -743,13 +754,33 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       idleTimer = setTimeout(becomeIdle, 10_000);
     };
 
-    markActive();
-    window.addEventListener("pointermove", markActive);
+    // Only a real move wakes the controls, not the page shifting under a still pointer.
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.movementX || event.movementY) markActive();
+    };
+
+    let snapFrame = 0;
+    if (playerOpenedByKeyRef.current) {
+      // Already put away rather than fading out; the fades start once the pointer moves.
+      root.setAttribute("data-bigscreen-snap", "");
+      root.setAttribute("data-bigscreen-idle", "true");
+      snapFrame = requestAnimationFrame(() => {
+        snapFrame = requestAnimationFrame(() => root.removeAttribute("data-bigscreen-snap"));
+      });
+    } else {
+      markActive();
+    }
+    playerOpenedByKeyRef.current = false;
+    // The player is for watching, so the pointer gets out of the way until it moves.
+    hidePointer();
+    window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerdown", markActive);
 
     return () => {
       clearTimeout(idleTimer);
-      window.removeEventListener("pointermove", markActive);
+      cancelAnimationFrame(snapFrame);
+      root.removeAttribute("data-bigscreen-snap");
+      window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerdown", markActive);
       root.removeAttribute("data-bigscreen-idle");
     };
@@ -913,7 +944,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       if (!matchesShortcut(event, "search")) return;
       event.preventDefault();
       openSearch();
-      announceShortcut("search");
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1077,10 +1107,12 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const toggleBigscreen = useStableCallback(() => {
     if (isPlayerView) {
       changeScreen(playerReturnScreenRef.current);
-      announceShortcut("togglePlayer", "Closed player");
     } else {
+      // Opened from the keyboard, the player starts with its extra controls already put away.
+      playerOpenedByKeyRef.current = Boolean(player.currentTrack);
       openPlayer();
-      announceShortcut("togglePlayer", player.currentTrack ? "Opened player" : "Nothing is playing");
+      // Without a song the player stays shut, so say why.
+      if (!player.currentTrack) announceShortcut("Nothing is playing");
     }
   });
   const openSettings = () => {
@@ -1100,12 +1132,11 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (wasKeyHandled(event) || event.repeat) return;
     if (matchesShortcut(event, "openSettings")) {
       event.preventDefault();
-      if (!isSettingsView) { openSettings(); announceShortcut("openSettings"); }
+      if (!isSettingsView) openSettings();
     } else if (matchesShortcut(event, "toggleQueue") && !isTypingTarget(event.target)) {
       event.preventDefault();
       if (isQueueView) closeCurrentScreen();
       else openQueue();
-      announceShortcut("toggleQueue", isQueueView ? "Closed queue" : "Opened queue");
     }
   });
   useEffect(() => {
@@ -1149,8 +1180,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (!result) return;
     event.preventDefault();
     flashItem(result.item);
-    if (result.text === null) announceShortcut(id, action === "queue" ? "Only songs can be queued" : "Only songs can play next");
-    else if (result.text) announceShortcut(id, result.text);
+    if (result.text === null) announceShortcut(action === "queue" ? "Only songs can be queued" : "Only songs can play next");
+    else if (result.text) announceShortcut(result.text);
   });
   useEffect(() => {
     window.addEventListener("keydown", handleListShortcut, true);
@@ -1191,7 +1222,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   // Each screen or page rises in as it opens, in the frame it first paints.
   const mainRef = useRef<HTMLElement>(null);
   const viewKey = isSettingsView ? "settings" : isQueueView ? "queue" : browseEntity ? `entity:${entityKey(browseEntity)}`
-    : isSearchView ? "search" : isHomeView ? "home" : selectedPlaylist ? `playlist:${selectedPlaylist.id}` : `library:${librarySection}`;
+    : isSearchView ? "search" : isHomeView ? "home" : selectedPlaylist || playlistPending ? `playlist:${selectedPlaylistId}` : `library:${librarySection}`;
   const shownView = useRef(viewKey);
   useLayoutEffect(() => {
     if (shownView.current === viewKey) return;
@@ -1209,7 +1240,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (!acceptsPlaybackShortcut(event) || !mainRef.current?.querySelector(".columnInfo")) return;
     event.preventDefault();
     if (event.repeat) return;
-    announceShortcut("filterPage");
     setPageFilter(current => ({
       view: viewKey,
       query: current?.view === viewKey ? current.query : "",
@@ -1319,7 +1349,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           }}
           isSettingsActive={isSettingsView}
           onOpenSettings={openSettings}
-          activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist ? librarySection : null}
+          activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist && !playlistPending ? librarySection : null}
           activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
           onOpenLibrarySection={(section) => {
             setBrowseEntity(null);
@@ -1449,6 +1479,14 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             onExit={playlistImprovement.clear}
             {...collectionViewProps}
           />
+        ) : playlistPending ? (
+          <div className="libraryView smoothScroll" ref={registerScrollElement}>
+            <p className="playlistPending" role="status">
+              {localOnly && serverConnectionInfo?.server
+                ? `This playlist opens once ${serverConnectionInfo.server.name} reconnects.`
+                : "Loading playlist…"}
+            </p>
+          </div>
         ) : (
           <LibraryView
             key={`library:${librarySection}`}

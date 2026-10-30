@@ -13,7 +13,7 @@ import { AudioControlsMenu } from "./AudioControlsMenu";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { visibleOutputs } from "../utils/audioSettings";
 import { acceptsPlaybackShortcut } from "../utils/keyboard";
-import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
+import { matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
 import { invokeOn, useEndpoints } from "../utils/playbackTarget";
 import { coreCommand, coreView, subscribeCore, type CoreOutput } from "../api/core";
@@ -194,11 +194,9 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
         event.preventDefault();
         const next = clampVolume(latestVolume.current + step);
         shortcuts.current.changeVolume(next);
-        announceShortcut(step > 0 ? "volumeUp" : "volumeDown", `Volume ${Math.round(next)}%`);
       } else if (matchesShortcut(event, "toggleMute") && acceptsPlaybackShortcut(event, false, true)) {
         event.preventDefault();
         if (event.repeat) return;
-        announceShortcut("toggleMute", latestVolume.current > 0 ? "Muted" : "Unmuted");
         shortcuts.current.toggleMute();
       }
     };

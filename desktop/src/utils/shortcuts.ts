@@ -185,15 +185,8 @@ export function formatBinding(binding: ShortcutBinding) {
   return bindingKeys(binding).join(isMac ? "" : "+");
 }
 
-/** The shortcut's first binding, for tooltips and feedback. */
-export function shortcutLabel(id: ShortcutId) {
-  const binding = shortcutBindings(id)[0];
-  return binding ? formatBinding(binding) : null;
-}
-
-export type ShortcutFeedback = { id: ShortcutId; text?: string };
-
-/** A shortcut acted: the brief notice at the bottom of the window says what it did (ShortcutToast). */
-export function announceShortcut(id: ShortcutId, text?: string) {
-  window.dispatchEvent(new CustomEvent<ShortcutFeedback>("ambra:shortcut", { detail: { id, text } }));
+/** Says what a shortcut did, in the brief notice at the bottom of the window (ShortcutToast). Only for
+ * results the screen doesn't show by itself, such as queueing a song or shuffling rather than playing. */
+export function announceShortcut(text: string) {
+  window.dispatchEvent(new CustomEvent<string>("ambra:shortcut", { detail: text }));
 }

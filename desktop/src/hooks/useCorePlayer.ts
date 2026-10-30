@@ -8,7 +8,7 @@ import type { QueueController } from "./useQueue";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
-import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
+import { matchesShortcut } from "../utils/shortcuts";
 import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
 
 const noDeck = () => {};
@@ -70,15 +70,14 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const currentTrack = queue.currentEntry?.track;
   const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
   // App shortcuts control the shared transport; hardware controls only affect local playback.
-  const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0, playing: view?.playing ?? false });
-  shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0, playing: view?.playing ?? false };
+  const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0 });
+  shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0 };
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const current = shortcutState.current;
       if (matchesShortcut(event, "playPause") && !isTypingTarget(event.target)) {
         event.preventDefault();
         if (!event.repeat) {
-          announceShortcut("playPause", current.playing ? "Paused" : "Playing");
           ensureOutput();
           void coreCommand("toggle").catch(() => {});
         }
@@ -93,14 +92,12 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
         clock.setRunning(false);
         clock.set(positionSeconds);
         void coreCommand("seek", { positionSeconds }).catch(() => {});
-        announceShortcut(step < 0 ? "seekBackward" : "seekForward");
       } else if (acceptsPlaybackShortcut(event)) {
         const action = matchesShortcut(event, "previousTrack") ? "previous" : matchesShortcut(event, "nextTrack") ? "next" : null;
         if (action) {
           event.preventDefault();
           if (event.repeat) return;
           void coreCommand(action).catch(() => {});
-          announceShortcut(action === "previous" ? "previousTrack" : "nextTrack");
         }
       }
     };

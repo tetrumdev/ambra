@@ -10,7 +10,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -28,6 +28,12 @@ const COMMANDS_WAIT_SECONDS: u64 = 25;
 const WATCH_EVERY: Duration = Duration::from_millis(20);
 /// Report round trips remembered; the quickest is the one least delayed by anything but the network.
 const ROUND_TRIPS_KEPT: usize = 8;
+
+/// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
+fn monotonic_ms() -> f64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+}
 
 struct Agent {
     app: AppHandle,
@@ -199,6 +205,9 @@ async fn report(agent: std::sync::Arc<Agent>) {
             .ok()
             .and_then(|status| serde_json::to_value(status).ok())
             .unwrap_or(Value::Null);
+        // When the position was read, on this device's clock: a report held up on the way (a
+        // stalled tunnel, say) is then placed when it was true, not when it finally arrived.
+        body["sampledAtMs"] = json!(monotonic_ms());
         if let Some(source) = status["currentSource"].as_str() {
             status["currentSource"] = Value::String(agent.sent_source(source));
         }

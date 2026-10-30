@@ -19,7 +19,7 @@ import {
 import { trackPosition } from "../utils/trackOrder";
 import { playbackRestore } from "../utils/playbackRestore";
 import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
-import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
+import { matchesShortcut } from "../utils/shortcuts";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
 
@@ -137,8 +137,6 @@ export function useAudioPlayer(
   const setCurrentTime = clock.set;
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const isPlayingRef = useRef(isPlaying);
-  isPlayingRef.current = isPlaying;
   const [previousActivation, setPreviousActivation] = useState(0);
   const [nextActivation, setNextActivation] = useState(0);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
@@ -906,7 +904,6 @@ export function useAudioPlayer(
 
       event.preventDefault();
       if (event.repeat) return;
-      announceShortcut("playPause", isPlayingRef.current ? "Paused" : "Playing");
       void togglePlayback();
     };
 
@@ -928,7 +925,6 @@ export function useAudioPlayer(
         // Holding Right stops short of the end instead of running on into the next song.
         const end = duration > 0 ? Math.max(0, duration - 1) : Infinity;
         seek(Math.min(end, Math.max(0, clock.get() + step)));
-        announceShortcut(step < 0 ? "seekBackward" : "seekForward");
         return;
       }
       const skip = matchesShortcut(event, "previousTrack") ? previous : matchesShortcut(event, "nextTrack") ? next : null;
@@ -936,7 +932,6 @@ export function useAudioPlayer(
       event.preventDefault();
       if (event.repeat || !hasTrack) return;
       skip();
-      announceShortcut(skip === previous ? "previousTrack" : "nextTrack");
     };
 
     window.addEventListener("keydown", handleKeyDown);

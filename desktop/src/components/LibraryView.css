@@ -312,6 +312,14 @@
     pointer-events: none;
 }
 
+/* A saved playlist waiting for the server or service it lives on (App.tsx). */
+.playlistPending {
+    margin: 0;
+    padding: 60px 30px;
+    color: #a3a2a3;
+    line-height: 1.6;
+}
+
 .libraryOverview {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -417,6 +425,11 @@
 .libraryEntityCard h2 {
     margin: 12px 0 5px;
     font-size: 1rem;
+}
+
+.libraryEntityButton:hover h2 {
+    text-decoration: underline;
+    text-underline-offset: 3px;
 }
 
 .libraryEntityCard:has(.libraryAlbumCover) {

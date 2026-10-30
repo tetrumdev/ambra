@@ -12,7 +12,7 @@ import { DropdownChevron } from "./DropdownChevron";
 import { slideDetails } from "../utils/detailsMotion";
 import type { PlaylistGroup } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
-import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
+import { matchesShortcut } from "../utils/shortcuts";
 import { moveSidebar } from "../utils/keyboardNav";
 import { useStableCallback } from "../hooks/useStableCallback";
 
@@ -76,7 +76,6 @@ export function Sidebar({
     if (event.repeat) return;
     setFilter(current => current ?? "");
     requestAnimationFrame(() => { filterInput.current?.focus(); filterInput.current?.select(); });
-    announceShortcut("filterSidebar");
   });
   useEffect(() => {
     window.addEventListener("keydown", handleFilterShortcut);
