@@ -38,7 +38,7 @@ import { LyricsView } from "./LyricsView";
 import { playerTiming } from "./playerMotion";
 import { Progress } from "./Progress";
 import { SongText } from "./SongText";
-import { Swirl, type CoverFrame } from "./Swirl";
+import { Swirl } from "./Swirl";
 import { Icon } from "./Icons";
 import { PlaylistBrowser, QueueSheet } from "./TrackBrowser";
 import { OutputPicker } from "./OutputPicker";
@@ -258,11 +258,6 @@ export function Player({ connectionError = null }: { connectionError?: string | 
   // Fixed rather than animated: reclipping the swirl's GL surface every frame is what stuttered.
   // Reveal its fixed viewport only near fullscreen; artwork and surface stay continuous underneath.
   const swirlStyle = useAnimatedStyle(() => ({ opacity: interpolate(frame.get().expansion, [0.92, 1], [0, 1], "clamp") }));
-  const coverFrame = useRef<CoverFrame | null>(null);
-  useEffect(() => {
-    const size = lyricsOpen ? 56 : layout.coverSize * (playing ? 1 : PAUSED_COVER_SCALE);
-    coverFrame.current = { x: lyricsOpen ? 30 : (width - size) / 2, y: lyricsOpen ? layout.coverTop : layout.coverTop + (layout.coverSize - size) / 2, size };
-  }, [layout.coverSize, layout.coverTop, width, playing, lyricsOpen]);
 
   const shownError = error ?? view?.error ?? connectionError;
   const shownArtist = (!expanded && shownError) || (track?.artist ?? (expanded
@@ -295,7 +290,7 @@ export function Player({ connectionError = null }: { connectionError?: string | 
       <Animated.View pointerEvents="none" style={[styles.surface, styles.surfaceBackground, surfaceStyle, backgroundStyle, hiddenByMenu && styles.hidden]} />
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderTopLeftRadius: screenCornerRadius, borderTopRightRadius: screenCornerRadius, overflow: "hidden" }, swirlStyle]}>
         {/* Darkened like the desktop lyrics view, and more behind the white controls. */}
-        <Swirl track={track} playing={playing && expanded} cover={coverFrame} darkened />
+        <Swirl track={track} playing={playing && expanded} darkened />
       </Animated.View>
       <GestureDetector gesture={pan}>
         <Animated.View collapsable={false} style={[styles.surface, surfaceStyle, hiddenByMenu && styles.hidden]} pointerEvents={hiddenByMenu ? "none" : "auto"} accessibilityElementsHidden={hiddenByMenu} importantForAccessibility={hiddenByMenu ? "no-hide-descendants" : "auto"} onAccessibilityEscape={expanded ? closePlayer : undefined}>

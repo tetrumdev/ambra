@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { CoverSeparation } from "../utils/backgroundPalette";
 import {
   COLOR_TRANSITION_MS,
-  EDGE_COMPONENTS,
-  EDGE_COLORS_OFFSET,
   MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
   createNoiseTexture,
@@ -18,61 +15,34 @@ import { SURFACE_BLACK } from "../utils/surfaceBlack";
 import { reducedMotion, subscribeReducedMotion } from "../utils/reducedMotion";
 
 type FluidGradientBackgroundProps = {
+  /** Already separated from the cover's edges (separatePaletteFromCover). */
   colors: string[];
   /** Each color's share of the cover; the swirl gives it a matching share of the field. */
   weights: number[];
-  separation: CoverSeparation;
-  coverId: string;
-  /** Visible share of the field beside the cover after page overlays; 1 = none. */
-  coverDim?: number;
-  /** How long a change in coverDim eases. */
-  coverDimMs?: number;
   active: boolean;
   animate?: boolean;
   /** The swirl drifts to a stop while playback is paused and gathers pace again when it resumes. */
   playing?: boolean;
 };
 
-/** Matches the lyrics backdrop fade by default, so the separation eases with what is visible beside the cover. */
-const COVER_DIM_TRANSITION_MS = 700;
-/** Reveal any needed edge lift gently after the artwork and its palette have settled. */
-const COVER_LIFT_FADE_MS = 300;
-const COVER_MOTION_EVENTS = [
-  "animationstart", "animationend", "animationcancel", "transitionrun", "transitionend", "transitioncancel",
-] as const;
-
 export function FluidGradientBackground({
   colors,
   weights,
-  separation,
-  coverId,
-  coverDim = 1,
-  coverDimMs = COVER_DIM_TRANSITION_MS,
   active,
   animate = true,
   playing = true,
 }: FluidGradientBackgroundProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const paletteKey = [
-    ...colors.slice(0, 4),
-    ...weights.slice(0, 4),
-    ...separation.edges,
-    ...separation.directions,
-    ...(separation.colors ?? []),
-  ].join(":");
+  const paletteKey = [...colors.slice(0, 4), ...weights.slice(0, 4)].join(":");
   // Swirl time advances at `speed`, which eases rather than switching, so pausing never freezes a frame mid-motion.
   const journeyRef = useRef<{ seed: number; seconds: number; updatedAt: number; speed: number } | null>(null);
   if (journeyRef.current === null) {
     journeyRef.current = { seed: Math.random() * 64, seconds: 0, updatedAt: performance.now(), speed: animate && playing ? 1 : 0 };
   }
   const journey = journeyRef.current;
-  const coverIdRef = useRef(coverId);
-  const clampedDim = Math.min(1, Math.max(0.05, coverDim));
-  const coverDimRef = useRef({ from: clampedDim, to: clampedDim, startedAt: 0, duration: coverDimMs });
-  const resizeRef = useRef<(() => void) | null>(null);
   const transitionRef = useRef({
-    from: paletteComponents(colors, weights, separation),
-    to: paletteComponents(colors, weights, separation),
+    from: paletteComponents(colors, weights),
+    to: paletteComponents(colors, weights),
     startedAt: 0,
   });
   const drawRef = useRef<((now: number) => void) | null>(null);
@@ -87,7 +57,7 @@ export function FluidGradientBackground({
     const now = performance.now();
     const previous = transitionRef.current;
     const progress = easedProgress((now - previous.startedAt) / COLOR_TRANSITION_MS);
-    const target = paletteComponents(colors, weights, separation);
+    const target = paletteComponents(colors, weights);
     const current = mixPalette(previous.from, previous.to, progress);
     transitionRef.current = reducedMotionRef.current || !activeRef.current
       ? { from: target, to: target, startedAt: now }
@@ -96,17 +66,6 @@ export function FluidGradientBackground({
       animationFrameRef.current = requestAnimationFrame(drawRef.current);
     }
   }, [paletteKey]);
-
-  useEffect(() => {
-    coverIdRef.current = coverId;
-    const now = performance.now();
-    const previous = coverDimRef.current;
-    const current = previous.from + (previous.to - previous.from) * easedProgress((now - previous.startedAt) / previous.duration);
-    coverDimRef.current = reducedMotionRef.current || !activeRef.current
-      ? { from: clampedDim, to: clampedDim, startedAt: now, duration: coverDimMs }
-      : { from: current, to: clampedDim, startedAt: now, duration: coverDimMs };
-    resizeRef.current?.();
-  }, [coverId, clampedDim]);
 
   useEffect(() => {
     // Hidden time does not count; the swirl resumes from where it was drawn.
@@ -183,15 +142,7 @@ export function FluidGradientBackground({
     const shaderNoise = gl.getUniformLocation(program, "u_noise");
     const shaderColors = gl.getUniformLocation(program, "u_colors[0]");
     const shaderBias = gl.getUniformLocation(program, "u_bias");
-    const shaderCover = gl.getUniformLocation(program, "u_cover");
-    const shaderCoverDim = gl.getUniformLocation(program, "u_coverDim");
-    const shaderEdgeLuma = gl.getUniformLocation(program, "u_edgeLuma[0]");
-    const shaderEdgeDirection = gl.getUniformLocation(program, "u_edgeDirection[0]");
-    const shaderEdgeColors = gl.getUniformLocation(program, "u_edgeColors[0]");
-    if (
-      !buffer || !noiseTexture || position < 0 || !resolution || !time || !shaderNoise || !shaderColors
-      || !shaderCover || !shaderEdgeLuma || !shaderEdgeDirection || !shaderEdgeColors
-    ) {
+    if (!buffer || !noiseTexture || position < 0 || !resolution || !time || !shaderNoise || !shaderColors) {
       gl.deleteTexture(noiseTexture);
       gl.deleteBuffer(buffer);
       gl.deleteProgram(program);
@@ -218,38 +169,6 @@ export function FluidGradientBackground({
     let width = 1;
     let height = 1;
     let layoutDirty = true;
-    // The cover, in canvas pixels: center (GL y-up), half size, glow falloff.
-    let cover = [0, 0, 0, 1];
-    let observedCover: HTMLElement | null = null;
-    const measureCover = () => {
-      const element = document.getElementById(coverIdRef.current);
-      if (element !== observedCover) {
-        if (observedCover) {
-          resizeObserver.unobserve(observedCover);
-          for (const event of COVER_MOTION_EVENTS) observedCover.removeEventListener(event, scheduleDraw);
-        }
-        observedCover = element;
-        if (element) {
-          resizeObserver.observe(element);
-          for (const event of COVER_MOTION_EVENTS) element.addEventListener(event, scheduleDraw);
-        }
-      }
-      const bounds = canvas.getBoundingClientRect();
-      const rect = element?.getBoundingClientRect();
-      if (!rect || rect.width <= 0 || bounds.width <= 0 || bounds.height <= 0) {
-        cover = [0, 0, 0, 1];
-        return;
-      }
-      const scaleX = width / bounds.width;
-      const scaleY = height / bounds.height;
-      const halfSize = (rect.width / 2) * scaleX;
-      cover = [
-        (rect.left + rect.width / 2 - bounds.left) * scaleX,
-        height - (rect.top + rect.height / 2 - bounds.top) * scaleY,
-        halfSize,
-        Math.max(1, halfSize * 0.36),
-      ];
-    };
     const resize = () => {
       layoutDirty = true;
       scheduleDraw();
@@ -264,8 +183,6 @@ export function FluidGradientBackground({
       scheduleDraw();
     };
     let lastDrawnAt = -Infinity;
-    let coverWasFlying = false;
-    let coverLiftStartedAt: number | null = null;
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
@@ -291,7 +208,6 @@ export function FluidGradientBackground({
         // buffer cannot reach the compositor, even when animation is paused.
         if (canvas.width !== width) canvas.width = width;
         if (canvas.height !== height) canvas.height = height;
-        measureCover();
         layoutDirty = false;
       }
       gl.viewport(0, 0, width, height);
@@ -301,31 +217,7 @@ export function FluidGradientBackground({
       );
       const palette = mixPalette(transition.from, transition.to, progress);
       gl.uniform3fv(shaderColors, palette.slice(0, 12));
-      // The cover may mount after the canvas; keep looking until it appears. While it moves
-      // (opening, closing, or gliding beside the lyrics) the glow follows it every frame, and
-      // once more after it lands, since the last moving frame is a little short of its place.
-      const flying = observedCover?.getAnimations({ subtree: true })
-        .some(animation => animation.playState === "running" || animation.pending) ?? false;
-      if (!observedCover || !observedCover.isConnected || flying || coverWasFlying) measureCover();
-      coverWasFlying = flying;
-      gl.uniform4fv(shaderCover, cover);
-      const dim = coverDimRef.current;
-      const dimProgress = easedProgress((now - dim.startedAt) / dim.duration);
-      gl.uniform1f(shaderCoverDim, dim.from + (dim.to - dim.from) * dimProgress);
-      gl.uniform4fv(shaderEdgeLuma, palette.slice(12, 12 + EDGE_COMPONENTS));
-      gl.uniform3fv(shaderEdgeColors, palette.slice(EDGE_COLORS_OFFSET, EDGE_COLORS_OFFSET + EDGE_COMPONENTS * 3));
-      // Cover images slide/fade inside their container. Their old edge samples must not
-      // leave a stationary bright outline behind while the artwork or palette is changing.
-      if (!observedCover || flying || progress < 1 || dimProgress < 1) coverLiftStartedAt = null;
-      else coverLiftStartedAt ??= now;
-      const liftProgress = coverLiftStartedAt === null
-        ? 0
-        : easedProgress((now - coverLiftStartedAt) / COVER_LIFT_FADE_MS);
-      const edgeDirections = palette.slice(12 + EDGE_COMPONENTS, 12 + EDGE_COMPONENTS * 2);
-      gl.uniform4fv(shaderEdgeDirection, liftProgress < 1
-        ? edgeDirections.map(direction => direction * liftProgress)
-        : edgeDirections);
-      gl.uniform4fv(shaderBias, palette.slice(12 + EDGE_COMPONENTS * 2, 16 + EDGE_COMPONENTS * 2));
+      gl.uniform4fv(shaderBias, palette.slice(12, 16));
       gl.uniform2f(resolution, width, height);
       // Swirl motion has its own app preference. Windows can disable UI
       // transitions without disabling this explicitly selected background.
@@ -339,13 +231,11 @@ export function FluidGradientBackground({
       journey.seconds += elapsed * journey.speed;
       gl.uniform1f(time, journey.seconds);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
-      if (activeRef.current && (journey.speed > 0 || swirlTarget > 0 || progress < 1 || dimProgress < 1 || flying
-        || (coverLiftStartedAt !== null && liftProgress < 1))) {
+      if (activeRef.current && (journey.speed > 0 || swirlTarget > 0 || progress < 1)) {
         animationFrameRef.current = requestAnimationFrame(draw);
       }
     };
     drawRef.current = draw;
-    resizeRef.current = resize;
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(canvas);
     document.addEventListener("visibilitychange", scheduleDraw);
@@ -354,11 +244,9 @@ export function FluidGradientBackground({
 
     return () => {
       resizeObserver.disconnect();
-      for (const event of COVER_MOTION_EVENTS) observedCover?.removeEventListener(event, scheduleDraw);
       document.removeEventListener("visibilitychange", scheduleDraw);
       stopFollowingMotion();
       drawRef.current = null;
-      resizeRef.current = null;
       cancelAnimationFrame(animationFrameRef.current);
       animationFrameRef.current = 0;
       gl.deleteBuffer(buffer);
