@@ -1164,3 +1164,83 @@
 /* Soloist uses the existing Services controls and stays within that panel. */
 .settingsCallbackForm select { width: 100%; min-height: 36px; padding: 6px 10px; color: inherit; background: #171717; border: 1px solid #333; border-radius: 6px; }
 .settingsCallbackForm .soloistActions { flex-wrap: wrap; }
+
+/* Keyboard: each shortcut's keys as small caps, recorded by clicking them (KeyboardSettings.tsx). */
+.shortcutBindings {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    align-items: center;
+    gap: 6px;
+}
+
+.shortcutBinding {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid #5a5a5a;
+    border-radius: 8px;
+}
+
+.shortcutBinding:hover,
+.shortcutBinding:focus-within,
+.shortcutBinding[data-recording] {
+    border-color: white;
+}
+
+.shortcutBindingKeys {
+    display: inline-flex;
+    gap: 4px;
+    min-height: 30px;
+    padding: 3px 4px 3px 6px;
+    border: 0;
+    background: transparent;
+    color: white;
+    align-items: center;
+}
+
+.shortcutBindingKeys .shortcutKey {
+    padding: 1px 7px;
+}
+
+.shortcutPrompt {
+    padding: 0 6px;
+    color: #d0d0d0;
+    font-size: 0.85rem;
+}
+
+.shortcutRemove {
+    width: 24px;
+    height: 30px;
+    padding: 0 6px 0 2px;
+    border: 0;
+    background: transparent;
+    color: #8f8f8f;
+    font-size: 1rem;
+}
+
+.shortcutRemove:hover,
+.shortcutRemove:focus-visible {
+    color: white;
+}
+
+.shortcutAdd {
+    min-width: 32px;
+    height: 32px;
+    padding: 0 10px;
+    border: 1px dashed #5a5a5a;
+    border-radius: 8px;
+    background: transparent;
+    color: #b3b3b3;
+    font-size: 0.85rem;
+}
+
+.shortcutAdd:hover,
+.shortcutAdd:focus-visible,
+.shortcutAdd[data-recording] {
+    border-color: white;
+    color: white;
+}
+
+.shortcutNotice {
+    color: #e0c070;
+}

@@ -1,0 +1,88 @@
+/* Above the player bar, centred, in the search bar's glass (SearchBar.css). */
+.shortcutToast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(var(--player-height, 90px) + 16px);
+    z-index: 60;
+    pointer-events: none;
+    translate: -50% 0;
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+.shortcutToast[data-shown] {
+    opacity: 1;
+    transition-duration: 0.1s;
+}
+
+.shortcutToastBody {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(480px, 80vw);
+    padding: 8px 10px 8px 16px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: white;
+    font: 500 0.9rem "Stack Sans Text", Inter, sans-serif;
+    white-space: nowrap;
+    animation: shortcutToastIn 0.2s var(--motion-ease-out, ease-out);
+}
+
+.shortcutToastText {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.shortcutToastBody kbd,
+.shortcutKey {
+    padding: 2px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #d0d0d0;
+    font: 500 0.8rem "Stack Sans Text", Inter, sans-serif;
+}
+
+@keyframes shortcutToastIn {
+    from { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+
+/* The list item holding the keyboard cursor, shown only while the keyboard is in use (keyboardNav.ts). */
+:root[data-keyboard-nav] [data-nav-cursor] {
+    background-color: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    border-radius: 8px;
+}
+
+/* An action just taken on an item, such as queueing it. */
+[data-nav-flash] {
+    animation: navFlash 0.6s ease-out;
+}
+
+@keyframes navFlash {
+    from { background-color: rgba(255, 255, 255, 0.3); }
+}
+
+/* Outlines are off app-wide (App.css), so keyboard focus in the sidebar shows as hover does. */
+:root[data-keyboard-nav] :is(.sidebarBtn, #createPlaylistBtn, .settingsBack):focus-visible {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+:root[data-keyboard-nav] .sidebarPlaylistGroup > summary:focus-visible {
+    color: white;
+    text-decoration: underline;
+    text-underline-offset: 4px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .shortcutToastBody,
+    [data-nav-flash] {
+        animation: none;
+    }
+}

@@ -56,6 +56,7 @@ pub enum ErrorCode {
     AuthenticationFailed,
     AccountRestricted,
     CaptureUnavailable,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Only Linux capture constructs it.
     SinkStartupFailed,
     WebsocketFailed,
     ControlFailed,

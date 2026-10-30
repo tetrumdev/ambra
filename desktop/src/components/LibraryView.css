@@ -90,6 +90,8 @@
     --playlist-expanded-header-height: 165px;
     --playlist-current-header-height: 165px;
     --playlist-background-scale: 1;
+    /* Room the compact buttons take beside the collapsed title: three 36px buttons, their gaps, and the gap before them. */
+    --playlist-compact-reserve: calc(3 * 36px + 2 * 8px + 16px);
     /* The collapse already holds the layout still; anchoring would fight it. */
     overflow-anchor: none;
 }
@@ -178,6 +180,7 @@
 }
 
 .playlistView .libraryHeaderBody {
+    position: relative;
     padding-bottom: 4px;
     transform: translateX(calc(-1 * var(--playlist-title-shift)));
 }
@@ -189,7 +192,9 @@
     line-height: 1.08;
     /* Width follows the scaled text inside the fixed header footprint. */
     width: calc(
-        (100% + var(--playlist-title-shift)) / var(--playlist-title-scale)
+        (100% + var(--playlist-title-shift) -
+            var(--playlist-compact-reserve) * var(--playlist-actions-progress)) /
+            var(--playlist-title-scale)
     );
     /* Clipped sideways only: the tight line height would otherwise cut off descenders and accents. */
     overflow-x: clip;
@@ -208,6 +213,65 @@
     opacity: calc(1 - var(--playlist-actions-progress));
     transform: translateY(calc(-1 * var(--playlist-actions-shift)));
     pointer-events: auto;
+}
+
+/* The play actions, icons only, following the end of the title once the full row fades. */
+.libraryCompactActions {
+    position: absolute;
+    top: calc(4rem * 1.08 * var(--playlist-title-scale) / 2);
+    left: calc(
+        min(
+            var(--playlist-title-text-width, 0px) * var(--playlist-title-scale),
+            100% + var(--playlist-title-shift) -
+                var(--playlist-compact-reserve) * var(--playlist-actions-progress)
+        ) + 16px
+    );
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    opacity: var(--playlist-actions-progress);
+    transform: translateY(-50%) scale(calc(0.85 + 0.15 * var(--playlist-actions-progress)));
+    transform-origin: left center;
+    pointer-events: auto;
+}
+
+.libraryCompactActions[inert] {
+    pointer-events: none;
+}
+
+.libraryCompactBtn {
+    display: grid;
+    place-items: center;
+    box-sizing: border-box;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    background-color: transparent;
+    border: 1px solid white;
+    border-radius: 50%;
+    color: white;
+}
+
+.libraryCompactBtn img {
+    width: 16px;
+}
+
+.libraryCompactPlay {
+    background-color: white;
+    border-color: transparent;
+}
+
+.libraryCompactPlay img {
+    width: 12px;
+    /* A triangle's weight sits left of its box; nudge it to look centred. */
+    margin-left: 2px;
+    filter: invert(1);
+}
+
+.libraryCompactBtn img[src="/menu.svg"] {
+    width: auto;
+    height: 16px;
+    transform: rotate(90deg);
 }
 
 .playlistView[data-playlist-actions-hidden] .libraryPlayActions {
@@ -431,12 +495,21 @@
     margin-top: 35px;
 }
 
+/* Trimmed to the capitals, so the text centres on the icon rather than on its line box. */
+.libraryPlayBtn span,
+.libraryShuffleBtn span {
+    text-box: trim-both cap alphabetic;
+}
+
 .libraryPlayBtn {
     display: inline-flex;
     align-items: center;
+    box-sizing: border-box;
+    /* The height the untrimmed line and 10px padding gave, which the options button matches. */
+    height: calc(1lh + 22px);
     font-size: 1rem;
     font-weight: 600;
-    padding: 10px 20px;
+    padding: 0 20px;
     gap: 10px;
     background-color: white;
     border: 1px solid transparent;
@@ -452,9 +525,11 @@
 .libraryShuffleBtn {
     display: inline-flex;
     align-items: center;
+    box-sizing: border-box;
+    height: calc(1lh + 22px);
     font-size: 1rem;
     font-weight: 600;
-    padding: 10px 20px;
+    padding: 0 20px;
     gap: 10px;
     background-color: transparent;
     border: 1px solid white;

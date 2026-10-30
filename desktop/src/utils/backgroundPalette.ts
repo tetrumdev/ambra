@@ -1,5 +1,4 @@
-import { swirlShares } from "./swirlProportions";
-import { linearChannel, perceptualColor } from "./perceptualColor";
+import { perceptualColor, srgbFromPerceptual } from "./perceptualColor";
 
 type Rgb = [number, number, number];
 
@@ -67,54 +66,17 @@ export function separateCollapsedPalette(colors: string[]) {
   );
 }
 
-// Each side of the cover is measured in this many zones along its length.
+// The swirl's saturation boost and per-pixel shade range (swirlShader.ts main()).
+// Shared so the palette is separated from the cover as the field actually draws it.
+export const SWIRL_SATURATION = 1.18;
+export const SWIRL_SHADE_MIN = 0.84;
+export const SWIRL_SHADE_RANGE = 0.22;
+
+// Each side of the cover is sampled at this many points along its length.
 export const COVER_EDGE_ZONES = 8;
 
-export type CoverSeparation = {
-  // Zone-major, each zone in shader order: top, right, bottom, left. Zones run
-  // left to right along the top and bottom, top to bottom along the sides.
-  edges: number[];
-  // -1 darkens the background beside that zone, 1 lightens it.
-  directions: number[];
-  /** Actual RGB boundary samples, in the same zone/side order as edges. */
-  colors?: number[];
-};
-
-export type CoverEdgeSamples = { luminances: number[]; colors: number[] };
-
-export const neutralCoverSeparation: CoverSeparation = {
-  edges: Array(COVER_EDGE_ZONES * 4).fill(0.5),
-  directions: Array(COVER_EDGE_ZONES * 4).fill(0),
-};
-
-// Averages the outer band of a small, square RGBA sample of the cover per zone.
-export function coverEdgeLuminances(pixels: ArrayLike<number>, size: number) {
-  const band = Math.max(1, Math.round(size / 8));
-  const zones = Array(COVER_EDGE_ZONES * 4).fill(0);
-  const counts = Array(COVER_EDGE_ZONES * 4).fill(0);
-  const zoneOf = (position: number) =>
-    Math.min(COVER_EDGE_ZONES - 1, Math.floor((position / size) * COVER_EDGE_ZONES));
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const offset = (y * size + x) * 4;
-      const value = luminance([
-        pixels[offset] / 255,
-        pixels[offset + 1] / 255,
-        pixels[offset + 2] / 255,
-      ]);
-      const add = (side: number, position: number) => {
-        const index = zoneOf(position) * 4 + side;
-        zones[index] += value;
-        counts[index] += 1;
-      };
-      if (y < band) add(0, x);
-      if (x >= size - band) add(1, y);
-      if (y >= size - band) add(2, x);
-      if (x < band) add(3, y);
-    }
-  }
-  return zones.map((sum, index) => counts[index] ? sum / counts[index] : 0.5);
-}
+/** Display sRGB boundary samples, three channels each, four sides per zone. */
+export type CoverEdgeSamples = { colors: number[] };
 
 const EDGE_SAMPLE_SIZE = 64;
 
@@ -124,17 +86,14 @@ const EDGE_SAMPLE_SIZE = 64;
  */
 export function coverEdgeSamples(pixels: ArrayLike<number>, size: number): CoverEdgeSamples {
   const colors: number[] = [];
-  const luminances: number[] = [];
   for (let zone = 0; zone < COVER_EDGE_ZONES; zone++) {
     const along = Math.min(size - 1, Math.floor((zone + 0.5) * size / COVER_EDGE_ZONES));
     for (const [x, y] of [[along, 0], [size - 1, along], [along, size - 1], [0, along]]) {
       const offset = (y * size + x) * 4;
-      const rgb: Rgb = [pixels[offset] / 255, pixels[offset + 1] / 255, pixels[offset + 2] / 255];
-      colors.push(...rgb);
-      luminances.push(luminance(rgb));
+      colors.push(pixels[offset] / 255, pixels[offset + 1] / 255, pixels[offset + 2] / 255);
     }
   }
-  return { luminances, colors };
+  return { colors };
 }
 
 // Reads how bright each side of the cover is. Covers the webview may not read
@@ -142,9 +101,13 @@ export function coverEdgeSamples(pixels: ArrayLike<number>, size: number): Cover
 export function sampleCoverEdges(source: string): Promise<CoverEdgeSamples | null> {
   const image = new Image();
   image.crossOrigin = "anonymous";
-  image.decoding = "async";
-  image.src = source;
-  return image.decode().then(() => {
+  // Wait for load, not decode(): Chromium settles decode() with a rendered frame,
+  // which never comes while the window is hidden or covered by a fullscreen game.
+  return new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = reject;
+    image.src = source;
+  }).then(() => {
     const canvas = document.createElement("canvas");
     canvas.width = EDGE_SAMPLE_SIZE;
     canvas.height = EDGE_SAMPLE_SIZE;
@@ -156,48 +119,81 @@ export function sampleCoverEdges(source: string): Promise<CoverEdgeSamples | nul
   }).catch(() => null);
 }
 
+/** Perceptual (Oklab) distance an edge sample needs from the field to stay distinct.
+ * Display levels are sparse near black, so a dark edge needs a larger step. */
+const neededContrast = (lightness: number) => Math.max(0.07, 0.16 - lightness);
+/** Field shades checked across the swirl's per-pixel brightness range. */
+const SWIRL_SHADES = [0, 0.25, 0.5, 0.75, 1].map(step => SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE * step);
+const LIGHTNESS_STEP = 0.0025;
+/** A moved color keeps at least this share of its original gap above the darker colors. */
+const KEEP_SPACING = 0.5;
+
 /**
+ * Separates the cover from the swirl by choosing the swirl's colors, not by
+ * painting anything near the cover. Each palette color keeps its hue and moves
+ * in lightness only as far as needed so that, at every brightness the swirl
+ * draws it, it stays perceptually distinct from every sampled edge color.
+ * Colors that already contrast are returned unchanged. Lighter colors stay
+ * lighter than darker ones, so the swirl keeps its own light and dark.
+ *
+ * Nothing changes near the cover, so nothing draws the eye to its edges: the
+ * swirl is simply made of colors that never match the cover's border.
+ *
  * `coverDim` is the share of the background still visible beside the cover
  * after any overlay drawn over the field but under the cover (1 = none).
  */
-export function coverSeparation(
-  edges: CoverEdgeSamples | number[] | null,
-  colors: string[],
-  weights: number[],
-  coverDim = 1,
-): CoverSeparation {
-  if (colors.length === 0 || !edges) return neutralCoverSeparation;
-  // The background shows each color in about its swirl share.
-  const influence = swirlShares(weights.slice(0, colors.length));
-  const background = coverDim * colors
-    .slice(0, 4)
-    .reduce((sum, color, index) => sum + luminance(parseColor(color)) * influence[index], 0);
-  // Without a readable cover, its palette is the best guess for every edge.
-  // A palette alone cannot tell whether a particular edge needs any treatment.
-  // Leave the field alone when the actual boundary is unavailable.
-  const samples = Array.isArray(edges) ? edges : edges.luminances;
-  if (samples.length !== COVER_EDGE_ZONES * 4) return neutralCoverSeparation;
-  const zones = samples;
-  return {
-    edges: zones,
-    colors: Array.isArray(edges) ? zones.flatMap(value => [value, value, value]) : edges.colors,
-    directions: zones.map((edge, index) => {
-      // Saturated colors can have low weighted luma while a primary channel is
-      // already near its ceiling. Darken those edges instead of clipping a lift.
-      const rgb = Array.isArray(edges) ? [edge, edge, edge] : edges.colors.slice(index * 3, index * 3 + 3);
-      const lightness = perceptualColor(rgb)[0];
-      const lightnessLimit = lightness > 0.0001
-        ? lightness * Math.cbrt(linearChannel(coverDim) / Math.max(0.000001, linearChannel(Math.max(...rgb))))
-        : Math.cbrt(linearChannel(coverDim));
-      if (lightnessLimit - lightness < 0.075) return -1;
-      // Edges too near either extreme leave room to move only one way.
-      if (edge < 0.14) return 1;
-      if (edge > 0.86) return -1;
-      // Push the way the background already leans; when it doesn't, cast a shadow
-      // unless the edge is too dark for one to show.
-      const difference = background - edge;
-      if (Math.abs(difference) >= 0.08) return Math.sign(difference);
-      return edge > 0.2 ? -1 : 1;
-    }),
+export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSamples | null, coverDim = 1): string[] {
+  // Leave the field alone when the actual boundary is unavailable: a palette
+  // alone cannot tell whether a particular edge needs any treatment.
+  if (!edges || edges.colors.length !== COVER_EDGE_ZONES * 4 * 3 || colors.length === 0) return colors;
+  const dim = Math.min(1, Math.max(0.05, coverDim));
+  const targets = Array.from({ length: COVER_EDGE_ZONES * 4 }, (_, index) => {
+    const lab = perceptualColor(edges.colors.slice(index * 3, index * 3 + 3));
+    return { lab, needed: neededContrast(lab[0]) };
+  });
+  // How far a palette color, as the swirl draws it, stays beyond the contrast each edge needs.
+  const clearance = (rgb: number[]) => {
+    const gray = luminance(rgb as Rgb);
+    const vivid = rgb.map(channel => gray + (channel - gray) * SWIRL_SATURATION);
+    let least = Infinity;
+    for (const shade of SWIRL_SHADES) {
+      const lab = perceptualColor(vivid.map(channel => dim * Math.min(1, Math.max(0, channel * shade))));
+      for (const target of targets) {
+        least = Math.min(least, Math.hypot(lab[0] - target.lab[0], lab[1] - target.lab[1], lab[2] - target.lab[2]) - target.needed);
+      }
+    }
+    return least;
   };
+
+  const parsed = colors.map(parseColor);
+  const original = parsed.map(rgb => perceptualColor(rgb));
+  const result = [...colors];
+  let lower: { from: number; to: number } | null = null;
+  for (const index of parsed.map((_, index) => index).sort((a, b) => original[a][0] - original[b][0])) {
+    const [lightness, a, b] = original[index];
+    const floor = lower ? lower.to + KEEP_SPACING * (lightness - lower.from) : 0;
+    // Same hue and saturation at another lightness.
+    const at = (target: number) => {
+      const scale = lightness > 0.001 ? target / lightness : 0;
+      return srgbFromPerceptual([target, a * scale, b * scale]);
+    };
+    let chosen = lightness;
+    if (lightness < floor || clearance(parsed[index]) < 0) {
+      // The nearest lightness that works, searching outward; failing that, the most distinct one.
+      let best = { lightness, clearance: -Infinity };
+      chosen = NaN;
+      for (let step = 0; step * LIGHTNESS_STEP <= 1 && Number.isNaN(chosen); step++) {
+        for (const candidate of [lightness + step * LIGHTNESS_STEP, lightness - step * LIGHTNESS_STEP]) {
+          if (candidate < floor || candidate < 0 || candidate > 1) continue;
+          const margin = clearance(at(candidate));
+          if (margin >= 0) { chosen = candidate; break; }
+          if (margin > best.clearance) best = { lightness: candidate, clearance: margin };
+        }
+      }
+      if (Number.isNaN(chosen)) chosen = best.lightness;
+      result[index] = toHex(at(chosen) as Rgb);
+    }
+    lower = { from: lightness, to: chosen };
+  }
+  return result;
 }

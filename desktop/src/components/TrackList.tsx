@@ -21,6 +21,7 @@ import { TrackExtraCells } from "./TrackExtraCells";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import { usePageFilteredTracks } from "../hooks/usePageFilter";
 import { revealListItem } from "../utils/revealListItem";
+import { useNavActions } from "../utils/keyboardNav";
 import {
   type DropPosition,
   type TrackSort,
@@ -177,6 +178,18 @@ export function TrackList({
     const list = columnHeaderRef.current?.parentElement;
     if (reveal.key && revealIndex >= 0 && list) revealListItem(list, revealIndex, virtual.start);
   }, [reveal.key]);
+
+  // The keyboard's selected song (utils/keyboardNav.ts), when it's one of these.
+  useNavActions((action, item) => {
+    if (!columnHeaderRef.current?.parentElement?.contains(item)) return null;
+    const track = tracks.find(candidate => candidate.globalId === item.dataset.trackId);
+    if (!track) return null;
+    if (!isTrackAvailable(track, connected)) return `“${track.name}” isn't available`;
+    if (action === "play") { playTrack(track.globalId); return `Playing “${track.name}”`; }
+    if (action === "queue") { addToQueue(track.globalId); return `Added “${track.name}” to the queue`; }
+    playNext(track.globalId);
+    return `“${track.name}” plays next`;
+  });
 
   function selectTrack(event: React.MouseEvent, index: number) {
     event.preventDefault();

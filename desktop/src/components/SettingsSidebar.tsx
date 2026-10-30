@@ -1,5 +1,5 @@
 import "./SettingsView.css";
-export type SettingsTab = "general" | "outputs" | "dsp" | "services" | "server" | "local";
+export type SettingsTab = "general" | "outputs" | "dsp" | "services" | "server" | "local" | "keyboard";
 
 const tabs: Array<{ id: SettingsTab; name: string }> = [
   { id: "general", name: "General" },
@@ -8,6 +8,7 @@ const tabs: Array<{ id: SettingsTab; name: string }> = [
   { id: "services", name: "Services" },
   { id: "server", name: "Server" },
   { id: "local", name: "Local" },
+  { id: "keyboard", name: "Keyboard" },
 ];
 
 export function SettingsSidebar({ tab, onSelect, onBack }: { tab: SettingsTab; onSelect: (tab: SettingsTab) => void; onBack: () => void }) {

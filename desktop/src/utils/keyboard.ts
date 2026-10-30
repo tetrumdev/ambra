@@ -23,29 +23,18 @@ export function isUnmodifiedKey(event: KeyPress, code: string) {
     && !modifierIsActive("Shift");
 }
 
-/** Cmd/Ctrl+F, which opens Ambra's search instead of the WebView's find bar. */
-export function isSearchShortcut(event: KeyPress) {
-  return event.code === "KeyF" && (event.ctrlKey || event.metaKey) && !event.altKey;
+// Key presses stopped only to keep the WebView's own behavior away; Ambra's shortcuts still answer them.
+const browserBlocked = new WeakSet<Event>();
+
+/** Stops the WebView acting on a key press without hiding it from Ambra's own shortcuts. */
+export function blockBrowserDefault(event: KeyboardEvent) {
+  event.preventDefault();
+  browserBlocked.add(event);
 }
 
-/** Cmd/Ctrl+comma, the usual shortcut for an app's settings. */
-export function isSettingsShortcut(event: KeyPress) {
-  return event.code === "Comma" && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
-}
-
-/** App history uses the same directions as browser navigation keys and mouse side buttons. */
-export function navigationShortcut(event: KeyPress): "back" | "forward" | null {
-  if (isUnmodifiedKey(event, "BrowserBack")) return "back";
-  if (isUnmodifiedKey(event, "BrowserForward")) return "forward";
-  if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-    if (event.code === "ArrowLeft") return "back";
-    if (event.code === "ArrowRight") return "forward";
-  }
-  if (event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey) {
-    if (event.code === "BracketLeft") return "back";
-    if (event.code === "BracketRight") return "forward";
-  }
-  return null;
+/** Whether something in the app already handled this key press. */
+export function wasKeyHandled(event: KeyboardEvent) {
+  return event.defaultPrevented && !browserBlocked.has(event);
 }
 
 /** Whether keys pressed here are being typed, so single-letter shortcuts must leave them alone. */
@@ -71,11 +60,6 @@ export function isBrowserShortcut(event: KeyPress) {
   return (event.ctrlKey || event.metaKey) && !event.altKey && BROWSER_MODIFIED_KEYS.has(event.code);
 }
 
-/** A shortcut named by the character it types, so it follows the keyboard layout: "/" is Shift+7 on some. */
-export function isCharacterKey(event: KeyboardEvent, character: string) {
-  return event.key === character && !event.ctrlKey && !event.metaKey && !event.altKey;
-}
-
 // Controls that use the arrow keys themselves: sliders, menus, lists and column resizing.
 const ARROW_KEY_OWNERS = "input[type='range'], [role='slider'], [role='menu'], [role='listbox'], [role='radiogroup'], [role='tablist'], select, .columnResizeHandle";
 
@@ -84,7 +68,7 @@ const ARROW_KEY_OWNERS = "input[type='range'], [role='slider'], [role='menu'], [
  * menu or dialog has the keyboard, and, for arrows, the focused control has no use of its own for them.
  */
 export function acceptsPlaybackShortcut(event: KeyboardEvent, arrows = false, ignoreOpenMenus = false) {
-  if (event.defaultPrevented || isTypingTarget(event.target)) return false;
+  if (wasKeyHandled(event) || isTypingTarget(event.target)) return false;
   if (!ignoreOpenMenus && document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop], .columnPickerMenu")) return false;
   return !arrows || !(event.target instanceof Element && event.target.closest(ARROW_KEY_OWNERS));
 }

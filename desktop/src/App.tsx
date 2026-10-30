@@ -16,7 +16,6 @@ import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
 import { NowPlayingBar } from "./components/NowPlayingBar";
 import { LyricsView } from "./components/LyricsView";
 import { LYRICS_COVER_DIM } from "./utils/lyricsMotion";
-import { motion } from "./utils/motion";
 import { SearchBar, type SearchFocusRequest } from "./components/SearchBar";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
@@ -51,7 +50,10 @@ import {
   libraryQueueContext,
   searchQueueContext,
 } from "./utils/queueModel";
-import { acceptsPlaybackShortcut, isCharacterKey, isSearchShortcut, isSettingsShortcut, isTypingTarget, isUnmodifiedKey, navigationShortcut } from "./utils/keyboard";
+import { acceptsPlaybackShortcut, isTypingTarget, wasKeyHandled } from "./utils/keyboard";
+import { announceShortcut, matchesShortcut, matchingShortcut, setShortcutOverrides, type ShortcutOverrides } from "./utils/shortcuts";
+import { actOnCursor, flashItem, installPointerCursor, moveCursor, moveSidebar, SIDEBAR_ROOT } from "./utils/keyboardNav";
+import { ShortcutToast } from "./components/ShortcutToast";
 import { PageFilterBar } from "./components/PageFilterBar";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useAutomaticUpdateChecks } from "./hooks/useAppUpdate";
@@ -91,6 +93,11 @@ async function setWindowFullscreen(fullscreen: boolean) {
 
 /** How long playback may stop before the display is allowed to sleep again. */
 const DISPLAY_WAKE_RELEASE_DELAY_MS = 5_000;
+
+/** Sessions saved before Settings stood apart could return to it; those go to the library instead. */
+function withoutSettings<T extends AppScreen>(screen: T): Exclude<T, "settings"> {
+  return (screen === "settings" ? "library" : screen) as Exclude<T, "settings">;
+}
 
 function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
   const connectedServices = useServiceAvailability();
@@ -235,6 +242,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [localOnly, library.isLoading, library.isServerReachable, library.refreshStreamingMusic]);
+  // Every shortcut handler reads the listener's own bindings from here.
+  setShortcutOverrides(preferences.ui.shortcuts ?? {});
   const screen = preferences.ui.screen;
   const isBigscreen = screen === "bigscreen";
   const isLyricsView = screen === "lyrics";
@@ -293,20 +302,21 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const [isFullscreen, setIsFullscreen] = useState<boolean | null>(null);
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
-  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue">>(
-    preferences.ui.navigation?.queueReturnScreen
-      ?? (screen === "home" || screen === "search" || screen === "settings" ? screen : "library"),
+  // Settings is a separate place, never a page the queue or player sits over or returns to.
+  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue" | "settings">>(
+    withoutSettings(preferences.ui.navigation?.queueReturnScreen ?? (screen === "home" || screen === "search" ? screen : "library")),
   );
-  const playerReturnScreenRef =
-    useRef<Exclude<AppScreen, "bigscreen" | "lyrics">>(preferences.ui.navigation?.playerReturnScreen ?? "library");
-  if (screen !== "bigscreen" && screen !== "lyrics") playerReturnScreenRef.current = screen;
+  const playerReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "settings">>(
+    withoutSettings(preferences.ui.navigation?.playerReturnScreen ?? "library"),
+  );
+  if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "settings") playerReturnScreenRef.current = screen;
   // While the player is open, the screen hidden behind it keeps what it showed.
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
   const isQueueView = libraryScreen === "queue";
   const isSettingsView = libraryScreen === "settings";
   const isHomeView = libraryScreen === "home" && !browseEntity;
   const isSearchView = libraryScreen === "search" && !browseEntity;
-  if (screen === "home" || screen === "library" || screen === "search" || screen === "settings") {
+  if (screen === "home" || screen === "library" || screen === "search") {
     queueReturnScreenRef.current = screen;
   }
   // Page history restores content; retain player/queue overlays and their return screens too.
@@ -552,7 +562,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     // macOS owns its fullscreen command and the shortcut assigned to it.
     if (!isTauri() || !navigator.userAgent.includes("Windows")) return;
     const handleKeyDown = async (event: KeyboardEvent) => {
-      if (!isUnmodifiedKey(event, "F11") || event.repeat) return;
+      if (!matchesShortcut(event, "toggleFullscreen") || event.repeat) return;
 
       event.preventDefault();
 
@@ -560,6 +570,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         const nextFullscreen = !(await getCurrentWindow().isFullscreen());
         await setWindowFullscreen(nextFullscreen);
         setIsFullscreen(nextFullscreen);
+        announceShortcut("toggleFullscreen", nextFullscreen ? "Fullscreen" : "Left fullscreen");
       } catch (error) {
         console.error("Could not toggle fullscreen:", error);
       }
@@ -628,7 +639,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || !isUnmodifiedKey(event, "Escape")) return;
+      if (wasKeyHandled(event) || !matchesShortcut(event, "closeScreen")) return;
       // Dialogs keep their native Escape dismissal; elsewhere it must not leave fullscreen.
       if (document.querySelector("dialog[open]")) return;
       event.preventDefault();
@@ -641,7 +652,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         // A text field in settings keeps Escape for itself.
         if (isTypingTarget(event.target)) return;
         event.preventDefault();
-        if (!event.repeat) closeCurrentScreen();
+        if (!event.repeat) { closeCurrentScreen(); announceShortcut("closeScreen", "Closed settings"); }
         return;
       }
       if (screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") return;
@@ -650,13 +661,14 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
       if (event.repeat) return;
       leaveScreen();
+      announceShortcut("closeScreen", screen === "queue" ? "Closed queue" : "Closed player");
     };
 
     const handleNavigationKey = (event: KeyboardEvent) => {
-      const direction = navigationShortcut(event);
-      if (!direction || event.defaultPrevented) return;
+      const direction = matchingShortcut(event, ["back", "forward"] as const);
+      if (!direction || wasKeyHandled(event)) return;
       event.preventDefault();
-      if (!event.repeat) navigate(direction);
+      if (!event.repeat && navigate(direction)) announceShortcut(direction);
     };
     const handleMouseNavigation = (event: MouseEvent) => {
       if (event.button !== 3 && event.button !== 4) return;
@@ -681,7 +693,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isUnmodifiedKey(event, "KeyF")) return;
+      if (!matchesShortcut(event, "togglePlayer")) return;
       if (
         isTypingTarget(event.target) ||
         (event.target instanceof Element &&
@@ -691,26 +703,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       }
 
       if (event.repeat) return;
-
-      const toggleBigscreen = () => {
-        setPreferences((current) => {
-          if (current.ui.screen !== "bigscreen" && current.ui.screen !== "lyrics") {
-            if (!latestSessionRef.current.player.currentTrack) return current;
-            playerReturnScreenRef.current = current.ui.screen;
-          }
-
-          return {
-            ...current,
-            ui: {
-              ...current.ui,
-              screen:
-                current.ui.screen === "bigscreen" || current.ui.screen === "lyrics"
-                  ? playerReturnScreenRef.current
-                  : current.ui.playerView,
-            },
-          };
-        });
-      };
 
       if (!isTauri()) {
         event.preventDefault();
@@ -918,9 +910,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   // Search opens only through its shortcut; typing elsewhere in the app never starts one.
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!isSearchShortcut(event)) return;
+      if (!matchesShortcut(event, "search")) return;
       event.preventDefault();
       openSearch();
+      announceShortcut("search");
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
@@ -1040,16 +1033,25 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     else player.clear();
   };
 
+  /** Restores the page Settings was opened over; returns the screen to show, if goBack didn't settle it. */
+  const leaveSettings = (): AppScreen | null => {
+    const origin = settingsReturnRef.current;
+    settingsReturnRef.current = null;
+    const restored = goBack();
+    if (origin) {
+      playerReturnScreenRef.current = origin.playerReturnScreen;
+      queueReturnScreenRef.current = origin.queueReturnScreen;
+      // A player opened over nothing playing can't come back once the song is gone.
+      const playerGone = (origin.screen === "bigscreen" || origin.screen === "lyrics") && !player.currentTrack;
+      return playerGone ? origin.playerReturnScreen : origin.screen;
+    }
+    return restored ? null : "library";
+  };
+
   const closeCurrentScreen = () => {
     if (screen === "settings") {
-      const origin = settingsReturnRef.current;
-      settingsReturnRef.current = null;
-      const restored = goBack();
-      if (origin) {
-        playerReturnScreenRef.current = origin.playerReturnScreen;
-        queueReturnScreenRef.current = origin.queueReturnScreen;
-        changeScreen(origin.screen);
-      } else if (!restored) changeScreen("library");
+      const target = leaveSettings();
+      if (target) changeScreen(target);
       return;
     }
     if (browseEntity && screen !== "bigscreen" && screen !== "lyrics" && screen !== "queue") { goBack(); return; }
@@ -1062,7 +1064,25 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     );
   };
 
-  const openQueue = () => changeScreen("queue");
+  // The queue and player replace Settings rather than opening over it.
+  const openQueue = () => {
+    if (screen === "settings") leaveSettings();
+    changeScreen("queue");
+  };
+  const openPlayer = useStableCallback(() => {
+    if (!player.currentTrack) return;
+    if (screen === "settings") leaveSettings();
+    changeScreen(preferences.ui.playerView);
+  });
+  const toggleBigscreen = useStableCallback(() => {
+    if (isPlayerView) {
+      changeScreen(playerReturnScreenRef.current);
+      announceShortcut("togglePlayer", "Closed player");
+    } else {
+      openPlayer();
+      announceShortcut("togglePlayer", player.currentTrack ? "Opened player" : "Nothing is playing");
+    }
+  });
   const openSettings = () => {
     if (screen === "settings") return;
     settingsReturnRef.current = {
@@ -1077,20 +1097,71 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   // Q opens the queue and closes it again; Cmd/Ctrl+comma opens settings.
   const handleScreenShortcut = useStableCallback((event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.repeat) return;
-    if (isSettingsShortcut(event)) {
+    if (wasKeyHandled(event) || event.repeat) return;
+    if (matchesShortcut(event, "openSettings")) {
       event.preventDefault();
-      if (!isSettingsView) openSettings();
-    } else if (isUnmodifiedKey(event, "KeyQ") && !isTypingTarget(event.target)) {
+      if (!isSettingsView) { openSettings(); announceShortcut("openSettings"); }
+    } else if (matchesShortcut(event, "toggleQueue") && !isTypingTarget(event.target)) {
       event.preventDefault();
       if (isQueueView) closeCurrentScreen();
       else openQueue();
+      announceShortcut("toggleQueue", isQueueView ? "Closed queue" : "Opened queue");
     }
   });
   useEffect(() => {
     window.addEventListener("keydown", handleScreenShortcut);
     return () => window.removeEventListener("keydown", handleScreenShortcut);
   }, [handleScreenShortcut]);
+
+  // The page's lists and the sidebar, item by item (utils/keyboardNav.ts). Captured first, so a
+  // key that moves through a list doesn't also seek or change the volume.
+  const handleListShortcut = useStableCallback((event: KeyboardEvent) => {
+    if (isPlayerView || !acceptsPlaybackShortcut(event, true)) return;
+    const id = matchingShortcut(event, [
+      "listNext", "listPrevious", "listFirst", "listLast", "playSelected", "addSelectedToQueue", "playSelectedNext",
+      "sidebarNext", "sidebarPrevious",
+    ] as const);
+    if (!id) return;
+    const main = mainRef.current;
+    const focused = document.activeElement;
+    const inSidebar = focused instanceof Element && focused.closest(SIDEBAR_ROOT) !== null;
+    // The sidebar is a list too: once it has the keyboard, the list keys move through it.
+    const sidebarStep = id === "sidebarNext" || (inSidebar && id === "listNext") ? 1
+      : id === "sidebarPrevious" || (inSidebar && id === "listPrevious") ? -1 : 0;
+    if (sidebarStep) {
+      if (moveSidebar(main, sidebarStep)) event.preventDefault();
+      return;
+    }
+    if (inSidebar) return;
+    if (id === "listNext" || id === "listPrevious" || id === "listFirst" || id === "listLast") {
+      const move = id === "listNext" ? 1 : id === "listPrevious" ? -1 : id === "listFirst" ? "first" : "last";
+      // A page without a list keeps the key, so it scrolls as usual.
+      if (moveCursor(main, move)) event.preventDefault();
+      return;
+    }
+    // A focused control other than the selected item keeps Enter for itself.
+    const target = event.target instanceof Element ? event.target : null;
+    const control = target?.closest("button, a, summary, input, select, textarea, [role='button']");
+    if (control && !control.matches("[data-nav-cursor]")) return;
+    const action = id === "playSelected" ? "play" : id === "addSelectedToQueue" ? "queue" : "next";
+    if (event.repeat) { event.preventDefault(); return; }
+    const result = actOnCursor(main, action);
+    if (!result) return;
+    event.preventDefault();
+    flashItem(result.item);
+    if (result.text === null) announceShortcut(id, action === "queue" ? "Only songs can be queued" : "Only songs can play next");
+    else if (result.text) announceShortcut(id, result.text);
+  });
+  useEffect(() => {
+    window.addEventListener("keydown", handleListShortcut, true);
+    const removePointerCursor = installPointerCursor();
+    return () => {
+      window.removeEventListener("keydown", handleListShortcut, true);
+      removePointerCursor();
+    };
+  }, [handleListShortcut]);
+  const changeShortcuts = useStableCallback((shortcuts: ShortcutOverrides) =>
+    setPreferences(current => ({ ...current, ui: { ...current.ui, shortcuts } })));
 
   const collectionViewProps = {
     onOpenEntity: openEntity,
@@ -1134,10 +1205,11 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   useEffect(() => setPageFilter(current => current && current.view !== viewKey ? null : current), [viewKey]);
   const activePageFilter = pageFilter?.view === viewKey && !isPlayerView ? pageFilter : null;
   const handlePageFilterShortcut = useStableCallback((event: KeyboardEvent) => {
-    if (!isCharacterKey(event, "/") || isPlayerView || ["search", "home", "settings"].includes(viewKey)) return;
+    if (!matchesShortcut(event, "filterPage") || isPlayerView || ["search", "home", "settings"].includes(viewKey)) return;
     if (!acceptsPlaybackShortcut(event) || !mainRef.current?.querySelector(".columnInfo")) return;
     event.preventDefault();
     if (event.repeat) return;
+    announceShortcut("filterPage");
     setPageFilter(current => ({
       view: viewKey,
       query: current?.view === viewKey ? current.query : "",
@@ -1188,8 +1260,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       {(player.currentTrack || isPlayerView) && (
         <div className="playerStage" data-open={isPlayerView}>
           <BackgroundArtwork track={player.currentTrack} active={isPlayerView} animate={preferences.ui.animateSwirl}
-            playing={player.isPlaying} coverId="albumCover" coverDim={lyricsShown ? LYRICS_COVER_DIM : 1}
-            coverDimMs={lyricsDrift ? motion.drift.duration : undefined} />
+            playing={player.isPlaying} coverDim={lyricsShown ? LYRICS_COVER_DIM : 1} />
           {isPlayerView && [
             ...leavingLyrics.map((track) => ({ track, leaving: true })),
             ...(lyricsTrack ? [{ track: lyricsTrack, leaving: false }] : []),
@@ -1234,8 +1305,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           onLeave={() => setSearchSummon((summon) => summon === "on" ? "dismissed" : summon)}
         />}
         {isQueueView && (
-          <button className="xContainer queueClose" type="button" onClick={closeCurrentScreen}
-            data-beside-search={localOnly ? undefined : true}>
+          <button className="xContainer queueClose" type="button" onClick={closeCurrentScreen}>
             <img src="/x.svg" alt="Close" className="closeBtn" />
           </button>
         )}
@@ -1297,6 +1367,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             lyricsOffsetMs={preferences.ui.lyricsOffsetMs}
             onLyricsOffsetChange={lyricsOffsetMs => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricsOffsetMs } }))}
             servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
+            shortcuts={preferences.ui.shortcuts ?? {}}
+            onShortcutsChange={changeShortcuts}
             onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
             }))}
@@ -1423,12 +1495,13 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         onTogglePlayback={player.togglePlayback}
         onNext={player.next}
         onSeek={player.seek}
-        onOpenBigscreen={() => changeScreen(preferences.ui.playerView)}
+        onOpenBigscreen={openPlayer}
         onOpenQueue={openQueue}
         direction={skipDirection}
       />
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
+      <ShortcutToast />
       <NavigationSwipe canNavigate={canNavigate} navigate={navigate} contextKey={`${screen}:${activeViewKey}:${settingsTab}`} />
     </>
   );

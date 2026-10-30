@@ -4,6 +4,7 @@ import { hideableTrackColumns, orderedOptionalColumns, type HideableColumnKey, t
 import type { BrowseEntity } from "./browse";
 import type { LibrarySection } from "../components/LibraryView";
 import type { SettingsTab } from "../components/SettingsSidebar";
+import { readShortcutOverrides, type ShortcutOverrides } from "./shortcuts";
 
 export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
@@ -42,6 +43,8 @@ export type AppPreferences = {
     trackColumns: OptionalColumnKey[];
     /** Standard columns left out of every song list. */
     hiddenTrackColumns: HideableColumnKey[];
+    /** Keyboard shortcuts changed from their defaults. */
+    shortcuts: ShortcutOverrides;
   };
   search: {
     query: string;
@@ -75,6 +78,7 @@ export const defaultPreferences: AppPreferences = {
     servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
     trackColumns: [],
     hiddenTrackColumns: [],
+    shortcuts: {},
   },
   search: {
     query: "",
@@ -138,7 +142,8 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
     entity,
     playlistId: typeof value.playlistId === "string" ? value.playlistId : null,
     section: value.section === "artists" || value.section === "albums" || value.section === "tracks" ? value.section : "overview",
-    settingsTab: value.settingsTab === "outputs" || value.settingsTab === "dsp" || value.settingsTab === "services" || value.settingsTab === "local"
+    settingsTab: value.settingsTab === "outputs" || value.settingsTab === "dsp" || value.settingsTab === "services"
+      || value.settingsTab === "server" || value.settingsTab === "local" || value.settingsTab === "keyboard"
       ? value.settingsTab : "general",
   };
 }
@@ -193,11 +198,13 @@ function migratePreferences(value: unknown): AppPreferences {
     ? hideableTrackColumns.filter(key => (ui.hiddenTrackColumns as unknown[]).includes(key))
     : [];
 
+  const shortcuts = readShortcutOverrides(ui.shortcuts);
+
   switch (value.version) {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -216,7 +223,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -252,6 +259,7 @@ function migratePreferences(value: unknown): AppPreferences {
           servicePlaylistVisibility,
           trackColumns,
           hiddenTrackColumns,
+          shortcuts,
         },
         search: { query, provider: "all" },
         playback: { trackId, positionSeconds },
@@ -291,6 +299,7 @@ function migratePreferences(value: unknown): AppPreferences {
           servicePlaylistVisibility,
           trackColumns,
           hiddenTrackColumns,
+          shortcuts,
         },
         search: { query, provider },
         playback: { trackId, positionSeconds },

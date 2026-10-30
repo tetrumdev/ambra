@@ -12,7 +12,8 @@ import {
 import { AudioControlsMenu } from "./AudioControlsMenu";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { visibleOutputs } from "../utils/audioSettings";
-import { acceptsPlaybackShortcut, isUnmodifiedKey } from "../utils/keyboard";
+import { acceptsPlaybackShortcut } from "../utils/keyboard";
+import { announceShortcut, matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
 import { invokeOn, useEndpoints } from "../utils/playbackTarget";
 import { coreCommand, coreView, subscribeCore, type CoreOutput } from "../api/core";
@@ -186,15 +187,19 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   shortcuts.current = { toggleMute, changeVolume };
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      const step = isUnmodifiedKey(event, "ArrowUp") ? VOLUME_STEP
-        : isUnmodifiedKey(event, "ArrowDown") ? -VOLUME_STEP : 0;
+      const step = matchesShortcut(event, "volumeUp") ? VOLUME_STEP
+        : matchesShortcut(event, "volumeDown") ? -VOLUME_STEP : 0;
       if (step !== 0) {
         if (!acceptsPlaybackShortcut(event, true, true)) return;
         event.preventDefault();
-        shortcuts.current.changeVolume(clampVolume(latestVolume.current + step));
-      } else if (isUnmodifiedKey(event, "KeyM") && acceptsPlaybackShortcut(event, false, true)) {
+        const next = clampVolume(latestVolume.current + step);
+        shortcuts.current.changeVolume(next);
+        announceShortcut(step > 0 ? "volumeUp" : "volumeDown", `Volume ${Math.round(next)}%`);
+      } else if (matchesShortcut(event, "toggleMute") && acceptsPlaybackShortcut(event, false, true)) {
         event.preventDefault();
-        if (!event.repeat) shortcuts.current.toggleMute();
+        if (event.repeat) return;
+        announceShortcut("toggleMute", latestVolume.current > 0 ? "Muted" : "Unmuted");
+        shortcuts.current.toggleMute();
       }
     };
     window.addEventListener("keydown", handleKeyDown);

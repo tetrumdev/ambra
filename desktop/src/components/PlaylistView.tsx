@@ -8,7 +8,7 @@ import { exportPlaylist } from "../utils/playlistExport";
 
 type PlaylistViewProps = Omit<
   TrackCollectionViewProps,
-  "title" | "removalLabel" | "collapsibleHeader" | "headerArtwork" | "playbackActions"
+  "title" | "removalLabel" | "collapsibleHeader" | "headerArtwork" | "playbackActions" | "compactActions"
 > & {
   playlist: Playlist;
   artworkTracks: Track[];
@@ -64,6 +64,21 @@ export function PlaylistView({
     [improvementReport],
   );
   const canShow = !progress && upgradedIds.size > 0;
+  const menuActions = [
+    { label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: onDuplicate },
+    ...(onImprove ? [{
+      label: improvementProgress ? "Improving…" : "Improve Playlist",
+      icon: "/sparkle.svg",
+      disabled: Boolean(improvementProgress) || artworkTracks.length === 0,
+      onSelect: onImprove,
+    }] : []),
+    {
+      label: exporting ? "Exporting…" : "Export Playlist",
+      icon: "/duplicate.svg",
+      disabled: exporting || artworkTracks.length === 0,
+      onSelect: () => void exportCsv(),
+    },
+  ];
 
   return (
     <TrackCollectionView
@@ -73,6 +88,17 @@ export function PlaylistView({
       showProviderIcon
       removalLabel="Remove from Playlist"
       collapsibleHeader
+      compactActions={
+        <PlaylistActions
+          playlist={playlist}
+          className="libraryCompactBtn"
+          onRename={onRename}
+          onDelete={onDelete}
+          actions={menuActions}
+        >
+          <img src="/menu.svg" alt="" aria-hidden="true" />
+        </PlaylistActions>
+      }
       playbackActions={
         <>
           <PlaylistActions
@@ -80,21 +106,7 @@ export function PlaylistView({
             className="libraryMoreBtn"
             onRename={onRename}
             onDelete={onDelete}
-            actions={[
-              { label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: onDuplicate },
-              ...(onImprove ? [{
-                label: improvementProgress ? "Improving…" : "Improve Playlist",
-                icon: "/sparkle.svg",
-                disabled: Boolean(improvementProgress) || artworkTracks.length === 0,
-                onSelect: onImprove,
-              }] : []),
-              {
-                label: exporting ? "Exporting…" : "Export Playlist",
-                icon: "/duplicate.svg",
-                disabled: exporting || artworkTracks.length === 0,
-                onSelect: () => void exportCsv(),
-              },
-            ]}
+            actions={menuActions}
           >
             <img src="/menu.svg" alt="" aria-hidden="true" />
           </PlaylistActions>
