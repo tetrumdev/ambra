@@ -7,6 +7,7 @@ import "./scrollbars.css";
 import { installTooltips } from "./utils/tooltips";
 import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
+import { desktopPlatform } from "./utils/windowChrome";
 
 mark("js-start");
 startPerfTracing();
@@ -17,11 +18,7 @@ if (perfEnabled()) {
   }
 }
 
-document.documentElement.dataset.platform = navigator.userAgent.includes(
-  "Windows",
-)
-  ? "windows"
-  : "other";
+document.documentElement.dataset.platform = desktopPlatform();
 
 installTooltips();
 window.addEventListener("keydown", (event) => {

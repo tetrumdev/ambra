@@ -8,7 +8,7 @@ import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
-export function Pairing({ savedAddress, onPaired, initialError = null }: { savedAddress: string | null; onPaired: () => void; initialError?: string | null }) {
+export function Pairing({ savedAddress, onPaired, onCancel, initialError = null }: { savedAddress: string | null; onPaired: () => void; onCancel?: () => void; initialError?: string | null }) {
   const [address, setAddress] = useState(() => savedAddress?.startsWith("ambra://pair/") ? savedAddress : "");
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
   const [scanning, setScanning] = useState(false);
@@ -26,7 +26,8 @@ export function Pairing({ savedAddress, onPaired, initialError = null }: { saved
     setError(null);
     setPairing(null);
     try {
-      const started = await requestPairing(address, Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone"));
+      const started = await requestPairing(address, Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone"), controller.signal);
+      if (controller.signal.aborted) return;
       setPairing(started);
       setBusy(false);
       await awaitPairing(started.requestId, controller.signal);
@@ -47,6 +48,7 @@ export function Pairing({ savedAddress, onPaired, initialError = null }: { saved
       <Swirl track={null} playing={false} />
       <KeyboardAvoidingView behavior="padding" style={styles.content}>
         <Text style={styles.title}>Pair with Ambra</Text>
+        {onCancel && <Touchable accessibilityRole="button" onPress={() => { abort.current?.abort(); onCancel(); }} style={styles.secondary}><Text style={styles.secondaryText}>Back to current server</Text></Touchable>}
         {pairing ? <>
           <Text style={styles.body}>Approve this code on the computer running the server.</Text>
           <Text style={styles.code} accessibilityLabel={`Code ${pairing.code.split("").join(" ")}`}>{pairing.code}</Text>

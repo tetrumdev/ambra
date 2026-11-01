@@ -114,10 +114,13 @@
     /* Each group is its own layer, so fades, blur and scroll lag stay on the compositor.
        Blur moves in fixed steps (see blurSteps) so a line change only re-filters a few groups. */
     filter: blur(var(--lyric-blur, 0px));
-    will-change: transform, opacity, filter;
     transition:
         opacity 500ms ease,
         filter 450ms ease;
+}
+
+.lyricGroup[data-nearby="true"] {
+    will-change: transform, opacity, filter;
 }
 
 .lyricLine {

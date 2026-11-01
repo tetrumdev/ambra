@@ -3,7 +3,7 @@
 //! While the app runs, it reports its outputs and playback status to the server, and carries
 //! out what the core asks for: load this song, play, pause, seek, the volume, and output
 //! settings that any computer can change (`endpoints.rs` and `session.rs` on the server).
-//! The app keeps running with its window closed, so playback carries on.
+//! When the app leaves, it withdraws its outputs so the server stops playback.
 //!
 //! Songs arrive as URLs on the server's address as it was saved; they're moved onto this
 //! app's own address and token before playing, and reported back as the core sent them.
@@ -104,6 +104,10 @@ pub async fn stop_shared_output(app: &AppHandle) {
     let mut tasks = state.0.lock().await;
     if let Some(previous) = tasks.take() {
         for task in previous.tasks { task.abort(); let _ = task.await; }
+        let _ = previous.agent.request(reqwest::Method::POST, "departure")
+            .timeout(Duration::from_secs(1))
+            .json(&json!({ "instanceId": previous.agent.instance_id }))
+            .send().await;
     }
 }
 

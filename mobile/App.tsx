@@ -19,7 +19,9 @@ export default function App() {
   ]);
   const [networkError, setNetworkError] = useState<string | null>(null);
   const [saved, setSaved] = useState<Saved | null>(null);
-  usePhoneOutput(saved?.paired ?? false);
+  const [changingServer, setChangingServer] = useState(false);
+  const paired = !!saved?.paired && !changingServer;
+  usePhoneOutput(paired);
   useEffect(() => {
     let disposed = false;
     void restore().then(value => { if (!disposed) setSaved(value); }).catch(error => {
@@ -29,7 +31,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!saved?.paired) return;
+    if (!paired) return;
     let disposed = false;
     const refresh = () => void networkStatus().then(status => {
       if (!disposed) setNetworkError(status.state.startsWith("Connected") ? null : status.error ?? `Server ${status.state.toLowerCase()}`);
@@ -37,24 +39,28 @@ export default function App() {
     refresh();
     const timer = setInterval(refresh, 3000);
     return () => { disposed = true; clearInterval(timer); };
-  }, [saved?.paired]);
+  }, [paired]);
 
   useEffect(() => {
-    if (!saved?.paired) return;
+    if (!paired) return;
     const abort = new AbortController();
     void follow(abort.signal).catch(error => {
-      if (error instanceof Unpaired) setSaved(current => current && { ...current, paired: false });
+      if (!abort.signal.aborted && error instanceof Unpaired) setSaved(current => current && { ...current, paired: false });
     });
     return () => abort.abort();
-  }, [saved?.paired]);
+  }, [paired]);
 
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.black }}>
       <SafeAreaProvider style={{ flex: 1 }}>
         <StatusBar style="light" />
-        {!saved || (!fontsLoaded && !fontError) ? <View style={{ flex: 1 }} /> : saved.paired
-          ? <Player connectionError={networkError} />
-          : <Pairing savedAddress={saved.address} initialError={networkError} onPaired={() => { setNetworkError(null); setSaved(current => ({ address: current?.address ?? null, paired: true })); }} />}
+        {!saved || (!fontsLoaded && !fontError) ? <View style={{ flex: 1 }} /> : paired
+          ? <Player connectionError={networkError} onChangeServer={() => { setNetworkError(null); setChangingServer(true); }} />
+          : <Pairing savedAddress={changingServer ? null : saved.address} initialError={networkError}
+            onCancel={changingServer ? () => {
+              void restore().then(value => { setSaved(value); setNetworkError(null); setChangingServer(false); }).catch(error => setNetworkError(String(error)));
+            } : undefined}
+            onPaired={() => { setNetworkError(null); setChangingServer(false); setSaved(current => ({ address: current?.address ?? null, paired: true })); }} />}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
