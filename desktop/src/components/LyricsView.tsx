@@ -487,6 +487,8 @@ function SyncedLyrics({
         startMs:
           block.kind === "pause" ? block.startMs : lyrics.lines[block.line].startMs,
         top: 0,
+        height: 0,
+        nearby: null as boolean | null,
         moved: 0,
         anchor: 0,
         /** Where each later visual line of a wrapped lead line starts being sung, and how far below the first it sits. */
@@ -614,6 +616,7 @@ function SyncedLyrics({
         for (const block of layout) {
           const previousTop = block.top;
           block.top = block.element.offsetTop;
+          block.height = block.element.offsetHeight;
           block.moved = block.top - previousTop;
           const lead = block.rows[0];
           const line = lead?.element;
@@ -814,7 +817,16 @@ function SyncedLyrics({
         }
         // Subpixel offsets let the wave settle without stepping between device pixels.
         const offset = followingRef.current ? scroll.value - spring.value : 0;
-        const transform = Math.abs(offset) > 0.01 ? `translate3d(0, ${offset.toFixed(3)}px, 0)` : "";
+        const top = block.top - spring.value;
+        const destinationTop = block.top - scroll.value;
+        const nearby = followingRef.current &&
+          Math.max(top, destinationTop) + block.height >= -viewportHeight &&
+          Math.min(top, destinationTop) <= viewportHeight * 2;
+        if (block.nearby !== nearby) {
+          block.nearby = nearby;
+          block.element.dataset.nearby = String(nearby);
+        }
+        const transform = nearby && Math.abs(offset) > 0.01 ? `translate3d(0, ${offset.toFixed(3)}px, 0)` : "";
         if (block.transform !== transform) {
           block.transform = transform;
           block.element.style.transform = transform;

@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
-import { MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
+import { enabledOutputsFirst, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
 import { MAX_LYRICS_OFFSET_MS, type LyricMotion } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
 import { musicProviderName } from "../utils/musicProviderName";
@@ -118,7 +118,7 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
       </header>
       {!audio.native && <p className="settingsMuted">Choosing devices needs the desktop app.</p>}
       {audio.loading ? <p className="settingsMuted" role="status">Loading outputs…</p> : <div className="settingsOutputs">
-        {audio.settings.outputs.filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <OutputCard key={output.id} output={output}
+        {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <OutputCard key={output.id} output={output}
           onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
       </div>}
       <RemoteOutputs active={tab === "outputs"} />
@@ -268,7 +268,7 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
     <h2>On {endpoint.name}</h2>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {outputs === null && !error && <p className="settingsMuted" role="status">Loading outputs…</p>}
-    {outputs?.filter(output => connected.has(output.id)).map(output => {
+    {enabledOutputsFirst(outputs ?? []).filter(output => connected.has(output.id)).map(output => {
       const playing = playingOn(endpoint.id, output.id);
       return <article key={output.id} className="settingsOutput" data-selected={playing || undefined}>
         <div className="settingsOutputHeader">

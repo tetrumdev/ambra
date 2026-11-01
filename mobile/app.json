@@ -3,16 +3,17 @@
     "name": "Ambra",
     "slug": "ambra",
     "scheme": "ambra",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.quantium.ambra.remote",
-      "buildNumber": "5",
+      "buildNumber": "6",
       "infoPlist": {
         "UIBackgroundModes": [
+          "audio",
           "audio"
         ],
         "NSLocalNetworkUsageDescription": "Ambra connects to your Ambra server on this network.",
@@ -24,7 +25,8 @@
             }
           }
         },
-        "NSCameraUsageDescription": "Ambra scans your server pairing QR code."
+        "NSCameraUsageDescription": "Ambra scans your server pairing QR code.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -40,7 +42,8 @@
         "android.permission.FOREGROUND_SERVICE",
         "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
         "android.permission.INTERNET",
-        "android.permission.ACCESS_NETWORK_STATE"
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.CAMERA"
       ]
     },
     "web": {

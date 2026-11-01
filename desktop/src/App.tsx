@@ -52,7 +52,7 @@ import {
   searchQueueContext,
 } from "./utils/queueModel";
 import { acceptsPlaybackShortcut, isTypingTarget, wasKeyHandled } from "./utils/keyboard";
-import { announceShortcut, matchesShortcut, matchingShortcut, setShortcutOverrides, type ShortcutOverrides } from "./utils/shortcuts";
+import { announceShortcut, isMac, matchesShortcut, matchingShortcut, setShortcutOverrides, type ShortcutOverrides } from "./utils/shortcuts";
 import { actOnCursor, flashItem, hidePointer, installPointerCursor, moveCursor, moveSidebar, SIDEBAR_ROOT } from "./utils/keyboardNav";
 import { ShortcutToast } from "./components/ShortcutToast";
 import { PageFilterBar } from "./components/PageFilterBar";
@@ -571,7 +571,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   useEffect(() => {
     // macOS owns its fullscreen command and the shortcut assigned to it.
-    if (!isTauri() || !navigator.userAgent.includes("Windows")) return;
+    if (!isTauri() || isMac) return;
     const handleKeyDown = async (event: KeyboardEvent) => {
       if (!matchesShortcut(event, "toggleFullscreen") || event.repeat) return;
 

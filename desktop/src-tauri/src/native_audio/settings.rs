@@ -159,7 +159,7 @@ impl AudioSettings {
                 self.outputs.push(OutputSettings {
                     id: device.id.clone(),
                     name: device.name.clone(),
-                    enabled: true,
+                    enabled: false,
                     exclusive_mode: false,
                     resync_delay_ms: 0,
                     preset_id: None,
@@ -185,5 +185,54 @@ fn fold_output_gain(value: &mut serde_json::Value) {
                 (headroom - gain).clamp(0.0, 30.0).into(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native_audio::NativeAudioDevice;
+
+    fn device(id: &str, is_default: bool) -> NativeAudioDevice {
+        NativeAudioDevice {
+            id: id.into(),
+            name: id.into(),
+            is_default,
+        }
+    }
+
+    #[test]
+    fn only_system_output_is_enabled_by_default() {
+        let mut settings = AudioSettings::default();
+        settings.discover(&[device("speakers", true), device("headphones", false)]);
+
+        assert_eq!(settings.selected_output_id, "");
+        assert_eq!(settings.outputs.len(), 3);
+        assert!(settings.outputs[0].enabled);
+        assert!(settings.outputs[1..].iter().all(|output| !output.enabled));
+        settings.validate().unwrap();
+    }
+
+    #[test]
+    fn discovery_preserves_saved_choices_and_disables_new_outputs() {
+        let mut settings = AudioSettings::default();
+        settings.discover(&[device("speakers", true), device("headphones", false)]);
+        settings.outputs[1].enabled = false;
+        settings.outputs[2].enabled = true;
+        settings.outputs[2].exclusive_mode = true;
+        settings.outputs[2].volume = 37.0;
+        settings.selected_output_id = "headphones".into();
+        let saved_outputs = settings.outputs.clone();
+        let saved = serde_json::to_value(&settings).unwrap();
+        let mut restored: AudioSettings = serde_json::from_value(saved).unwrap();
+
+        restored.discover(&[device("hdmi", false)]);
+        restored.discover(&[device("headphones", false), device("speakers", true)]);
+
+        assert_eq!(restored.selected_output_id, "headphones");
+        assert_eq!(restored.outputs[..3], saved_outputs);
+        assert_eq!(restored.outputs.len(), 4);
+        assert!(!restored.outputs[3].enabled);
+        restored.validate().unwrap();
     }
 }

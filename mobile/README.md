@@ -6,7 +6,17 @@ Startup restores the paired P2P server and opens the original player and MEGA li
 
 The app sits on true black (#000) for OLED screens. Swipe down on the fullscreen player (or tap its grab handle) to reach MEGA, and swipe up on the mini-player (or tap it) to return. Both sizes use one persistent player surface, album cover and pair of song labels. The surface expands from the mini-player's exact bounds; artwork moves and scales continuously, while song labels fade out beside the cover and fade back in beneath it. Text changes placement and font size only while invisible, avoiding a path around the artwork. A drag can interrupt and reverse the spring without switching artwork views. The paused cover shrinks only toward the expanded endpoint, leaving mini-player artwork at 44 points. Compact screens reserve room for playback controls. The swirl keeps a fixed viewport and fades in near fullscreen, avoiding GL resizing or clipping during the morph. UI changes use Fast Refresh after installing the native development build. MEGA uses the server's saved songs and order, with desktop's Play and Shuffle; bound song groups stay together when shuffled. Tap a song to play from it, or hold it (or tap its options) for desktop's playback menu: Standalone Play, Play from Here, Play Next and Add to Queue. Pull to refresh the playlist.
 
-The fullscreen player's queue button opens the shared queue. Tap an upcoming song to play from it, hold it to play from here or remove it, or clear upcoming songs. Sheets drag down to close, and every control answers with a haptic. The mini-player has play/pause and skip controls. One continuous blurred dock fills the area from the mini-player to the bottom safe area, with text-only Home, Search and Library labels below playback and Library selected. The dock's blur and tint fade to transparent at the mini-player's midpoint, leaving playback controls sharp. These labels reserve the navigation layout for future screens. The dock hides until a track menu finishes closing, keeping its native views mounted and avoiding list reordering during the hold. Its native blur stays outside the player's drag gesture. Playlist and queue artwork use cached thumbnails, early resizing and a bounded rendering window to limit native image memory while scrolling. Press animations stop when virtualized rows unmount, and gesture/GL containers keep stable native views. The swirl stops GPU work as soon as the app becomes inactive and resumes on return.
+The fullscreen player's queue button opens the shared queue. Tap an upcoming song to play from it, hold it to play from here or remove it, or clear upcoming songs. Sheets drag down to close, and every control answers with a haptic. The mini-player has play/pause and skip controls. One continuous blurred dock fills the area from the mini-player to the bottom safe area, with functional Library, Search and Settings tabs below playback. The dock's blur and tint fade to transparent at the mini-player's midpoint, leaving playback controls sharp. The dock hides until a track menu finishes closing, keeping its native views mounted and avoiding list reordering during the hold. Its native blur stays outside the player's drag gesture. Playlist and queue artwork use cached thumbnails, early resizing and a bounded rendering window to limit native image memory while scrolling. Press animations stop when virtualized rows unmount, and gesture/GL containers keep stable native views. The swirl stops GPU work as soon as the app becomes inactive and resumes on return.
+
+## Settings and unified search
+
+Open Settings from the bottom dock or the fullscreen player's gear. Change server opens QR/link pairing without deleting the current saved pairing. Back to current server restores it, including when cancellation races with approval. The old phone output stops before switching; leaving an active phone output announces departure to the server. Other devices' selected outputs remain unchanged.
+
+Tidal, Qobuz and Spotify switches are saved securely on this phone. Turning a service off removes its songs from the phone's library view and excludes it from search. Local music remains visible. These switches do not sign out shared server accounts or modify the shared queue. Connect new service accounts through desktop Settings on the server.
+
+Search defaults to AMBRA, combining connected, enabled services with desktop's recording deduplication, relevance and quality ranking. Individual service filters remain available. Searches are debounced, canceled when replaced, paginated independently and retryable after provider failures. The result menu retains the chosen recording even if later results change the ranking. This screen currently returns songs; artist and album terms help find songs rather than opening separate artist/album pages.
+
+Track menus use desktop's compact dark glass panels, borders, fonts, icons and playback actions. Existing queue/output sheets retain their larger touch layout.
 
 Tap the output pill at the fullscreen player's bottom left to choose an output on any online device, including this phone. The phone registers with the same server output protocol as desktop, resumes at the current position, and plays through its current system audio route (speaker, headphones or Bluetooth). Switching away releases phone audio. Phone lock-screen pause/play and seeks follow the shared session; native headset and system next/previous commands also go through the server's shared queue. The server advances the queue after a song ends. Files that exist only at a computer's private path must be imported into the server library before the phone can stream them.
 
@@ -16,7 +26,7 @@ For an installed iPhone app that runs without Expo Go or Metro, run `bunx eas-cl
 
 The project is linked to https://expo.dev/accounts/eggwithpants/projects/ambra. The first iOS preview build needs Apple signing setup for `com.quantium.ambra.remote`, plus registration of the test iPhone. A non-interactive build cannot create those initial credentials. Run the preview build command interactively for that first setup; subsequent builds can reuse the saved credentials. The mini-player has an opaque background of its own, independent of the dock's fade mask.
 
-## Lyrics in Expo Go
+## Lyrics
 
 Tap the lyrics button beside the queue button. The same album cover shrinks into a compact song header, leaving a scrolling lyric viewport above the transport controls. Stack Sans Text uses its exact 650 weight through SDK 58's `fontVariationSettings`, with desktop's tight spacing, line height, directional quotes, singer labels, background vocals and romanization. Lead lyrics are 37.1–52.4 points (42.6 on a 390-point phone), exactly 5% below the previous enlarged size. No extra font asset or native dependency is needed.
 
@@ -32,7 +42,18 @@ Scroll gestures belong to the lyrics list while this view is open. Collapse the 
 
 ## SideStore with a free Apple Account
 
-Run `bunx eas-cli@latest build --platform ios --profile sidestore` from `mobile/`. This custom EAS build compiles a Release app for a real iPhone on a cloud Mac, skips Apple signing, and packages `Ambra.ipa`. Download the IPA from the build page and import it with SideStore's add-app button. The app includes its JavaScript bundle and works without Expo Go or Metro. Native background audio and the patched system playback controls are included.
+From the repository root, run:
+
+```sh
+bun install --cwd mobile --frozen-lockfile
+bun run --cwd mobile build:ios:sideload
+```
+
+Sign in to Expo when prompted, or supply `EXPO_TOKEN` through your shell's secret manager. No Apple credentials are needed for this unsigned profile. The script pins EAS CLI 27.2.0 and uploads the repository root even without Git, preserving the shared desktop assets and Rust crates. Running EAS with only `mobile/` as its upload root is insufficient.
+
+This custom EAS build compiles a Release app for a real iPhone on a cloud Mac, skips Apple signing, and packages `Ambra.ipa`. Download the IPA from the build page and import it with SideStore's add-app button or your existing sideloading tool. The app includes its JavaScript bundle and works without Expo Go or Metro. Native background audio and the patched system playback controls are included. Version 1.0.1 uses iOS build number 6.
+
+Keep the existing Expo/React Native implementation for this build. Local iOS native compilation requires macOS with full Xcode; xtool is not a drop-in replacement for this app's CocoaPods, Expo and native audio dependencies. Linux can run the tests, typecheck and iOS JavaScript export, but that export is not an installable IPA.
 
 SideStore signs and installs the IPA using your own free Apple Account. Keep its normal seven-day refresh active. Free accounts allow three installed apps including SideStore, and ten App IDs in a week. Ambra uses one app identifier and includes no widget extension or shared app group.
 
@@ -78,7 +99,9 @@ Validation:
 
 ```
 bun run lint
-bunx tsc --noEmit
+bun run typecheck
+bun run test
+bunx expo export --platform ios --output-dir /tmp/ambra-mobile-ios-export
 bun test --cwd ../desktop tests/mobileApp.test.tsx
 bun test --cwd ../desktop tests/audioSession.test.ts tests/mobileClient.test.ts tests/mobileLyrics.test.ts tests/mobileLyricsAnimation.test.ts tests/mobileLyricsSync.test.ts tests/mobileQueue.test.ts tests/phonePlayback.test.ts tests/playerGeometry.test.ts
 cargo test --manifest-path ../server/Cargo.toml --locked local_music::tests

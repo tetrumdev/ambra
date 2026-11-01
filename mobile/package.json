@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "main": "index.ts",
   "dependencies": {
     "@react-native-masked-view/masked-view": "0.3.2",
@@ -41,12 +41,14 @@
     "start:tailscale": "bun scripts/start-tailscale.cjs",
     "android": "expo run:android",
     "ios": "expo run:ios",
+    "build:ios:sideload": "bash scripts/build-ios-sideload.sh",
     "web": "expo start --web",
     "lint": "expo lint",
     "network:ios": "bash scripts/build-network.sh ios",
     "network:android": "bash scripts/build-network.sh android",
     "eas-build-post-install": "bash scripts/build-network.sh \"${EAS_BUILD_PLATFORM}\"",
-    "test": "bun test tests"
+    "test": "bun test --isolate tests",
+    "typecheck": "tsc --noEmit"
   },
   "private": true,
   "patchedDependencies": {

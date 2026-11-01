@@ -15,6 +15,8 @@ const assets = {
   output: require("../../desktop/public/volume-high.svg"),
   close: require("../../desktop/public/x.svg"),
   check: require("../../desktop/public/check.svg"),
+  search: require("../../desktop/public/search.svg"),
+  settings: require("../../desktop/public/settings.svg"),
 };
 
 export type IconName = keyof typeof assets;

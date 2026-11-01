@@ -68,6 +68,13 @@ export class Unpaired extends Error {}
 let baseUrl = "";
 let pairingPayload: string | null = null;
 let connectionEpoch = 0;
+let pairingStorage = Promise.resolve();
+
+function writePairing<T>(work: () => Promise<T>): Promise<T> {
+  const pending = pairingStorage.then(work);
+  pairingStorage = pending.then(() => {}, () => {});
+  return pending;
+}
 
 function assertConnection(epoch: number) {
   if (epoch !== connectionEpoch) throw Object.assign(new Error("The server connection changed. Try again."), { name: "AbortError" });
@@ -87,6 +94,8 @@ function resetSession() {
 export async function restore() {
   resetSession();
   const epoch = connectionEpoch;
+  await pairingStorage;
+  assertConnection(epoch);
   const [address, saved, payload] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, PAYLOAD_KEY].map(key => SecureStore.getItemAsync(key)));
   assertConnection(epoch);
   pairingPayload = payload;
@@ -105,7 +114,7 @@ export const networkStatus = () => networkCall<{ state: string; method?: string;
 
 async function forget() {
   resetSession();
-  await SecureStore.deleteItemAsync(TOKEN_KEY);
+  await writePairing(() => SecureStore.deleteItemAsync(TOKEN_KEY));
   await networkCall("close");
 }
 
@@ -153,7 +162,7 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
 }
 
 // Connection policy and retry live in Rust. A possibly delivered mutation is never replayed.
-async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
+export async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   return send<T>(path, init);
 }
 
@@ -192,34 +201,53 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
 export type PairingStarted = { requestId: string; code: string };
 
 /** `name` is how the server lists this phone, e.g. in its outputs. */
-export async function requestPairing(address: string, name: string) {
+export async function requestPairing(address: string, name: string, signal?: AbortSignal) {
   if (!address.trim().startsWith("ambra://pair/")) throw new Error("Paste the pairing link from ambra-server pair qr. Legacy addresses need re-pairing.");
   pairingPayload = address.trim();
   resetSession();
   const epoch = connectionEpoch;
   const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload });
   assertConnection(epoch);
+  if (signal?.aborted) throw Object.assign(new Error("Pairing canceled"), { name: "AbortError" });
   baseUrl = opened.baseUrl;
+  const id = await clientId();
+  assertConnection(epoch);
   return request<PairingStarted>("/api/pair/request", {
-    method: "POST", body: JSON.stringify({ clientId: await clientId(), clientName: name.slice(0, 64) }), timeoutMs: 30_000,
+    method: "POST", body: JSON.stringify({ clientId: id, clientName: name.slice(0, 64) }), timeoutMs: 30_000, signal,
   });
 }
 
 /** Resolves once someone approves the code at the server. */
 export async function awaitPairing(requestId: string, signal: AbortSignal) {
-  const epoch = connectionEpoch;
+  let epoch = connectionEpoch;
+  const payload = pairingPayload;
+  const assertActive = () => {
+    assertConnection(epoch);
+    if (signal.aborted) throw Object.assign(new Error("Pairing canceled"), { name: "AbortError" });
+  };
   while (!signal.aborted) {
     const status = await request<{ status: string; token?: string }>(`/api/pair/request/${requestId}`, { signal });
+    assertActive();
     if (status.status === "approved" && status.token) {
-      await SecureStore.setItemAsync(TOKEN_KEY, status.token);
-      await SecureStore.setItemAsync(PAYLOAD_KEY, pairingPayload!);
-      assertConnection(epoch);
-      if (signal.aborted) return;
-      resetSession();
-      const pairedEpoch = connectionEpoch;
-      const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload, token: status.token });
-      assertConnection(pairedEpoch);
-      baseUrl = opened.baseUrl;
+      await writePairing(async () => {
+        assertActive();
+        const previous = await Promise.all([TOKEN_KEY, PAYLOAD_KEY].map(key => SecureStore.getItemAsync(key)));
+        assertActive();
+        try {
+          await SecureStore.setItemAsync(TOKEN_KEY, status.token!);
+          assertActive();
+          await SecureStore.setItemAsync(PAYLOAD_KEY, payload!);
+          assertActive();
+          resetSession();
+          epoch = connectionEpoch;
+          const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: status.token });
+          assertActive();
+          baseUrl = opened.baseUrl;
+        } catch (error) {
+          await Promise.all([TOKEN_KEY, PAYLOAD_KEY].map((key, index) => previous[index] === null ? SecureStore.deleteItemAsync(key) : SecureStore.setItemAsync(key, previous[index]!)));
+          throw error;
+        }
+      });
       return;
     }
     if (status.status !== "pending") throw new Error(status.status === "denied" ? "The server refused this phone." : "The code expired.");
