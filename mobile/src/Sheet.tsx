@@ -4,6 +4,7 @@ import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
+import { BlurView } from "expo-blur";
 import { colors, haptic } from "./theme";
 
 const rise = { damping: 32, stiffness: 340, mass: 1, overshootClamping: true };
@@ -14,7 +15,7 @@ const fall = { duration: 200, easing: Easing.in(Easing.quad) };
  * A black sheet that rises over everything, follows a drag on its grip and drops away when
  * flicked or dragged far enough. Children get `close` so a choice can dismiss it in the same motion.
  */
-export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhere = false }: {
+export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhere = false, variant = "sheet" }: {
   label: string;
   onClose: () => void;
   /** Header content beside the handle, also a place to drag the sheet from. */
@@ -24,6 +25,7 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
   tall?: boolean;
   /** The whole sheet is a grip, for short menus with nothing to scroll. */
   dragAnywhere?: boolean;
+  variant?: "sheet" | "menu";
 }) {
   const insets = useSafeAreaInsets();
   const { height: screenHeight } = useWindowDimensions();
@@ -92,8 +94,9 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
         accessibilityLabel={label}
         onAccessibilityEscape={close}
         onLayout={event => height.set(event.nativeEvent.layout.height)}
-        style={[styles.sheet, tall ? { height: screenHeight - insets.top - 16 } : { maxHeight: screenHeight - insets.top - 16 }, { paddingBottom: insets.bottom + 12 }, sheetStyle]}
+        style={[styles.sheet, tall ? { height: screenHeight - insets.top - 16 } : { maxHeight: screenHeight - insets.top - 16 }, { paddingBottom: insets.bottom + 12 }, variant === "menu" && [styles.menu, { bottom: insets.bottom + 12 }], sheetStyle]}
       >
+        {variant === "menu" && <BlurView pointerEvents="none" tint="dark" intensity={60} style={StyleSheet.absoluteFill} />}
         {dragAnywhere
           ? <GestureDetector gesture={pan}><View collapsable={false}><View style={styles.handle} />{grip}{content}</View></GestureDetector>
           : <>
@@ -122,4 +125,5 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
   },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "#3a3a3a", alignSelf: "center", marginTop: 8, marginBottom: 6 },
+  menu: { left: 16, right: 16, borderRadius: 12, borderTopLeftRadius: 12, borderTopRightRadius: 12, borderWidth: 1, borderBottomWidth: 1, backgroundColor: "rgba(19, 19, 19, 0.82)", paddingHorizontal: 0, paddingBottom: 4, overflow: "hidden" },
 });

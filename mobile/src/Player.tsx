@@ -45,6 +45,9 @@ import { OutputPicker } from "./OutputPicker";
 import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
 import { MINI_HEIGHT, NAVIGATION_HEIGHT, playerFrame, playerLayout } from "./playerGeometry";
+import { SearchScreen } from "./SearchScreen";
+import { SettingsScreen } from "./SettingsScreen";
+import { loadServicePreferences } from "./servicePreferences";
 
 const PAUSED_COVER_SCALE = 0.9;
 const coverSpring = { damping: 16, stiffness: 140, mass: 1 };
@@ -90,7 +93,7 @@ function MiniProgress({ view, duration }: { view: SessionView | null; duration: 
   return <View style={styles.miniProgress}><Animated.View style={[styles.miniFill, style]} /></View>;
 }
 
-export function Player({ connectionError = null }: { connectionError?: string | null }) {
+export function Player({ connectionError = null, onChangeServer }: { connectionError?: string | null; onChangeServer: () => void }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const layout = playerLayout(width, height, insets.top, insets.bottom);
@@ -103,6 +106,8 @@ export function Player({ connectionError = null }: { connectionError?: string | 
   const [trackMenuOpen, setTrackMenuOpen] = useState(false);
   const libraryBackdrop = useRef<ComponentRef<typeof View>>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tab, setTab] = useState<"Library" | "Search" | "Settings">("Library");
+  useEffect(() => { void loadServicePreferences().catch(reason => setError(String(reason))); }, []);
   // A normalized value preserves either endpoint when screen dimensions or safe areas change.
   const expansion = useSharedValue(1);
   const expandedNow = useRef(true);
@@ -269,7 +274,9 @@ export function Player({ connectionError = null }: { connectionError?: string | 
     <View style={styles.screen}>
       <View style={styles.library} pointerEvents={expanded ? "none" : "auto"} accessibilityElementsHidden={expanded} importantForAccessibility={expanded ? "no-hide-descendants" : "auto"}>
         <BlurTargetView ref={libraryBackdrop} collapsable={false} style={StyleSheet.absoluteFill}>
-          <PlaylistBrowser view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} />
+          {tab === "Library" ? <PlaylistBrowser view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} />
+            : tab === "Search" ? <SearchScreen view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} />
+            : <SettingsScreen bottomInset={layout.miniBottom + MINI_HEIGHT} onChangeServer={onChangeServer} />}
         </BlurTargetView>
         {/* Keep native blur and touch targets mounted while a long press opens a menu. */}
         <Animated.View pointerEvents={trackMenuOpen || expanded ? "none" : "auto"} accessibilityElementsHidden={trackMenuOpen || expanded} importantForAccessibility={trackMenuOpen || expanded ? "no-hide-descendants" : "auto"} style={[styles.dock, { height: dockHeight }, dockStyle, trackMenuOpen && styles.hidden]}>
@@ -280,9 +287,9 @@ export function Player({ connectionError = null }: { connectionError?: string | 
             <View style={[StyleSheet.absoluteFill, styles.dockTint]} />
           </DockMask>
           <View style={[styles.navigation, { height: NAVIGATION_HEIGHT + insets.bottom, paddingBottom: insets.bottom }]}>
-            <Text style={styles.navigationLabel}>Home</Text>
-            <Text style={styles.navigationLabel}>Search</Text>
-            <Text style={[styles.navigationLabel, styles.navigationSelected]} accessibilityState={{ selected: true }}>Library</Text>
+            {(["Library", "Search", "Settings"] as const).map(value => <Touchable key={value} accessibilityRole="tab" accessibilityLabel={value} accessibilityState={{ selected: tab === value }} onPress={() => setTab(value)} style={styles.navigationButton}>
+              <Text style={[styles.navigationLabel, tab === value && styles.navigationSelected]}>{value}</Text>
+            </Touchable>)}
           </View>
         </Animated.View>
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.shade, shadeStyle]} />
@@ -305,6 +312,7 @@ export function Player({ connectionError = null }: { connectionError?: string | 
             <LyricsView key={track?.globalId ?? "empty"} track={track} view={view} active={expanded && lyricsOpen && gesturesEnabled} height={layout.lyricsHeight} disabled={disabled} onSeek={seconds => send("seek", { positionSeconds: seconds })} />
           </Animated.View>
           <Animated.View pointerEvents={expanded ? "box-none" : "none"} accessibilityElementsHidden={!expanded} importantForAccessibility={expanded ? "auto" : "no-hide-descendants"} style={[styles.details, { width, height }, detailStyle]}>
+            <Touchable accessibilityRole="button" accessibilityLabel="Open settings" onPress={() => { setTab("Settings"); closePlayer(); }} style={[styles.settingsButton, { top: insets.top }]}><Icon name="settings" size={20} color={colors.secondary} /></Touchable>
             <GestureDetector gesture={headerPan}>
               <View collapsable={false} style={[styles.collapseGesture, { top: insets.top }]}>
                 <Touchable accessibilityRole="button" accessibilityLabel="Close player" accessibilityHint="You can also swipe down here" haptic="tap" scale={0.9} onPress={closePlayer} style={styles.collapse}><View style={styles.grabHandle} /></Touchable>
@@ -349,7 +357,9 @@ const styles = StyleSheet.create({
   hidden: { opacity: 0 },
   dockTint: { backgroundColor: "rgba(18, 18, 18, 0.35)" },
   navigation: { position: "absolute", left: 0, right: 0, bottom: 0, flexDirection: "row", alignItems: "center" },
-  navigationLabel: { flex: 1, textAlign: "center", color: colors.muted, fontFamily: fonts.sans, fontSize: 14, fontWeight: "500" },
+  navigationButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center" },
+  navigationLabel: { textAlign: "center", color: colors.muted, fontFamily: fonts.sans, fontSize: 14, fontWeight: "500" },
+  settingsButton: { position: "absolute", right: 14, width: 44, height: 44, alignItems: "center", justifyContent: "center", zIndex: 3 },
   navigationSelected: { color: "white", fontWeight: "600" },
   shade: { backgroundColor: colors.black },
   surface: { position: "absolute", overflow: "hidden", borderCurve: "continuous" },

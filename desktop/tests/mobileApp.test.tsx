@@ -14,8 +14,8 @@ mock.module("../../mobile/node_modules/expo-font", () => ({ useFonts: () => [tru
 mock.module("../src/assets/fonts/SourceSerif4Variable-Roman.ttf", () => ({ default: 1 }));
 mock.module("../src/assets/fonts/StackSansText-VariableFont_wght.ttf", () => ({ default: 2 }));
 mock.module("../../mobile/src/theme", () => ({ colors: { black: "#000" } }));
-mock.module("../../mobile/src/Player", () => ({ Player: ({ connectionError }: { connectionError: string | null }) => <main data-player data-connection-error={connectionError ?? ""} style={{ flex: 1 }} /> }));
-mock.module("../../mobile/src/Pairing", () => ({ Pairing: ({ initialError, onPaired }: { initialError: string | null; onPaired: () => void }) => <button data-pairing data-error={initialError ?? ""} onClick={onPaired}>Pair</button> }));
+mock.module("../../mobile/src/Player", () => ({ Player: ({ connectionError, onChangeServer }: { connectionError: string | null; onChangeServer: () => void }) => <main data-player data-connection-error={connectionError ?? ""} style={{ flex: 1 }}><button data-change-server onClick={onChangeServer} /></main> }));
+mock.module("../../mobile/src/Pairing", () => ({ Pairing: ({ initialError, onPaired, onCancel }: { initialError: string | null; onPaired: () => void; onCancel?: () => void }) => <><button data-pairing data-error={initialError ?? ""} onClick={onPaired}>Pair</button>{onCancel && <button data-cancel-server onClick={onCancel}>Cancel</button>}</> }));
 
 let audioActive = false;
 const followers: AbortSignal[] = [];
@@ -89,5 +89,25 @@ test("failed restoration shows pairing, and successful pairing starts the same p
   await act(async () => pairing.click());
   expect(container.querySelector<HTMLElement>("[data-player]")?.dataset.connectionError).toBe("");
   expect(audioActive).toBe(true);
+  await act(async () => root.unmount());
+});
+
+test("changing servers stops the old follower and phone output; cancel restores the saved server", async () => {
+  restoreSaved = async () => ({ address: "ambra://pair/original", paired: true });
+  network = { state: "ConnectedLocal", error: undefined };
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => root.render(<App />));
+  const originalFollower = followers.at(-1)!;
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-change-server]")!.click());
+  expect(container.querySelector("[data-player]")).toBeNull();
+  expect(container.querySelector("[data-pairing]")).not.toBeNull();
+  expect(originalFollower.aborted).toBe(true);
+  expect(audioActive).toBe(false);
+  await act(async () => container.querySelector<HTMLButtonElement>("[data-cancel-server]")!.click());
+  expect(container.querySelector("[data-player]")).not.toBeNull();
+  expect(audioActive).toBe(true);
+  expect(followers.at(-1)).not.toBe(originalFollower);
+  expect(followers.at(-1)?.aborted).toBe(false);
   await act(async () => root.unmount());
 });

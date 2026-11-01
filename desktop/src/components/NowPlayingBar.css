@@ -31,6 +31,12 @@
     border-top: 1px solid rgba(122, 122, 122, 0.5);
 }
 
+/* WebKitGTK blurs whatever lies past the window edge as transparent, so glass
+   reaching below the window turns see-through and the content shows sharply. */
+:root[data-platform="linux"] .bottomInfoBarSurface {
+    bottom: 0;
+}
+
 /* A backdrop blur repeats its border pixels to fill the kernel, so a row divider
    reaching the bar's top edge smears into a band. Sampling from 150px (3σ of the
    50px blur) above the bar and masking that margin away keeps the visible edge

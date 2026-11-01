@@ -147,6 +147,7 @@ body,
 }
 
 :root[data-platform="windows"] [data-tauri-drag-region],
+:root[data-platform="linux"] [data-tauri-drag-region],
 :root[data-window-fullscreen] [data-tauri-drag-region] {
     display: none !important;
     pointer-events: none !important;

@@ -95,8 +95,7 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
     }
     const settle = () => { if (moved) setOptimistic(current => current?.state === moved ? null : current); };
     // With nothing to ask, the server's own move replaces this one once it hears of it.
-    if (command === null) setTimeout(settle, 5000);
-    else void coreCommand(command).catch(() => {}).finally(settle);
+    if (command !== null) void coreCommand(command).catch(() => {}).finally(settle);
     return transition.item;
   }, []);
   const next = useCallback((tellServer = true) => move(advanceQueue(stateRef.current, historyEntry), tellServer ? "next" : null), [move]);

@@ -63,7 +63,7 @@ fn normalized_to_signed(sample: f64, bits: u32) -> i64 {
         .clamp(-scale, scale - 1.0) as i64
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "windows", target_os = "linux"))]
 fn writable_frames(available_frames: usize, sample_count: usize, channels: usize) -> usize {
     available_frames.min(sample_count / channels)
 }
@@ -81,13 +81,19 @@ mod macos;
 #[cfg(target_os = "macos")]
 pub use macos::PlatformOutput;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(target_os = "linux")]
+pub use linux::PlatformOutput;
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub struct PlatformOutput;
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 impl AudioOutput for PlatformOutput {
     fn open(_spec: StreamSpec) -> Result<Self, String> {
-        Err("Native audio playback is only available on Windows and macOS".to_owned())
+        Err("Native audio playback is only available on Windows, macOS and Linux".to_owned())
     }
 
     fn start(&mut self) -> Result<(), String> {

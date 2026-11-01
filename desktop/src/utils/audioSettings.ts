@@ -64,6 +64,9 @@ function foldOutputGain(preset: DspPreset & { outputGainDb?: number }) {
   delete preset.outputGainDb;
 }
 export function saveAudioSettings(settings: AudioSettings) { setPersistentItem(storageKey, JSON.stringify(settings)); }
+export function enabledOutputsFirst(outputs: readonly OutputSettings[]) {
+  return [...outputs].sort((left, right) => Number(right.enabled) - Number(left.enabled));
+}
 export function visibleOutputs(settings: AudioSettings, devices: NativeAudioDevice[]) {
   const available = new Set(["", ...devices.map(device => device.id)]);
   return settings.outputs.filter(output => output.enabled && available.has(output.id));

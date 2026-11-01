@@ -22,12 +22,14 @@ export function followPhoneOutput() {
   let foreground: { remove(): void } | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let reportTimer: ReturnType<typeof setTimeout> | null = null;
+  let depart = () => {};
 
   void clientId().then(async id => {
     if (abort.signal.aborted) return;
     const name = (Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone")).slice(0, 64);
     const descriptor = { id, name };
     let instance = instanceId();
+    depart = () => { void endpointRequest(id, "departure", { method: "POST", body: JSON.stringify({ instanceId: instance }) }).catch(() => {}); };
     let lastContact = Date.now();
     let lost = false;
     let reporting = false;
@@ -137,6 +139,7 @@ export function followPhoneOutput() {
   });
 
   return () => {
+    depart();
     abort.abort();
     unsubscribe();
     foreground?.remove();

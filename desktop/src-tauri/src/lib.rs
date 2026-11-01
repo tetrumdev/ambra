@@ -1157,8 +1157,14 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application");
 
-    app.run(|_app, event| {
+    app.run(|app, event| {
         if matches!(event, tauri::RunEvent::Exit) {
+            tauri::async_runtime::block_on(async {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    remote_endpoint::stop_shared_output(app),
+                ).await;
+            });
             #[cfg(target_os = "macos")]
             keyboard::cleanup();
         }

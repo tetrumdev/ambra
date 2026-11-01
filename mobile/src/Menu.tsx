@@ -19,9 +19,10 @@ export function Menu({ track, actions, onClose, onVisibilityChange }: { track: T
     <Sheet
       label={`Options for ${track.name}`}
       onClose={onClose}
+      variant="menu"
       dragAnywhere
       grip={<View style={styles.heading}>
-        <Artwork track={track} size={52} />
+        <Artwork track={track} size={40} />
         <View style={styles.headingText}>
           <Text numberOfLines={1} style={styles.title}>{track.name}</Text>
           <Text numberOfLines={1} style={styles.artist}>{track.artist}</Text>
@@ -49,12 +50,12 @@ export function Menu({ track, actions, onClose, onVisibilityChange }: { track: T
 }
 
 const styles = StyleSheet.create({
-  heading: { flexDirection: "row", alignItems: "center", gap: 14, paddingHorizontal: 8, paddingTop: 10, paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line, marginBottom: 6 },
+  heading: { flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 15, paddingTop: 8, paddingBottom: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: "#2f2f2f", backgroundColor: "rgba(29, 29, 29, 0.7)" },
   headingText: { flex: 1, gap: 4 },
-  title: { color: "white", fontFamily: fonts.sans, fontSize: 16, fontWeight: "600" },
+  title: { color: "white", fontFamily: fonts.sans, fontSize: 14, fontWeight: "500" },
   artist: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13 },
   actions: { paddingBottom: 4 },
-  action: { flexDirection: "row", alignItems: "center", gap: 16, height: 54, paddingHorizontal: 12, borderRadius: 14, borderCurve: "continuous" },
+  action: { flexDirection: "row", alignItems: "center", gap: 10, height: 45, paddingHorizontal: 15, backgroundColor: "rgba(29, 29, 29, 0.7)" },
   icon: { width: 22, alignItems: "center" },
-  label: { color: "white", fontFamily: fonts.sans, fontSize: 16 },
+  label: { color: "white", fontFamily: fonts.sans, fontSize: 14 },
 });

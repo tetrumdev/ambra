@@ -81,11 +81,11 @@ function clockAt(seconds: number) {
   return clock;
 }
 
-async function paint(clock: PlaybackClock, seconds: number) {
+async function paint(clock: PlaybackClock, seconds: number, frameMilliseconds = 1000 / 60) {
   animatedRows.length = 0;
   await act(async () => {
     clock.set(seconds);
-    now += 1000 / 60;
+    now += frameMilliseconds;
     const pending = [...frames.values()];
     frames.clear();
     for (const callback of pending) callback(now);
@@ -132,6 +132,46 @@ test("unrelated player updates do not split every lyric into letters again", asy
     const line = container.querySelector<HTMLButtonElement>('[data-row="1"]')!;
     await act(async () => line.click());
     expect(seek).toHaveBeenCalledWith(4);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test.each([60, 144])("line transitions at %i Hz move only nearby groups, including after a seek", async refreshRate => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const clock = clockAt(103.98);
+  try {
+    await act(async () => root.render(<LyricsView track={track} clock={clock} playing autoSync={false} />));
+    const viewport = container.querySelector<HTMLElement>(".lyricsViewport")!;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 760 } });
+    const lines = container.querySelector<HTMLElement>(".lyricsLines")!;
+    Object.defineProperties(lines, { offsetHeight: { value: 10_000 }, offsetTop: { value: 0 } });
+    const groups = Array.from(container.querySelectorAll<HTMLElement>(".lyricGroup"));
+    for (const [index, group] of groups.entries()) {
+      Object.defineProperties(group, { offsetTop: { value: index * 100 }, offsetHeight: { value: 80 } });
+    }
+    observers[observers.length - 1]([], {} as ResizeObserver);
+    await paint(clock, 103.98, 1000 / refreshRate);
+    await paint(clock, 104.01, 1000 / refreshRate);
+    await paint(clock, 104.026, 1000 / refreshRate);
+    const moving = groups.filter(group => group.style.transform !== "");
+    expect(moving.length).toBeGreaterThan(0);
+    expect(moving.length).toBeLessThan(25);
+    expect(groups[0].style.transform).toBe("");
+    expect(groups[99].style.transform).toBe("");
+    expect(groups[26].style.transform).not.toBe("");
+    expect(groups.filter(group => group.dataset.nearby === "true").length).toBeLessThan(25);
+    expect(groups[26].dataset.nearby).toBe("true");
+    await paint(clock, 200.5, 1000 / refreshRate);
+    await paint(clock, 203.98, 1000 / refreshRate);
+    await paint(clock, 204.01, 1000 / refreshRate);
+    await paint(clock, 204.026, 1000 / refreshRate);
+    expect(groups.filter(group => group.style.transform !== "").length).toBeLessThan(25);
+    expect(groups[26].style.transform).toBe("");
+    expect(groups[51].style.transform).not.toBe("");
   } finally {
     await act(async () => root.unmount());
     container.remove();

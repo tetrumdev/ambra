@@ -54,6 +54,7 @@ struct QueuedCommand {
 struct Endpoint {
     name: String,
     instance_id: Option<String>,
+    departed: bool,
     devices: Value,
     selected_device_id: Value,
     status: Value,
@@ -97,6 +98,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(endpoints: Shared) -> Router<S> 
     Router::new()
         .route("/api/endpoints", get(list))
         .route("/api/endpoints/{endpoint_id}/presence", post(presence))
+        .route("/api/endpoints/{endpoint_id}/departure", post(departure))
         .route("/api/endpoints/{endpoint_id}/commands", get(collect))
         .route("/api/endpoints/{endpoint_id}/results", post(result))
         .route("/api/endpoints/{endpoint_id}/command", post(command))
@@ -137,7 +139,7 @@ async fn list(State(endpoints): State<Shared>) -> Json<Vec<EndpointView>> {
     endpoints.retain(|_, endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER * 4);
     let mut online = endpoints
         .iter()
-        .filter(|(_, endpoint)| endpoint.seen.elapsed() < OFFLINE_AFTER)
+        .filter(|(_, endpoint)| endpoint.online())
         .map(|(id, endpoint)| EndpointView {
             id: id.clone(),
             name: endpoint.name.clone(),
@@ -169,6 +171,10 @@ struct Presence {
 }
 
 impl Endpoint {
+    fn online(&self) -> bool {
+        !self.departed && self.seen.elapsed() < OFFLINE_AFTER
+    }
+
     /// How much longer than usual a report sampled at `sampled_ms`, on the output's clock, took
     /// to arrive. The quickest recent report shows the clocks' difference plus the shortest trip;
     /// anything slower was held up on the way, and its status was true that much earlier.
@@ -199,6 +205,7 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
     let endpoint = endpoints.entry(endpoint_id.clone()).or_insert_with(|| Endpoint {
         name: String::new(),
         instance_id: None,
+        departed: false,
         devices: json!([]),
         selected_device_id: Value::Null,
         status: Value::Null,
@@ -209,6 +216,10 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
         queue: VecDeque::new(),
         work: Arc::new(Notify::new()),
     });
+    if endpoint.departed && (report.instance_id.is_none() || report.instance_id == endpoint.instance_id) {
+        return error(StatusCode::CONFLICT, "This output instance has departed");
+    }
+    endpoint.departed = false;
     endpoint.name = report.name.trim().to_owned();
     if let Some(instance) = report.instance_id {
         if endpoint.instance_id.as_ref().is_some_and(|previous| previous != &instance) {
@@ -240,6 +251,29 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Departure {
+    instance_id: String,
+}
+
+async fn departure(State(shared): State<Shared>, Extension(caller): Extension<Caller>, Path(endpoint_id): Path<String>, Json(report): Json<Departure>) -> Response {
+    if !speaks_for(&caller, &endpoint_id) {
+        return not_this_device();
+    }
+    let mut endpoints = shared.endpoints.lock().await;
+    if let Some(endpoint) = endpoints.get_mut(&endpoint_id)
+        && endpoint.instance_id.as_deref() == Some(report.instance_id.as_str())
+    {
+        endpoint.departed = true;
+        endpoint.queue.clear();
+        shared.waiting.lock().unwrap_or_else(|p| p.into_inner()).retain(|_, waiting| waiting.endpoint_id != endpoint_id);
+        endpoint.work.notify_waiters();
+        shared.reported.notify_one();
+    }
+    Json(json!({})).into_response()
+}
+
+#[derive(Deserialize)]
 struct CollectQuery {
     wait: Option<u64>,
 }
@@ -256,7 +290,9 @@ async fn collect(State(shared): State<Shared>, Extension(caller): Extension<Call
             let Some(endpoint) = endpoints.get_mut(&endpoint_id) else {
                 return error(StatusCode::NOT_FOUND, "Report presence before collecting commands");
             };
-            endpoint.seen = Instant::now();
+            if !endpoint.online() {
+                return error(StatusCode::SERVICE_UNAVAILABLE, "That device is offline");
+            }
             endpoint.queue.retain(|command| shared.waiting.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&command.id));
             if !endpoint.queue.is_empty() {
                 return Json(endpoint.queue.drain(..).collect::<Vec<_>>()).into_response();
@@ -309,7 +345,7 @@ struct CommandRequest {
 async fn command(State(endpoints): State<Shared>, Path(endpoint_id): Path<String>, Json(request): Json<CommandRequest>) -> Response {
     if request.command == "native_audio_status" {
         let endpoints = endpoints.endpoints.lock().await;
-        return match endpoints.get(&endpoint_id).filter(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER) {
+        return match endpoints.get(&endpoint_id).filter(|endpoint| endpoint.online()) {
             Some(endpoint) if !endpoint.status.is_null() => Json(endpoint.status.clone()).into_response(),
             Some(_) => error(StatusCode::SERVICE_UNAVAILABLE, "That device hasn't reported its playback yet"),
             None => error(StatusCode::SERVICE_UNAVAILABLE, "That device is offline"),
@@ -366,12 +402,12 @@ impl Endpoints {
     /// The endpoint's latest playback report, when it came and when it was sampled, while it's online.
     pub async fn status(&self, endpoint_id: &str) -> Option<(Value, Instant, Instant, Option<String>)> {
         let endpoints = self.endpoints.lock().await;
-        let endpoint = endpoints.get(endpoint_id).filter(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER)?;
+        let endpoint = endpoints.get(endpoint_id).filter(|endpoint| endpoint.online())?;
         Some((endpoint.status.clone(), endpoint.status_at, endpoint.status_sampled_at, endpoint.instance_id.clone()))
     }
 
     pub async fn online(&self, endpoint_id: &str) -> bool {
-        self.endpoints.lock().await.get(endpoint_id).is_some_and(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER)
+        self.endpoints.lock().await.get(endpoint_id).is_some_and(Endpoint::online)
     }
 
     pub async fn name(&self, endpoint_id: &str) -> Option<String> {
@@ -382,7 +418,7 @@ impl Endpoints {
 /// Puts a command in an online endpoint's queue without waiting for its answer.
 async fn enqueue(endpoints: &Endpoints, endpoint_id: &str, id: u64, command: &str, args: Value) -> Result<(), Response> {
     let mut all = endpoints.endpoints.lock().await;
-    let Some(endpoint) = all.get_mut(endpoint_id).filter(|endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER) else {
+    let Some(endpoint) = all.get_mut(endpoint_id).filter(|endpoint| endpoint.online()) else {
         return Err(error(StatusCode::SERVICE_UNAVAILABLE, "That device is offline"));
     };
     endpoint.queue.retain(|command| endpoints.waiting.lock().unwrap_or_else(|p| p.into_inner()).contains_key(&command.id));
@@ -415,6 +451,49 @@ mod tests {
 
     fn report(status: Value) -> Json<Presence> {
         Json(Presence { name: "Desk".into(), instance_id: None, devices: Some(json!([{ "id": "d1", "name": "Speakers" }])), selected_device_id: None, status: Some(status), latency_ms: None, sampled_at_ms: None })
+    }
+
+    #[tokio::test]
+    async fn departure_withdraws_output_and_rejects_late_presence_and_commands() {
+        let endpoints = Shared::default();
+        let first = || Json(Presence { instance_id: Some("first".into()), ..report(json!({})).0 });
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), first()).await;
+        let call = tokio::spawn({ let endpoints = endpoints.clone(); async move {
+            endpoints.call("pc-1", "load_native_audio", json!({})).await
+        }});
+        tokio::task::yield_now().await;
+        departure(State(endpoints.clone()), local(), Path("pc-1".into()), Json(Departure { instance_id: "first".into() })).await;
+        assert!(tokio::time::timeout(Duration::from_millis(100), call).await.unwrap().unwrap().is_err());
+        assert!(!endpoints.online("pc-1").await);
+        assert!(endpoints.status("pc-1").await.is_none());
+        assert!(list(State(endpoints.clone())).await.0.is_empty());
+        assert_eq!(presence(State(endpoints.clone()), local(), Path("pc-1".into()), first()).await.status(), StatusCode::CONFLICT);
+        assert_eq!(collect(State(endpoints.clone()), local(), Path("pc-1".into()), Query(CollectQuery { wait: Some(0) })).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(endpoints.endpoints.lock().await["pc-1"].queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn departure_is_owned_by_the_paired_client_and_current_instance() {
+        let endpoints = Shared::default();
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), Json(Presence { instance_id: Some("first".into()), ..report(json!({})).0 })).await;
+        let stranger = Extension(Caller { client_id: Some("pc-2".into()) });
+        assert_eq!(departure(State(endpoints.clone()), stranger, Path("pc-1".into()), Json(Departure { instance_id: "first".into() })).await.status(), StatusCode::FORBIDDEN);
+        assert!(endpoints.online("pc-1").await);
+        departure(State(endpoints.clone()), local(), Path("pc-1".into()), Json(Departure { instance_id: "first".into() })).await;
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), Json(Presence { instance_id: Some("second".into()), ..report(json!({})).0 })).await;
+        departure(State(endpoints.clone()), local(), Path("pc-1".into()), Json(Departure { instance_id: "first".into() })).await;
+        assert!(endpoints.online("pc-1").await);
+        assert_eq!(endpoints.status("pc-1").await.unwrap().3.as_deref(), Some("second"));
+    }
+
+    #[tokio::test]
+    async fn missing_presence_expires_without_a_departure_notice() {
+        let endpoints = Shared::default();
+        presence(State(endpoints.clone()), local(), Path("pc-1".into()), report(json!({}))).await;
+        endpoints.endpoints.lock().await.get_mut("pc-1").unwrap().seen = Instant::now() - OFFLINE_AFTER;
+        assert_eq!(collect(State(endpoints.clone()), local(), Path("pc-1".into()), Query(CollectQuery { wait: Some(0) })).await.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!endpoints.online("pc-1").await);
+        assert!(endpoints.status("pc-1").await.is_none());
     }
 
     #[tokio::test]

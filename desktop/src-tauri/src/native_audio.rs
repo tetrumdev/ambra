@@ -768,7 +768,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     fn run(mut self) {
         // When an idle output is let go: counted from when it went idle, not from the last
-        // command, since apps ask for the device list and settings every few seconds and that
+        // command, since apps update controls and ask for settings every few seconds and that
         // alone would keep an exclusive device held forever.
         let mut release_at: Option<Instant> = None;
         loop {
@@ -779,7 +779,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 self.command_rx.try_recv().ok()
             } else if self.output.is_some() {
                 let due = *release_at.get_or_insert_with(|| Instant::now() + PAUSED_DEVICE_RELEASE_TIMEOUT);
-                // A steady stream of queued reads must not win over an expired deadline.
+                // A steady stream of queued commands must not win over an expired deadline.
                 if Instant::now() >= due {
                     release_at = None;
                     if let Err(error) = self.release_paused_output() {
@@ -806,9 +806,6 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 }
             };
             if let Some(command) = command {
-                if !command.only_reads() {
-                    release_at = None;
-                }
                 if self.handle_command(command) {
                     break;
                 }
@@ -2211,6 +2208,15 @@ mod tests {
         device_id: Option<String>,
         channels: usize,
         frames_written: usize,
+        released: Option<Sender<()>>,
+    }
+
+    impl Drop for TestOutput {
+        fn drop(&mut self) {
+            if let Some(released) = &self.released {
+                let _ = released.send(());
+            }
+        }
     }
 
     impl AudioOutput for TestOutput {
@@ -2236,6 +2242,7 @@ mod tests {
                 device_id: device_id.map(str::to_owned),
                 channels: spec.channels,
                 frames_written: 0,
+                released: None,
             })
         }
 
@@ -2252,7 +2259,12 @@ mod tests {
     }
 
     fn engine() -> PlaybackEngine<TestOutput> {
-        PlaybackEngine::new(unbounded().1, Arc::default(), None)
+        let mut worker = PlaybackEngine::new(unbounded().1, Arc::default(), None);
+        worker.audio_settings.discover(&TestOutput::list_devices().unwrap());
+        for output in &mut worker.audio_settings.outputs {
+            output.enabled = true;
+        }
+        worker
     }
 
     struct Song(PathBuf);
@@ -2339,6 +2351,22 @@ mod tests {
         let status = lock_status(&worker.status);
         assert_eq!(status.underruns, 3);
         assert_eq!(status.decoded_buffer_seconds, 0.0);
+    }
+
+    #[test]
+    fn hardware_output_requires_explicit_enablement_before_selection() {
+        let mut worker = PlaybackEngine::<TestOutput>::new(unbounded().1, Arc::default(), None);
+        assert_eq!(
+            worker.select_device(Some("headphones".into())).unwrap_err(),
+            "Enable this output in Settings before selecting it"
+        );
+        assert_eq!(worker.audio_settings.selected_output_id, "");
+        let mut settings = worker.audio_settings.clone();
+        settings.discover(&TestOutput::list_devices().unwrap());
+        settings.outputs.iter_mut().find(|output| output.id == "headphones").unwrap().enabled = true;
+        worker.apply_audio_settings(settings).unwrap();
+        worker.select_device(Some("headphones".into())).unwrap();
+        assert_eq!(worker.audio_settings.selected_output_id, "headphones");
     }
 
     #[test]
@@ -2446,12 +2474,64 @@ mod tests {
         std::fs::remove_file(&song.0).unwrap();
         worker.release_paused_output().unwrap();
         assert!(worker.output.is_none());
-        assert!(worker.decoder.is_none());
+        assert!(worker.decoder.is_some());
         assert_eq!(lock_status(&worker.status).current_time, 0.2);
         assert!(lock_status(&worker.status).error.is_none());
+        play(&mut worker).unwrap();
+        assert!(worker.output.is_some());
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
+        worker.pause().unwrap();
         worker.select_device(Some("headphones".into())).unwrap();
         song.create();
         play(&mut worker).unwrap();
         assert_eq!(lock_status(&worker.status).current_time, 0.2);
+    }
+
+    #[test]
+    fn idle_device_is_released_despite_repeated_pause_volume_queue_and_status_commands() {
+        let mut worker = engine();
+        let song = Song::missing();
+        song.create();
+        worker.load(song.source(), None, 0.0, true).unwrap();
+        worker.rendered_frames = 9_600;
+        worker.pause().unwrap();
+        let status = worker.status.clone();
+        let (released, release) = unbounded();
+        worker.output.as_mut().unwrap().released = Some(released);
+        let (commands, receiver) = unbounded();
+        worker.command_rx = receiver;
+        let running = thread::spawn(move || worker.run());
+        let deadline = Instant::now() + PAUSED_DEVICE_RELEASE_TIMEOUT + Duration::from_secs(1);
+        let mut released = false;
+        while Instant::now() < deadline {
+            let (reply, result) = bounded(1);
+            commands.send(WorkerCommand::Pause { reply }).unwrap();
+            result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+            let (reply, result) = bounded(1);
+            commands.send(WorkerCommand::SetVolume { volume: 73.0, reply }).unwrap();
+            result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+            let (reply, result) = bounded(1);
+            commands.send(WorkerCommand::Queue { source: None, expected_source: None, reply }).unwrap();
+            result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+            let (reply, result) = bounded(1);
+            commands.send(WorkerCommand::GetAudioSettings { reply }).unwrap();
+            result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
+            if release.recv_timeout(Duration::from_millis(20)).is_ok() {
+                released = true;
+                break;
+            }
+        }
+        let (reply, result) = bounded(1);
+        commands.send(WorkerCommand::GetVolume { reply }).unwrap();
+        assert_eq!(result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap(), 73.0);
+        let snapshot = lock_status(&status).clone();
+        commands.send(WorkerCommand::Shutdown).unwrap();
+        running.join().unwrap();
+        assert!(released, "idle control commands must not postpone releasing the audio device");
+        assert_eq!(snapshot.current_time, 0.2);
+        assert_eq!(snapshot.current_source.as_deref(), Some(song.source().as_str()));
+        assert!(!snapshot.is_playing);
+        assert!(!snapshot.buffering);
+        assert!(snapshot.error.is_none());
     }
 }

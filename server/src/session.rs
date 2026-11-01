@@ -903,10 +903,12 @@ async fn step(core: &Core) -> Result<(), String> {
             && status["ended"] != true
             && status["error"].is_null()
     };
-    // A fresh authorized output needs a reload, but it does not change the
-    // user's play/pause intent. The load below resumes the confirmed position
-    // and preserves generation/history. Truly offline outputs still pause in
-    // the status(None) branch above.
+    let restarted = core.transport().loaded.as_ref().is_some_and(|loaded|
+        loaded.endpoint_id == endpoint && loaded.endpoint_instance != endpoint_instance);
+    if restarted || empty_engine {
+        core.pause_disconnected_output();
+        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+    }
 
     let mut source = canonical_source.clone();
     let mut live = false;
@@ -1220,10 +1222,35 @@ mod driver_tests {
         /// One report at a time, as the real output app sends them, so none arrives out of order.
         sending: Arc<Mutex<()>>,
         load_delay: Arc<SyncMutex<Duration>>,
+        workers: Vec<tokio::task::JoinHandle<()>>,
     }
 
     impl Harness {
         async fn start() -> Self { Self::start_backend(false).await }
+
+        async fn playing_output() -> Self {
+            let harness = Self::start().await;
+            *harness.instance.lock().unwrap() = Some("first-process".into());
+            harness.report(json!({})).await;
+            harness.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+            harness.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [track("a"), track("b")] } })).await;
+            harness.wait_for_command("load_native_audio").await;
+            harness.report(json!({ "currentSource": source("a"), "currentTime": 42.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+            tokio::time::timeout(Duration::from_secs(2), async {
+                while harness.core.transport().position != 42.0 {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            }).await.unwrap();
+            harness
+        }
+
+        async fn stop_workers(&mut self) {
+            for worker in self.workers.drain(..) {
+                worker.abort();
+                let _ = worker.await;
+            }
+        }
+
         async fn start_backend(soloist: bool) -> Self {
             let directory = std::env::temp_dir().join(format!("ambra-core-{}-{}", std::process::id(), crate::server_config::random_hex(4)));
             let state = Arc::new(UserState::at(directory.join("user-state.v1.json")));
@@ -1231,11 +1258,12 @@ mod driver_tests {
             let core = if soloist { Core::with_spotify(state.clone(), endpoints.clone(), Some(crate::soloist::tests::manager(&directory, true))) } else { Core::new(state.clone(), endpoints.clone()) };
             let app: Router = Router::new()
                 .merge(crate::endpoints::router(endpoints.clone()))
-                .merge(router(core.clone()));
+                .merge(router(core.clone()))
+                .layer(axum::Extension(crate::access::Caller { client_id: None }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-            let harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default(), sending: Arc::default(), load_delay: Arc::default() };
+            let mut harness = Self { base, http: reqwest::Client::new(), state, core, instance: Arc::default(), received: Arc::default(), status: Arc::default(), sending: Arc::default(), load_delay: Arc::default(), workers: Vec::new() };
             harness.report(json!({})).await;
             harness.serve_commands();
             harness
@@ -1252,10 +1280,10 @@ mod driver_tests {
         }
 
         /// The output app: answers every command at once, like an idle engine would.
-        fn serve_commands(&self) {
+        fn serve_commands(&mut self) {
             let (base, http, status, instance, sending) = (self.base.clone(), self.http.clone(), self.status.clone(), self.instance.clone(), self.sending.clone());
             // A real output reports continuously, including after a command acknowledgement.
-            tokio::spawn(async move {
+            self.workers.push(tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     let _sending = sending.lock().await;
@@ -1264,9 +1292,9 @@ mod driver_tests {
                     let _ = http.post(format!("{base}/api/endpoints/desk/presence"))
                         .json(&json!({ "name": "Desk", "instanceId": instance, "status": status })).send().await;
                 }
-            });
+            }));
             let (base, http, received, status, load_delay) = (self.base.clone(), self.http.clone(), self.received.clone(), self.status.clone(), self.load_delay.clone());
-            tokio::spawn(async move {
+            self.workers.push(tokio::spawn(async move {
                 loop {
                     let Ok(response) = http.get(format!("{base}/api/endpoints/desk/commands?wait=5")).send().await else { continue };
                     for command in response.json::<Vec<Value>>().await.unwrap_or_default() {
@@ -1288,7 +1316,7 @@ mod driver_tests {
                         });
                     }
                 }
-            });
+            }));
         }
 
         async fn post(&self, path: &str, body: Value) -> Value {
@@ -1311,6 +1339,12 @@ mod driver_tests {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
             panic!("timed out waiting for {command}: {:?}", self.received.lock().unwrap());
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            for worker in &self.workers { worker.abort(); }
         }
     }
 
@@ -1423,8 +1457,6 @@ mod driver_tests {
         let resume_position = {
             let _operation = h.core.operation.lock().await;
             let mut transport = h.core.transport();
-            // The state left while the app was absent; reopening must recover without
-            // a playTrack command, queue mutation, or another listening-history entry.
             transport.error = Some("Desk is offline".into());
             transport.buffering = true;
             if with_instance {
@@ -1444,9 +1476,10 @@ mod driver_tests {
             assert_eq!(args["source"], source("a"));
             assert_eq!(args["nextSource"], source("b"));
             assert_eq!(args["positionSeconds"], resume_position);
-            assert_eq!(args["autoplay"], !paused);
+            assert_eq!(args["autoplay"], false);
         }
-        h.report(json!({ "currentSource": source("a"), "currentTime": 65.0, "duration": 200.0, "isPlaying": !paused, "buffering": false, "ended": false })).await;
+        assert!(!h.core.transport().playing);
+        h.report(json!({ "currentSource": source("a"), "currentTime": 65.0, "duration": 200.0, "isPlaying": false, "buffering": false, "ended": false })).await;
         eventually!("resumed report", h.core.transport().position == 65.0);
         assert_eq!(h.core.transport().generation, generation);
         assert_eq!(h.queue().await, queue);
@@ -1454,8 +1487,13 @@ mod driver_tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn reopening_the_output_resumes_the_current_song_and_clears_offline_error() {
+    async fn reopening_the_output_keeps_the_current_song_paused_and_clears_offline_error() {
         check_reopened_output(true, false).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn reopening_a_legacy_output_keeps_a_playing_song_paused() {
+        check_reopened_output(false, false).await;
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1466,6 +1504,57 @@ mod driver_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn reopening_an_identified_output_keeps_a_paused_song_paused() {
         check_reopened_output(true, true).await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn only_the_active_outputs_departure_pauses_playback_until_explicit_resume() {
+        let mut harness = Harness::playing_output().await;
+        harness.post("/api/endpoints/other/presence", json!({ "name": "Other", "instanceId": "other-process", "status": {} })).await;
+        harness.post("/api/endpoints/other/departure", json!({ "instanceId": "other-process" })).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(harness.core.transport().playing);
+        let queue = harness.queue().await;
+        let history = harness.history().await;
+        let generation = harness.core.transport().generation;
+        harness.stop_workers().await;
+        harness.post("/api/endpoints/desk/departure", json!({ "instanceId": "first-process" })).await;
+        eventually!("active output departure to pause playback", !harness.core.transport().playing);
+        {
+            let transport = harness.core.transport();
+            assert!(!transport.buffering);
+            assert!(transport.loaded.is_none());
+            assert_eq!(transport.position, 42.0);
+        }
+        harness.received.lock().unwrap().clear();
+        *harness.instance.lock().unwrap() = Some("second-process".into());
+        harness.report(json!({ "currentSource": null, "currentTime": 0.0, "isPlaying": false, "buffering": false, "ended": false })).await;
+        harness.serve_commands();
+        harness.wait_for_command("load_native_audio").await;
+        eventually!("paused output to reload", harness.core.transport().loaded.is_some());
+        assert!(harness.received.lock().unwrap().iter().filter(|(command, _)| command == "load_native_audio").all(|(_, args)| args["autoplay"] == false));
+        assert!(!harness.core.transport().playing);
+        harness.report(json!({ "currentSource": source("a"), "currentTime": 42.0, "duration": 200.0, "isPlaying": false, "buffering": false, "ended": false })).await;
+        let resumed = harness.post("/api/session/command", json!({ "action": "play" })).await;
+        assert_eq!(resumed["playing"], true);
+        harness.wait_for_command("play_native_audio").await;
+        assert_eq!(harness.core.transport().generation, generation);
+        assert_eq!(harness.queue().await, queue);
+        assert_eq!(harness.history().await, history);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_crashed_output_pauses_after_presence_expires() {
+        let mut harness = Harness::playing_output().await;
+        let queue = harness.queue().await;
+        harness.stop_workers().await;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while harness.core.transport().playing {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        }).await.expect("a vanished client must pause after the eight-second presence timeout");
+        assert_eq!(harness.core.transport().position, 42.0);
+        assert!(!harness.core.transport().buffering);
+        assert_eq!(harness.queue().await, queue);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1621,6 +1710,9 @@ mod driver_tests {
         let generation = h.core.transport().generation;
         *h.instance.lock().unwrap() = Some("second-process".into());
         h.report(json!({ "currentSource": null, "currentTime": 0.0, "isPlaying": false, "buffering": false, "ended": false })).await;
+        eventually!("restarted output to pause Spotify playback", !h.core.transport().playing && !h.core.transport().buffering);
+        assert_eq!(h.core.transport().position, 64.0);
+        h.post("/api/session/command", json!({ "action": "play" })).await;
         let resumed = latest_live(&h, Some(&first)).await;
         assert_ne!(resumed, first);
         h.report(json!({ "currentSource": resumed, "currentTime": 64.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;

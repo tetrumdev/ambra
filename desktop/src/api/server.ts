@@ -6,7 +6,7 @@ import type {
   Track,
   TrackArtist,
 } from "../types/music";
-import { whiteArtwork } from "../utils/artworkPlaceholder";
+import { remoteTrack } from "../utils/remoteTrack";
 import { fetchWhenServerReady } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
@@ -384,45 +384,7 @@ function artworkRetryDelay(attempt: number, signal: AbortSignal) {
 }
 
 export function playableTrack(track: RemoteTrack): Track {
-  const displayTitle = withVersion(track.title, track.version);
-  const displayAlbum = withVersion(
-    track.album?.title ?? "Unknown Album",
-    track.album?.version ?? null,
-  );
-  return {
-    globalId: track.id,
-    provider: track.provider,
-    providerTrackId: track.providerTrackId,
-    playbackKind: track.playback.kind,
-    audio: serverUrl(track.playback.url),
-    cover: track.album?.coverUrl ?? whiteArtwork,
-    nativeCover: track.album?.coverUrl ?? null,
-    name: displayTitle,
-    version: track.version,
-    album: displayAlbum,
-    albumVersion: track.album?.version ?? null,
-    albumId: track.album?.providerId ?? null,
-    albumArtists: track.album?.artists ?? [],
-    artist: track.primaryArtist.name,
-    artists: track.artists,
-    trackNumber: track.trackNumber,
-    discNumber: track.discNumber,
-    durationSeconds: track.durationSeconds,
-    releaseDate: track.album?.releaseDate ?? null,
-    explicit: track.explicit,
-    isrc: track.isrc,
-    copyright: track.copyright,
-    label: track.album?.label ?? null,
-    genres: track.album?.genres ?? [],
-    upc: track.album?.upc ?? null,
-    quality: track.quality,
-    maximumSamplingRateKHz: track.maximumSamplingRateKHz,
-    maximumBitDepth: track.maximumBitDepth,
-  };
-}
-
-function withVersion(title: string, version: string | null) {
-  return version?.trim() ? `${title} (${version})` : title;
+  return remoteTrack(track, serverUrl);
 }
 
 async function responseTracks(response: Response): Promise<Track[]> {

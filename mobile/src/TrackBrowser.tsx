@@ -12,6 +12,7 @@ import { editUpcoming, enqueueEntries, playEntries, playlistEntries, shuffledEnt
 import { Sheet } from "./Sheet";
 import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
+import { serviceAllowed, servicePreferences, subscribeServicePreferences } from "./servicePreferences";
 
 const placeholder = require("../assets/ambra.png");
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
@@ -54,7 +55,7 @@ function boundRows(contents: PlaylistContents | null) {
   return rows;
 }
 
-const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, onPress, onMore }: {
+export const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, onPress, onMore }: {
   track: Track;
   index: number;
   active: boolean;
@@ -95,6 +96,7 @@ const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, 
 /** MEGA, as desktop's playlist page: tap a song to play from it, hold it for its options. */
 export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset, onMenuVisibilityChange }: { view: SessionView | null; bottomInset: number; onMenuVisibilityChange?: (visible: boolean) => void }) {
   const insets = useSafeAreaInsets();
+  const enabled = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
   const [contents, setContents] = useState<PlaylistContents | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -121,9 +123,9 @@ export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset
     return () => abort.abort();
   }, [reload, address]);
 
-  const tracks = useMemo(() => contents?.tracks ?? [], [contents]);
-  const entries = useMemo(() => contents ? playlistEntries(contents.playlist, contents.tracks) : [], [contents]);
-  const bound = useMemo(() => boundRows(contents), [contents]);
+  const tracks = useMemo(() => contents?.tracks.filter(track => serviceAllowed(track.provider, enabled)) ?? [], [contents, enabled]);
+  const entries = useMemo(() => contents ? playlistEntries(contents.playlist, tracks) : [], [contents, tracks]);
+  const bound = useMemo(() => boundRows(contents ? { ...contents, tracks } : null), [contents, tracks]);
   const now = currentTrack(view);
   const playing = !!view?.playing;
 

@@ -1,6 +1,6 @@
 import type { LyricsAvailability } from "../hooks/useLyricsAvailability";
 import type { AppScreen } from "../utils/preferences";
-import { canUseWindowDragRegion } from "../utils/windowChrome";
+import { canUseWindowDragRegion, desktopPlatform } from "../utils/windowChrome";
 import "./AppChrome.css";
 import "../App.css";
 
@@ -27,11 +27,7 @@ export function AppChrome({
   onExit,
   onSelectPlayerView,
 }: AppChromeProps) {
-  const isWindows = navigator.userAgent.includes("Windows");
-  const canDragWindow = canUseWindowDragRegion(
-    isWindows ? "windows" : "other",
-    isFullscreen,
-  );
+  const canDragWindow = canUseWindowDragRegion(desktopPlatform(), isFullscreen);
   const isPlayerScreen =
     currentScreen === "bigscreen" || currentScreen === "lyrics";
   const lyricsUnavailable =

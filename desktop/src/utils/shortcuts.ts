@@ -5,7 +5,6 @@
  */
 
 export const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent);
-const isWindows = typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
 
 /** One key and its modifiers. `mod` is Cmd on macOS and Ctrl elsewhere; `ctrl` is the Mac's Control key. */
 export type ShortcutBinding = { code: string; mod?: boolean; alt?: boolean; shift?: boolean; ctrl?: boolean };
@@ -50,7 +49,7 @@ export const shortcutDefinitions = {
     label: "Forward", category: "Screens",
     defaults: [key("ArrowRight", { alt: true }), key("BrowserForward"), ...(isMac ? [key("BracketRight", { mod: true })] : [])],
   },
-  toggleFullscreen: { label: "Fullscreen", category: "Screens", defaults: [key("F11")], unavailable: !isWindows },
+  toggleFullscreen: { label: "Fullscreen", category: "Screens", defaults: [key("F11")], unavailable: isMac },
 
   listNext: { label: "Next item in list", category: "Lists", defaults: [key("ArrowDown")], hint: "Songs, search results, albums and cards" },
   listPrevious: { label: "Previous item in list", category: "Lists", defaults: [key("ArrowUp")] },
