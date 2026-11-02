@@ -15,7 +15,7 @@ import { nativeAudioSource } from "../utils/nativeAudioSource";
 const noDeck = () => {};
 
 /** This device's engine, as the shared output reports it (remote_endpoint.rs `show_status`). */
-type EngineStatus = { currentSource: string | null; currentTime: number; isPlaying: boolean; buffering: boolean };
+type EngineStatus = { currentSource: string | null; currentTime: number; duration?: number; isPlaying: boolean; buffering: boolean };
 /** The engine is followed only while it keeps reporting. */
 const ENGINE_FRESH_MS = 1500;
 /** How long a play, pause or skip shown at once waits for the server to agree. */
@@ -61,6 +61,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const latestQueue = useRef(queue);
   latestQueue.current = queue;
   const [enginePlaying, setEnginePlaying] = useState<boolean | null>(null);
+  const [engineDuration, setEngineDuration] = useState<number | null>(null);
 
   // While this device is the output and its engine plays the server's song, the clock follows the
   // engine itself: what's heard here, with no trip to the server and back in between.
@@ -112,6 +113,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       clock.set(payload.currentTime);
       clock.setRunning(payload.isPlaying && !payload.buffering);
       setEnginePlaying(payload.isPlaying || payload.buffering);
+      const duration = payload.duration;
+      setEngineDuration(typeof duration === "number" && Number.isFinite(duration) && duration > 0 ? duration : null);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); };
   }, [clock, followsEngine]);
@@ -123,6 +126,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       // Mid-skip the server still describes the song being left; the clock waits at the start.
       if (followsEngine() || skipping.current) return;
       setEnginePlaying(null);
+      setEngineDuration(null);
       clock.set(positionOf(view));
       clock.setRunning(view.playing && !view.buffering && view.outputOnline);
     };
@@ -153,6 +157,15 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
 
   const currentTrack = queue.currentEntry?.track;
   const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
+  // A local skip can be audible before the server confirms it. The old song's duration
+  // must not be paired with the new title, progress bar, or seek limits.
+  const sessionMatchesTrack = !!currentTrack && view?.queue.current?.globalTrackId === currentTrack.globalId
+    && (!view.loadedSource || view.loadedSource.includes("/api/playback/live/")
+      || sameSource(view.loadedSource, nativeAudioSource(currentTrack)));
+  const engineMatchesTrack = !!currentTrack
+    && (sameSource(engine.current?.status.currentSource, nativeAudioSource(currentTrack)) || sessionMatchesTrack);
+  const duration = (engineMatchesTrack && followsEngine() ? engineDuration : null)
+    ?? ((sessionMatchesTrack ? view?.duration : 0) || currentTrack?.durationSeconds || 0);
 
   // Play and pause show at once. On this device's own output they act on its engine alone, which
   // the server takes on from the engine's next report; elsewhere the server is asked.
@@ -223,8 +236,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const transport = useRef({ setPlaying, seekTo, skip });
   transport.current = { setPlaying, seekTo, skip };
   // App shortcuts control the shared transport; hardware controls only affect local playback.
-  const shortcutState = useRef({ track: currentTrack, duration: view?.duration ?? 0 });
-  shortcutState.current = { track: currentTrack, duration: view?.duration ?? 0 };
+  const shortcutState = useRef({ track: currentTrack, duration });
+  shortcutState.current = { track: currentTrack, duration };
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
       const current = shortcutState.current;
@@ -295,7 +308,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     currentTrack,
     audioQuality: view?.audioQuality ?? null,
     clock,
-    duration: view?.duration || currentTrack?.durationSeconds || 0,
+    duration,
     isPlaying: playingNow.current,
     previousActivation,
     nextActivation,
