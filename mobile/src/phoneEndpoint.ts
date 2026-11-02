@@ -2,7 +2,7 @@ import { createAudioPlayer } from "expo-audio";
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
-import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, subscribe } from "./client";
+import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, setLocalControl, setLocalPlayback, subscribe } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
@@ -15,12 +15,8 @@ type Job = { id: number; command: string; args: Record<string, unknown> };
 const instanceId = () => `phone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 /** The server shows the phone offline after this long without word from it. */
 const QUIET_MS = 8000;
-/**
- * How long the phone keeps playing from its downloaded audio while it reconnects. The server
- * holds the session for 90 seconds (RECONNECT_GRACE in server/src/endpoints.rs); stopping a
- * little sooner means the phone never plays on after the core has given up on it.
- */
-const RECONNECT_GRACE_MS = 85_000;
+/** The phone's own position is shown again once it drifts this far from the one last shown. */
+const LOCAL_DRIFT_SECONDS = 0.5;
 
 /** The phone reports presence and executes the core's output commands, just as desktop does. */
 export function followPhoneOutput() {
@@ -36,10 +32,9 @@ export function followPhoneOutput() {
     if (abort.signal.aborted) return;
     const name = (Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone")).slice(0, 64);
     const descriptor = { id, name };
-    let instance = instanceId();
+    const instance = instanceId();
     depart = () => { void endpointRequest(id, "departure", { method: "POST", body: JSON.stringify({ instanceId: instance }) }).catch(() => {}); };
     let lastContact = Date.now();
-    let lost = false;
     let reporting = false;
     let reportAgain = false;
     let signature = "";
@@ -62,7 +57,6 @@ export function followPhoneOutput() {
         });
         if (!abort.signal.aborted) {
           lastContact = Date.now();
-          lost = false;
           if (!info?.ready) publish({ ...descriptor, ready: true, error: null });
         }
       } catch (reason) {
@@ -73,10 +67,26 @@ export function followPhoneOutput() {
         if (reportAgain && !abort.signal.aborted) { reportAgain = false; reportTimer = setTimeout(() => { void report(); }, 50); }
       }
     };
+    // While this phone plays the server's song, its screens follow its own player.
+    let shownLocal: { playing: boolean; buffering: boolean; positionSeconds: number; at: number } | null = null;
+    const playsCore = () => ownsOutput() && player!.controls(sessionView()?.loadedSource);
+    const showLocal = () => {
+      const status = player!.status();
+      if (!playsCore()) { shownLocal = null; setLocalPlayback(null); return; }
+      const playing = status.isPlaying || status.buffering;
+      const buffering = status.buffering;
+      const at = Date.now();
+      const expected = shownLocal ? shownLocal.positionSeconds + (shownLocal.playing && !shownLocal.buffering ? (at - shownLocal.at) / 1000 : 0) : NaN;
+      if (shownLocal && shownLocal.playing === playing && shownLocal.buffering === buffering
+        && Math.abs(expected - status.currentTime) < LOCAL_DRIFT_SECONDS) return;
+      shownLocal = { playing, buffering, positionSeconds: status.currentTime, at };
+      setLocalPlayback(shownLocal);
+    };
     const changed = () => {
       const status = player!.status();
-      const next = JSON.stringify([status.currentSource, status.isPlaying, status.buffering, status.ended, status.error]);
+      const next = JSON.stringify([status.currentSource, status.isPlaying, status.buffering, status.ended, status.error, status.control?.seq]);
       if (next !== signature) { signature = next; void report(); }
+      showLocal();
     };
     player = new PhonePlayback({
       create: source => createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false }),
@@ -92,6 +102,19 @@ export function followPhoneOutput() {
         if (ownsOutput() && !abort.signal.aborted) void command(action, details).catch(() => { if (!ownsOutput()) player?.release(); });
       },
     });
+    setLocalControl((action, details) => {
+      if (!player || !playsCore()) return false;
+      const playing = player.status().isPlaying || player.status().buffering;
+      if (action === "play" || action === "pause" || action === "toggle") {
+        void player.local(action === "toggle" ? (playing ? "pause" : "play") : action);
+        return true;
+      }
+      if (action === "seek" && Number.isFinite(Number(details.positionSeconds))) {
+        void player.local("seek", Math.max(0, Number(details.positionSeconds)));
+        return true;
+      }
+      return false;
+    });
     const sync = () => {
       const next = ownsOutput();
       if (next !== owned) {
@@ -101,6 +124,7 @@ export function followPhoneOutput() {
         changed();
       }
       if (next) player?.updateMetadata();
+      showLocal();
     };
     unsubscribe = subscribe(sync);
     sync();
@@ -110,22 +134,15 @@ export function followPhoneOutput() {
     let quiet = false;
     heartbeat = setInterval(() => {
       const silence = Date.now() - lastContact;
-      // A network change: keep playing what is already downloaded while the bridge reconnects.
-      if (!quiet && !lost && silence > QUIET_MS) {
+      // Out of reach: keep playing what is already downloaded, under this phone's own control,
+      // until the server answers again. Only the server choosing another output stops it.
+      if (!quiet && silence > QUIET_MS) {
         quiet = true;
         publish({ ...descriptor, ready: true, error: "Reconnecting…" });
       }
       if (silence <= QUIET_MS && quiet) {
         quiet = false;
-        if (!lost) publish({ ...descriptor, ready: true, error: null });
-      }
-      // Too long out of reach: the core can have moved on, so this phone must not keep playing.
-      if (!lost && silence > RECONNECT_GRACE_MS) {
-        lost = true;
-        quiet = false;
-        instance = instanceId();
-        player?.release();
-        publish({ ...descriptor, ready: false, error: "Connection lost. Reconnecting…" });
+        publish({ ...descriptor, ready: true, error: null });
       }
       void report();
     }, 1000);
@@ -168,6 +185,8 @@ export function followPhoneOutput() {
     foreground?.remove();
     if (heartbeat) clearInterval(heartbeat);
     if (reportTimer) clearTimeout(reportTimer);
+    setLocalControl(null);
+    setLocalPlayback(null);
     player?.release();
     publish(null);
     void configureAudioSession(false).catch(() => {});
