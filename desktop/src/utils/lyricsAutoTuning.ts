@@ -31,6 +31,14 @@ export const defaultTuning: AutoSyncTuning = { minProminence: 4, minMargin: 0.75
 
 /** Shifts smaller than this are left alone; they are within what a listener notices. */
 const MIN_CORRECTION_MS = 150;
+/**
+ * Lyrics matched to the recording are rarely off by more than a second or two. A larger shift
+ * is far more often a repeated section scoring well than a real offset, so it needs much
+ * stronger evidence, and an untrusted guess this large is never applied.
+ */
+export const LARGE_SHIFT_MS = 3000;
+const LARGE_PROMINENCE_FACTOR = 2;
+const LARGE_MARGIN_FACTOR = 3;
 /** A detection within this of where the listener settled counts as right; nudges move in 100 ms steps. */
 const MATCH_TOLERANCE_MS = 250;
 /** Samples needed before the thresholds move away from the defaults. */
@@ -177,5 +185,7 @@ export function trustedCorrection(evidence: OffsetEvidence): number | null {
   const tuning = autoSyncTuning();
   if (!accepts(evidence, tuning.minProminence, tuning.minMargin)) return null;
   const correctionMs = bestCorrection(evidence)!;
+  if (Math.abs(correctionMs) > LARGE_SHIFT_MS && !accepts(evidence,
+    tuning.minProminence * LARGE_PROMINENCE_FACTOR, Math.max(tuning.minMargin, 0.25) * LARGE_MARGIN_FACTOR)) return null;
   return Math.abs(correctionMs) < MIN_CORRECTION_MS ? 0 : correctionMs;
 }

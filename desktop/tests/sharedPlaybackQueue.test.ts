@@ -142,3 +142,16 @@ test("a confirmed server skip retains the acknowledged song", async () => {
     expect(queue.historyEntries).toHaveLength(1);
   } finally { await mounted.unmount(); }
 });
+
+test("a local move made before the server's newer queue renders does not outlast it", async () => {
+  const mounted = await mount();
+  try {
+    // The server's view is in the store, but this hasn't rendered it yet.
+    const server = { current: entries[2], upcoming: [], history: [] };
+    confirmed = { ...server, revision: 2 };
+    view = { queue: server, revision: view.revision + 1 };
+    await act(async () => { queue.next(false); });
+    await act(async () => { for (const listener of listeners) listener(); });
+    expect(mounted.container.textContent).toBe("third");
+  } finally { await mounted.unmount(); }
+});

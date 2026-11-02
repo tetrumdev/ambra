@@ -73,3 +73,36 @@ test("an explicitly requested release and explicitness still take precedence", (
   const clean = track("qobuz", "clean", { explicit: false });
   expect(groupSearchResults([clean, requested], "Deadly Verses")[0].track).toBe(requested);
 });
+
+const artist = (name: string) => ({ providerId: "", name, imageUrl: null });
+
+test("one recording credited differently on Spotify joins its lossless copy and does not lead", () => {
+  const stone = { name: "Stone Cold", album: "Stonecold / Hold On", isrc: "GBFNM9700001", explicit: false };
+  const qobuz = track("qobuz", "stone", { ...stone, artist: "Groove Chronicles (Noodles)", artists: [artist("Groove Chronicles (Noodles)")], durationSeconds: 338 });
+  const tidal = track("tidal", "stone", { ...stone, artist: "Groove Chronicles (Noodles)", artists: [artist("Groove Chronicles (Noodles)")], durationSeconds: 337 });
+  const lossy = spotify("stone", { ...stone, artist: "groove chronicles", artists: [artist("groove chronicles")], durationSeconds: 337 });
+  const holdOn = track("qobuz", "hold", { ...stone, name: "Hold On", isrc: "GBFNM9700002", artist: "Groove Chronicles (Noodles)", artists: [artist("Groove Chronicles (Noodles)")], durationSeconds: 313 });
+  const groups = groupSearchResults([lossy, qobuz, tidal, holdOn], "Groove Chronicles - Stone Cold");
+  expect(groups).toHaveLength(2);
+  const result = rankSearchResults([lossy, qobuz, tidal, holdOn], "Groove Chronicles - Stone Cold");
+  expect(result).toHaveLength(2);
+  expect(result[0].provider).not.toBe("spotify");
+  expect(result[0].name).toBe("Stone Cold");
+});
+
+test("a remix crediting its remixers on Spotify joins the copy that credits the lead artist alone", () => {
+  const values = { album: "Coming Up For Air (feat. Sarah Whittaker-Gilbey)", isrc: "GBDUE0400307", durationSeconds: 431, explicit: false };
+  const qobuz = track("qobuz", "koma", { ...values, name: "Coming Up For Air [feat. Sarah Whittaker-Gilbey] (Koma & Bones Remix)", artist: "Rennie Pilgrem", artists: [artist("Rennie Pilgrem")] });
+  const lossy = spotify("koma", { ...values, name: "Coming Up For Air - Koma & Bones Remix",
+    artist: "Rennie Pilgrem, Sarah Whittaker-Gilbey, Koma, Bones",
+    artists: ["Rennie Pilgrem", "Sarah Whittaker-Gilbey", "Koma", "Bones"].map(artist) });
+  const groups = groupSearchResults([lossy, qobuz], "rennie pilgrem coming up for air");
+  expect(groups).toHaveLength(1);
+  expect(groups[0].track.provider).toBe("qobuz");
+});
+
+test("a shared ISRC with no artist in common stays apart", () => {
+  const left = track("qobuz", "a", { artists: [artist("Gangsta Pat")] });
+  const right = spotify("b", { artist: "Someone Else", artists: [artist("Someone Else")] });
+  expect(groupSearchResults([left, right], "deadly verses")).toHaveLength(2);
+});

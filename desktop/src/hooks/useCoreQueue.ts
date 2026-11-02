@@ -45,6 +45,10 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
   const state = optimistic && confirmed.revision <= optimistic.after ? optimistic.state : confirmed;
   const stateRef = useRef(state);
   stateRef.current = state;
+  // The revision `stateRef` was built on. The server's next view can already be in the store
+  // before this renders; a move made on the older state must not outlast that view.
+  const shownRevision = useRef(confirmed.revision);
+  shownRevision.current = confirmed.revision;
 
   const change = useCallback((transform: (state: QueueState) => QueueState, playTrackId?: string) => {
     const next = transform(stateRef.current);
@@ -91,7 +95,7 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
     const moved = transition.item ? transition.state : null;
     if (moved) {
       stateRef.current = moved;
-      setOptimistic({ state: moved, after: coreQueue(tracksRef.current).revision });
+      setOptimistic({ state: moved, after: shownRevision.current });
     }
     const settle = () => { if (moved) setOptimistic(current => current?.state === moved ? null : current); };
     // With nothing to ask, the server's own move replaces this one once it hears of it.

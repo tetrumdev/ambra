@@ -6,7 +6,7 @@ import type { Track } from "../types/music";
 import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
-import { recordSyncSample } from "../utils/lyricsAutoTuning";
+import { LARGE_SHIFT_MS, recordSyncSample } from "../utils/lyricsAutoTuning";
 import { detectLyricOffset, firstAutoSyncNotice, lyricAutoSyncKey, storedLyricEvidence, storedLyricOffset } from "../utils/lyricsOffset";
 import { subscribeLocalStorage } from "../utils/storageEvents";
 import {
@@ -1197,6 +1197,11 @@ export function LyricsView({
         const correctionMs = result.confident ? result.correctionMs : result.bestMs;
         if (correctionMs === null) {
           showNotice("Too few timed lines to auto-sync this song");
+          return;
+        }
+        // A weak guess of several seconds is almost always a repeated section, not the real offset.
+        if (!result.confident && Math.abs(correctionMs) > LARGE_SHIFT_MS) {
+          showNotice("No reliable sync found · timing left as is");
           return;
         }
         // An explicit request is the listener's choice, so it is kept like a manual edit.
