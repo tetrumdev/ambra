@@ -5,6 +5,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
 import { enabledOutputsFirst, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
+import { ANIMATION_FPS_OPTIONS } from "../utils/frameRate";
 import { MAX_LYRICS_OFFSET_MS, type LyricMotion } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
 import { musicProviderName } from "../utils/musicProviderName";
@@ -29,11 +30,11 @@ function usePlayingOn() {
   return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
 }
 
-type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; shortcuts: ShortcutOverrides; onShortcutsChange: (shortcuts: ShortcutOverrides) => void; registerScrollElement: RefCallback<HTMLDivElement> };
+type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; maxAnimationFps: number; onMaxAnimationFpsChange: (fps: number) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; shortcuts: ShortcutOverrides; onShortcutsChange: (shortcuts: ShortcutOverrides) => void; registerScrollElement: RefCallback<HTMLDivElement> };
 
 const DESKTOP_ONLY = "Desktop app only";
 
-export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, reduceMotion, onReduceMotion, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, shortcuts, onShortcutsChange, registerScrollElement }: Props) {
+export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTabChange: setTab, showAudioQuality, onShowAudioQuality, reduceMotion, onReduceMotion, animateSwirl, onAnimateSwirl, lyricMotion, onLyricMotionChange, maxAnimationFps, onMaxAnimationFpsChange, autoSyncLyrics, onAutoSyncLyrics, lyricsOffsetMs, onLyricsOffsetChange, servicePlaylistVisibility, onServicePlaylistVisibilityChange, shortcuts, onShortcutsChange, registerScrollElement }: Props) {
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
@@ -83,6 +84,10 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
         <SettingRow label="Lyric motion" hint="Default follows Reduce motion; Full animates even with it on">
           <Segmented label="Lyric motion" value={lyricMotion} onChange={onLyricMotionChange}
             options={[{ value: "system", label: "Default" }, { value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]} />
+        </SettingRow>
+        <SettingRow label="Animation frame rate" hint="Caps how often lyrics and the swirl redraw. Lower saves power on high refresh rate displays">
+          <Segmented label="Animation frame rate" value={String(maxAnimationFps)} onChange={fps => onMaxAnimationFpsChange(Number(fps))}
+            options={ANIMATION_FPS_OPTIONS.map(fps => ({ value: String(fps), label: fps ? `${fps}` : "Unlimited" }))} />
         </SettingRow>
         <SettingRow label="Auto-sync lyrics" hint={audio.native ? "Lines lyrics up with the vocals" : DESKTOP_ONLY}>
           <Toggle label="Auto-sync lyrics" checked={autoSyncLyrics} disabled={!audio.native} onChange={onAutoSyncLyrics} />

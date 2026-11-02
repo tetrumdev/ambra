@@ -567,3 +567,78 @@ async fn shutdown_cancels_shared_authorization_and_all_waiters() {
     stop.cancel();
     server.await.unwrap().unwrap();
 }
+
+/// The song's first response breaks partway; the bridge resumes with a byte range and the
+/// player, reading through the cache, still gets every byte in order.
+#[tokio::test]
+async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
+    const SIZE: usize = 3 * 1024 * 1024;
+    let song: Arc<Vec<u8>> = Arc::new((0..SIZE).map(|i| (i % 251) as u8).collect());
+    let identity = Identity::generate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let cancel = CancellationToken::new();
+    let requests = Arc::new(std::sync::Mutex::new(Vec::<Option<String>>::new()));
+    let seen = requests.clone();
+    let served = song.clone();
+    let app = Router::new()
+        .route("/api/network/session", get(|| async { "authorized" }))
+        .route("/api/providers/test/tracks/1/stream", get(move |request: Request| {
+            let song = served.clone();
+            let seen = seen.clone();
+            async move {
+                let range = request.headers().get(header::RANGE).map(|v| v.to_str().unwrap().to_owned());
+                let first = seen.lock().unwrap().is_empty();
+                seen.lock().unwrap().push(range.clone());
+                let start: usize = range.as_deref().and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.split('-').next()).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let rest = song[start..].to_vec();
+                let length = rest.len();
+                let chunks: Vec<Result<Bytes, std::io::Error>> = rest.chunks(64 * 1024).enumerate().map(|(index, chunk)| {
+                    // The first response dies after a few chunks, as a dropped Wi-Fi link would.
+                    if first && index == 5 { Err(std::io::Error::other("link lost")) } else { Ok(Bytes::copy_from_slice(chunk)) }
+                }).collect();
+                let delivered = futures_util::stream::iter(chunks).then(|chunk| async move {
+                    // Give earlier chunks time to reach the client before the link fails.
+                    if chunk.is_err() { tokio::time::sleep(Duration::from_millis(300)).await; }
+                    chunk
+                });
+                let mut response = Body::from_stream(delivered).into_response();
+                response.headers_mut().insert(header::CONTENT_LENGTH, length.into());
+                response.headers_mut().insert(header::CONTENT_TYPE, "audio/flac".parse().unwrap());
+                if start > 0 {
+                    *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                    response.headers_mut().insert(header::CONTENT_RANGE, format!("bytes {start}-{}/{SIZE}", SIZE - 1).parse().unwrap());
+                }
+                response
+            }
+        }));
+    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, cancel.clone()));
+    let directory = std::env::temp_dir().join(format!("ambra-media-cache-test-{}", std::process::id()));
+    let bridge = ambra_net::bridge::Bridge::start_with_cache(manager(&identity, address), Some(directory.clone())).await.unwrap();
+    let client = reqwest::Client::new();
+    let url = format!("{}/api/providers/test/tracks/1/stream", bridge.base_url);
+
+    let whole = client.get(&url).send().await.unwrap();
+    assert_eq!(whole.status(), StatusCode::OK);
+    assert_eq!(whole.headers()[header::CONTENT_TYPE], "audio/flac");
+    assert_eq!(whole.bytes().await.unwrap().as_ref(), song.as_slice());
+    {
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2, "one broken response, then one resumed range: {requests:?}");
+        assert_eq!(requests[0], None);
+        assert!(requests[1].as_deref().is_some_and(|range| range.starts_with("bytes=") && range != "bytes=0-"), "{requests:?}");
+    }
+
+    // Later reads come from disk, with no further requests to the server.
+    let part = client.get(&url).header(header::RANGE, "bytes=1000-1999").send().await.unwrap();
+    assert_eq!(part.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(part.headers()[header::CONTENT_RANGE], format!("bytes 1000-1999/{SIZE}"));
+    assert_eq!(part.bytes().await.unwrap().as_ref(), &song[1000..2000]);
+    assert_eq!(requests.lock().unwrap().len(), 2);
+
+    bridge.prefetch("/api/session");
+    drop(bridge);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    let _ = std::fs::remove_dir_all(directory);
+}

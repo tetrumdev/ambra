@@ -1,4 +1,4 @@
-use crate::{ConnectionManager, Result};
+use crate::{ConnectionManager, Result, media_cache::{self, MediaCache}};
 use axum::{
     Router,
     body::Body,
@@ -16,6 +16,7 @@ struct BridgeState {
     manager: Arc<ConnectionManager>,
     capability: String,
     host: String,
+    cache: Option<Arc<MediaCache>>,
 }
 /// The capability is per process and grants access only to this selected server.
 pub struct Bridge {
@@ -23,9 +24,15 @@ pub struct Bridge {
     cancel: CancellationToken,
     task: JoinHandle<()>,
     manager_task: JoinHandle<()>,
+    cache: Option<Arc<MediaCache>>,
 }
 impl Bridge {
     pub async fn start(manager: Arc<ConnectionManager>) -> Result<Self> {
+        Self::start_with_cache(manager, None).await
+    }
+    /// With a cache directory, audio is downloaded ahead of the player and survives reconnects.
+    pub async fn start_with_cache(manager: Arc<ConnectionManager>, cache_directory: Option<std::path::PathBuf>) -> Result<Self> {
+        let cache = cache_directory.map(|directory| MediaCache::new(manager.clone(), directory)).transpose()?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let mut secret = [0; 32];
@@ -35,6 +42,7 @@ impl Bridge {
             manager: manager.clone(),
             capability: capability.clone(),
             host: address.to_string(),
+            cache: cache.clone(),
         };
         let app = Router::new().fallback(any(forward)).with_state(state);
         let cancel = manager.cancel.clone();
@@ -52,7 +60,14 @@ impl Bridge {
             cancel,
             task,
             manager_task,
+            cache,
         })
+    }
+    /// Downloads a song the player will need next. `path` is a server path such as `/api/...`.
+    pub fn prefetch(&self, path: &str) {
+        if let Some(cache) = &self.cache {
+            cache.prefetch(path);
+        }
     }
 }
 impl Drop for Bridge {
@@ -137,14 +152,19 @@ async fn forward(State(state): State<BridgeState>, mut request: Request) -> Resp
     };
     *request.uri_mut() = uri;
     request.headers_mut().remove(header::ORIGIN);
-    let mut response = match state.manager.request(request).await {
+    let cached = state.cache.as_ref().filter(|_| {
+        matches!(*request.method(), hyper::Method::GET | hyper::Method::HEAD) && media_cache::cacheable(&path)
+    });
+    let mut response = if let Some(cache) = cached {
+        cache.serve(&path, request.method(), request.headers()).await
+    } else { match state.manager.request(request).await {
         Ok(response) => response.map(Body::new),
         Err(_) => (
             StatusCode::SERVICE_UNAVAILABLE,
             "Selected Ambra server is offline",
         )
             .into_response(),
-    };
+    } };
     // Never cache capability URLs or expose paired tokens through forwarded redirects/cookies.
     response.headers_mut().remove(header::SET_COOKIE);
     response.headers_mut().remove(header::LOCATION);

@@ -87,6 +87,16 @@ Run `ambra-server pair qr` or open desktop Settings, Server, Show QR code. Scan 
 
 Rust chooses LAN, then available pwnat with a known public endpoint, then native HyperDHT, then offline. All media and API requests use the same private loopback bridge; React Native does not discover remote endpoints or implement NAT traversal. Media URLs contain an ephemeral bridge capability, not the server's device token. The native module skips raw ICMP on iOS/Android. UDP and HyperDHT behavior still need physical-device testing.
 
+### Changing networks
+
+Playback continues when the phone changes Wi-Fi networks or leaves Wi-Fi for cellular:
+
+- The bridge downloads each song to the app's storage as fast as the connection allows and plays it from there. When a connection drops, the download resumes with a byte range on the next connection while the player keeps reading what is already on disk. The next song in the queue is downloaded before it starts, including every segment of HLS songs. Up to three songs are kept, excluded from backups and cleared on each launch.
+- While on the LAN, the phone keeps a warm, unauthenticated HyperDHT session open. If the LAN connection is lost, that session is authorized in one request instead of rediscovering the server.
+- iOS (`NWPathMonitor`) and Android (`ConnectivityManager`) report network changes to Rust at once. Connections that no longer answer within two seconds are replaced, rather than left hanging until keepalives time out. While on HyperDHT, the phone moves back to the LAN when it becomes reachable, checking every 30 seconds and on each network change.
+- If the current song ends while the server is unreachable, the phone starts the queued song by itself, and the server advances its queue when the phone reports in.
+- The phone keeps playing for up to 85 seconds without reaching the server. The server holds the session for 90 seconds (`RECONNECT_GRACE`) before pausing a silent output, so update the server too.
+
 Foreground resumption asks the native manager to reconnect and refreshes session state. Background audio capabilities remain enabled. iOS may suspend networking when the phone is not playing audio; no extra background networking daemon or silent audio lease is introduced.
 
 The old `start:tailscale` script remains only for legacy development environments while device builds are validated. Application onboarding and connection selection do not use Tailscale, MagicDNS, Metro host probes, or VPN fallback.

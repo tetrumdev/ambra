@@ -886,6 +886,10 @@ async fn step(core: &Core) -> Result<(), String> {
     // Let the first finish, then explicitly load the next occurrence.
     if next.as_deref() == Some(canonical_source.as_str()) { next = None; }
     let Some((status, reported_at, _, endpoint_instance)) = core.endpoints.status(&endpoint).await else {
+        // A phone between networks keeps playing from its own download; hold the song for it.
+        if core.endpoints.reconnecting(&endpoint).await {
+            return Err(format!("Waiting for {} to reconnect", output.endpoint_name));
+        }
         core.pause_disconnected_output();
         if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
         return Err(format!("Audio output {} is offline", output.endpoint_name));
@@ -1547,13 +1551,37 @@ mod driver_tests {
         let mut harness = Harness::playing_output().await;
         let queue = harness.queue().await;
         harness.stop_workers().await;
-        tokio::time::timeout(Duration::from_secs(10), async {
+        // Past the presence timeout the output may only be changing networks; its song is kept.
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        assert!(harness.core.transport().playing, "a reconnecting output keeps its song");
+        assert!(harness.core.transport().error.as_deref().is_some_and(|error| error.starts_with("Waiting for")));
+        tokio::time::timeout(crate::endpoints::RECONNECT_GRACE, async {
             while harness.core.transport().playing {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
-        }).await.expect("a vanished client must pause after the eight-second presence timeout");
+        }).await.expect("a vanished client must pause once the reconnect grace runs out");
         assert_eq!(harness.core.transport().position, 42.0);
         assert!(!harness.core.transport().buffering);
+        assert_eq!(harness.queue().await, queue);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_output_back_from_a_network_change_keeps_playing_without_a_reload() {
+        let mut harness = Harness::playing_output().await;
+        let queue = harness.queue().await;
+        let generation = harness.core.transport().generation;
+        harness.stop_workers().await;
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        assert!(harness.core.transport().playing);
+        harness.received.lock().unwrap().clear();
+        // The same process reports again, still playing from what it downloaded.
+        harness.report(json!({ "currentSource": source("a"), "currentTime": 51.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        harness.serve_commands();
+        eventually!("the waiting message to clear", harness.core.transport().error.is_none());
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        assert!(harness.core.transport().playing);
+        assert_eq!(harness.core.transport().generation, generation);
+        assert!(!harness.received.lock().unwrap().iter().any(|(command, _)| command == "load_native_audio" || command == "pause_native_audio"));
         assert_eq!(harness.queue().await, queue);
     }
 

@@ -178,6 +178,48 @@ test.each([60, 144])("line transitions at %i Hz move only nearby groups, includi
   }
 });
 
+test.each([false, true])("manual scrolling settles the lyric ripple without snapping (playing=%s)", async playing => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const clock = clockAt(103.98);
+  try {
+    await act(async () => root.render(<LyricsView track={track} clock={clock} playing={playing} autoSync={false} />));
+    const viewport = container.querySelector<HTMLElement>(".lyricsViewport")!;
+    Object.defineProperties(viewport, { clientHeight: { value: 600 }, clientWidth: { value: 760 } });
+    const lines = container.querySelector<HTMLElement>(".lyricsLines")!;
+    Object.defineProperties(lines, { offsetHeight: { value: 10_000 }, offsetTop: { value: 0 } });
+    const groups = Array.from(container.querySelectorAll<HTMLElement>(".lyricGroup"));
+    for (const [index, group] of groups.entries()) {
+      Object.defineProperties(group, { offsetTop: { value: index * 100 }, offsetHeight: { value: 80 } });
+    }
+    observers[observers.length - 1]([], {} as ResizeObserver);
+    await paint(clock, 103.98);
+    await paint(clock, 104.01);
+    await paint(clock, 104.026);
+    const offset = (group: HTMLElement) => Number(group.style.transform.match(/translate3d\(0, ([-\d.]+)px, 0\)/)?.[1] ?? 0);
+    const before = offset(groups[26]);
+    expect(before).toBeGreaterThan(20);
+    const wheel = new dom.WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+    await act(async () => { viewport.dispatchEvent(wheel); });
+    expect(wheel.defaultPrevented).toBe(false);
+    expect(viewport.dataset.following).toBe("false");
+    // Native scrolling remains in charge of the wheel's distance.
+    viewport.scrollTop += 120;
+    const manualScroll = viewport.scrollTop;
+    await paint(clock, 104.042);
+    expect(Math.abs(offset(groups[26]) - before)).toBeLessThan(20);
+    expect(viewport.scrollTop).toBe(manualScroll);
+    for (let frame = 0; frame < 180; frame++) await paint(clock, 104.042);
+    expect(groups.every(group => group.style.transform === "")).toBe(true);
+    await paint(clock, 108.5);
+    expect(viewport.scrollTop).toBe(manualScroll);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test("held-note release excludes future notes and keeps the sung note's trailing animation", () => {
   const letter = motion.letterMotion(data.lines[1].segments[0], 0, 4);
   expect(motion.releasing(letter, 0)).toBe(false);

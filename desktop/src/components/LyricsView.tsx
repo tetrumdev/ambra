@@ -41,6 +41,7 @@ import { lyricDisplayLine } from "../utils/lyricTypography";
 import "./LyricsView.css";
 import "./TrackMenus.css";
 import { useReducedMotion } from "../utils/reducedMotion";
+import { createFrameScheduler } from "../utils/frameRate";
 
 type LyricsViewProps = {
   track: Track | undefined;
@@ -524,6 +525,7 @@ function SyncedLyrics({
       element.style.setProperty(property, value);
     };
     let frame = 0;
+    const frames = createFrameScheduler();
     let lastTime = Number.NaN;
     let focus = -1;
     /** How far the focused block's sung visual line sits below its first. */
@@ -566,7 +568,7 @@ function SyncedLyrics({
       }
     };
     const schedule = () => {
-      if (!frame && !document.hidden) frame = requestAnimationFrame(paint);
+      if (!frame && !document.hidden) frame = frames.request(paint);
     };
     const paint = (now: number) => {
       frame = 0;
@@ -801,8 +803,9 @@ function SyncedLyrics({
         block.dotsAnimating = dotsMoving || block.active;
         settling ||= dotsMoving;
       }
-      const snapRipple = !followingRef.current || reducedMotion || discontinuity || snapScroll;
+      const snapRipple = reducedMotion || discontinuity || snapScroll;
       if (snapRipple) rippleFocus = focus;
+      const visibleScroll = followingRef.current ? scroll.value : container.scrollTop;
       for (const block of layout) {
         const spring = block.ripple;
         if (snapRipple) {
@@ -816,10 +819,10 @@ function SyncedLyrics({
           settling ||= block.pending !== block.goal;
         }
         // Subpixel offsets let the wave settle without stepping between device pixels.
-        const offset = followingRef.current ? scroll.value - spring.value : 0;
-        const top = block.top - spring.value;
-        const destinationTop = block.top - scroll.value;
-        const nearby = followingRef.current &&
+        const offset = scroll.value - spring.value;
+        const top = block.top - visibleScroll + offset;
+        const destinationTop = block.top - visibleScroll;
+        const nearby = (followingRef.current || Math.abs(offset) > 0.01) &&
           Math.max(top, destinationTop) + block.height >= -viewportHeight &&
           Math.min(top, destinationTop) <= viewportHeight * 2;
         if (block.nearby !== nearby) {
@@ -842,7 +845,10 @@ function SyncedLyrics({
       if (playingRef.current || settling) schedule();
     };
     const hold = () => {
+      if (!followingRef.current) return;
       followingRef.current = false;
+      // Let the current ripple settle while native scrolling takes over, without a visual jump.
+      for (const block of layout) block.goal = block.pending = scroll.value;
       setFollowing(false);
       schedule();
     };
@@ -886,7 +892,7 @@ function SyncedLyrics({
     resize.observe(linesElement);
     for (const block of layout) resize.observe(block.element);
     const onVisibility = () => {
-      cancelAnimationFrame(frame);
+      frames.cancel();
       frame = 0;
       lastTime = Number.NaN;
       lastFrame = 0;
@@ -901,7 +907,7 @@ function SyncedLyrics({
     schedule();
     return () => {
       unsubscribe();
-      cancelAnimationFrame(frame);
+      frames.cancel();
       resize.disconnect();
       container.removeEventListener("wheel", hold);
       container.removeEventListener("touchstart", hold);
