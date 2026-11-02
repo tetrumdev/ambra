@@ -125,14 +125,32 @@ const neededContrast = (lightness: number) => Math.max(0.07, 0.16 - lightness);
 /** Field shades checked across the swirl's per-pixel brightness range. */
 const SWIRL_SHADES = [0, 0.25, 0.5, 0.75, 1].map(step => SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE * step);
 const LIGHTNESS_STEP = 0.0025;
-/** A moved color keeps at least this share of its original gap above the darker colors. */
+/** Prefer keeping this share of the original gap above darker colors when contrast allows it. */
 const KEEP_SPACING = 0.5;
+const BLEND_STEPS = 8;
+
+/** Sample the mixture grid with earlier colors, including three- and four-color blends. */
+function blendSamples(previous: Rgb[]) {
+  const samples: { base: Rgb; share: number }[] = [];
+  const visit = (index: number, remaining: number, base: Rgb) => {
+    if (index === previous.length) {
+      samples.push({ base, share: remaining / BLEND_STEPS });
+      return;
+    }
+    for (let parts = 0; parts < remaining; parts++) {
+      visit(index + 1, remaining - parts, base.map((channel, axis) =>
+        channel + previous[index][axis] * parts / BLEND_STEPS) as Rgb);
+    }
+  };
+  visit(0, BLEND_STEPS, [0, 0, 0]);
+  return samples;
+}
 
 /**
  * Separates the cover from the swirl by choosing the swirl's colors, not by
  * painting anything near the cover. Each palette color keeps its hue and moves
  * in lightness only as far as needed so that, at every brightness the swirl
- * draws it, it stays perceptually distinct from every sampled edge color.
+ * draws it, it and its sampled blends stay distinct from every sampled edge color.
  * Colors that already contrast are returned unchanged. Lighter colors stay
  * lighter than darker ones, so the swirl keeps its own light and dark.
  *
@@ -147,19 +165,28 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
   // alone cannot tell whether a particular edge needs any treatment.
   if (!edges || edges.colors.length !== COVER_EDGE_ZONES * 4 * 3 || colors.length === 0) return colors;
   const dim = Math.min(1, Math.max(0.05, coverDim));
-  const targets = Array.from({ length: COVER_EDGE_ZONES * 4 }, (_, index) => {
-    const lab = perceptualColor(edges.colors.slice(index * 3, index * 3 + 3));
+  const boundaryColors = Array.from({ length: COVER_EDGE_ZONES * 4 }, (_, index) =>
+    edges.colors.slice(index * 3, index * 3 + 3).join(","));
+  const targets = [...new Set(boundaryColors)].map(color => {
+    const lab = perceptualColor(color.split(",").map(Number));
     return { lab, needed: neededContrast(lab[0]) };
   });
   // How far a palette color, as the swirl draws it, stays beyond the contrast each edge needs.
-  const clearance = (rgb: number[]) => {
-    const gray = luminance(rgb as Rgb);
-    const vivid = rgb.map(channel => gray + (channel - gray) * SWIRL_SATURATION);
+  const clearance = (rgb: Rgb, blends: ReturnType<typeof blendSamples>) => {
     let least = Infinity;
-    for (const shade of SWIRL_SHADES) {
-      const lab = perceptualColor(vivid.map(channel => dim * Math.min(1, Math.max(0, channel * shade))));
-      for (const target of targets) {
-        least = Math.min(least, Math.hypot(lab[0] - target.lab[0], lab[1] - target.lab[1], lab[2] - target.lab[2]) - target.needed);
+    for (const { base, share } of blends) {
+      // Blend in display sRGB before saturation, shading, and clipping, just like the shader.
+      const mixed = rgb.map((channel, axis) => base[axis] + channel * share) as Rgb;
+      const gray = luminance(mixed);
+      const vivid = mixed.map(channel => gray + (channel - gray) * SWIRL_SATURATION);
+      for (const shade of SWIRL_SHADES) {
+        const lab = perceptualColor(vivid.map(channel => dim * Math.min(1, Math.max(0, channel * shade))));
+        for (const target of targets) {
+          least = Math.min(least, Math.hypot(lab[0] - target.lab[0], lab[1] - target.lab[1], lab[2] - target.lab[2]) - target.needed);
+          // Below a dark border, numerical Oklab clearance can still mean almost black on black.
+          // Keep the entire blend above it instead of solving by making black even darker.
+          if (target.lab[0] < 0.3) least = Math.min(least, lab[0] - target.lab[0] - target.needed);
+        }
       }
     }
     return least;
@@ -168,31 +195,39 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
   const parsed = colors.map(parseColor);
   const original = parsed.map(rgb => perceptualColor(rgb));
   const result = [...colors];
+  const previous: Rgb[] = [];
   let lower: { from: number; to: number } | null = null;
   for (const index of parsed.map((_, index) => index).sort((a, b) => original[a][0] - original[b][0])) {
     const [lightness, a, b] = original[index];
     const floor = lower ? lower.to + KEEP_SPACING * (lightness - lower.from) : 0;
+    const blends = blendSamples(previous);
     // Same hue and saturation at another lightness.
     const at = (target: number) => {
       const scale = lightness > 0.001 ? target / lightness : 0;
-      return srgbFromPerceptual([target, a * scale, b * scale]);
+      // Check the quantized palette that is actually sent to the renderer.
+      return parseColor(toHex(srgbFromPerceptual([target, a * scale, b * scale]) as Rgb));
     };
     let chosen = lightness;
-    if (lightness < floor || clearance(parsed[index]) < 0) {
+    if (lightness < floor || clearance(parsed[index], blends) < 0) {
       // The nearest lightness that works, searching outward; failing that, the most distinct one.
       let best = { lightness, clearance: -Infinity };
       chosen = NaN;
-      for (let step = 0; step * LIGHTNESS_STEP <= 1 && Number.isNaN(chosen); step++) {
-        for (const candidate of [lightness + step * LIGHTNESS_STEP, lightness - step * LIGHTNESS_STEP]) {
-          if (candidate < floor || candidate < 0 || candidate > 1) continue;
-          const margin = clearance(at(candidate));
-          if (margin >= 0) { chosen = candidate; break; }
-          if (margin > best.clearance) best = { lightness: candidate, clearance: margin };
+      // Preserve spacing when possible; clearance takes priority when a blend would cross the border.
+      for (const minimum of [floor, lower?.to ?? 0]) {
+        if (!Number.isNaN(chosen)) break;
+        for (let step = 0; step * LIGHTNESS_STEP <= 1 && Number.isNaN(chosen); step++) {
+          for (const candidate of [lightness + step * LIGHTNESS_STEP, lightness - step * LIGHTNESS_STEP]) {
+            if (candidate < minimum || candidate < 0 || candidate > 1) continue;
+            const margin = clearance(at(candidate), blends);
+            if (margin >= 0) { chosen = candidate; break; }
+            if (margin > best.clearance) best = { lightness: candidate, clearance: margin };
+          }
         }
       }
       if (Number.isNaN(chosen)) chosen = best.lightness;
       result[index] = toHex(at(chosen) as Rgb);
     }
+    previous.push(parseColor(result[index]));
     lower = { from: lightness, to: chosen };
   }
   return result;
