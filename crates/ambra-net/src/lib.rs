@@ -4,6 +4,7 @@ pub mod hyperdht;
 pub mod identity;
 pub mod lan;
 pub mod manager;
+pub mod media_cache;
 pub mod pairing;
 pub mod pwnat;
 pub mod transport;

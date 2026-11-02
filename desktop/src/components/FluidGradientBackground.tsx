@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { animationFrameInterval } from "../utils/frameRate";
 import {
   COLOR_TRANSITION_MS,
   MIN_FRAME_INTERVAL_MS,
@@ -190,7 +191,7 @@ export function FluidGradientBackground({
       const swirlTarget = animateRef.current && playingRef.current ? 1 : 0;
       const moving = journey.speed > 0 || swirlTarget > 0;
       if (
-        now - lastDrawnAt < MIN_FRAME_INTERVAL_MS
+        now - lastDrawnAt < Math.max(MIN_FRAME_INTERVAL_MS, animationFrameInterval() - 0.5)
         && !layoutDirty
         && moving
         && activeRef.current

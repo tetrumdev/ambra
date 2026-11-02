@@ -78,6 +78,14 @@ pub struct ConnectionManager {
     dht: hyperdht::Client,
     pwnat: pwnat::Client,
     active: RwLock<Option<Arc<HttpConnection>>>,
+    /// An encrypted HyperDHT session held open, unauthenticated, while another method is
+    /// active. Authorizing it takes one request, so losing the LAN never waits for discovery.
+    /// It is always newer than the active session, so the server lets it take over.
+    standby: Mutex<Option<Arc<HttpConnection>>>,
+    /// Bumped whenever the operating system reports a different network path.
+    network: watch::Sender<u64>,
+    /// Devices that move between networks keep the HyperDHT standby; desktops need not.
+    roaming: std::sync::atomic::AtomicBool,
     connecting: Mutex<Option<Flight>>,
     owner: Weak<Self>,
     status: watch::Sender<Status>,
@@ -119,6 +127,9 @@ impl ConnectionManager {
             selected,
             token: RwLock::new(token),
             active: RwLock::new(None),
+            standby: Mutex::new(None),
+            network: watch::channel(0).0,
+            roaming: Default::default(),
             connecting: Mutex::new(None),
             owner: owner.clone(),
             status,
@@ -142,9 +153,14 @@ impl ConnectionManager {
         });
     }
     async fn attempt(&self, method: Method) -> Result<Arc<HttpConnection>> {
+        self.attempt_reporting(method, true).await
+    }
+    /// `report` is false for background work that must not disturb the visible state.
+    async fn attempt_reporting(&self, method: Method, report: bool) -> Result<Arc<HttpConnection>> {
+        let state = |state, method| if report { self.state(state, method, None) };
         let (io, pump) = match method {
             Method::Lan => {
-                self.state(ConnectionState::DiscoveringLocal, None, None);
+                state(ConnectionState::DiscoveringLocal, None);
                 let mut addresses = self.selected.local_addresses.clone();
                 // Cached hints race discovery, but only the selected key can authenticate.
                 let discovery = lan::discover(Duration::from_millis(500));
@@ -156,7 +172,7 @@ impl ConnectionManager {
                 }
                 tokio::pin!(discovery);
                 let mut discovered = false;
-                self.state(ConnectionState::ConnectingLocal, Some(method), None);
+                state(ConnectionState::ConnectingLocal, Some(method));
                 loop {
                     tokio::select! {
                         Some(result) = attempts.join_next(), if !attempts.is_empty() => { if let Ok(Ok(connected)) = result { break connected; } },
@@ -182,7 +198,7 @@ impl ConnectionManager {
                 }
             }
             Method::Pwnat => {
-                self.state(ConnectionState::ConnectingPwnat, Some(method), None);
+                state(ConnectionState::ConnectingPwnat, Some(method));
                 let capability = pwnat::capability();
                 if !capability.available {
                     return Err(capability.reason.into());
@@ -203,7 +219,7 @@ impl ConnectionManager {
                     .await?
             }
             Method::HyperDHT => {
-                self.state(ConnectionState::ConnectingHyperDHT, Some(method), None);
+                state(ConnectionState::ConnectingHyperDHT, Some(method));
                 self.dht.connect(self.selected.public_key).await?
             }
         };
@@ -296,7 +312,18 @@ impl ConnectionManager {
                 let (result_tx, result) = watch::channel(None);
                 let owner = self.owner.upgrade().ok_or("Connection manager dropped")?;
                 let task = tokio::spawn(async move {
-                    let result = owner.connect_round().await;
+                    let result = match owner.promote_standby().await {
+                        Some(connection) => Ok(connection),
+                        None => {
+                            // A standby opened before this round is older than it; the server
+                            // would refuse to let it take over, so it is replaced.
+                            let result = owner.connect_round().await;
+                            if result.is_ok() {
+                                if let Some(old) = owner.standby.lock().await.take() { old.close(); }
+                            }
+                            result
+                        }
+                    };
                     let result = match result {
                         Ok(connection) if !owner.cancel.is_cancelled() => {
                             *owner.active.write().await = Some(connection.clone());
@@ -402,20 +429,46 @@ impl ConnectionManager {
         if let Some(connection) = self.active.write().await.take() {
             connection.close();
         }
+        if let Some(connection) = self.standby.lock().await.take() {
+            connection.close();
+        }
         self.dht.shutdown().await;
         self.pwnat.shutdown();
         self.state(ConnectionState::Offline, None, None);
     }
 
+    /// Called when the operating system switches networks (Wi-Fi to Wi-Fi, Wi-Fi to cellular).
+    /// Connections on the old path can hang for a long time instead of failing, so they are
+    /// checked at once and replaced if they no longer answer.
+    /// Keep a warm HyperDHT session beside the LAN, for phones that leave Wi-Fi mid-song.
+    pub fn enable_roaming(&self) {
+        self.roaming.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn network_changed(&self) {
+        self.network.send_modify(|generation| *generation += 1);
+    }
+
     pub async fn run(&self) {
         let mut immediate_retry = true;
+        let mut network = self.network.subscribe();
         loop {
             if self.cancel.is_cancelled() {
                 break;
             }
             if let Ok(connection) = self.connect().await {
                 let connected = tokio::time::Instant::now();
-                tokio::select! { _ = self.cancel.cancelled() => break, _ = connection.closed() => {} }
+                let method = self.status().method;
+                tokio::select! {
+                    _ = self.cancel.cancelled() => break,
+                    _ = connection.closed() => {}
+                    _ = self.maintain(&connection, method, &mut network) => {}
+                }
+                // Switched to a better path while the old one still worked: nothing was lost.
+                if self.active.read().await.as_ref().is_some_and(|active| !Arc::ptr_eq(active, &connection) && !active.is_closed()) {
+                    continue;
+                }
+                connection.close();
                 self.state(ConnectionState::Reconnecting, None, None);
                 // One immediate reconnect after interruption. Repeated brief
                 // sessions must not create a hot loop against a flapping server.
@@ -427,10 +480,113 @@ impl ConnectionManager {
                     continue;
                 }
             }
-            tokio::select! { _ = self.cancel.cancelled() => break, _ = tokio::time::sleep(self.timing.retry) => {} }
+            tokio::select! {
+                _ = self.cancel.cancelled() => break,
+                _ = tokio::time::sleep(self.timing.retry) => {}
+                // A new network is worth trying straight away.
+                _ = network.changed() => {}
+            }
         }
         self.shutdown().await;
     }
+
+    /// Runs beside a live connection and returns when it should be replaced: it stopped
+    /// answering after a network change, or a LAN path came back while away from home.
+    async fn maintain(&self, active: &Arc<HttpConnection>, method: Option<Method>, network: &mut watch::Receiver<u64>) {
+        let authorized = self.token.read().await.is_some();
+        let roaming = self.roaming.load(std::sync::atomic::Ordering::Relaxed);
+        let away = method == Some(Method::HyperDHT);
+        let mut upgrade = tokio::time::interval(Duration::from_secs(30));
+        upgrade.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        upgrade.tick().await;
+        loop {
+            tokio::select! {
+                _ = self.keep_standby(), if authorized && roaming && !away => {}
+                changed = network.changed() => {
+                    if changed.is_err() { std::future::pending::<()>().await; }
+                    let (alive, standby) = tokio::join!(answers(active), async {
+                        let standby = self.standby.lock().await.clone();
+                        match standby { Some(standby) => Some((answers(&standby).await, standby)), None => None }
+                    });
+                    if let Some((false, dead)) = standby {
+                        let mut slot = self.standby.lock().await;
+                        if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, &dead)) { slot.take(); }
+                        dead.close();
+                    }
+                    if !alive {
+                        tracing::info!(?method, "Connection stopped answering after a network change");
+                        return;
+                    }
+                    if away && authorized && self.upgrade_to_lan().await { return; }
+                }
+                _ = upgrade.tick(), if away && authorized => {
+                    if self.upgrade_to_lan().await { return; }
+                }
+            }
+        }
+    }
+
+    /// Keeps one warm, unauthenticated HyperDHT session. HTTP/2 keepalives hold its NAT
+    /// mapping open and reveal when it dies, at which point it is quietly rebuilt.
+    async fn keep_standby(&self) {
+        loop {
+            let current = self.standby.lock().await.clone();
+            match current {
+                Some(connection) if !connection.is_closed() => connection.closed().await,
+                _ => {
+                    let attempt = tokio::time::timeout(self.timing.hyperdht, self.attempt_reporting(Method::HyperDHT, false)).await;
+                    match attempt {
+                        Ok(Ok(connection)) => {
+                            tracing::debug!("HyperDHT standby ready");
+                            if let Some(old) = self.standby.lock().await.replace(connection) { old.close(); }
+                        }
+                        _ => tokio::time::sleep(self.timing.retry * 2).await,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Authorizes the warm HyperDHT session in place of a lost connection.
+    async fn promote_standby(&self) -> Option<Arc<HttpConnection>> {
+        let standby = self.standby.lock().await.take()?;
+        if standby.is_closed() || self.token.read().await.is_none() {
+            standby.close();
+            return None;
+        }
+        match tokio::time::timeout(Duration::from_secs(5), self.authenticate(&standby, Method::HyperDHT)).await {
+            Ok(Ok(())) => {
+                tracing::info!("Promoted HyperDHT standby without rediscovery");
+                Some(standby)
+            }
+            _ => {
+                standby.close();
+                None
+            }
+        }
+    }
+
+    /// Moves back to the LAN when it answers again. The new session is newer, so the server
+    /// closes the HyperDHT one once the LAN session is authorized.
+    async fn upgrade_to_lan(&self) -> bool {
+        let Ok(Ok(connection)) = tokio::time::timeout(self.timing.lan, self.attempt_reporting(Method::Lan, false)).await else {
+            return false;
+        };
+        if tokio::time::timeout(Duration::from_secs(5), self.authenticate(&connection, Method::Lan)).await.is_ok_and(|result| result.is_ok()) {
+            tracing::info!("Returned to the LAN");
+            if let Some(old) = self.active.write().await.replace(connection) { old.close(); }
+            true
+        } else {
+            connection.close();
+            false
+        }
+    }
+}
+
+/// Whether a connection still carries requests. Public, so it works before authorization.
+async fn answers(connection: &HttpConnection) -> bool {
+    let Ok(request) = Request::builder().uri("/api/server/info").body(Body::empty()) else { return false };
+    matches!(tokio::time::timeout(Duration::from_secs(2), connection.request(request)).await, Ok(Ok(_)))
 }
 
 impl ConnectionManager {

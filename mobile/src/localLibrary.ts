@@ -58,6 +58,8 @@ export class LocalMusic {
         if (!source.startsWith("file://") || !this.current.library.tracks.some(track => track.uri === source)) throw new Error("Choose an imported local file.");
         return source;
       },
+      // Files already on the phone need no download.
+      prefetch: () => {},
       metadata: (): AudioMetadata => ({ title: this.track()?.name ?? "Ambra", artist: this.track()?.artist, albumTitle: this.track()?.album }),
       transport: (action, details) => { void this.command(action, details).catch(() => {}); },
       changed: () => this.changed(),

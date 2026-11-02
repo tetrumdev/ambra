@@ -8,6 +8,8 @@ type Host = {
   create(source: string): PhonePlayer;
   activate(): Promise<void>;
   mediaUrl(source: string): string;
+  /** Starts downloading a song so it plays through a network change. */
+  prefetch(source: string): void;
   metadata(): AudioMetadata;
   ownsOutput(): boolean;
   transport(action: string, details?: Record<string, unknown>): void;
@@ -22,6 +24,8 @@ export class PhonePlayback {
   private loading: AbortController | null = null;
   private native: AudioStatus | null = null;
   private source: string | null = null;
+  /** The song the core queued after this one; played straight away if this one ends. */
+  private next: string | null = null;
   private error: string | null = null;
   private ended = false;
   private busy = false;
@@ -49,7 +53,17 @@ export class PhonePlayback {
     const previous = this.previous;
     const at = Date.now();
     this.native = status;
-    if (status.didJustFinish) this.ended = true;
+    if (status.didJustFinish) {
+      // Like desktop's engine, move on to the queued song by itself. The core advances when it
+      // sees the report, and the song keeps going even while the server is out of reach.
+      const next = this.next;
+      if (next && next !== this.source && this.host.ownsOutput()) {
+        this.next = null;
+        void this.load(next, 0, true).catch(() => {});
+        return;
+      }
+      this.ended = true;
+    }
     // Lock-screen controls, headphone disconnection and interruptions must also update the core.
     if (!this.busy && this.host.ownsOutput() && status.isLoaded && !status.isBuffering && !status.error && !this.ended && previous) {
       if (status.playing !== previous.playing && status.playing !== this.intendedPlaying) {
@@ -118,10 +132,14 @@ export class PhonePlayback {
         if (args.deviceId !== PHONE_DEVICE_ID) throw new Error("This phone uses its system audio output.");
         await this.host.activate();
         return null;
-      case "load_native_audio":
+      case "load_native_audio": {
         if (typeof args.source !== "string") throw new Error("The song has no audio source.");
+        const next = typeof args.nextSource === "string" ? args.nextSource : null;
+        if (next) this.host.prefetch(next);
         await this.load(args.source, Number(args.positionSeconds) || 0, args.autoplay === true);
+        this.next = next;
         return null;
+      }
       case "play_native_audio":
         if ((this.error || this.native?.error) && this.source) await this.load(this.source, this.player?.currentTime ?? 0, true);
         else { this.ended = false; this.intendedPlaying = true; this.player?.play(); }
@@ -138,9 +156,12 @@ export class PhonePlayback {
         try { await this.player?.seekTo(position); } finally { this.busy = false; this.previous = null; }
         return null;
       }
-      // The core advances after our 'ended' report; no second player can advance the queue itself.
       case "queue_native_audio":
+        this.next = typeof args.source === "string" ? args.source : null;
+        if (this.next) this.host.prefetch(this.next);
+        return null;
       case "warm_native_audio":
+        if (typeof args.source === "string") this.host.prefetch(args.source);
         return null;
       case "set_native_audio_volume":
         this.volume = Math.min(100, Math.max(0, Number(args.volume) || 0));
@@ -174,6 +195,7 @@ export class PhonePlayback {
     const player = this.player;
     this.player = null;
     this.source = null;
+    this.next = null;
     this.native = null;
     this.error = null;
     this.ended = false;

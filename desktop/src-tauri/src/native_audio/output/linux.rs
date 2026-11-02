@@ -60,10 +60,97 @@ pub struct PlatformOutput {
     /// Exclusive streams talk to the hardware directly, so their integer depth is what the DAC
     /// receives. Shared streams pass through the system mixer, which works in floating point.
     exclusive: bool,
+    /// The `hw:` id of an exclusive stream, so PipeWire can be given the card back.
+    device: Option<String>,
     started: bool,
     bytes: Vec<u8>,
 }
 
+
+/// Why an exclusive open failed: busy devices can still be shared through PipeWire.
+enum Exclusive {
+    Busy(String),
+    Failed(String),
+}
+
+/// The PipeWire sink that drives the hardware device `id` (`hw:CARD=<id>,DEV=<n>`), found
+/// through `pw-dump`. None without PipeWire or when PipeWire leaves the card alone, in which
+/// case whatever holds the card cannot be shared with.
+fn pipewire_node(id: &str) -> Option<String> {
+    let (card, device) = id.strip_prefix("hw:CARD=")?.split_once(",DEV=")?;
+    let device: u64 = device.parse().ok()?;
+    let output = std::process::Command::new("pw-dump")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let objects: Vec<serde_json::Value> = serde_json::from_slice(&output.stdout).ok()?;
+    node_for_card(&objects, card, device)
+}
+
+fn node_for_card(objects: &[serde_json::Value], card: &str, device: u64) -> Option<String> {
+    objects.iter().find_map(|object| {
+        let props = object.pointer("/info/props")?;
+        (props.get("media.class")?.as_str()? == "Audio/Sink"
+            && props.get("alsa.id")?.as_str()? == card
+            && props.get("alsa.device")?.as_u64()? == device)
+            .then(|| props.get("node.name")?.as_str().map(str::to_owned))?
+    })
+}
+
+/// PipeWire gives up on a card it found busy while Ambra held it exclusively: WirePlumber drops
+/// its sink and never tries again, so the card stays silent for everything else. Once Ambra lets
+/// go, switching the card's profile off and back makes WirePlumber build the sink again.
+fn return_card_to_pipewire(id: &str) {
+    let Some((card, _)) = id.strip_prefix("hw:CARD=").and_then(|rest| rest.split_once(",DEV="))
+    else {
+        return;
+    };
+    if pipewire_node(id).is_some() {
+        return;
+    }
+    let Some(index) = alsa::card::Iter::new().flatten().find_map(|found| {
+        let ctl = Ctl::from_card(&found, false).ok()?;
+        let info = ctl.card_info().ok()?;
+        (info.get_id().ok()? == card).then(|| found.get_index())
+    }) else {
+        return;
+    };
+    let pactl = |args: &[&str]| {
+        std::process::Command::new("pactl")
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+    };
+    let Some(cards) = pactl(&["-f", "json", "list", "cards"]) else { return };
+    let Ok(cards) = serde_json::from_slice::<Vec<serde_json::Value>>(&cards.stdout) else {
+        return;
+    };
+    let Some((name, profile)) = pulse_card(&cards, index) else { return };
+    // A card switched off on purpose stays off.
+    if profile == "off" {
+        return;
+    }
+    if pactl(&["set-card-profile", &name, "off"]).is_some() {
+        let _ = pactl(&["set-card-profile", &name, &profile]);
+    }
+}
+
+/// The PulseAudio-API name and active profile of ALSA card `index`.
+fn pulse_card(cards: &[serde_json::Value], index: i32) -> Option<(String, String)> {
+    let index = index.to_string();
+    cards.iter().find_map(|card| {
+        (card.pointer("/properties/alsa.card")?.as_str()? == index).then(|| {
+            Some((card.get("name")?.as_str()?.to_owned(), card.get("active_profile")?.as_str()?.to_owned()))
+        })?
+    })
+}
 
 /// ALSA hint names for hardware devices look like `hw:CARD=PCH,DEV=0`.
 fn is_hardware(id: &str) -> bool {
@@ -128,7 +215,21 @@ impl AudioOutput for PlatformOutput {
                     "Exclusive mode on Linux needs a hardware output; choose one in the audio device list"
                         .to_owned()
                 })?;
-            Self::open_exclusive(spec, id, processed)
+            match Self::open_exclusive(spec, id, processed) {
+                // Something else is playing on the card. PipeWire mixes for it, so play through
+                // PipeWire to the same card rather than going silent; the next fresh open (after
+                // a pause, or for a new format) tries exclusive again.
+                Err(Exclusive::Busy(error)) => match pipewire_node(id) {
+                    Some(node) => {
+                        let output = Self::open_shared(spec, &format!("pipewire:NODE={node}"))?;
+                        eprintln!("{error}; sharing it through PipeWire until it is free");
+                        Ok(output)
+                    }
+                    None => Err(error),
+                },
+                Err(Exclusive::Failed(error)) => Err(error),
+                Ok(output) => Ok(output),
+            }
         } else {
             // A hardware device opened in shared mode goes through ALSA's plug converter,
             // so any rate or format the source has still plays.
@@ -187,6 +288,15 @@ impl AudioOutput for PlatformOutput {
             DeviceFormat::S16 => Some(16),
             // A 32-bit container still carries 24-bit music.
             DeviceFormat::S24Packed | DeviceFormat::S24In32 | DeviceFormat::S32 => Some(24),
+        }
+    }
+
+    fn hand_back(self) {
+        let device = self.device.clone();
+        drop(self);
+        // Done in place (a few pactl calls) so it still happens when the app is quitting.
+        if let Some(device) = device {
+            return_card_to_pipewire(&device);
         }
     }
 
@@ -287,7 +397,7 @@ impl PlatformOutput {
         Self::finish(pcm, spec, format, false)
     }
 
-    fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, String> {
+    fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, Exclusive> {
         // Untouched 16-bit audio goes out at its own depth; everything else at 24 bits.
         let candidates: &[DeviceFormat] = match spec.bits_per_sample {
             0..=16 if !processed => &[
@@ -311,11 +421,25 @@ impl PlatformOutput {
             .collect();
         let pcm = PCM::new(id, Direction::Playback, true).map_err(|error| {
             if error.errno() == libc::EBUSY {
-                format!("ALSA device {id} is in use by another application or the system mixer")
+                Exclusive::Busy(format!(
+                    "ALSA device {id} is in use by another application or the system mixer"
+                ))
             } else {
-                alsa_error(&format!("Could not open ALSA device {id}"), error)
+                Exclusive::Failed(alsa_error(&format!("Could not open ALSA device {id}"), error))
             }
         })?;
+        let mut output =
+            Self::configure_exclusive(pcm, spec, id, &candidates).map_err(Exclusive::Failed)?;
+        output.device = Some(id.to_owned());
+        Ok(output)
+    }
+
+    fn configure_exclusive(
+        pcm: PCM,
+        spec: StreamSpec,
+        id: &str,
+        candidates: &[DeviceFormat],
+    ) -> Result<Self, String> {
         let format = {
             let params = HwParams::any(&pcm)
                 .map_err(|error| alsa_error("Could not configure ALSA playback", error))?;
@@ -381,6 +505,7 @@ impl PlatformOutput {
             buffer_frames,
             poll_interval: (period / 2).clamp(Duration::from_millis(1), Duration::from_millis(10)),
             exclusive,
+            device: None,
             started: false,
             bytes: Vec::with_capacity(buffer_frames * spec.channels * format.bytes_per_sample()),
         })
@@ -433,6 +558,38 @@ mod tests {
     }
 
     #[test]
+    fn finds_the_pipewire_sink_for_a_hardware_device() {
+        let objects: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+                {"info": {"props": {"media.class": "Audio/Sink", "node.name": "easyeffects_sink"}}},
+                {"info": {"props": {"media.class": "Audio/Source", "alsa.id": "AUDIO", "alsa.device": 0, "node.name": "mic"}}},
+                {"info": {"props": {"media.class": "Audio/Sink", "alsa.id": "AUDIO", "alsa.device": 1, "node.name": "other"}}},
+                {"info": {"props": {"media.class": "Audio/Sink", "alsa.id": "AUDIO", "alsa.device": 0, "node.name": "speakers"}}},
+                {"type": "PipeWire:Interface:Link"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(node_for_card(&objects, "AUDIO", 0).as_deref(), Some("speakers"));
+        assert_eq!(node_for_card(&objects, "J2", 0), None);
+    }
+
+    #[test]
+    fn finds_the_pulse_card_for_an_alsa_card() {
+        let cards: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[
+                {"name": "alsa_card.speakers", "active_profile": "pro-audio", "properties": {"alsa.card": "0"}},
+                {"name": "alsa_card.headphones", "active_profile": "pro-audio", "properties": {"alsa.card": "3"}}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pulse_card(&cards, 3),
+            Some(("alsa_card.headphones".to_owned(), "pro-audio".to_owned()))
+        );
+        assert_eq!(pulse_card(&cards, 5), None);
+    }
+
+    #[test]
     fn samples_encode_little_endian_at_the_device_depth() {
         let mut bytes = Vec::new();
         DeviceFormat::S16.encode(0.5, &mut bytes);
@@ -471,5 +628,22 @@ mod tests {
         let Ok(id) = std::env::var("AMBRA_ALSA_DEVICE") else { return };
         let output = PlatformOutput::open_device_with_mode(spec(), Some(&id), true, false).unwrap();
         assert_eq!(output.quantization_bits(), Some(16));
+    }
+
+    /// Opens `AMBRA_BUSY_ALSA_DEVICE` (a `hw:` id PipeWire is playing on) in exclusive mode and
+    /// plays silence: the open falls back to PipeWire and the stream keeps draining.
+    #[test]
+    #[ignore = "needs a hardware device PipeWire is playing on"]
+    fn shares_a_busy_hardware_device_through_pipewire() {
+        let Ok(id) = std::env::var("AMBRA_BUSY_ALSA_DEVICE") else { return };
+        let mut output = PlatformOutput::open_device_with_mode(spec(), Some(&id), true, false).unwrap();
+        assert_eq!(output.quantization_bits(), None, "a busy device is shared, not exclusive");
+        let silence = vec![0.0; 4_410 * 2];
+        output.start().unwrap();
+        let written = output.write(&silence, &[]).unwrap();
+        assert!(written > 0);
+        let queued = output.queued_frames().unwrap();
+        thread::sleep(Duration::from_millis(150));
+        assert!(output.queued_frames().unwrap() < queued, "PipeWire should consume the queued audio");
     }
 }
