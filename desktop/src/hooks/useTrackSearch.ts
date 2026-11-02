@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { configuredSearchProviders, resolveTrackPlayback, searchServerCatalog, type SearchProvider } from "../api/server";
+import { configuredSearchProviders, loadAlbumTracks, resolveTrackPlayback, searchServerCatalog, type SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
 import { groupSearchResults } from "../utils/searchRanking";
 import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
@@ -101,6 +101,7 @@ export function useTrackSearch(query: string, provider: SearchProvider) {
         const selected = provider === "all" ? providers : providers.filter(value => value === provider);
         session = new SearchSession({
           query: trimmedQuery, providers: selected, combined: provider === "all", onUpdate,
+          albumTracks: async (album, signal) => (await loadAlbumTracks(album, signal)).map(cachedTrack),
           fetchPage: async (...args) => {
             const page = await searchServerCatalog(args[0], args[1], args[2]);
             // Use the brief result-merging window to fetch covers before their cards mount.

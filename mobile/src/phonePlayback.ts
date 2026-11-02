@@ -33,6 +33,12 @@ export class PhonePlayback {
   private previous: { position: number; at: number; playing: boolean } | null = null;
   private volume = 100;
   private metadataSignature = "";
+  /**
+   * The plays, pauses and seeks made on this phone (its own controls, the lock screen,
+   * headphones): `seq` counts them, `playing` is what the latest left. Reports carry it and
+   * the core takes it on, so these work without waiting on the server.
+   */
+  private control = { seq: 0, playing: false };
 
   constructor(private host: Host) {}
 
@@ -45,7 +51,43 @@ export class PhonePlayback {
       buffering: !!this.source && !this.error && (this.busy || !this.native?.isLoaded || !!this.native?.isBuffering),
       ended: this.ended,
       error: this.error ?? this.native?.error ?? null,
+      ...(this.control.seq > 0 ? { control: { ...this.control } } : {}),
     };
+  }
+
+  /** Whether `source` is loaded here and ready to be played, paused or sought by this phone. */
+  controls(source: string | null | undefined) {
+    return !!source && source === this.source && !!this.player && !this.loading && !this.error && !this.native?.error;
+  }
+
+  private changedHere(playing: boolean) {
+    this.control = { seq: this.control.seq + 1, playing };
+  }
+
+  /** A play, pause or seek decided by the core before it heard of this phone's latest own one. */
+  private overruled(args: Record<string, unknown>) {
+    return typeof args.control === "number" && args.control < this.control.seq;
+  }
+
+  /** Plays, pauses or seeks at once, for the listener holding this phone. */
+  async local(action: "play" | "pause" | "seek", positionSeconds?: number) {
+    const player = this.player;
+    if (!player) return;
+    if (action === "seek") {
+      const position = Number(positionSeconds);
+      if (!Number.isFinite(position) || position < 0) return;
+      this.changedHere(this.intendedPlaying);
+      this.busy = true;
+      this.ended = false;
+      this.host.changed();
+      try { await player.seekTo(position); } finally { this.busy = false; this.previous = null; this.host.changed(); }
+      return;
+    }
+    const playing = action === "play";
+    this.changedHere(playing);
+    this.intendedPlaying = playing;
+    if (playing) { this.ended = false; player.play(); } else player.pause();
+    this.host.changed();
   }
 
   private observe(player: PhonePlayer, status: AudioStatus) {
@@ -64,14 +106,15 @@ export class PhonePlayback {
       }
       this.ended = true;
     }
-    // Lock-screen controls, headphone disconnection and interruptions must also update the core.
+    // Lock-screen controls, headphone disconnection and interruptions are this phone's own
+    // changes too; the core takes them on from the next report.
     if (!this.busy && this.host.ownsOutput() && status.isLoaded && !status.isBuffering && !status.error && !this.ended && previous) {
       if (status.playing !== previous.playing && status.playing !== this.intendedPlaying) {
         this.intendedPlaying = status.playing;
-        this.host.transport(status.playing ? "play" : "pause");
+        this.changedHere(status.playing);
       }
       const expected = previous.position + (previous.playing ? (at - previous.at) / 1000 : 0);
-      if (Math.abs(status.currentTime - expected) > 2.5) this.host.transport("seek", { positionSeconds: status.currentTime });
+      if (Math.abs(status.currentTime - expected) > 2.5) this.changedHere(this.intendedPlaying);
     }
     this.previous = { position: status.currentTime, at, playing: status.playing };
     this.host.changed();
@@ -136,19 +179,24 @@ export class PhonePlayback {
         if (typeof args.source !== "string") throw new Error("The song has no audio source.");
         const next = typeof args.nextSource === "string" ? args.nextSource : null;
         if (next) this.host.prefetch(next);
-        await this.load(args.source, Number(args.positionSeconds) || 0, args.autoplay === true);
+        // Played or paused as this phone last left it, if that came after the core decided.
+        const autoplay = this.overruled(args) ? this.control.playing : args.autoplay === true;
+        await this.load(args.source, Number(args.positionSeconds) || 0, autoplay);
         this.next = next;
         return null;
       }
       case "play_native_audio":
+        if (this.overruled(args)) return null;
         if ((this.error || this.native?.error) && this.source) await this.load(this.source, this.player?.currentTime ?? 0, true);
         else { this.ended = false; this.intendedPlaying = true; this.player?.play(); }
         return null;
       case "pause_native_audio":
+        if (this.overruled(args)) return null;
         this.intendedPlaying = false;
         this.player?.pause();
         return null;
       case "seek_native_audio": {
+        if (this.overruled(args)) return null;
         const position = Number(args.positionSeconds);
         if (!Number.isFinite(position) || position < 0) throw new Error("Invalid playback position.");
         this.busy = true;

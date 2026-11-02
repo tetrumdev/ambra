@@ -31,8 +31,6 @@ const ROUND_TRIPS_KEPT: usize = 8;
 
 /// How often this app's own screens hear the engine's position while it's the shared output.
 const LOCAL_STATUS_EVERY: Duration = Duration::from_millis(100);
-/// How long a play, pause or seek taken here waits for the core's matching command.
-const LOCAL_INTENT_FOR: Duration = Duration::from_secs(5);
 
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
 fn monotonic_ms() -> f64 {
@@ -52,25 +50,22 @@ struct Agent {
     /// The URL each source was sent as, by the URL it plays as here.
     sent_as: Mutex<HashMap<String, String>>,
     device_report: Mutex<Value>,
-    /// Plays, pauses and seeks already done here, which the core will also ask for.
-    local_intents: Mutex<VecDeque<(Intent, Instant)>>,
+    /// The plays, pauses and seeks made here, which the core takes on from the reports.
+    control: Mutex<Control>,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Intent {
-    Play,
-    Pause,
-    Seek(f64),
+/// This device's own latest play, pause or seek: `seq` counts them, `playing` is what it left.
+#[derive(Clone, Copy, Default)]
+struct Control {
+    seq: u64,
+    playing: bool,
 }
 
-impl Intent {
-    fn matches(self, command: &str, args: &Value) -> bool {
-        match self {
-            Intent::Play => command == "play_native_audio",
-            Intent::Pause => command == "pause_native_audio",
-            Intent::Seek(position) => command == "seek_native_audio"
-                && args["positionSeconds"].as_f64().is_some_and(|asked| (asked - position).abs() < 0.05),
-        }
+impl Control {
+    /// A play, pause or seek the core decided before it heard of this device's latest own one.
+    /// Commands from servers that don't send `control` are always carried out.
+    fn overrules(self, args: &Value) -> bool {
+        args["control"].as_u64().is_some_and(|known| known < self.seq)
     }
 }
 
@@ -111,28 +106,34 @@ pub async fn stop_shared_output(app: &AppHandle) {
     }
 }
 
-/// Plays, pauses or seeks this device's engine at once, for the listener in front of it, while
-/// the app tells the core. The core's own command for it then finds the engine already there and
-/// is skipped, so a seek isn't repeated from a moment later and nothing stutters.
+/// Plays, pauses or seeks this device's engine at once, for the listener in front of it. The
+/// core takes it on from the next report, which leaves straight away; no trip to the server is
+/// needed first, so a slow or lost connection never keeps this device from pausing.
 #[tauri::command]
 pub async fn shared_output_control(app: AppHandle, action: String, position_seconds: Option<f64>) -> Result<(), String> {
     let agent = app.state::<SharedOutput>().0.lock().await.as_ref().map(|running| running.agent.clone())
         .ok_or("This device isn't playing for the server")?;
-    let intent = match action.as_str() {
-        "play" => Intent::Play,
-        "pause" => Intent::Pause,
-        "seek" => Intent::Seek(position_seconds.ok_or("`positionSeconds` is missing")?),
+    let player = app.state::<NativeAudioPlayer>();
+    let playing = match action.as_str() {
+        "play" => true,
+        "pause" => false,
+        "seek" => {
+            position_seconds.ok_or("`positionSeconds` is missing")?;
+            let status = agent.status().await;
+            status["isPlaying"] == true || status["buffering"] == true
+        }
         _ => return Err(format!("Unknown action `{action}`")),
     };
-    if let Ok(mut intents) = agent.local_intents.lock() {
-        intents.retain(|(_, at)| at.elapsed() < LOCAL_INTENT_FOR);
-        intents.push_back((intent, Instant::now()));
+    // Counted before the engine acts, so a report showing the change also carries it.
+    if let Ok(mut control) = agent.control.lock() {
+        control.seq += 1;
+        control.playing = playing;
     }
-    let player = app.state::<NativeAudioPlayer>();
-    match intent {
-        Intent::Play => native_audio::play_native_audio(player).await,
-        Intent::Pause => native_audio::pause_native_audio(player).await,
-        Intent::Seek(position) => native_audio::seek_native_audio(player, position).await,
+    match (action.as_str(), position_seconds) {
+        ("play", _) => native_audio::play_native_audio(player).await,
+        ("pause", _) => native_audio::pause_native_audio(player).await,
+        (_, Some(position)) => native_audio::seek_native_audio(player, position).await,
+        _ => Ok(()),
     }
 }
 
@@ -154,7 +155,7 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
     let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
     let agent = std::sync::Arc::new(Agent {
         app, client, base_url, token, id, name, instance_id,
-        sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), local_intents: Mutex::new(VecDeque::new()),
+        sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), control: Mutex::new(Control::default()),
     });
     let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone()))];
     Ok(Running { tasks, agent })
@@ -195,16 +196,12 @@ impl Agent {
         args[key].as_str().map(|source| self.local_source(source))
     }
 
-    /// Whether this command from the core was already carried out here, at the listener's hand.
-    fn already_done(&self, command: &str, args: &Value) -> bool {
-        let Ok(mut intents) = self.local_intents.lock() else { return false };
-        intents.retain(|(_, at)| at.elapsed() < LOCAL_INTENT_FOR);
-        let Some(index) = intents.iter().position(|(intent, _)| intent.matches(command, args)) else { return false };
-        intents.remove(index);
-        true
+    fn control(&self) -> Control {
+        self.control.lock().map(|control| *control).unwrap_or_default()
     }
 
-    /// The engine's status, with its song named as the core sent it.
+    /// The engine's status, with its song named as the core sent it, and this device's own
+    /// latest play, pause or seek.
     async fn status(&self) -> Value {
         let player = self.app.state::<NativeAudioPlayer>();
         let mut status = native_audio::native_audio_status(player)
@@ -214,6 +211,10 @@ impl Agent {
             .unwrap_or(Value::Null);
         if let Some(source) = status["currentSource"].as_str() {
             status["currentSource"] = Value::String(self.sent_source(source));
+        }
+        let control = self.control();
+        if control.seq > 0 && status.is_object() {
+            status["control"] = json!({ "seq": control.seq, "playing": control.playing });
         }
         status
     }
@@ -355,8 +356,8 @@ async fn report(agent: std::sync::Arc<Agent>) {
 }
 
 /// What the core acts on at once when it changes, as opposed to the advancing position.
-fn transitions(status: &Value) -> [Value; 5] {
-    ["currentSource", "isPlaying", "buffering", "ended", "error"].map(|key| status[key].clone())
+fn transitions(status: &Value) -> [Value; 6] {
+    ["currentSource", "isPlaying", "buffering", "ended", "error", "control"].map(|key| status[key].clone())
 }
 
 async fn serve(agent: std::sync::Arc<Agent>) {
@@ -397,7 +398,9 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             if !server_media_source(source) { return Err("Shared playback cannot read private device files".into()); }
         }
     }
-    if agent.already_done(command, args) {
+    // The listener here changed playback after the core decided this: theirs stands.
+    let control = agent.control();
+    if matches!(command, "play_native_audio" | "pause_native_audio" | "seek_native_audio") && control.overrules(args) {
         return Ok(Value::Null);
     }
     let player = agent.app.state::<NativeAudioPlayer>();
@@ -408,7 +411,7 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             agent.arg_source(args, "source").ok_or("`source` is missing")?,
             agent.arg_source(args, "nextSource"),
             number("positionSeconds")?,
-            args["autoplay"].as_bool().unwrap_or(false),
+            if control.overrules(args) { control.playing } else { args["autoplay"].as_bool().unwrap_or(false) },
         )
         .map(|()| Value::Null),
         "queue_native_audio" => native_audio::queue_native_audio(player, agent.arg_source(args, "source"), agent.arg_source(args, "expectedSource"))

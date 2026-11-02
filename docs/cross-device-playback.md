@@ -115,7 +115,16 @@ server's permanent track IDs. Unchanged local files reuse cached hashes on later
 queue when the client's queue revision differs; otherwise clients retain their existing
 snapshot. Conflicting queue edits retry against the server's returned snapshot. Track-list
 preloading goes to the selected output computer, so browsing on a remote prepares audio
-where it will play. Output transport commands cannot bypass the core.
+where it will play. Other devices' transport commands cannot bypass the core.
+
+The selected output has full control of its own playback. Play, pause and seek on that device
+(its own controls, the lock screen, headphones, media keys) act on its player at once, with no
+trip to the server first, and a slow or lost connection never stops it pausing. Each such
+change is counted and carried in the output's reports; the core takes it on as newer than
+anything it asked for before hearing of it. Each play, pause, seek and load the core sends
+carries the count it knows, and the output ignores one decided before its latest own change.
+An output that is out of reach keeps playing what it has. If it comes back after the core
+gave up on it, still playing the same song, the core keeps that song rather than reloading it.
 
 Every screen shows the position the output is actually playing, not one a network trip old.
 The output app sends half its quickest recent report round trip as `latencyMs`, and the core

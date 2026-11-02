@@ -1,4 +1,5 @@
 import { textRelevance } from "./catalogRanking";
+import { serviceRank } from "./servicePreference";
 import type { Track } from "../types/music";
 
 /**
@@ -134,6 +135,9 @@ function compareEdition(left: Track, right: Track, query: string) {
     // The album itself over one of its editions, and a plainly titled copy over one that
     // spells out its guests, which variant releases tend to.
     || Number(plainEdition(left)) - Number(plainEdition(right))
+    // One release on several services in equal quality: the preferred service's copy, or the
+    // same service the album would open from, never whichever answered differently.
+    || serviceRank(left.provider) - serviceRank(right.provider)
     || right.name.trim().length - left.name.trim().length
     || byCodePoint(right.releaseDate ?? "9999", left.releaseDate ?? "9999")
     // Nothing tells the copies apart; settle it the same way every time.

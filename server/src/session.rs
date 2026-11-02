@@ -80,6 +80,12 @@ struct Transport {
     counted: Option<(String, u64)>,
     /// Ignore reports sampled before the most recent load or transport command completed.
     report_after: Option<Instant>,
+    /// The output instance and the last of its own plays, pauses and seeks the core has taken
+    /// on. Sent with each transport command, so the output can tell one decided before them.
+    control: Option<(Option<String>, u64)>,
+    /// What the output had loaded when it went out of reach. It's kept, rather than loaded
+    /// again, if the same output comes back still playing that song.
+    orphaned: Option<Loaded>,
 }
 
 impl Transport {
@@ -96,6 +102,14 @@ impl Transport {
     fn set_position(&mut self, position: f64) {
         self.position = position.max(0.0);
         self.position_at = Some(Instant::now());
+    }
+
+    /// The output's latest own change the core knows of, for that output instance.
+    fn known_control(&self, instance: &Option<String>) -> u64 {
+        match &self.control {
+            Some((known, seq)) if known == instance => *seq,
+            _ => 0,
+        }
     }
 }
 
@@ -289,8 +303,39 @@ impl Core {
             transport_path,
             instance_id: crate::server_config::random_hex(16),
         });
+        let weak = Arc::downgrade(&core);
+        core.endpoints.on_report(Box::new(move |endpoint, status, instance, sampled_at| {
+            if let Some(core) = weak.upgrade() { core.adopt_control(endpoint, status, instance, sampled_at); }
+        }));
         tokio::spawn(drive(core.clone()));
         core
+    }
+
+    /// Takes on a play, pause or seek made on the output itself. The listener in front of it
+    /// decides; it happened after anything the core asked of that output before hearing of it,
+    /// so it replaces the core's own pending play, pause or seek.
+    fn adopt_control(&self, endpoint: &str, status: &Value, instance: &Option<String>, sampled_at: Instant) {
+        let Some(seq) = status["control"]["seq"].as_u64() else { return };
+        let mut transport = self.transport();
+        if transport.output.as_ref().is_none_or(|output| output.endpoint_id != endpoint) { return; }
+        if seq <= transport.known_control(instance) { return; }
+        transport.control = Some((instance.clone(), seq));
+        // Only the core's own song on that engine; anything else is settled by the driver.
+        let playing_ours = transport.loaded.as_ref().is_some_and(|loaded| loaded.endpoint_id == endpoint
+            && &loaded.endpoint_instance == instance && status["currentSource"].as_str() == Some(loaded.source.as_str()));
+        if !playing_ours { return; }
+        let playing = status["control"]["playing"].as_bool().unwrap_or(transport.playing);
+        let engine_playing = status["isPlaying"].as_bool().unwrap_or(false);
+        transport.playing = playing;
+        transport.pending_play = None;
+        transport.pending_seek = None;
+        transport.buffering = playing && (status["buffering"] == true || !engine_playing);
+        if let Some(position) = status["currentTime"].as_f64() {
+            transport.position = position.max(0.0);
+            transport.position_at = Some(sampled_at);
+        }
+        drop(transport);
+        self.changed();
     }
 
     fn transport(&self) -> std::sync::MutexGuard<'_, Transport> {
@@ -312,7 +357,7 @@ impl Core {
         transport.position_at = Some(Instant::now());
         transport.playing = false;
         transport.buffering = false;
-        transport.loaded = None;
+        if let Some(loaded) = transport.loaded.take() { transport.orphaned = Some(loaded); }
         transport.queued_next = None;
         transport.pending_play = None;
         transport.pending_seek = None;
@@ -322,6 +367,33 @@ impl Core {
             self.save_transport();
             self.changed();
         }
+    }
+
+    /// Takes back the load an output had when it went out of reach, if it came back still
+    /// playing that song (or the queued one after it), so it isn't stopped and started again.
+    fn restore_orphaned(&self, endpoint: &str, device: &str, instance: &Option<String>, track_source: &str, next: Option<&str>, status: &Value) {
+        let mut transport = self.transport();
+        if transport.loaded.is_some() { return; }
+        let Some(orphaned) = transport.orphaned.take() else { return };
+        let source = status["currentSource"].as_str();
+        let same = instance.is_some() && !orphaned.live && orphaned.endpoint_id == endpoint && &orphaned.endpoint_instance == instance
+            && orphaned.device_id == device && orphaned.generation == transport.generation && orphaned.track_source == track_source
+            && status["error"].is_null() && status["ended"] != true
+            && (source == Some(orphaned.source.as_str()) || source.is_some() && source == next);
+        if !same { return; }
+        if transport.pending_play.is_none() {
+            transport.playing = status["isPlaying"] == true || status["buffering"] == true;
+        }
+        if transport.pending_seek.is_none() && source == Some(orphaned.source.as_str()) && let Some(position) = status["currentTime"].as_f64() {
+            transport.set_position(position);
+        }
+        transport.buffering = transport.playing && status["isPlaying"] != true;
+        transport.loaded = Some(orphaned);
+        transport.queued_next = None;
+        transport.report_after = None;
+        transport.error = None;
+        drop(transport);
+        self.changed();
     }
 
     pub(crate) fn save_transport(&self) {
@@ -713,6 +785,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
                     transport.position_at = Some(Instant::now());
                     transport.output = output.clone();
                     transport.loaded = None;
+                    transport.orphaned = None;
                     transport.queued_next = None;
                     transport.error = None;
                 }
@@ -913,6 +986,10 @@ async fn step(core: &Core) -> Result<(), String> {
         core.pause_disconnected_output();
         if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
     }
+    core.restore_orphaned(&endpoint, &output.device_id, &endpoint_instance, &canonical_source, next.as_deref(), &status);
+    // The output's own changes the core knows of when it sends a command. The output ignores a
+    // play, pause or seek decided before its latest own change.
+    let known = || core.transport().known_control(&endpoint_instance);
 
     let mut source = canonical_source.clone();
     let mut live = false;
@@ -977,7 +1054,7 @@ async fn step(core: &Core) -> Result<(), String> {
     if needs_load {
         // A pause also stops an already executing, superseded autoplay load.
         if core.transport().pending_play == Some(false) {
-            remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})))?;
+            remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({ "control": known() })))?;
             core.transport().pending_play = None;
         }
         if needs_device {
@@ -985,7 +1062,7 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         let duration = track["durationSeconds"].as_f64().unwrap_or(0.0);
         if let Err(error) = remote!(core.endpoints
-            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay }))) {
+            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay, "control": known() }))) {
             if live {
                 if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); }
                 core.transport().failed_live_load = Some(wanted);
@@ -1004,11 +1081,13 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         let mut transport = core.transport();
         transport.loaded = Some(wanted);
+        transport.orphaned = None;
         transport.queued_next = Some(next.clone());
         transport.pending_play = None;
         transport.pending_seek = None;
         transport.duration = duration;
-        transport.buffering = autoplay;
+        // The output plays as its own latest change says, if it made one while this loaded.
+        transport.buffering = transport.playing;
         transport.error = None;
         transport.set_position(position);
         transport.report_after = Some(Instant::now());
@@ -1022,11 +1101,11 @@ async fn step(core: &Core) -> Result<(), String> {
         (transport.pending_play, transport.pending_seek, transport.queued_next.clone())
     };
     if let Some(seek) = pending_seek {
-        remote!(core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek })))?;
+        remote!(core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek, "control": known() })))?;
     }
     if let Some(playing) = pending_play {
         let command = if playing { "play_native_audio" } else { "pause_native_audio" };
-        remote!(core.endpoints.call(&endpoint, command, json!({})))?;
+        remote!(core.endpoints.call(&endpoint, command, json!({ "control": known() })))?;
     }
     if pending_seek.is_some() || pending_play.is_some() {
         let mut transport = core.transport();

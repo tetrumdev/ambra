@@ -26,8 +26,8 @@ use crate::access::Caller;
 
 /// An endpoint that hasn't reported for this long is offline.
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
-/// How long an offline output keeps its song. A phone changing networks keeps playing what it
-/// already downloaded while it reconnects (RECONNECT_GRACE_MS in mobile/src/phoneEndpoint.ts).
+/// How long an offline output keeps its song. An output that comes back later with the same
+/// song still playing keeps it (`session.rs` restores its load instead of starting it again).
 #[cfg(not(test))]
 const RECONNECT_GRACE: Duration = Duration::from_secs(90);
 #[cfg(test)]
@@ -82,7 +82,12 @@ pub struct Endpoints {
     next_id: AtomicU64,
     /// Signalled by every playback report, so the core acts on it at once.
     reported: Notify,
+    /// Hears every playback report as it arrives, even while the core waits on the output.
+    on_report: OnceLock<ReportHook>,
 }
+
+/// The endpoint, its report, its instance and when the report was sampled.
+pub type ReportHook = Box<dyn Fn(&str, &Value, &Option<String>, Instant) + Send + Sync>;
 
 struct WaitingCommand {
     endpoint_id: String,
@@ -247,10 +252,13 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
         // Beyond a second it's a stalled request, not the network's usual delay.
         let latency = report.latency_ms.filter(|ms| ms.is_finite()).map_or(0.0, |ms| ms.clamp(0.0, 1000.0));
         let held = report.sampled_at_ms.filter(|ms| ms.is_finite()).map_or(Duration::ZERO, |ms| endpoint.report_delay(now, ms));
-        endpoint.status = status;
+        let sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0) + held).unwrap_or(now);
+        endpoint.status = status.clone();
         endpoint.status_at = now;
-        endpoint.status_sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0) + held).unwrap_or(now);
+        endpoint.status_sampled_at = sampled_at;
+        let instance = endpoint.instance_id.clone();
         drop(endpoints);
+        if let Some(hook) = shared.on_report.get() { hook(&endpoint_id, &status, &instance, sampled_at); }
         shared.reported.notify_one();
     }
     Json(json!({})).into_response()
@@ -380,6 +388,11 @@ async fn command(State(endpoints): State<Shared>, Path(endpoint_id): Path<String
 }
 
 impl Endpoints {
+    /// Runs `hook` on every playback report from now on; only the first hook is kept.
+    pub fn on_report(&self, hook: ReportHook) {
+        let _ = self.on_report.set(hook);
+    }
+
     /// Resolves at the next playback report (or at once, if one came since the last wait).
     pub async fn reported(&self) {
         self.reported.notified().await;

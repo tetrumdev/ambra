@@ -57,6 +57,8 @@ export type SessionView = {
   error: string | null;
   output: Output | null;
   outputOnline: boolean;
+  /** What the output was asked to play, as the core sent it. */
+  loadedSource?: string | null;
   queueRevision: number;
   queue: QueueSnapshot;
 };
@@ -87,7 +89,7 @@ function resetSession() {
   view = null;
   viewAt = Date.now();
   playbackClock.reset();
-  for (const listener of listeners) listener();
+  show();
 }
 
 /** The server and token saved by an earlier pairing, if any. */
@@ -260,9 +262,32 @@ let viewAt = Date.now();
 const playbackClock = new SessionClock();
 const listeners = new Set<() => void>();
 
-export const sessionView = () => view;
+/**
+ * While this phone is the output and plays the server's song, its own player says whether
+ * it plays and where, rather than a server that may be out of reach.
+ */
+export type LocalPlayback = { playing: boolean; buffering: boolean; positionSeconds: number; at: number };
+let local: LocalPlayback | null = null;
+let shown: SessionView | null = null;
+/** Plays, pauses or seeks on this phone's own player; false when it isn't the one to. */
+let localControl: ((action: string, details: Record<string, unknown>) => boolean) | null = null;
+
+function show() {
+  shown = view && local ? { ...view, playing: local.playing, buffering: local.buffering, positionSeconds: local.positionSeconds } : view;
+  for (const listener of listeners) listener();
+}
+
+export function setLocalPlayback(next: LocalPlayback | null) {
+  if (!next && !local) return;
+  local = next;
+  show();
+}
+
+export function setLocalControl(control: typeof localControl) { localControl = control; }
+
+export const sessionView = () => shown;
 /** Seconds since the view's position was true. */
-export const sessionViewAge = () => playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
+export const sessionViewAge = () => local && view ? Math.max(0, (Date.now() - local.at) / 1000) : playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
 
 export function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -278,7 +303,7 @@ function accept(next: ArrivingView) {
   if (view?.instanceId !== next.instanceId) playbackClock.reset();
   view = { ...rest, queue };
   viewAt = Date.now();
-  for (const listener of listeners) listener();
+  show();
   return true;
 }
 
@@ -322,6 +347,7 @@ function inOrder<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export function command(action: string, details: Record<string, unknown> = {}) {
+  if (localControl?.(action, details)) return Promise.resolve();
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
