@@ -1,3 +1,4 @@
+import { serviceRank } from "./servicePreference";
 import type { CatalogArtist, CatalogAlbum } from "../api/server";
 
 export function searchText(value: string) {
@@ -109,13 +110,29 @@ export function sameAlbum(left: CatalogAlbum, right: CatalogAlbum) {
 // A choice is filed under each credited artist, so a service listing collaborators differently still finds it.
 const preferenceKeys = (album: CatalogAlbum) => [...albumArtistNames(album)].map(name => `${name}|${albumIdentity(album)}`);
 const losslessProviders = new Set(["qobuz", "tidal", "local"]);
-/** Higher is better: explicit, then bit depth and sample rate, with lossless services assumed CD quality. */
+/**
+ * Higher is better: explicit, then bit depth and sample rate, with lossless services assumed CD
+ * quality, then the service songs are settled by too (`serviceRank`), so equal copies of an
+ * album and of its songs come from one service.
+ */
 function editionQuality(album: CatalogAlbum): number[] {
   const lossless = losslessProviders.has(album.provider);
-  return [Number(album.explicit ?? false), album.maximumBitDepth ?? (lossless ? 16 : 0), album.maximumSamplingRateKHz ?? (lossless ? 44.1 : 0)];
+  return [Number(album.explicit ?? false), album.maximumBitDepth ?? (lossless ? 16 : 0), album.maximumSamplingRateKHz ?? (lossless ? 44.1 : 0), serviceRank(album.provider)];
 }
 
-const compareEditions = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
+const compareScores = (a: number[], b: number[]) => a.map((value, index) => value - b[index]).find(difference => difference !== 0) ?? 0;
+
+/**
+ * Compares two copies of an album by `editionQuality`, after `lead`. Some services' search leaves
+ * out the sample rate (TIDAL's gives only the bit depth); a rate is then compared only when both
+ * copies state one, rather than an unstated rate losing to any stated one.
+ */
+function compareEditions(left: CatalogAlbum, right: CatalogAlbum, lead: [number, number] = [0, 0]) {
+  const a = [lead[0], ...editionQuality(left)], b = [lead[1], ...editionQuality(right)];
+  const rate = 3;
+  if (left.maximumSamplingRateKHz == null || right.maximumSamplingRateKHz == null) a[rate] = b[rate] = 0;
+  return compareScores(a, b);
+}
 
 // The version the listener picked for each album, by album identity; it opens instead of the
 // best-sounding copy wherever the album's editions are gathered into one.
@@ -167,7 +184,7 @@ export function bestEditions(albums: CatalogAlbum[]): CatalogAlbum[] {
   for (const album of albums) {
     const index = best.findIndex(current => [current, ...(current.versions ?? [])].some(copy => sameAlbum(copy, album)));
     const current = index < 0 ? undefined : best[index];
-    const representative = !current || compareEditions(editionQuality(album), editionQuality(current)) > 0 ? album : current;
+    const representative = !current || compareEditions(album, current) > 0 ? album : current;
     const merged = withAlbumVersions(representative, current ? [current, album] : [album]);
     if (index < 0) best.push(merged);
     else best[index] = merged;
@@ -207,8 +224,7 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
       group.fusion += 1 / (60 + rank);
       group.providers.add(item.provider);
     }
-    const a = [asked(item), ...editionQuality(item)], b = [asked(group.album), ...editionQuality(group.album)];
-    if (compareEditions(a, b) > 0) group.album = item;
+    if (compareEditions(item, group.album, [asked(item), asked(group.album)]) > 0) group.album = item;
   }
   return groups.sort((a, b) => score(b.album) - score(a.album) || b.fusion - a.fusion).map(group => withAlbumVersions(group.album, group.copies));
 }

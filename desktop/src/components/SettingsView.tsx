@@ -21,6 +21,22 @@ import type { ShortcutOverrides } from "../utils/shortcuts";
 import { invokeOn, useEndpoints, type RemoteEndpoint } from "../utils/playbackTarget";
 import { coreCommand, coreView, subscribeCore } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
+import { preferredService, setPreferredService, subscribePreferredService, type PreferredService } from "../utils/servicePreference";
+
+/** Which service's copy is shown when several have a song or album in the same quality. */
+function PreferredServiceSetting() {
+  const service = useSyncExternalStore(subscribePreferredService, preferredService);
+  const options: { value: PreferredService; label: string }[] = [
+    { value: "off", label: "Off" },
+    ...(["qobuz", "tidal", "spotify"] as const).map(value => ({ value, label: musicProviderName(value) })),
+  ];
+  return <div className="settingsGroup">
+    <h2>Search</h2>
+    <SettingRow label="Preferred service" hint="Shown when several services have a song or album in the same quality. Songs and their albums always come from the same service.">
+      <Segmented label="Preferred service" value={service} options={options} onChange={setPreferredService} />
+    </SettingRow>
+  </div>;
+}
 
 /** Whether the server's core is playing on this output of this computer, or of `endpointId`. */
 function usePlayingOn() {
@@ -106,6 +122,7 @@ export function SettingsView({ onRescanLocalMusic, onServiceConnected, tab, onTa
           </span>
         </SettingRow>
       </div>
+      <PreferredServiceSetting />
       <div className="settingsGroup">
         <h2>Sidebar</h2>
         {(["spotify", "qobuz", "tidal"] as const).map(provider => <SettingRow key={provider} label={`${musicProviderName(provider)} playlists`}>

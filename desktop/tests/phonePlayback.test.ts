@@ -107,15 +107,17 @@ describe("phone output playback", () => {
     h.engine.release();
   });
 
-  test("native pause and seek update the shared session, while song completion is left to the core", async () => {
+  test("native pause and seek are the phone's own changes, while song completion is left to the core", async () => {
     const h = harness();
     await h.engine.execute("load_native_audio", { source: "song", autoplay: true });
     h.created[0].pause();
     await h.created[0].seekTo(85);
-    expect(h.transport).toEqual([{ action: "pause", details: undefined }, { action: "seek", details: { positionSeconds: 85 } }]);
+    // Reported for the core to take on, rather than sent as commands it must answer first.
+    expect(h.transport).toEqual([]);
+    expect(h.engine.status().control).toEqual({ seq: 2, playing: false });
     h.created[0].emit({ didJustFinish: true, playing: false });
     expect(h.engine.status().ended).toBe(true);
-    expect(h.transport).toHaveLength(2);
+    expect(h.transport).toHaveLength(0);
     h.engine.release();
   });
 

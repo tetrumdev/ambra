@@ -154,8 +154,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const currentTrack = queue.currentEntry?.track;
   const localOutput = ownsPlaybackOutput(view?.output, serverConnection?.clientId);
 
-  // Play and pause show at once, and on this device's own output take effect at once; the server
-  // hears of it alongside and its view is shown again once it agrees.
+  // Play and pause show at once. On this device's own output they act on its engine alone, which
+  // the server takes on from the engine's next report; elsewhere the server is asked.
   const [pendingPlaying, setPendingPlaying] = useState<{ playing: boolean; at: number } | null>(null);
   useEffect(() => {
     if (!pendingPlaying) return;
@@ -165,24 +165,31 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   }, [pendingPlaying, view?.playing]);
   const playingNow = useRef(false);
   playingNow.current = pendingPlaying?.playing ?? (followsEngine() ? enginePlaying : null) ?? view?.playing ?? false;
-  /** Asks this device's engine directly, when it's the one playing the server's song. */
-  const controlEngine = useCallback((action: "play" | "pause" | "seek", positionSeconds?: number) => {
-    if (!followsEngine()) return;
-    void invoke("shared_output_control", { action, positionSeconds }).catch(() => {});
+  /**
+   * Plays, pauses or seeks with this device's engine, when it's the one playing the server's
+   * song: the listener here has full control, however slow the way to the server is. Otherwise,
+   * or if the engine can't, the server is asked.
+   */
+  const control = useCallback(async (action: "play" | "pause" | "seek", positionSeconds?: number) => {
+    if (followsEngine()) {
+      try {
+        await invoke("shared_output_control", { action, positionSeconds });
+        return;
+      } catch { /* No longer this device's to play: the server decides. */ }
+    }
+    await coreCommand(action, action === "seek" ? { positionSeconds } : {});
   }, [followsEngine]);
   const setPlaying = useCallback((playing: boolean) => {
     if (playing) ensureOutput();
     setPendingPlaying({ playing, at: performance.now() });
-    controlEngine(playing ? "play" : "pause");
     clock.setRunning(playing && !!coreView()?.output);
-    return coreCommand(playing ? "play" : "pause");
-  }, [clock, controlEngine, ensureOutput]);
+    return control(playing ? "play" : "pause");
+  }, [clock, control, ensureOutput]);
   const seekTo = useCallback((positionSeconds: number) => {
-    controlEngine("seek", positionSeconds);
     clock.setRunning(false);
     clock.set(positionSeconds);
-    void coreCommand("seek", { positionSeconds }).catch(() => {});
-  }, [clock, controlEngine]);
+    void control("seek", positionSeconds).catch(() => {});
+  }, [clock, control]);
   const skip = useCallback((direction: "next" | "previous") => {
     if (direction === "previous" && clock.get() > RESTART_AFTER_SECONDS) {
       // Starting the song over. Only a seek: a "previous" sent after it would find the server
