@@ -2,7 +2,7 @@ import { createAudioPlayer } from "expo-audio";
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
-import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, refreshSession, sessionView, subscribe } from "./client";
+import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, subscribe } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
@@ -13,6 +13,14 @@ export function subscribePhoneEndpoint(listener: () => void) { listeners.add(lis
 function publish(next: PhoneEndpointInfo | null) { info = next; for (const listener of listeners) listener(); }
 type Job = { id: number; command: string; args: Record<string, unknown> };
 const instanceId = () => `phone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+/** The server shows the phone offline after this long without word from it. */
+const QUIET_MS = 8000;
+/**
+ * How long the phone keeps playing from its downloaded audio while it reconnects. The server
+ * holds the session for 90 seconds (RECONNECT_GRACE in server/src/endpoints.rs); stopping a
+ * little sooner means the phone never plays on after the core has given up on it.
+ */
+const RECONNECT_GRACE_MS = 85_000;
 
 /** The phone reports presence and executes the core's output commands, just as desktop does. */
 export function followPhoneOutput() {
@@ -74,11 +82,14 @@ export function followPhoneOutput() {
       create: source => createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
       mediaUrl: phoneMediaUrl,
+      prefetch: prefetchMedia,
       metadata,
       ownsOutput,
       changed,
       transport: (action, details) => {
-        if (ownsOutput() && !abort.signal.aborted) void command(action, details).catch(() => { player?.release(); });
+        // A command lost to a network change is reconciled from the next report; only a
+        // phone that is no longer the output stops.
+        if (ownsOutput() && !abort.signal.aborted) void command(action, details).catch(() => { if (!ownsOutput()) player?.release(); });
       },
     });
     const sync = () => {
@@ -96,10 +107,22 @@ export function followPhoneOutput() {
     foreground = AppState.addEventListener("change", state => {
       if (state === "active") { void report(); void refreshSession(abort.signal).catch(() => {}); }
     });
+    let quiet = false;
     heartbeat = setInterval(() => {
-      // An unreachable phone must not keep playing after the core can have moved elsewhere.
-      if (!lost && Date.now() - lastContact > 8000) {
+      const silence = Date.now() - lastContact;
+      // A network change: keep playing what is already downloaded while the bridge reconnects.
+      if (!quiet && !lost && silence > QUIET_MS) {
+        quiet = true;
+        publish({ ...descriptor, ready: true, error: "Reconnecting…" });
+      }
+      if (silence <= QUIET_MS && quiet) {
+        quiet = false;
+        if (!lost) publish({ ...descriptor, ready: true, error: null });
+      }
+      // Too long out of reach: the core can have moved on, so this phone must not keep playing.
+      if (!lost && silence > RECONNECT_GRACE_MS) {
         lost = true;
+        quiet = false;
         instance = instanceId();
         player?.release();
         publish({ ...descriptor, ready: false, error: "Connection lost. Reconnecting…" });

@@ -817,8 +817,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 }
             }
         }
-        if let Some(output) = self.output.as_mut() {
+        if let Some(mut output) = self.output.take() {
             let _ = output.pause();
+            output.hand_back();
         }
     }
 
@@ -1636,11 +1637,11 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             // event. The queue can retry the next track through foreground load.
             self.next_source = None;
             self.end_preload_started_at = None;
-            if let Some(output) = self.output.as_mut() {
+            if let Some(mut output) = self.output.take() {
                 output.pause()?;
+                output.hand_back();
             }
             self.rendering = false;
-            self.output = None;
             self.desired_playing = false;
             update_status(&self.status, |status| {
                 status.current_time = status.duration;
@@ -1928,10 +1929,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let position_seconds =
             self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
 
-        if let Some(output) = self.output.as_mut() {
+        if let Some(mut output) = self.output.take() {
             output.reset()?;
+            output.hand_back();
         }
-        self.output = None;
         self.rendering = false;
         // Give up the device without re-downloading or seeking the song. Samples
         // still queued in its ring return ahead of the decoder's existing PCM.
@@ -1968,10 +1969,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     fn fail(&mut self, error: String) {
         self.desired_playing = false;
         self.output_retry = None;
-        if let Some(output) = self.output.as_mut() {
+        if let Some(mut output) = self.output.take() {
             let _ = output.pause();
+            output.hand_back();
         }
-        self.output = None;
         self.decoder = None;
         self.pcm.clear();
         self.reset_gain_buffer();

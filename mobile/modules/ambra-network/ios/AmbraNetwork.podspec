@@ -12,5 +12,6 @@ Pod::Spec.new do |s|
   s.dependency 'ExpoModulesCore'
   s.source_files = '**/*.{h,swift}'
   s.vendored_frameworks = 'AmbraNetwork.xcframework'
+  s.frameworks = 'Network'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
 end

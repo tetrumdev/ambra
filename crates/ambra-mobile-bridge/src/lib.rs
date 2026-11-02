@@ -10,7 +10,7 @@ use std::{
 
 struct Session {
     manager: Arc<ConnectionManager>,
-    _bridge: Bridge,
+    bridge: Bridge,
 }
 static SESSION: Mutex<Option<Session>> = Mutex::new(None);
 static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -40,11 +40,15 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
             };
             let token = args["token"].as_str().map(str::to_owned);
             let manager = ConnectionManager::new(identity, selected, token);
-            let bridge = Bridge::start(manager.clone()).await?;
+            manager.enable_roaming();
+            // Songs are downloaded ahead into the app's own storage so a network change
+            // never interrupts what is playing.
+            let cache = std::path::Path::new(directory).join("media-cache");
+            let bridge = Bridge::start_with_cache(manager.clone(), Some(cache)).await?;
             let base_url = bridge.base_url.clone();
             *SESSION.lock().map_err(|_| "Native session lock failed")? = Some(Session {
                 manager,
-                _bridge: bridge,
+                bridge,
             });
             Ok(json!({ "baseUrl": base_url }))
         }
@@ -72,6 +76,22 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
                 .ok_or("Native networking is not open")?;
             manager.connect().await?;
             Ok(serde_json::to_value(manager.status())?)
+        }
+        "network_changed" => {
+            if let Some(session) = SESSION.lock().map_err(|_| "Native session lock failed")?.as_ref() {
+                session.manager.network_changed();
+            }
+            Ok(Value::Null)
+        }
+        "prefetch" => {
+            let path = args["path"].as_str().ok_or("Missing media path")?;
+            if !path.starts_with("/api/") {
+                return Err("Only server media can be prefetched".into());
+            }
+            if let Some(session) = SESSION.lock().map_err(|_| "Native session lock failed")?.as_ref() {
+                session.bridge.prefetch(path);
+            }
+            Ok(Value::Null)
         }
         "discover" => Ok(serde_json::to_value(
             ambra_net::lan::discover(std::time::Duration::from_millis(750)).await?,

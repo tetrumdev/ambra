@@ -64,6 +64,7 @@ import { hideableTrackColumns, optionalColumnsTemplate, orderedOptionalColumns }
 import { cachePlaylistArtwork } from "./utils/playlistArtworkCache";
 import { enterView } from "./utils/viewMotion";
 import { setReducedMotion } from "./utils/reducedMotion";
+import { setMaxAnimationFps } from "./utils/frameRate";
 import { isSongEnding } from "./utils/songEnding";
 import { preloadUpcomingBigscreenArtwork } from "./utils/artworkImages";
 import { preloadLyrics } from "./utils/lyricsCache";
@@ -105,6 +106,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const [preferences, setPreferences] = useState(loadPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
+  setMaxAnimationFps(preferences.ui.maxAnimationFps);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const playlistStore = usePlaylists();
   const listeningHistory = useListeningHistory();
@@ -1392,6 +1394,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             onReduceMotion={reduceMotion => setPreferences(current => ({ ...current, ui: { ...current.ui, reduceMotion } }))}
             animateSwirl={preferences.ui.animateSwirl}
             lyricMotion={preferences.ui.lyricMotion}
+            maxAnimationFps={preferences.ui.maxAnimationFps}
+            onMaxAnimationFpsChange={maxAnimationFps => setPreferences(current => ({ ...current, ui: { ...current.ui, maxAnimationFps } }))}
             autoSyncLyrics={preferences.ui.autoSyncLyrics}
             lyricsOffsetMs={preferences.ui.lyricsOffsetMs}
             onLyricsOffsetChange={lyricsOffsetMs => setPreferences(current => ({ ...current, ui: { ...current.ui, lyricsOffsetMs } }))}

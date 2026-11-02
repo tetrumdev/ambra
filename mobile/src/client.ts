@@ -361,15 +361,26 @@ export async function refreshSession(signal: AbortSignal, options: { clock?: "re
 }
 
 /** Keep the core's source unchanged in reports; authenticate/rebase only the native media URL. */
+/** The server path of a song's audio, without credentials, or null for audio elsewhere. */
+export function phoneMediaPath(source: string) {
+  if (!source.startsWith("/api/") && !/^https?:\/\/[^/]+\/api\//.test(source)) return null;
+  const path = source.slice(source.indexOf("/api/"));
+  const [pathname, query = ""] = path.split("?");
+  const parameters = new URLSearchParams(query);
+  parameters.delete("access_token");
+  const remaining = parameters.toString();
+  return `${pathname}${remaining ? `?${remaining}` : ""}`;
+}
+
+/** Downloads a song through the native bridge before the player needs it. */
+export function prefetchMedia(source: string) {
+  const path = phoneMediaPath(source);
+  if (path && nativeNetworkAvailable) void networkCall("prefetch", { path }).catch(() => {});
+}
+
 export function phoneMediaUrl(source: string) {
-  if (source.startsWith("/api/") || /^https?:\/\/[^/]+\/api\//.test(source)) {
-    const path = source.slice(source.indexOf("/api/"));
-    const [pathname, query = ""] = path.split("?");
-    const parameters = new URLSearchParams(query);
-    parameters.delete("access_token");
-    const remaining = parameters.toString();
-    return serverUrl(`${pathname}${remaining ? `?${remaining}` : ""}`);
-  }
+  const path = phoneMediaPath(source);
+  if (path) return serverUrl(path);
   if (/^https?:\/\//.test(source)) return source;
   throw new Error("This file is only on the computer. Import it into the server library to play it on your phone.");
 }

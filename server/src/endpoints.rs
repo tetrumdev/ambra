@@ -26,6 +26,12 @@ use crate::access::Caller;
 
 /// An endpoint that hasn't reported for this long is offline.
 const OFFLINE_AFTER: Duration = Duration::from_secs(8);
+/// How long an offline output keeps its song. A phone changing networks keeps playing what it
+/// already downloaded while it reconnects (RECONNECT_GRACE_MS in mobile/src/phoneEndpoint.ts).
+#[cfg(not(test))]
+const RECONNECT_GRACE: Duration = Duration::from_secs(90);
+#[cfg(test)]
+pub(crate) const RECONNECT_GRACE: Duration = Duration::from_secs(12);
 /// How long an output's report timings are compared, to tell a delayed report from a prompt one.
 const CLOCK_SAMPLES_FOR: Duration = Duration::from_secs(60);
 /// A report seemingly held up longer than this means the output's clock jumped (it slept).
@@ -136,7 +142,7 @@ struct EndpointView {
 
 async fn list(State(endpoints): State<Shared>) -> Json<Vec<EndpointView>> {
     let mut endpoints = endpoints.endpoints.lock().await;
-    endpoints.retain(|_, endpoint| endpoint.seen.elapsed() < OFFLINE_AFTER * 4);
+    endpoints.retain(|_, endpoint| endpoint.seen.elapsed() < RECONNECT_GRACE.max(OFFLINE_AFTER * 4));
     let mut online = endpoints
         .iter()
         .filter(|(_, endpoint)| endpoint.online())
@@ -404,6 +410,13 @@ impl Endpoints {
         let endpoints = self.endpoints.lock().await;
         let endpoint = endpoints.get(endpoint_id).filter(|endpoint| endpoint.online())?;
         Some((endpoint.status.clone(), endpoint.status_at, endpoint.status_sampled_at, endpoint.instance_id.clone()))
+    }
+
+    /// Offline, but recently enough that it may be reconnecting rather than gone.
+    pub async fn reconnecting(&self, endpoint_id: &str) -> bool {
+        self.endpoints.lock().await.get(endpoint_id).is_some_and(|endpoint| {
+            !endpoint.online() && !endpoint.departed && endpoint.seen.elapsed() < RECONNECT_GRACE
+        })
     }
 
     pub async fn online(&self, endpoint_id: &str) -> bool {

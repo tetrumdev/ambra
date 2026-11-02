@@ -155,6 +155,21 @@ export function SearchBar({
               placeholder="Search..."
               aria-label="Search songs"
             />
+            {query && (
+              <button
+                className="searchClearButton"
+                type="button"
+                aria-label="Clear search"
+                // Keeps focus in the field so typing carries on after clearing.
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onQueryChange("");
+                  input.current?.focus();
+                }}
+              >
+                <img src="/x.svg" alt="" aria-hidden="true" />
+              </button>
+            )}
           </>
         ) : (
           <button

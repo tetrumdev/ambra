@@ -15,7 +15,9 @@
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid #535353;
     font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
-    transition: filter 0.25s ease, border-color 0.25s ease;
+    /* A filter here (the old drop-shadow glow) gave WebKitGTK a square layer at the expanded size
+       that it never cleared once the bar collapsed; box-shadow follows the pill and repaints. */
+    transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 /* Pages without search leave it out at once; one summoned there fades in, and out again when dismissed. */
@@ -27,7 +29,7 @@
 /* Over the player, the hidden screen around it stays hidden. */
 #searchBar[data-summoned] {
     visibility: visible;
-    transition: filter 0.25s ease, border-color 0.25s ease, opacity 0.2s ease;
+    transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.2s ease;
 }
 #searchBar[data-away="dismissed"] {
     transition: opacity 0.2s ease, visibility 0s linear 0.2s;
@@ -39,7 +41,7 @@
 
 #searchBar:has(#input:focus),
 #searchBar:has(.searchExpandButton:focus) {
-    filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.3));
+    box-shadow: 0 0 7px rgba(255, 255, 255, 0.3);
     border: 1px solid rgb(100, 100, 100);
 }
 
@@ -92,7 +94,7 @@
     border: none;
     outline: none;
     color: white;
-    padding: 0 16px 0 43px;
+    padding: 0 30px 0 43px;
     font-size: 16px;
     font-family: inherit;
     background-color: transparent;
@@ -100,16 +102,40 @@
     -webkit-user-select: text;
 }
 
-#input::-webkit-search-cancel-button {
+/* WebKitGTK paints its own theme glyph here whatever the styles say, so the bar draws its own button. */
+#input::-webkit-search-cancel-button,
+#input::-webkit-search-decoration {
+    display: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.searchClearButton {
+    position: absolute;
+    top: 50%;
+    right: 2px;
+    display: grid;
     width: 28px;
     height: 28px;
-    margin-right: -8px;
-    margin-left: 4px;
-    appearance: none;
-    -webkit-appearance: none;
-    background: url("/x.svg") center / 12px 12px no-repeat;
+    padding: 0;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
     cursor: default;
     opacity: 0.45;
+    transform: translateY(-50%);
+    transition: opacity 0.15s ease;
+}
+
+.searchClearButton:hover,
+.searchClearButton:focus-visible {
+    opacity: 0.8;
+}
+
+.searchClearButton img {
+    width: 12px;
+    height: 12px;
 }
 
 .searchProviderControl {

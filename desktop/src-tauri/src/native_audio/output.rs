@@ -51,6 +51,13 @@ pub trait AudioOutput {
     fn quantization_bits(&self) -> Option<u32> {
         None
     }
+    /// Closes an output that is done for now (paused long enough, the queue ended, or playback
+    /// failed), as opposed to one replaced by a new stream at once.
+    fn hand_back(self)
+    where
+        Self: Sized,
+    {
+    }
     fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String>;
     fn queued_frames(&mut self) -> Result<usize, String>;
     fn is_drained(&mut self) -> Result<bool, String>;
