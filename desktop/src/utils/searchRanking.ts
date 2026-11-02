@@ -48,13 +48,30 @@ function relatedFamilies(a: string, b: string) {
   return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
 }
 
+/**
+ * Each credited artist, without a parenthesized alias: services credit the same act as
+ * "groove chronicles" and "Groove Chronicles (Noodles)", or list remixers and guests
+ * alongside the lead artist that another service credits alone.
+ */
+function artistNames(track: Track) {
+  const names = track.artists.length ? track.artists.map(artist => artist.name) : track.artist.split(/\s*(?:,|&|\bfeat\.?|\bft\.?|\bx\b)\s*/i);
+  return new Set(names.map(name => normalized(name.replace(/\s*[([][^)\]]*[)\]]/g, ""))).filter(Boolean));
+}
+
+function shareArtist(left: Track, right: Track) {
+  const names = artistNames(left);
+  return [...artistNames(right)].some(name => names.has(name));
+}
+
 export function sameRecording(left: Track, right: Track) {
   if (left.globalId === right.globalId) return true;
-  if (!normalized(left.artist) || normalized(left.artist) !== normalized(right.artist)) return false;
-  if (performance(left) !== performance(right)) return false;
   const leftIsrc = normalized(left.isrc ?? "");
   const rightIsrc = normalized(right.isrc ?? "");
-  if (leftIsrc && leftIsrc === rightIsrc) return true;
+  // An ISRC names one recording. Services spell its credits differently, so one shared
+  // artist is enough to rule out a mislabeled code.
+  if (leftIsrc && leftIsrc === rightIsrc && shareArtist(left, right)) return true;
+  if (!normalized(left.artist) || normalized(left.artist) !== normalized(right.artist)) return false;
+  if (performance(left) !== performance(right)) return false;
   if (!title(left.name) || title(left.name) !== title(right.name)) return false;
   if (left.durationSeconds <= 0 || right.durationSeconds <= 0) return false;
   const durationDifference = Math.abs(left.durationSeconds - right.durationSeconds);
@@ -266,6 +283,8 @@ export function rankSearchGroups(tracks: Track[], query: string) {
     .filter(group => group.relevance > 0)
     // Among equally relevant results, a copy found only on compilations follows the album's own.
     .sort((a, b) => b.relevance - a.relevance || Number(compilation(a.track)) - Number(compilation(b.track))
+      // Between equally relevant songs, the one that sounds better leads.
+      || compareSoundQuality(b.track, a.track)
       || b.fusionScore - a.fusionScore || byCodePoint(a.track.globalId, b.track.globalId));
 }
 

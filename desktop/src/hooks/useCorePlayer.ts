@@ -90,12 +90,17 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     let unlisten: (() => void) | undefined;
     void listen<EngineStatus>("shared-output-status", ({ payload }) => {
       if (disposed) return;
+      const heardBefore = engine.current?.status.currentSource;
       engine.current = { status: payload, at: performance.now() };
       const queue = latestQueue.current;
       const next = queue.peekNext()?.track;
       const current = queue.currentEntry?.track;
       // A gapless handoff is already audible here, even if the server still shows the old song.
-      if (!skipping.current && next && ownsPlaybackOutput(coreView()?.output, serverConnection?.clientId)
+      // Only an actual move from the current song to the next one counts: after going back (or
+      // replaying a played song) the song being left is "next", and the engine keeps reporting it
+      // until the server's load arrives.
+      if (!skipping.current && next && current && ownsPlaybackOutput(coreView()?.output, serverConnection?.clientId)
+        && sameSource(heardBefore, nativeAudioSource(current))
         && sameSource(payload.currentSource, nativeAudioSource(next))
         && !sameSource(payload.currentSource, current && nativeAudioSource(current))) {
         skipping.current = { to: nativeAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
@@ -180,9 +185,9 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   }, [clock, controlEngine]);
   const skip = useCallback((direction: "next" | "previous") => {
     if (direction === "previous" && clock.get() > RESTART_AFTER_SECONDS) {
-      // Starting the song over, as the server will.
+      // Starting the song over. Only a seek: a "previous" sent after it would find the server
+      // already at 0 and go back a song instead.
       seekTo(0);
-      void coreCommand("previous").catch(() => {});
       return;
     }
     if (direction === "next" && followsEngine()) {
