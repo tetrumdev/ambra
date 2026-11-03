@@ -1426,6 +1426,11 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         }
         self.resync.pause();
         self.rendering = false;
+        if cfg!(target_os = "linux") && self.exclusive_mode {
+            // Give the desktop its card back on Pause, keeping decoded samples
+            // and the audible position for the next Play.
+            self.release_paused_output()?;
+        }
         update_status(&self.status, |status| {
             status.is_playing = false;
             status.buffering = false;
@@ -2534,5 +2539,28 @@ mod tests {
         assert!(!snapshot.is_playing);
         assert!(!snapshot.buffering);
         assert!(snapshot.error.is_none());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn exclusive_pause_releases_output_and_resume_keeps_the_song() {
+        let mut worker = engine();
+        worker.exclusive_mode = true;
+        let song = Song::missing();
+        song.create();
+        worker.load(song.source(), None, 0.0, true).unwrap();
+        worker.rendered_frames = 9_600;
+        let (released, release) = unbounded();
+        worker.output.as_mut().unwrap().released = Some(released);
+        worker.pause().unwrap();
+        assert!(worker.output.is_none());
+        release.try_recv().expect("Pause must immediately give the device back");
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
+        assert!(worker.decoder.is_some());
+        worker.play().unwrap();
+        assert!(worker.output.is_some());
+        assert!(worker.desired_playing);
+        assert_eq!(lock_status(&worker.status).current_source.as_deref(), Some(song.source().as_str()));
+        assert_eq!(lock_status(&worker.status).current_time, 0.2);
     }
 }

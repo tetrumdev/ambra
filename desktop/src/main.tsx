@@ -1,3 +1,5 @@
+// Must stay first: see utils/abortSignalAny.ts.
+import "./utils/installAbortSignalAny";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { invoke, isTauri } from "@tauri-apps/api/core";
