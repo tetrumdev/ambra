@@ -9,6 +9,7 @@ import {
 import type { MediaPlayerClass } from "dashjs";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { flushSync } from "react-dom";
 import type { AudioQuality, Deck, Track } from "../types/music";
 import { canAttemptPlayback } from "../utils/playbackReadiness";
 import {
@@ -22,6 +23,7 @@ import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import { NativePlaybackCommands } from "../utils/nativePlaybackCommands";
 import { createPlaybackClock, type PlaybackClock } from "../utils/playbackClock";
+import { onWindowResume } from "../utils/windowResume";
 
 export type AudioDeckController = {
   firstAudioRef: RefObject<HTMLAudioElement | null>;
@@ -770,9 +772,11 @@ export function useAudioPlayer(
     let disposed = false;
     let handledEnd = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let requestRevision = 0;
 
-    const poll = async () => {
-      if (releasedRef.current) return;
+    const poll = async (resumed = false) => {
+      if (disposed || releasedRef.current) return;
+      const request = ++requestRevision;
       const statusGeneration = nativeLoadGenerationRef.current;
       const commandRevision = nativeCommandsRef.current.revision;
       if (
@@ -783,9 +787,13 @@ export function useAudioPlayer(
         return;
       }
 
+      // A WebView IPC reply can stall while the window is backgrounded. A new
+      // read must be able to replace it, and its eventual reply must be ignored.
+      timer = setTimeout(() => void poll(), 2000);
       try {
         const playback = await invoke<NativeAudioStatus>("native_audio_status");
-        if (disposed || releasedRef.current) return;
+        if (disposed || releasedRef.current || request !== requestRevision) return;
+        clearTimeout(timer);
 
         if (
           !nativeCommandsRef.current.acceptsStatus(commandRevision) ||
@@ -807,48 +815,60 @@ export function useAudioPlayer(
           return;
         }
 
-        if (statusTrack.advanced) {
-          acceptNativeAdvance(playback.currentSource);
-        }
-
-        setNativeQuality((previous) => {
-          if (!playback.currentSource || !playback.audioQuality) return null;
-          if (
-            previous?.source === playback.currentSource &&
-            JSON.stringify(previous.quality) === JSON.stringify(playback.audioQuality)
-          ) return previous;
-          return { source: playback.currentSource, quality: playback.audioQuality };
-        });
-        clock.setRunning(playback.isPlaying && !playback.buffering);
-        setCurrentTime(playback.currentTime);
-        if (playback.duration > 0) setDuration(playback.duration);
-        if (playback.ended || playback.error) {
-          nativePlayIntentRef.current = false;
-        }
-        if (playback.error) setPlaybackError(playback.error);
-        else if (playback.isPlaying) setPlaybackError(null);
-        if (playback.isPlaying && !playback.buffering && !playback.error) reportPlay();
-        // Keep the pause control active through a short rebuffer. The native
-        // worker still intends to play and will resume by itself.
-        setIsPlaying(
-          playback.isPlaying || (playback.buffering && nativePlayIntentRef.current),
-        );
-
-        if (playback.ended && !handledEnd) {
-          handledEnd = true;
-          const nextTrack = queueNavigationRef.current.completeCurrent();
-          if (nextTrack) {
-            const nextIndex = trackPosition(
-              tracksRef.current,
-              nextTrack.globalId,
-            );
-            if (nextIndex >= 0) switchToTrack(nextIndex, true);
-          } else {
-            clearPlayback();
+        const apply = () => {
+          if (statusTrack.advanced) {
+            acceptNativeAdvance(playback.currentSource);
+          } else if (resumed) {
+            // A native handoff may have updated the ref while its React render waited.
+            setCurrentTrackId(statusTrack.track.globalId);
           }
-          return;
-        }
+
+          setNativeQuality((previous) => {
+            if (!playback.currentSource || !playback.audioQuality) return null;
+            if (
+              previous?.source === playback.currentSource &&
+              JSON.stringify(previous.quality) === JSON.stringify(playback.audioQuality)
+            ) return previous;
+            return { source: playback.currentSource, quality: playback.audioQuality };
+          });
+          clock.setRunning(playback.isPlaying && !playback.buffering);
+          setCurrentTime(playback.currentTime);
+          if (playback.duration > 0) setDuration(playback.duration);
+          if (playback.ended || playback.error) {
+            nativePlayIntentRef.current = false;
+          }
+          if (playback.error) setPlaybackError(playback.error);
+          else if (playback.isPlaying) setPlaybackError(null);
+          if (playback.isPlaying && !playback.buffering && !playback.error) reportPlay();
+          // Keep the pause control active through a short rebuffer. The native
+          // worker still intends to play and will resume by itself.
+          setIsPlaying(
+            playback.isPlaying || (playback.buffering && nativePlayIntentRef.current),
+          );
+
+          if (playback.ended && !handledEnd) {
+            handledEnd = true;
+            const nextTrack = queueNavigationRef.current.completeCurrent();
+            if (nextTrack) {
+              const nextIndex = trackPosition(
+                tracksRef.current,
+                nextTrack.globalId,
+              );
+              if (nextIndex >= 0) switchToTrack(nextIndex, true);
+            } else {
+              clearPlayback();
+            }
+            return;
+          }
+        };
+        // Returning to the player must commit its track, time and transport
+        // together, without waiting for another user input to flush React work.
+        if (resumed) flushSync(apply);
+        else apply();
+        if (playback.ended && handledEnd) return;
       } catch (error) {
+        if (disposed || request !== requestRevision) return;
+        clearTimeout(timer);
         if (!disposed)
           console.warn("Could not read native audio state:", error);
       }
@@ -856,10 +876,17 @@ export function useAudioPlayer(
       if (!disposed) timer = setTimeout(poll, 200);
     };
 
+    const refresh = () => {
+      clearTimeout(timer);
+      void poll(true);
+    };
+    const stopResume = onWindowResume(refresh);
     void poll();
     return () => {
       disposed = true;
+      requestRevision++;
       if (timer !== undefined) clearTimeout(timer);
+      stopResume();
     };
   }, [acceptNativeAdvance, clearPlayback, currentTrack, switchToTrack, usesNativeAudio]);
 

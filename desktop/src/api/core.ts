@@ -7,6 +7,7 @@ import type { AudioQuality, Track } from "../types/music";
 import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
 import { invokeOn } from "../utils/playbackTarget";
 import { nativeAudioSource, isDeviceTrack } from "../utils/nativeAudioSource";
+import { onWindowResume } from "../utils/windowResume";
 
 /**
  * The server's core decides what plays for every device (server/src/session.rs). This is
@@ -127,19 +128,14 @@ export function followCore() {
     poll?.abort();
     retry?.();
   };
-  const visible = () => { if (!document.hidden) refresh(); };
+  const stopResume = onWindowResume(refresh);
   const cleanup = () => {
     poll?.abort(); retry?.(); stopClock();
-    window.removeEventListener("focus", refresh);
-    window.removeEventListener("pageshow", refresh);
+    stopResume();
     window.removeEventListener("online", refresh);
-    document.removeEventListener("visibilitychange", visible);
     if (following === controller) following = null;
   };
-  window.addEventListener("focus", refresh);
-  window.addEventListener("pageshow", refresh);
   window.addEventListener("online", refresh);
-  document.addEventListener("visibilitychange", visible);
   signal.addEventListener("abort", cleanup, { once: true });
   void (async () => {
     // Servers that stream the session send every change and position as it happens; older

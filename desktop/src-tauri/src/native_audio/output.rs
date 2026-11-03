@@ -92,6 +92,9 @@ pub use macos::PlatformOutput;
 mod linux;
 
 #[cfg(target_os = "linux")]
+mod reservation;
+
+#[cfg(target_os = "linux")]
 pub use linux::PlatformOutput;
 
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]

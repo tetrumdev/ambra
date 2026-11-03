@@ -272,8 +272,59 @@ where
             )
             .ok();
         }
-        conn.process(Duration::from_millis(1000))?;
+        // Playback positions arrive at least once a second. Waiting a full second
+        // after every update lets metadata and pause/play changes build a backlog.
+        // Keep servicing method calls without holding up outgoing state changes.
+        conn.process(Duration::from_millis(10))?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::MediaPosition;
+    use dbus::blocking::stdintf::org_freedesktop_dbus::Properties;
+
+    #[test]
+    #[ignore = "requires an isolated D-Bus session; run with dbus-run-session and --ignored"]
+    fn playback_bursts_do_not_delay_metadata_or_media_buttons() {
+        // Run under dbus-run-session so no desktop traffic drains the old
+        // one-event-per-second queue and hides the regression.
+        let conn = Connection::new_session().expect("Run this test under dbus-run-session");
+        let name = format!("ambra_test_{}", std::process::id());
+        let mut controls = MediaControls::new(PlatformConfig {
+            dbus_name: &name,
+            display_name: "Ambra media regression test",
+            hwnd: None,
+        }).unwrap();
+        let (sent, received) = mpsc::channel();
+        controls.attach(move |event| { sent.send(event).unwrap(); }).unwrap();
+        for second in 0..20 {
+            controls.set_playback(MediaPlayback::Playing {
+                progress: Some(MediaPosition(Duration::from_secs(second))),
+            }).unwrap();
+        }
+        controls.set_metadata(MediaMetadata { title: Some("Current song"), ..Default::default() }).unwrap();
+        controls.set_playback(MediaPlayback::Paused { progress: None }).unwrap();
+        thread::sleep(Duration::from_secs(1));
+
+        let destination = format!("org.mpris.MediaPlayer2.{name}");
+        let proxy = conn.with_proxy(destination, "/org/mpris/MediaPlayer2", Duration::from_secs(1));
+        let playback: String = proxy.get("org.mpris.MediaPlayer2.Player", "PlaybackStatus").unwrap();
+        assert_eq!(playback, "Paused");
+        let metadata: HashMap<String, Variant<Box<dyn RefArg>>> = proxy.get("org.mpris.MediaPlayer2.Player", "Metadata").unwrap();
+        assert_eq!(metadata["xesam:title"].0.as_str(), Some("Current song"));
+        for (method, event) in [
+            ("Play", MediaControlEvent::Play),
+            ("Pause", MediaControlEvent::Pause),
+            ("Next", MediaControlEvent::Next),
+            ("Previous", MediaControlEvent::Previous),
+            ("PlayPause", MediaControlEvent::Toggle),
+        ] {
+            let _: () = proxy.method_call("org.mpris.MediaPlayer2.Player", method, ()).unwrap();
+            assert_eq!(received.recv_timeout(Duration::from_secs(1)).unwrap(), event);
+        }
+    }
 }

@@ -27,6 +27,12 @@ mock.module("@tauri-apps/api/core", () => ({ ...tauriCore, isTauri: () => true, 
   if (command === "start_pairing") return { address: "ambra://pair/key", requestId: "pending", code: "123456", serverName: "Independent server" };
   return null;
 } }));
+const nativeEvents = new Map<string, () => void>();
+const tauriEvent = await import("@tauri-apps/api/event");
+mock.module("@tauri-apps/api/event", () => ({ ...tauriEvent, listen: async (name: string, handler: () => void) => {
+  nativeEvents.set(name, handler);
+  return () => { if (nativeEvents.get(name) === handler) nativeEvents.delete(name); };
+} }));
 mock.module("../src/App", () => ({ default: ({ localOnly }: { localOnly: boolean }) => {
   const [instance] = useState(() => ++mounts);
   const { reconnect } = useContext(ClientConnectionContext);
@@ -277,7 +283,10 @@ test("old shared commands and queued controls cannot affect a newly selected ser
     globalThis.fetch = ((_url, init) => { signals.push(init!.signal!); return new Promise<Response>(() => {}); }) as typeof fetch;
     const stop = followCore();
     expect(signals.length).toBeGreaterThan(0);
+    expect(nativeEvents.has("tauri://focus")).toBe(true);
     stop();
+    await Promise.resolve();
+    expect(nativeEvents.has("tauri://focus")).toBe(false);
     expect(signals.every(signal => signal.aborted)).toBe(true);
   } finally { globalThis.fetch = previousFetch; }
 });
