@@ -7,6 +7,7 @@ use alsa::{
 };
 
 use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed, writable_frames};
+use super::reservation::DeviceReservation;
 
 /// The system mixer (PipeWire, PulseAudio or dmix, whichever ALSA routes "default" to).
 const DEFAULT_DEVICE: &str = "default";
@@ -64,14 +65,10 @@ pub struct PlatformOutput {
     device: Option<String>,
     started: bool,
     bytes: Vec<u8>,
+    // Fields drop in declaration order: close PCM before releasing the reservation.
+    reservation: Option<DeviceReservation>,
 }
 
-
-/// Why an exclusive open failed: busy devices can still be shared through PipeWire.
-enum Exclusive {
-    Busy(String),
-    Failed(String),
-}
 
 /// The PipeWire sink that drives the hardware device `id` (`hw:CARD=<id>,DEV=<n>`), found
 /// through `pw-dump`. None without PipeWire or when PipeWire leaves the card alone, in which
@@ -215,21 +212,9 @@ impl AudioOutput for PlatformOutput {
                     "Exclusive mode on Linux needs a hardware output; choose one in the audio device list"
                         .to_owned()
                 })?;
-            match Self::open_exclusive(spec, id, processed) {
-                // Something else is playing on the card. PipeWire mixes for it, so play through
-                // PipeWire to the same card rather than going silent; the next fresh open (after
-                // a pause, or for a new format) tries exclusive again.
-                Err(Exclusive::Busy(error)) => match pipewire_node(id) {
-                    Some(node) => {
-                        let output = Self::open_shared(spec, &format!("pipewire:NODE={node}"))?;
-                        eprintln!("{error}; sharing it through PipeWire until it is free");
-                        Ok(output)
-                    }
-                    None => Err(error),
-                },
-                Err(Exclusive::Failed(error)) => Err(error),
-                Ok(output) => Ok(output),
-            }
+            // Only a direct hardware open satisfies an exclusive request. Reserving
+            // the card asks the system mixer to release it until playback stops.
+            Self::open_exclusive(spec, id, processed)
         } else {
             // A hardware device opened in shared mode goes through ALSA's plug converter,
             // so any rate or format the source has still plays.
@@ -292,7 +277,8 @@ impl AudioOutput for PlatformOutput {
     }
 
     fn hand_back(self) {
-        let device = self.device.clone();
+        // Reservation release already tells the server to restore its own nodes.
+        let device = if self.reservation.is_none() { self.device.clone() } else { None };
         drop(self);
         // Done in place (a few pactl calls) so it still happens when the app is quitting.
         if let Some(device) = device {
@@ -397,7 +383,8 @@ impl PlatformOutput {
         Self::finish(pcm, spec, format, false)
     }
 
-    fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, Exclusive> {
+    fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, String> {
+        let reservation = DeviceReservation::for_device(id)?;
         // Untouched 16-bit audio goes out at its own depth; everything else at 24 bits.
         let candidates: &[DeviceFormat] = match spec.bits_per_sample {
             0..=16 if !processed => &[
@@ -419,18 +406,25 @@ impl PlatformOutput {
             // Never truncate a 24-bit source to 16 bits.
             .filter(|format| spec.bits_per_sample <= 16 || *format != DeviceFormat::S16)
             .collect();
-        let pcm = PCM::new(id, Direction::Playback, true).map_err(|error| {
+        // The server may acknowledge the reservation just before its PCM closes.
+        let mut opened = PCM::new(id, Direction::Playback, true);
+        for _ in 0..20 {
+            if !opened.as_ref().is_err_and(|error| error.errno() == libc::EBUSY) { break; }
+            thread::sleep(Duration::from_millis(10));
+            opened = PCM::new(id, Direction::Playback, true);
+        }
+        let pcm = opened.map_err(|error| {
             if error.errno() == libc::EBUSY {
-                Exclusive::Busy(format!(
+                format!(
                     "ALSA device {id} is in use by another application or the system mixer"
-                ))
+                )
             } else {
-                Exclusive::Failed(alsa_error(&format!("Could not open ALSA device {id}"), error))
+                alsa_error(&format!("Could not open ALSA device {id}"), error)
             }
         })?;
-        let mut output =
-            Self::configure_exclusive(pcm, spec, id, &candidates).map_err(Exclusive::Failed)?;
+        let mut output = Self::configure_exclusive(pcm, spec, id, &candidates)?;
         output.device = Some(id.to_owned());
+        output.reservation = reservation;
         Ok(output)
     }
 
@@ -508,6 +502,7 @@ impl PlatformOutput {
             device: None,
             started: false,
             bytes: Vec::with_capacity(buffer_frames * spec.channels * format.bytes_per_sample()),
+            reservation: None,
         })
     }
 
@@ -630,20 +625,52 @@ mod tests {
         assert_eq!(output.quantization_bits(), Some(16));
     }
 
-    /// Opens `AMBRA_BUSY_ALSA_DEVICE` (a `hw:` id PipeWire is playing on) in exclusive mode and
-    /// plays silence: the open falls back to PipeWire and the stream keeps draining.
+    /// Takes over `AMBRA_BUSY_ALSA_DEVICE` while PipeWire is playing, without writing samples.
+    /// Releasing the PCM and reservation must let the same system stream resume.
     #[test]
     #[ignore = "needs a hardware device PipeWire is playing on"]
-    fn shares_a_busy_hardware_device_through_pipewire() {
+    fn exclusive_mode_takes_over_a_busy_device_and_hands_it_back() {
         let Ok(id) = std::env::var("AMBRA_BUSY_ALSA_DEVICE") else { return };
-        let mut output = PlatformOutput::open_device_with_mode(spec(), Some(&id), true, false).unwrap();
-        assert_eq!(output.quantization_bits(), None, "a busy device is shared, not exclusive");
-        let silence = vec![0.0; 4_410 * 2];
-        output.start().unwrap();
-        let written = output.write(&silence, &[]).unwrap();
-        assert!(written > 0);
-        let queued = output.queued_frames().unwrap();
-        thread::sleep(Duration::from_millis(150));
-        assert!(output.queued_frames().unwrap() < queued, "PipeWire should consume the queued audio");
+        let node = pipewire_node(&id).expect("The system mixer must own the device before this test");
+        let output = PlatformOutput::open_device_with_mode(spec(), Some(&id), true, false).unwrap();
+        assert!(output.reservation.is_some());
+        assert!(output.quantization_bits().is_some(), "The stream must use hardware, not PipeWire");
+        let error = PCM::new(&id, Direction::Playback, true).err().expect("The hardware must be held exclusively");
+        assert_eq!(error.errno(), libc::EBUSY);
+        output.hand_back();
+        for _ in 0..100 {
+            if pipewire_node(&id).as_deref() == Some(&node) { return; }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("The system mixer did not regain its output after exclusive playback stopped");
+    }
+
+    #[test]
+    #[ignore = "needs a hardware device PipeWire is playing on"]
+    fn failed_exclusive_configuration_restores_busy_device() {
+        let Ok(id) = std::env::var("AMBRA_BUSY_ALSA_DEVICE") else { return };
+        let node = pipewire_node(&id).expect("The system mixer must own the device before this test");
+        let invalid = StreamSpec { sample_rate: 1, ..spec() };
+        let error = PlatformOutput::open_device_with_mode(invalid, Some(&id), true, false)
+            .err().expect("An unsupported hardware format must fail");
+        assert!(error.contains("does not support"), "{error}");
+        for _ in 0..100 {
+            if pipewire_node(&id).as_deref() == Some(&node) { return; }
+            thread::sleep(Duration::from_millis(20));
+        }
+        panic!("Failed exclusive configuration left the system output reserved");
+    }
+
+    /// Holds `AMBRA_ALSA_DEVICE` without playing samples and tries a second hardware open.
+    #[test]
+    #[ignore = "needs an idle hardware device with one playback substream"]
+    fn exclusive_mode_blocks_other_hardware_opens() {
+        let Ok(id) = std::env::var("AMBRA_ALSA_DEVICE") else { return };
+        let output = PlatformOutput::open_device_with_mode(spec(), Some(&id), true, false).unwrap();
+        assert_eq!(output.quantization_bits(), Some(16));
+        let error = PCM::new(&id, Direction::Playback, true)
+            .err().expect("Exclusive playback must hold the hardware");
+        assert_eq!(error.errno(), libc::EBUSY);
+        drop(output);
     }
 }

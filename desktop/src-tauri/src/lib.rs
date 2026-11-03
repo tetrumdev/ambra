@@ -41,7 +41,7 @@ mod playlist_export;
 mod remote_endpoint;
 mod server_link;
 mod service_login;
-mod window_bounds;
+mod window_size;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -1079,7 +1079,6 @@ pub fn run() {
         context
     };
     let app = tauri::Builder::default()
-        .plugin(window_bounds::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_update::PendingUpdate::default())
@@ -1088,6 +1087,9 @@ pub fn run() {
         .setup(|app| {
             // The client never starts a server. Its optional bridge is separate from local playback.
             let _ = separate_client_data(app.handle());
+            if let Err(error) = window_size::setup(app) {
+                eprintln!("Could not restore window size: {error}");
+            }
             let data = persistent_data_directory(app.handle()).map_err(std::io::Error::other)?;
             let link = server_link::ServerLink::start(data).map_err(std::io::Error::other)?;
             app.manage(link);
