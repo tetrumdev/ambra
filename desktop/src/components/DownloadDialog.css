@@ -1,0 +1,110 @@
+.downloadDialogContent {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+}
+
+.downloadDialogContent p,
+.downloadProgress small {
+    margin: 0;
+    color: #bdbdbd;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.downloadDialogContent [role="alert"] {
+    color: var(--error-text);
+}
+
+.downloadQuality {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-size: 12px;
+    color: #bdbdbd;
+}
+
+.downloadQuality select {
+    height: 40px;
+    padding: 0 12px;
+    font: inherit;
+    font-size: 14px;
+    color: white;
+    background: rgba(22, 22, 22, 0.6);
+    border: 1px solid #535353;
+    border-radius: 100px;
+    outline: none;
+}
+
+.downloadQuality select:focus-visible {
+    border-color: rgb(140, 140, 140);
+}
+
+.downloadTargets {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.downloadTargets .menuItem {
+    width: 100%;
+}
+
+.downloadClients {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    max-height: 240px;
+    overflow: auto;
+}
+
+.downloadClients legend {
+    margin-bottom: 6px;
+    padding: 0;
+    font-size: 12px;
+    color: #bdbdbd;
+}
+
+.downloadClients label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+}
+
+.downloadClients input {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: white;
+}
+
+.downloadStart {
+    align-self: flex-end;
+    width: 120px;
+}
+
+.downloadProgress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    font-size: 14px;
+}
+
+.downloadProgress li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 2px 12px;
+}
+
+.downloadProgress small {
+    grid-column: 1 / -1;
+}

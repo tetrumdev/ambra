@@ -214,6 +214,8 @@ impl FileDecodedSource {
             let http = HttpRangeSource::open(&source).map_err(|error| error.to_string())?;
             reported_loudness = http.loudness;
             Box::new(http)
+        } else if source.starts_with(crate::downloads::SCHEME) {
+            Box::new(crate::downloads::open(&source)?)
         } else {
             let path = file_path(&source);
             Box::new(
@@ -1568,5 +1570,41 @@ mod http_streaming_tests {
             read_before_completion,
             "audio waited for the entire 4 MiB HTTP range"
         );
+    }
+}
+
+#[cfg(test)]
+mod offline_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn an_encrypted_download_plays_and_seeks() {
+        let root = std::env::temp_dir().join(format!("ambra-offline-decoder-{}", std::process::id()));
+        let store = ambra_vault::Store::open(root.join("downloads"), &root.join("key")).unwrap();
+        let mut wav = io::Cursor::new(Vec::new());
+        {
+            let spec = hound::WavSpec { channels: 2, sample_rate: 44_100, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+            let mut writer = hound::WavWriter::new(&mut wav, spec).unwrap();
+            for index in 0..44_100 * 2 {
+                let sample = ((index as f64 * 0.05).sin() * 8000.0) as i16;
+                writer.write_sample(sample).unwrap();
+                writer.write_sample(sample).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        let mut pending = store.begin("test-1.wav").unwrap();
+        pending.writer().write_all(wav.get_ref()).unwrap();
+        store.finish(pending).unwrap();
+        // The file on disk is not a WAV any more.
+        assert!(!std::fs::read(store.path("test-1.wav")).unwrap().windows(4).any(|window| window == b"RIFF"));
+        crate::downloads::install_for_test(store);
+
+        let mut decoded = FileDecodedSource::open(format!("{}test-1.wav", crate::downloads::SCHEME)).unwrap();
+        assert!((decoded.duration_seconds() - 2.0).abs() < 0.01, "{}", decoded.duration_seconds());
+        assert_eq!(decoded.spec().sample_rate, 44_100);
+        decoded.seek(1.5).unwrap();
+        assert!(decoded.decode_next().unwrap().is_some_and(|samples| !samples.is_empty()));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

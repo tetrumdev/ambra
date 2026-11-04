@@ -28,6 +28,7 @@ use walkdir::WalkDir;
 mod app_update;
 mod cover_thumbnails;
 mod display_wake;
+mod downloads;
 mod keyboard;
 mod library_index;
 mod local_import;
@@ -1097,6 +1098,7 @@ pub fn run() {
             keyboard::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
+            downloads::setup(app);
             #[cfg(debug_assertions)]
             network_test::start(app.handle().clone());
             // Shared output starts only when the listener explicitly selects a shared session.
@@ -1155,6 +1157,8 @@ pub fn run() {
             service_login::cancel_service_login,
             service_login::submit_service_login,
             local_import::import_local_music,
+            downloads::offline_downloads,
+            downloads::remove_offline_downloads,
         ])
         .build(context)
         .expect("error while building tauri application");

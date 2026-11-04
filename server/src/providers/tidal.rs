@@ -81,6 +81,14 @@ pub enum PlaybackSource {
     },
 }
 
+/// A download's source, with the quality Tidal reports for it.
+pub struct TidalDownload {
+    pub source: PlaybackSource,
+    pub quality: String,
+    pub sampling_rate_khz: Option<f64>,
+    pub bit_depth: Option<u32>,
+}
+
 struct CachedPlaybackSource {
     source: PlaybackSource,
     cached_at: Instant,
@@ -940,6 +948,60 @@ impl TidalProvider {
         Ok(source)
     }
 
+    /// Where to fetch `track_id` at `audio_quality` (`HI_RES_LOSSLESS`, `LOSSLESS` or `HIGH`)
+    /// for a download, and what Tidal says it is. Bypasses the playback caches: a download may
+    /// ask for a different quality than playback uses.
+    pub async fn download_source(
+        &self,
+        track_id: &str,
+        audio_quality: &str,
+        duration_seconds: u64,
+    ) -> ProviderResult<TidalDownload> {
+        validate_track_id(track_id)?;
+        let mut client = {
+            let mut client = self.client.lock().await;
+            if client.refresh_access_token(false).await? {
+                save_session(&client)?;
+            }
+            client.clone()
+        };
+        let mut response = self.playback_response(&client, track_id, audio_quality).await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            client = {
+                let mut client = self.client.lock().await;
+                client.refresh_access_token(true).await?;
+                save_session(&client)?;
+                client.clone()
+            };
+            response = self.playback_response(&client, track_id, audio_quality).await?;
+        }
+        let raw = response.error_for_status()?.json::<RawPlaybackInfo>().await?;
+        let playback = parse_maximum_playback_info(raw)?;
+        let quality = tidal_stream_quality_label(
+            &playback.manifest,
+            playback.sampling_rate_khz,
+            playback.bit_depth,
+            &playback.audio_quality,
+        );
+        let source = match playback.manifest {
+            MaximumPlaybackManifest::Direct(manifest) => PlaybackSource::Direct {
+                url: normalize_dash_url(manifest.urls.first().ok_or_else(|| {
+                    io::Error::other("Tidal playback manifest contains no stream URL")
+                })?),
+                mime_type: manifest.mime_type,
+            },
+            MaximumPlaybackManifest::Dash(manifest) => {
+                playback_source_from_dash(&self.http_client, &self.media_cache, manifest, duration_seconds).await?
+            }
+        };
+        Ok(TidalDownload {
+            source,
+            quality,
+            sampling_rate_khz: playback.sampling_rate_khz,
+            bit_depth: playback.bit_depth,
+        })
+    }
+
     async fn maximum_playback_info(&self, track_id: &str) -> ProviderResult<MaximumPlaybackInfo> {
         {
             let cache = self.maximum_playback_cache.lock().await;
@@ -957,7 +1019,7 @@ impl TidalProvider {
             }
             client.clone()
         };
-        let mut response = self.maximum_playback_response(&client, track_id).await?;
+        let mut response = self.playback_response(&client, track_id, TIDAL_MAX_AUDIO_QUALITY).await?;
 
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             client = {
@@ -966,7 +1028,7 @@ impl TidalProvider {
                 save_session(&client)?;
                 client.clone()
             };
-            response = self.maximum_playback_response(&client, track_id).await?;
+            response = self.playback_response(&client, track_id, TIDAL_MAX_AUDIO_QUALITY).await?;
         }
 
         let response = response.error_for_status()?;
@@ -992,10 +1054,11 @@ impl TidalProvider {
         Ok(parsed)
     }
 
-    async fn maximum_playback_response(
+    async fn playback_response(
         &self,
         client: &TidalClient,
         track_id: &str,
+        audio_quality: &str,
     ) -> ProviderResult<reqwest::Response> {
         let access_token = client
             .session
@@ -1017,7 +1080,7 @@ impl TidalProvider {
             .bearer_auth(access_token)
             .query(&[
                 ("countryCode", country_code),
-                ("audioquality", TIDAL_MAX_AUDIO_QUALITY),
+                ("audioquality", audio_quality),
                 ("playbackmode", "STREAM"),
                 ("assetpresentation", "FULL"),
             ])

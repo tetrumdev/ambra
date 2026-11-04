@@ -7,6 +7,8 @@ import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
 import { MENU_WIDTH } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
+import { isDownloadable, isDownloadedOnServer, offlineSource, openDownloadDialog, removeLocalDownloads, removeServerDownloads } from "../utils/offlineDownloads";
+import { serverOnline } from "../api/serverConnection";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -40,6 +42,16 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   const connected = useServiceAvailability();
   const available = isTrackAvailable(trackId, connected);
   if (!available) { actions = actions.filter(action => action.whenUnavailable); playlistOptions = undefined; }
+  // Every song's edit menu offers a download; collection menus (no song) bring their own.
+  if (available && trackId && isDownloadable(trackId)) {
+    actions = [...actions, { label: "Download", icon: "/download.svg", onSelect: () => openDownloadDialog([trackId], "this song") }];
+  }
+  if (trackId && offlineSource(trackId)) {
+    actions = [...actions, { label: "Remove Download", icon: "/delete.svg", whenUnavailable: true, onSelect: () => void removeLocalDownloads([trackId]) }];
+  }
+  if (trackId && isDownloadedOnServer(trackId) && serverOnline) {
+    actions = [...actions, { label: "Remove from Server Downloads", icon: "/delete.svg", whenUnavailable: true, onSelect: () => void removeServerDownloads([trackId]) }];
+  }
   const [choosingPlaylist, setChoosingPlaylist] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);

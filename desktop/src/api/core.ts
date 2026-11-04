@@ -6,7 +6,7 @@ import { getServerItem } from "../utils/serverState";
 import type { AudioQuality, Track } from "../types/music";
 import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
 import { invokeOn } from "../utils/playbackTarget";
-import { nativeAudioSource, isDeviceTrack } from "../utils/nativeAudioSource";
+import { serverAudioSource, isDeviceTrack } from "../utils/nativeAudioSource";
 import { onWindowResume } from "../utils/windowResume";
 
 /**
@@ -57,7 +57,7 @@ export const coreView = () => view;
 /** Prepare where the song will play, including when this app is only a remote. */
 export async function warmCoreTrack(track: Track) {
   const output = view?.output;
-  if (output) await invokeOn(output, "warm_native_audio", { source: nativeAudioSource(track) });
+  if (output) await invokeOn(output, "warm_native_audio", { source: serverAudioSource(track) });
 }
 
 /**
@@ -93,9 +93,31 @@ function accept(next: ArrivingView, signal = serverConnectionSignal()) {
     queue = JSON.parse(fromStorage(JSON.stringify(arrived))) as CoreView["queue"];
     if (queue.tracks) queue.tracks = queue.tracks.map(track => track.provider === "local" ? localMusicTrack(track) : track);
   }
-  view = { ...JSON.parse(fromStorage(JSON.stringify(rest))) as Omit<CoreView, "queue">, queue };
+  const parsed = JSON.parse(fromStorage(JSON.stringify(rest))) as Omit<CoreView, "queue">;
   viewAt = performance.now();
+  // The stream sends the position up to four times a second. A view that differs only there
+  // updates the current one in place: readers that sample the position (positionOf) see it,
+  // but nothing rerenders, so the whole app doesn't repaint mid-animation several times a second.
+  if (view && queue === view.queue && sameApartFromPosition(view, parsed)) {
+    view.revision = parsed.revision;
+    view.positionSeconds = parsed.positionSeconds;
+    view.serverTimeMs = parsed.serverTimeMs;
+    return;
+  }
+  view = { ...parsed, queue };
   for (const listener of listeners) listener();
+}
+
+const POSITION_FIELDS = new Set(["revision", "positionSeconds", "serverTimeMs", "queue"]);
+function sameApartFromPosition(current: CoreView, next: Omit<CoreView, "queue">) {
+  const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
+  for (const key of keys) {
+    if (POSITION_FIELDS.has(key)) continue;
+    const left = (current as Record<string, unknown>)[key];
+    const right = (next as Record<string, unknown>)[key];
+    if (left !== right && JSON.stringify(left) !== JSON.stringify(right)) return false;
+  }
+  return true;
 }
 
 /** Tells the server which queue this app has, so an unchanged one isn't sent again. */

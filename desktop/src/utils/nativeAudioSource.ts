@@ -1,4 +1,5 @@
 import type { Track } from "../types/music";
+import { offlineSource } from "./offlineDownloads";
 
 /** Tauri uses an HTTP asset origin on Windows and the asset scheme on macOS. Both are device files. */
 export function isDeviceTrack(track: Pick<Track, "provider" | "audio">) {
@@ -6,7 +7,20 @@ export function isDeviceTrack(track: Pick<Track, "provider" | "audio">) {
     || !/^(https?:|\/api\/)/.test(track.audio));
 }
 
+/** What this device's own player plays: its downloaded copy when it has one. */
 export function nativeAudioSource(track: Track) {
+  if (!isDeviceTrack(track)) {
+    const offline = offlineSource(track.globalId);
+    if (offline) return offline;
+  }
+  return serverAudioSource(track);
+}
+
+/**
+ * The song's source as the server names it. Shared playback uses this: the server's core
+ * compares sources across devices, and each output maps it onto its own downloaded copy.
+ */
+export function serverAudioSource(track: Track) {
   if (isDeviceTrack(track)) return track.providerTrackId;
   if (track.playbackKind === "dash") {
     return track.audio.replace(/\/manifest\.mpd(?=\?|$)/, "/playlist.m3u8");

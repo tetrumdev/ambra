@@ -128,6 +128,8 @@ const LIGHTNESS_STEP = 0.0025;
 /** Prefer keeping this share of the original gap above darker colors when contrast allows it. */
 const KEEP_SPACING = 0.5;
 const BLEND_STEPS = 8;
+/** Borders darker than this (Oklab lightness) need a lightness step, not only a perceptual one. */
+const DARK_BORDER = 0.3;
 
 /** Sample the mixture grid with earlier colors, including three- and four-color blends. */
 function blendSamples(previous: Rgb[]) {
@@ -171,6 +173,13 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
     const lab = perceptualColor(color.split(",").map(Number));
     return { lab, needed: neededContrast(lab[0]) };
   });
+  const darkest = targets.filter(target => target.lab[0] < DARK_BORDER)
+    .reduce<typeof targets[number] | null>((low, target) => !low || target.lab[0] < low.lab[0] ? target : low, null);
+  /** Oklab lightness of `rgb` as the swirl draws it at `shade`. */
+  const drawnLightness = (rgb: Rgb, shade: number) => {
+    const gray = luminance(rgb);
+    return perceptualColor(rgb.map(channel => dim * Math.min(1, Math.max(0, (gray + (channel - gray) * SWIRL_SATURATION) * shade))))[0];
+  };
   // How far a palette color, as the swirl draws it, stays beyond the contrast each edge needs.
   const clearance = (rgb: Rgb, blends: ReturnType<typeof blendSamples>) => {
     let least = Infinity;
@@ -183,9 +192,11 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
         const lab = perceptualColor(vivid.map(channel => dim * Math.min(1, Math.max(0, channel * shade))));
         for (const target of targets) {
           least = Math.min(least, Math.hypot(lab[0] - target.lab[0], lab[1] - target.lab[1], lab[2] - target.lab[2]) - target.needed);
-          // Below a dark border, numerical Oklab clearance can still mean almost black on black.
-          // Keep the entire blend above it instead of solving by making black even darker.
-          if (target.lab[0] < 0.3) least = Math.min(least, lab[0] - target.lab[0] - target.needed);
+          // Near a dark border, numerical Oklab clearance can still mean almost black on black.
+          // Keep the blend clearly above or clearly below it in lightness; deeper black is fine.
+          if (target.lab[0] < DARK_BORDER) {
+            least = Math.min(least, Math.max(lab[0] - target.lab[0], target.lab[0] - lab[0]) - target.needed);
+          }
         }
       }
     }
@@ -227,7 +238,11 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
       if (Number.isNaN(chosen)) chosen = best.lightness;
       result[index] = toHex(at(chosen) as Rgb);
     }
-    previous.push(parseColor(result[index]));
+    // A color kept below a dark border blends across it on its way to any lighter color; that
+    // crossing is unavoidable, so only colors above every dark border constrain later blends.
+    // Requiring otherwise would lift a black cover's black swirl into flat gray.
+    const placed = parseColor(result[index]);
+    if (!darkest || drawnLightness(placed, SWIRL_SHADES[SWIRL_SHADES.length - 1]) >= darkest.lab[0]) previous.push(placed);
     lower = { from: lightness, to: chosen };
   }
   return result;

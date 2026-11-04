@@ -305,7 +305,7 @@ async fn old_sessions_cannot_commit_provider_results_after_disconnect() {
     assert!(discover.cache.lock().await.matches.is_empty());
 }
 
-fn state(directory: &std::path::Path) -> AppState {
+pub(in crate::api) fn state(directory: &std::path::Path) -> AppState {
     let client = reqwest::Client::new();
     AppState {
         tidal: Arc::new(ProviderSlot::new()),
@@ -336,6 +336,10 @@ fn state(directory: &std::path::Path) -> AppState {
         discover: Arc::new(Discover::default()),
         user_state: Arc::new(crate::user_state::UserState::at(
             directory.join("user-state.v1.json"),
+        )),
+        downloads: Arc::new(super::super::downloads::Downloads::at(
+            directory.join("downloads"),
+            &directory.join("download-vault.key"),
         )),
     }
 }

@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ambra-net = { path = "../crates/ambra-net" }
+ambra-vault = { path = "../crates/ambra-vault" }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 axum = "0.8.9"
 base64 = "0.22.1"

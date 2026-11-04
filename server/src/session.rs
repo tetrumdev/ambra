@@ -155,12 +155,41 @@ fn track_of<'a>(queue: &'a Value, item: &Value) -> Option<&'a Value> {
     queue["tracks"].as_array()?.iter().find(|track| track["globalId"].as_str() == Some(id))
 }
 
+/// One of this server's own URLs as just its path, without the access token. Each app writes
+/// queue songs with the address it reaches the server by, and a bridged app's loopback port
+/// changes with every launch. Outputs resolve `/api/` paths against their own route to the
+/// server, so the path alone names the stream. Compared as whole URLs, the same song looked like
+/// a different one whenever an app rewrote the queue (adding a song), and it restarted.
+fn server_relative(audio: &str) -> String {
+    let Some(rest) = audio.strip_prefix("http://").or_else(|| audio.strip_prefix("https://")) else {
+        return audio.to_owned();
+    };
+    let Some(path_start) = rest.find('/') else { return audio.to_owned() };
+    let (authority, path) = rest.split_at(path_start);
+    let host = authority.rsplit_once(':').map_or(authority, |(host, port)| {
+        if port.chars().all(|c| c.is_ascii_digit()) && !host.ends_with(':') { host } else { authority }
+    });
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    // Only addresses an app uses for this server: an IP address, a machine name or a `.local`
+    // name. A provider's own CDN URL stays whole.
+    let ours = !host.is_empty() && (!host.contains('.') || host.ends_with(".local") || host.parse::<std::net::IpAddr>().is_ok());
+    if !ours || !path.starts_with("/api/") {
+        return audio.to_owned();
+    }
+    let (path, query) = path.split_once('?').map_or((path, None), |(path, query)| (path, Some(query)));
+    let query = query
+        .map(|query| query.split('&').filter(|pair| !pair.is_empty() && !pair.starts_with("access_token=")).collect::<Vec<_>>().join("&"))
+        .filter(|query| !query.is_empty());
+    query.map_or_else(|| path.to_owned(), |query| format!("{path}?{query}"))
+}
+
 /// What an output plays for `track`: its stream (a DASH song as its HLS playlist), or a file path.
 fn source_of(track: &Value) -> Option<String> {
     if track["provider"] == "local" && !track["audio"].as_str().is_some_and(|audio| audio.starts_with("http") || audio.starts_with("/api/")) {
         return track["providerTrackId"].as_str().map(str::to_owned);
     }
-    let audio = track["audio"].as_str()?;
+    let audio = server_relative(track["audio"].as_str()?);
+    let audio = audio.as_str();
     if track["playbackKind"] == "dash" {
         let (path, query) = audio.split_once('?').map_or((audio, None), |(path, query)| (path, Some(query)));
         let path = path.strip_suffix("/manifest.mpd").map_or_else(|| path.to_owned(), |base| format!("{base}/playlist.m3u8"));
@@ -1251,9 +1280,18 @@ mod tests {
     #[test]
     fn sources_are_what_outputs_play() {
         let (current, next) = current_and_next(&queue());
-        assert_eq!(current.unwrap().1, "http://h:1/api/providers/tidal/tracks/2/playlist.m3u8?q=1");
+        assert_eq!(current.unwrap().1, "/api/providers/tidal/tracks/2/playlist.m3u8?q=1");
         assert_eq!(next.unwrap(), "C:/Music/c.flac");
         assert_eq!(source_of(&json!({ "provider": "local", "providerTrackId": "hash.flac", "audio": "/api/music/local/files/hash.flac", "playbackKind": "direct" })).as_deref(), Some("/api/music/local/files/hash.flac"));
+        // The same song written by apps reaching the server at different addresses is one source.
+        let at = |audio: &str| source_of(&json!({ "provider": "qobuz", "audio": audio, "playbackKind": "direct" }));
+        assert_eq!(at("http://127.0.0.1:43749/api/providers/qobuz/tracks/1/stream").as_deref(), Some("/api/providers/qobuz/tracks/1/stream"));
+        assert_eq!(at("http://127.0.0.1:33923/api/providers/qobuz/tracks/1/stream"), at("http://192.168.1.20:38147/api/providers/qobuz/tracks/1/stream"));
+        assert_eq!(at("http://[::1]:38147/api/a?access_token=x&q=1").as_deref(), Some("/api/a?q=1"));
+        assert_eq!(at("http://ambra.local:38147/api/a?access_token=x").as_deref(), Some("/api/a"));
+        // A provider's own URL is left whole.
+        assert_eq!(at("https://cdn.example.com/api/a.flac").as_deref(), Some("https://cdn.example.com/api/a.flac"));
+        assert_eq!(source_of(&json!({ "provider": "tidal", "audio": "http://127.0.0.1:9/api/t/manifest.mpd?x=1", "playbackKind": "dash" })).as_deref(), Some("/api/t/playlist.m3u8?x=1"));
     }
 
     #[test]
@@ -1453,8 +1491,9 @@ mod driver_tests {
         json!({ "globalId": id, "providerTrackId": id, "audio": format!("http://127.0.0.1:38147/api/providers/qobuz/tracks/{id}/stream"), "cover": "", "name": id, "album": "A", "artist": "B", "provider": "qobuz", "playbackKind": "direct", "durationSeconds": 200, "artists": [], "albumArtists": [] })
     }
 
+    /// What the core sends an output for track `id`: the path its full `audio` URL names.
     fn source(id: &str) -> String {
-        format!("http://127.0.0.1:38147/api/providers/qobuz/tracks/{id}/stream")
+        format!("/api/providers/qobuz/tracks/{id}/stream")
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -1711,6 +1750,36 @@ mod driver_tests {
             .map(|entry| (entry["track"]["globalId"].as_str().unwrap().to_owned(), entry["playCount"].as_u64().unwrap())).collect();
         assert_eq!(plays.get("a"), Some(&1));
         assert_eq!(plays.get("b"), Some(&1));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn adding_to_the_queue_from_an_app_at_another_address_keeps_the_current_song_playing() {
+        let h = Harness::start().await;
+        h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        let queued = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [track("a")] });
+        h.post("/api/session/queue", json!({ "base": 0, "queue": queued, "playTrackId": "a" })).await;
+        h.wait_for_command("load_native_audio").await;
+        h.report(json!({ "currentSource": source("a"), "currentTime": 64.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        eventually!("the position to arrive", h.core.transport().position == 64.0);
+
+        // An app launched since reaches the server through a new bridge port and writes every
+        // song it sends with that address, then adds a song.
+        let moved = |id: &str| {
+            let mut track = track(id);
+            track["audio"] = json!(format!("http://127.0.0.1:43749/api/providers/qobuz/tracks/{id}/stream?access_token=t"));
+            track
+        };
+        let revision = h.queue().await["revision"].as_u64().unwrap();
+        let added = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [moved("a"), moved("b")] });
+        h.post("/api/session/queue", json!({ "base": revision, "queue": added })).await;
+        h.wait_for_command("queue_native_audio").await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        let received = h.received.lock().unwrap().clone();
+        assert_eq!(received.iter().filter(|(command, _)| command == "load_native_audio").count(), 1, "the playing song is not loaded again");
+        let queued_next = &received.iter().find(|(command, _)| command == "queue_native_audio").unwrap().1;
+        assert_eq!(queued_next["source"], source("b"));
+        assert!(h.core.transport().position >= 64.0, "the song keeps its place");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -1,4 +1,5 @@
 import { isDeviceTrack } from "./utils/nativeAudioSource";
+import { DownloadDialog } from "./components/DownloadDialog";
 import "./App.css";
 import "./components/EntityView.css";
 import { EntityView, type EntityPage, type EntityAction } from "./components/EntityView";
@@ -1505,6 +1506,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       </PageFilterProvider>
       </TrackColumnsContext.Provider>
       {!isPlayerView && <UpdateNotice />}
+      <DownloadDialog />
       {!isPlayerView && !isQueueView && !isSettingsView && servicePlaylistError && !playlistErrorDismissed && (
         <div className="playlistSyncError" role="alert" data-playback-error={!!player.playbackError}>
           <span data-tooltip={servicePlaylistError} data-tooltip-overflow="">{servicePlaylistError}</span>

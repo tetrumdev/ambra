@@ -20,6 +20,8 @@ const VOCAL_END_AFTER_MS = 5_000;
 const MIN_OUTRO_MS = 60_000;
 /** A heard ending outranks a last line timed lazily through the outro, so a shorter one is enough. */
 const MIN_HEARD_OUTRO_MS = 20_000;
+/** The lyrics rest only if at least this much of the song is still left when they would leave. */
+const MIN_REST_LEFT_MS = 30_000;
 /** Pointer or key activity brings the lyrics back for this long before they rest again. */
 const WAKE_MS = 5_000;
 
@@ -49,7 +51,9 @@ function restingFrom(track: Track | undefined, lyrics: TrackLyrics | undefined, 
     && vocalEndMs <= lastSungMs - lyrics.offsetMs - correctionMs + VOCAL_END_AFTER_MS;
   const endSeconds = (heard ? vocalEndMs : lastPlaybackMs) / 1000;
   if (track.durationSeconds - endSeconds < (heard ? MIN_HEARD_OUTRO_MS : MIN_OUTRO_MS) / 1000) return Infinity;
-  return endSeconds + (heard ? VOCAL_SETTLE_MS : SETTLE_MS) / 1000;
+  const restSeconds = endSeconds + (heard ? VOCAL_SETTLE_MS : SETTLE_MS) / 1000;
+  if (track.durationSeconds - restSeconds < MIN_REST_LEFT_MS / 1000) return Infinity;
+  return restSeconds;
 }
 
 /**

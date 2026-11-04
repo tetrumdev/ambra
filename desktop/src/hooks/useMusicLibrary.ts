@@ -31,6 +31,7 @@ import {
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
 import { loadLocalMusic } from "../api/localMusic";
+import { offlineTrack, useDownloads } from "../utils/offlineDownloads";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
@@ -126,7 +127,14 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
-  const catalogTracks = useMemo(() => [...(localOnly ? [] : [...serverTracks, ...sharedLocalTracks]), ...(sharedPlayback ? [] : localTracks)], [serverTracks, sharedLocalTracks, localTracks, localOnly, sharedPlayback]);
+  const { local: downloaded } = useDownloads();
+  const catalogTracks = useMemo(() => {
+    const catalog = [...(localOnly ? [] : [...serverTracks, ...sharedLocalTracks]), ...(sharedPlayback ? [] : localTracks)];
+    // Without a server, songs downloaded to this device are still there to play.
+    if (sharedPlayback || (!localOnly && isServerReachable) || downloaded.size === 0) return catalog;
+    const known = new Set(catalog.map(track => track.globalId));
+    return [...catalog, ...[...downloaded.values()].filter(entry => !known.has(entry.id)).map(offlineTrack)];
+  }, [serverTracks, sharedLocalTracks, localTracks, localOnly, sharedPlayback, isServerReachable, downloaded]);
   const tracks = useMemo(
     () =>
       orderLibraryTracks(catalogTracks, libraryOrder)
