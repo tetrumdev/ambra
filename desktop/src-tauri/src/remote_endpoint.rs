@@ -171,7 +171,9 @@ impl Agent {
     }
 
     fn local_source(&self, source: &str) -> String {
-        let local = local_source(&self.base_url, self.token.as_deref(), source);
+        // A song downloaded to this device plays from that copy, sparing the network.
+        let local = crate::downloads::offline_source_for_url(source)
+            .unwrap_or_else(|| local_source(&self.base_url, self.token.as_deref(), source));
         if local == source {
             return local;
         }

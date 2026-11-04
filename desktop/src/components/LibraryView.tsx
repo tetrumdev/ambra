@@ -1,6 +1,10 @@
 import type { CatalogAlbum } from "../api/server";
 import { entityProvider, type BrowseEntity } from "../utils/browse";
-import { memo, useMemo, useRef, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
+import { TrackCollectionMenu } from "./TrackCollectionMenu";
+import { isDownloadable, openDownloadDialog } from "../utils/offlineDownloads";
+import type { Track } from "../types/music";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { prefetchArtistPage } from "../utils/artistPage";
 import {
@@ -156,6 +160,47 @@ function AlbumSection({ albums, onOpenEntity }: { albums: LibraryAlbum[]; onOpen
   );
 }
 
+/** The library's own menu, beside Play and Shuffle. */
+function LibraryActions({ tracks }: { tracks: Track[] }) {
+  const [menu, setMenu] = useState<{ x: number; y: number; flipY: number } | null>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const ids = tracks.map(track => track.globalId);
+  return (
+    <>
+      <button
+        ref={trigger}
+        type="button"
+        className="libraryMoreBtn"
+        aria-label="Library options"
+        aria-haspopup="menu"
+        aria-expanded={Boolean(menu)}
+        onClick={event => {
+          const bounds = event.currentTarget.getBoundingClientRect();
+          setMenu({ x: bounds.right, y: bounds.bottom, flipY: bounds.top });
+        }}
+      >
+        <img src="/menu.svg" alt="" aria-hidden="true" />
+      </button>
+      {menu && createPortal(
+        <TrackCollectionMenu
+          trackId=""
+          xPos={menu.x}
+          yPos={menu.y}
+          flipY={menu.flipY}
+          onClose={() => { setMenu(null); trigger.current?.focus(); }}
+          actions={[{
+            label: "Download Library",
+            icon: "/download.svg",
+            disabled: !ids.some(isDownloadable),
+            onSelect: () => openDownloadDialog(ids, "your library"),
+          }]}
+        />,
+        document.body,
+      )}
+    </>
+  );
+}
+
 export function LibraryView({
   section,
   onSectionChange,
@@ -199,6 +244,7 @@ export function LibraryView({
       title={librarySections.find(item => item.id === section)!.label}
       removalLabel="Remove from Library"
       showPlaybackActions={section !== "artists"}
+      playbackActions={<LibraryActions tracks={props.tracks} />}
       summary={
         section === "artists"
           ? { count: artists.length, unit: "artist", showDuration: false }

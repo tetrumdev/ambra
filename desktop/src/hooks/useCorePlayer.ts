@@ -10,7 +10,7 @@ import { listen } from "@tauri-apps/api/event";
 import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
-import { nativeAudioSource } from "../utils/nativeAudioSource";
+import { serverAudioSource } from "../utils/nativeAudioSource";
 
 const noDeck = () => {};
 
@@ -62,6 +62,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   latestQueue.current = queue;
   const [enginePlaying, setEnginePlaying] = useState<boolean | null>(null);
   const [engineDuration, setEngineDuration] = useState<number | null>(null);
+  const shownEngine = useRef<{ playing: boolean | null; duration: number | null }>({ playing: null, duration: null });
 
   // While this device is the output and its engine plays the server's song, the clock follows the
   // engine itself: what's heard here, with no trip to the server and back in between.
@@ -81,7 +82,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     // Direct streams belong to the selected track, even before the server confirms its load.
     // Live PCM has a session URL instead of the track URL, so use the server's source for it.
     const source = skipping.current?.to ?? (current?.loadedSource?.includes("/api/playback/live/")
-      ? current.loadedSource : (track && nativeAudioSource(track)) ?? current?.loadedSource);
+      ? current.loadedSource : (track && serverAudioSource(track)) ?? current?.loadedSource);
     return !!current && fresh && ownsPlaybackOutput(current.output, serverConnection?.clientId)
       && sameSource(heard.status.currentSource, source);
   }, []);
@@ -101,10 +102,10 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       // replaying a played song) the song being left is "next", and the engine keeps reporting it
       // until the server's load arrives.
       if (!skipping.current && next && current && ownsPlaybackOutput(coreView()?.output, serverConnection?.clientId)
-        && sameSource(heardBefore, nativeAudioSource(current))
-        && sameSource(payload.currentSource, nativeAudioSource(next))
-        && !sameSource(payload.currentSource, current && nativeAudioSource(current))) {
-        skipping.current = { to: nativeAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
+        && sameSource(heardBefore, serverAudioSource(current))
+        && sameSource(payload.currentSource, serverAudioSource(next))
+        && !sameSource(payload.currentSource, current && serverAudioSource(current))) {
+        skipping.current = { to: serverAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
         queue.next(false);
         clock.setRunning(false);
         clock.set(0);
@@ -112,9 +113,11 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       if (!followsEngine()) return;
       clock.set(payload.currentTime);
       clock.setRunning(payload.isPlaying && !payload.buffering);
-      setEnginePlaying(payload.isPlaying || payload.buffering);
-      const duration = payload.duration;
-      setEngineDuration(typeof duration === "number" && Number.isFinite(duration) && duration > 0 ? duration : null);
+      // Reported ten times a second; only a change may rerender the app, never a repeat.
+      const playing = payload.isPlaying || payload.buffering;
+      const duration = typeof payload.duration === "number" && Number.isFinite(payload.duration) && payload.duration > 0 ? payload.duration : null;
+      if (shownEngine.current.playing !== playing) setEnginePlaying(shownEngine.current.playing = playing);
+      if (shownEngine.current.duration !== duration) setEngineDuration(shownEngine.current.duration = duration);
     }).then(stop => { if (disposed) stop(); else unlisten = stop; });
     return () => { disposed = true; unlisten?.(); };
   }, [clock, followsEngine]);
@@ -125,8 +128,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     const sample = () => {
       // Mid-skip the server still describes the song being left; the clock waits at the start.
       if (followsEngine() || skipping.current) return;
-      setEnginePlaying(null);
-      setEngineDuration(null);
+      if (shownEngine.current.playing !== null) setEnginePlaying(shownEngine.current.playing = null);
+      if (shownEngine.current.duration !== null) setEngineDuration(shownEngine.current.duration = null);
       clock.set(positionOf(view));
       clock.setRunning(view.playing && !view.buffering && view.outputOnline);
     };
@@ -161,9 +164,9 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   // must not be paired with the new title, progress bar, or seek limits.
   const sessionMatchesTrack = !!currentTrack && view?.queue.current?.globalTrackId === currentTrack.globalId
     && (!view.loadedSource || view.loadedSource.includes("/api/playback/live/")
-      || sameSource(view.loadedSource, nativeAudioSource(currentTrack)));
+      || sameSource(view.loadedSource, serverAudioSource(currentTrack)));
   const engineMatchesTrack = !!currentTrack
-    && (sameSource(engine.current?.status.currentSource, nativeAudioSource(currentTrack)) || sessionMatchesTrack);
+    && (sameSource(engine.current?.status.currentSource, serverAudioSource(currentTrack)) || sessionMatchesTrack);
   const duration = (engineMatchesTrack && followsEngine() ? engineDuration : null)
     ?? ((sessionMatchesTrack ? view?.duration : 0) || currentTrack?.durationSeconds || 0);
 
@@ -216,7 +219,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       const from = coreView()?.loadedSource;
       const next = queue.peekNext()?.track;
       if (!next) { queue.next(); return; }
-      const pending = { to: nativeAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
+      const pending = { to: serverAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
       skipping.current = pending;
       clock.setRunning(false);
       clock.set(0);
@@ -229,7 +232,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     }
     const moved = direction === "next" ? queue.next() : queue.previous();
     if (!moved) return;
-    skipping.current = { to: nativeAudioSource(moved.track), outputId: coreView()?.output?.endpointId, at: performance.now() };
+    skipping.current = { to: serverAudioSource(moved.track), outputId: coreView()?.output?.endpointId, at: performance.now() };
     clock.setRunning(false);
     clock.set(0);
   }, [clock, followsEngine, queue, seekTo]);

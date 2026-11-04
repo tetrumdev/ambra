@@ -67,6 +67,8 @@ pub struct PlatformOutput {
     bytes: Vec<u8>,
     // Fields drop in declaration order: close PCM before releasing the reservation.
     reservation: Option<DeviceReservation>,
+    /// The card's PipeWire volume from before exclusive playback, put back once it's returned.
+    sink_level: Option<SinkLevel>,
 }
 
 
@@ -96,6 +98,100 @@ fn node_for_card(objects: &[serde_json::Value], card: &str, device: u64) -> Opti
             && props.get("alsa.device")?.as_u64()? == device)
             .then(|| props.get("node.name")?.as_str().map(str::to_owned))?
     })
+}
+
+/// A PipeWire sink's volume and mute, as the PulseAudio API reports them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SinkLevel {
+    card: String,
+    device: u64,
+    name: String,
+    volumes: Vec<u64>,
+    mute: bool,
+}
+
+/// How long the card's sink may take to come back after exclusive playback.
+const SINK_RETURN_WAIT: Duration = Duration::from_secs(10);
+const SINK_RETURN_POLL: Duration = Duration::from_millis(100);
+
+fn pactl_json(args: &[&str]) -> Option<serde_json::Value> {
+    let output = std::process::Command::new("pactl")
+        .args(["-f", "json"])
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    serde_json::from_slice(&output.stdout).ok()
+}
+
+fn pactl(args: &[&str]) -> bool {
+    std::process::Command::new("pactl")
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// The level of the sink that drives `card`'s `device`, from `pactl -f json list sinks`.
+fn sink_level_in(sinks: &serde_json::Value, card: &str, device: u64) -> Option<SinkLevel> {
+    sinks.as_array()?.iter().find_map(|sink| {
+        let props = sink.get("properties")?;
+        if props.get("alsa.id")?.as_str()? != card
+            || props.get("alsa.device")?.as_str()?.parse::<u64>().ok()? != device
+        {
+            return None;
+        }
+        let volumes = sink
+            .get("volume")?
+            .as_object()?
+            .values()
+            .map(|channel| channel.get("value")?.as_u64())
+            .collect::<Option<Vec<_>>>()?;
+        Some(SinkLevel {
+            card: card.to_owned(),
+            device,
+            name: sink.get("name")?.as_str()?.to_owned(),
+            volumes,
+            mute: sink.get("mute")?.as_bool()?,
+        })
+    })
+}
+
+fn sink_level(id: &str) -> Option<SinkLevel> {
+    let (card, device) = id.strip_prefix("hw:CARD=")?.split_once(",DEV=")?;
+    let device = device.parse().ok()?;
+    sink_level_in(&pactl_json(&["list", "sinks"])?, card, device)
+}
+
+/// PipeWire builds the card's sink anew after exclusive playback, under a new name, so
+/// WirePlumber doesn't recognise it and starts it at full volume. Put the listener's volume
+/// back on it once it appears. Runs on its own thread: the sink can take a moment to return.
+fn restore_sink_level(saved: SinkLevel) {
+    let _ = thread::Builder::new()
+        .name("ambra-sink-volume".into())
+        .spawn(move || {
+            let started = std::time::Instant::now();
+            while started.elapsed() < SINK_RETURN_WAIT {
+                thread::sleep(SINK_RETURN_POLL);
+                let Some(sinks) = pactl_json(&["list", "sinks"]) else { continue };
+                let Some(current) = sink_level_in(&sinks, &saved.card, saved.device) else { continue };
+                if current.volumes == saved.volumes && current.mute == saved.mute {
+                    // The old sink may linger for a moment; only the returned one settles this.
+                    if current.name != saved.name { return; }
+                    continue;
+                }
+                let volumes = saved.volumes.iter().map(u64::to_string).collect::<Vec<_>>();
+                let mut args = vec!["set-sink-volume", current.name.as_str()];
+                args.extend(volumes.iter().map(String::as_str));
+                pactl(&args);
+                pactl(&["set-sink-mute", &current.name, if saved.mute { "1" } else { "0" }]);
+                return;
+            }
+        });
 }
 
 /// PipeWire gives up on a card it found busy while Ambra held it exclusively: WirePlumber drops
@@ -384,6 +480,8 @@ impl PlatformOutput {
     }
 
     fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, String> {
+        // Read before the reservation makes PipeWire take the card's sink down.
+        let sink_level = sink_level(id);
         let reservation = DeviceReservation::for_device(id)?;
         // Untouched 16-bit audio goes out at its own depth; everything else at 24 bits.
         let candidates: &[DeviceFormat] = match spec.bits_per_sample {
@@ -425,6 +523,7 @@ impl PlatformOutput {
         let mut output = Self::configure_exclusive(pcm, spec, id, &candidates)?;
         output.device = Some(id.to_owned());
         output.reservation = reservation;
+        output.sink_level = sink_level;
         Ok(output)
     }
 
@@ -503,6 +602,7 @@ impl PlatformOutput {
             started: false,
             bytes: Vec::with_capacity(buffer_frames * spec.channels * format.bytes_per_sample()),
             reservation: None,
+            sink_level: None,
         })
     }
 
@@ -533,6 +633,9 @@ impl PlatformOutput {
 impl Drop for PlatformOutput {
     fn drop(&mut self) {
         let _ = self.pcm.drop();
+        if let Some(level) = self.sink_level.take() {
+            restore_sink_level(level);
+        }
     }
 }
 
@@ -550,6 +653,32 @@ mod tests {
             let error = PlatformOutput::open_device_with_mode(spec(), device, true, false).err();
             assert!(error.is_some_and(|error| error.contains("hardware output")));
         }
+    }
+
+    #[test]
+    fn reads_the_volume_of_the_sink_that_drives_a_hardware_device() {
+        let sinks: serde_json::Value = serde_json::from_str(
+            r#"[
+                {"name": "easyeffects_sink", "mute": false, "properties": {},
+                 "volume": {"front-left": {"value": 65536}, "front-right": {"value": 65536}}},
+                {"name": "alsa_output.other", "mute": false, "properties": {"alsa.id": "AUDIO", "alsa.device": "0"},
+                 "volume": {"aux0": {"value": 65536}, "aux1": {"value": 65536}}},
+                {"name": "alsa_output.dac.pro-output-0.20", "mute": true, "properties": {"alsa.id": "J2", "alsa.device": "0"},
+                 "volume": {"aux0": {"value": 45875}, "aux1": {"value": 45000}}}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            sink_level_in(&sinks, "J2", 0),
+            Some(SinkLevel {
+                card: "J2".into(),
+                device: 0,
+                name: "alsa_output.dac.pro-output-0.20".into(),
+                volumes: vec![45875, 45000],
+                mute: true,
+            })
+        );
+        assert_eq!(sink_level_in(&sinks, "J2", 1), None);
     }
 
     #[test]

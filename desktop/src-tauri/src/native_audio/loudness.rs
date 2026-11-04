@@ -351,6 +351,9 @@ pub fn cache_key(source: &str) -> Option<String> {
             .map_or(path.len(), |end| id_start + end);
         return Some(format!("stream:{}", &path[..id_end]));
     }
+    if let Some(file) = source.strip_prefix(crate::downloads::SCHEME) {
+        return Some(format!("offline:{file}"));
+    }
     let path = source.strip_prefix("file://").unwrap_or(source);
     let metadata = std::fs::metadata(path).ok()?;
     let modified = metadata
