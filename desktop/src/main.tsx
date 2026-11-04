@@ -10,6 +10,7 @@ import { installTooltips } from "./utils/tooltips";
 import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 import { desktopPlatform } from "./utils/windowChrome";
+import { startDownloads } from "./utils/offlineDownloads";
 
 mark("js-start");
 startPerfTracing();
@@ -23,6 +24,7 @@ if (perfEnabled()) {
 document.documentElement.dataset.platform = desktopPlatform();
 
 installTooltips();
+startDownloads();
 window.addEventListener("keydown", (event) => {
   if (isBrowserFindShortcut(event)) blockBrowserDefault(event);
 }, true);

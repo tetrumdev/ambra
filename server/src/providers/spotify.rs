@@ -89,6 +89,7 @@ pub struct PreparedSpotifyStream {
     content_length: u64,
     header_offset: u64,
     mime_type: &'static str,
+    format: AudioFileFormat,
 }
 
 #[derive(Clone, Copy)]
@@ -619,11 +620,20 @@ impl SpotifyProvider {
     }
 
     pub async fn prepare_stream(&self, track_id: &str) -> ProviderResult<PreparedSpotifyStream> {
+        self.prepare_stream_at(track_id, self.quality).await
+    }
+
+    /// The best file Spotify offers (320 kbps where the account allows it), for a download.
+    pub async fn prepare_download(&self, track_id: &str) -> ProviderResult<PreparedSpotifyStream> {
+        self.prepare_stream_at(track_id, SpotifyQuality::Kbps320).await
+    }
+
+    async fn prepare_stream_at(&self, track_id: &str, quality: SpotifyQuality) -> ProviderResult<PreparedSpotifyStream> {
         self.access_token(None).await?;
         let track = self.track(track_id).await?;
         let playable_track = self.playable_track(&track).await?;
-        let (format, file_id) = self
-            .selected_audio_file(&playable_track)
+        let (format, file_id) = Self::audio_file_at(&playable_track, quality)
+            .or_else(|| self.selected_audio_file(&playable_track))
             .ok_or_else(|| io::Error::other("Spotify track has no supported audio file"))?;
         let encrypted_file =
             AudioFile::open(&self.session, file_id, stream_bytes_per_second(format)).await?;
@@ -657,6 +667,7 @@ impl SpotifyProvider {
             content_length,
             header_offset,
             mime_type: AudioFiles::mime_type(format).unwrap_or("application/octet-stream"),
+            format,
         })
     }
 
@@ -696,7 +707,14 @@ impl SpotifyProvider {
         &self,
         track: &Track,
     ) -> Option<(AudioFileFormat, librespot_core::FileId)> {
-        self.quality
+        Self::audio_file_at(track, self.quality)
+    }
+
+    fn audio_file_at(
+        track: &Track,
+        quality: SpotifyQuality,
+    ) -> Option<(AudioFileFormat, librespot_core::FileId)> {
+        quality
             .preferred_formats()
             .iter()
             .find_map(|format| track.files.get(format).map(|file_id| (*format, *file_id)))
@@ -763,6 +781,16 @@ impl PreparedSpotifyStream {
 
     pub fn mime_type(&self) -> &'static str {
         self.mime_type
+    }
+
+    /// What the file is, e.g. "Ogg Vorbis 320 kbps".
+    pub fn quality_label(&self) -> &'static str {
+        format_quality(self.format)
+    }
+
+    /// `ogg` or `mp3`: the container of the bytes this stream yields.
+    pub fn container(&self) -> &'static str {
+        if AudioFiles::is_ogg_vorbis(self.format) { "ogg" } else { "mp3" }
     }
 
     pub fn into_byte_stream(mut self, start: u64, end_inclusive: u64) -> AudioByteStream {

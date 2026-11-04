@@ -103,6 +103,16 @@ test("lighter swirl colors stay lighter, and a black border lifts a black swirl"
   expect(separated[3]).toBe("#808080");
 });
 
+test("a near-black border keeps a near-black swirl dark instead of lifting it to gray", () => {
+  // twenty one pilots, Blurryface: grainy near-black border, mostly near-black cover.
+  const edges = edgesOf([[14 / 255, 14 / 255, 14 / 255], [20 / 255, 20 / 255, 20 / 255], [24 / 255, 24 / 255, 24 / 255]]);
+  const colors = ["#0e0e0e", "#1c1c1c", "#b8412c", "#d8d8d8"];
+  const separated = separatePaletteFromCover(colors, edges);
+  for (const color of separated) expect(clearance(color, edges)).toBeGreaterThan(-0.003);
+  expect(lightness(separated[0])).toBeLessThan(lightness(colors[0]));
+  expect(separated.slice(2)).toEqual(colors.slice(2));
+});
+
 test("a saturated border too bright to clear by lifting darkens the matching swirl color instead", () => {
   const red = [226 / 255, 0, 1 / 255];
   const edges = edgesOf([red]);

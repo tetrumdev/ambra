@@ -579,6 +579,20 @@ impl QobuzProvider {
         Ok(source)
     }
 
+    /// A fresh stream URL at `quality` or the best below it, for a download. Not cached:
+    /// a download may ask for a different quality than playback uses.
+    pub async fn download_source(&self, track_id: &str, quality: Quality) -> ProviderResult<PlaybackSource> {
+        let numeric_track_id = validate_track_id(track_id)?;
+        let stream = self.client.get_stream_url_with_fallback(numeric_track_id, quality).await?;
+        Ok(PlaybackSource {
+            url: stream.url,
+            mime_type: nonempty(stream.mime_type).unwrap_or_else(|| "audio/flac".to_owned()),
+            quality: stream_quality_label(stream.format_id, stream.sampling_rate, stream.bit_depth),
+            sampling_rate_khz: normalize_sampling_rate(stream.sampling_rate),
+            bit_depth: stream.bit_depth,
+        })
+    }
+
     async fn album(&self, album_id: &str) -> ProviderResult<Album> {
         if let Some(album) = self.albums.lock().await.get(album_id).cloned() {
             return Ok(album);

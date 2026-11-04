@@ -4,6 +4,7 @@ import type { Playlist } from "../types/music";
 import { TrackCollectionMenu, type TrackCollectionAction } from "./TrackCollectionMenu";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import { MenuDotsIcon } from "./MenuDotsIcon";
+import { isDownloadable, openDownloadDialog } from "../utils/offlineDownloads";
 
 type Props = {
   playlist: Playlist;
@@ -11,11 +12,14 @@ type Props = {
   onDelete?: (id: string) => boolean | Promise<boolean>;
   /** Listed between Rename and Delete. */
   actions?: TrackCollectionAction[];
+  /** Every song in the playlist, when more are known than `playlist.trackIds`. */
+  downloadTrackIds?: string[];
   className?: string;
   children?: ReactNode;
 };
 
-export function PlaylistActions({ playlist, onRename, onDelete, actions = [], className = "sidebarPlaylistActions", children }: Props) {
+export function PlaylistActions({ playlist, onRename, onDelete, actions = [], downloadTrackIds, className = "sidebarPlaylistActions", children }: Props) {
+  const downloadIds = downloadTrackIds ?? playlist.trackIds;
   const [menu, setMenu] = useState<{ x: number; y: number; flipY: number } | null>(null);
   const [action, setAction] = useState<"rename" | "delete" | null>(null);
   const [name, setName] = useState(playlist.name);
@@ -70,6 +74,12 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], cl
           actions={[
             ...(onRename ? [{ label: "Rename Playlist", icon: "/edit.svg", onSelect: () => edit("rename") }] : []),
             ...actions,
+            {
+              label: "Download Playlist",
+              icon: "/download.svg",
+              disabled: !downloadIds.some(isDownloadable),
+              onSelect: () => openDownloadDialog(downloadIds, playlist.name),
+            },
             ...(onDelete ? [{ label: "Delete Playlist", icon: "/delete.svg", onSelect: () => edit("delete") }] : []),
           ]}
         />,

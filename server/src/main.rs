@@ -7,6 +7,7 @@ mod cli;
 mod credits;
 mod discovery;
 mod endpoints;
+mod flac_remux;
 mod http_client;
 mod impulses;
 mod loudness;

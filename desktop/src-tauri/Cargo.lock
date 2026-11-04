@@ -8,6 +8,7 @@ version = "0.2.1"
 dependencies = [
  "alsa",
  "ambra-net",
+ "ambra-vault",
  "axum",
  "base64 0.22.1",
  "biquad",
@@ -140,6 +141,16 @@ dependencies = [
  "tower",
  "tracing",
  "zeroize",
+]
+
+[[package]]
+name = "ambra-vault"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "getrandom 0.3.4",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

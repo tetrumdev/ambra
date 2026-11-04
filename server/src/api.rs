@@ -1,5 +1,6 @@
 mod credits;
 mod discover;
+mod downloads;
 mod playlists;
 
 use crate::loudness::Loudness;
@@ -96,6 +97,7 @@ struct AppState {
     playlist_mutations: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     discover: Arc<discover::Discover>,
     user_state: Arc<crate::user_state::UserState>,
+    downloads: Arc<downloads::Downloads>,
 }
 
 /// Requests own a cheap provider clone; signing out can remove the active session.
@@ -183,6 +185,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         playlist_mutations: Arc::new(Mutex::new(HashMap::new())),
         discover: Arc::new(discover::Discover::default()),
         user_state: user_state.clone(),
+        downloads: Arc::new(downloads::Downloads::open()),
     };
 
     let config = crate::server_config::ServerConfig::load();
@@ -213,6 +216,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .merge(crate::remote::router())
         .merge(crate::local_music::router(user_state.clone()))
         .merge(crate::user_state::router(user_state.clone()))
+        .merge(downloads::routes())
         .route("/api/health", get(health))
         .route("/api/lyrics", get(lyrics))
         .route("/api/auth/status", get(auth_status))
@@ -307,6 +311,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
 
     // Open the port first; provider sessions restore concurrently behind it.
     tokio::spawn(restore_providers(state.clone(), providers_ready_tx));
+    downloads::start(state.clone());
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -416,6 +421,8 @@ fn path_needs_providers(path: &str) -> bool {
         && !path.starts_with("/api/spotify/playback/")
         && !path.starts_with("/api/playback/live/")
         && !path.starts_with("/api/music/local/")
+        // Downloaded copies play without their service; only fetching a new one needs it.
+        && (!path.starts_with("/api/downloads") || path.starts_with("/api/downloads/source/"))
         && !path.starts_with(crate::remote::PATH)
 }
 
@@ -1786,7 +1793,25 @@ async fn load_search_tracks(state: &AppState, entries: &[LibraryEntry]) -> Vec<T
     tracks.into_iter().map(|(_, track)| track).collect()
 }
 
+/// How long a downloaded song waits on its service before the saved details are used instead.
+const DOWNLOADED_METADATA_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The track, playing from the server's downloaded copy when there is one. A downloaded
+/// song stays available with its saved details while its service is signed out or away.
 async fn load_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<TrackMetadata> {
+    let id = format!("{}:{}", provider_slug(entry.provider), entry.provider_track_id);
+    let Some(downloaded) = state.downloads.server_entry(&id) else {
+        return load_provider_track(state, entry).await;
+    };
+    let loaded = tokio::time::timeout(DOWNLOADED_METADATA_TIMEOUT, load_provider_track(state, entry)).await;
+    let track = match loaded {
+        Ok(Ok(track)) => track,
+        _ => serde_json::from_value::<TrackMetadata>(downloaded.metadata.clone())?,
+    };
+    Ok(downloads::offline_track(track, &downloaded))
+}
+
+async fn load_provider_track(state: &AppState, entry: &LibraryEntry) -> ServerResult<TrackMetadata> {
     match entry.provider {
         MusicProvider::Tidal => {
             state

@@ -95,6 +95,7 @@ export function PlaylistView({
           onRename={onRename}
           onDelete={onDelete}
           actions={menuActions}
+          downloadTrackIds={artworkTracks.map(track => track.globalId)}
         >
           <img src="/menu.svg" alt="" aria-hidden="true" />
         </PlaylistActions>
@@ -107,6 +108,7 @@ export function PlaylistView({
             onRename={onRename}
             onDelete={onDelete}
             actions={menuActions}
+          downloadTrackIds={artworkTracks.map(track => track.globalId)}
           >
             <img src="/menu.svg" alt="" aria-hidden="true" />
           </PlaylistActions>
