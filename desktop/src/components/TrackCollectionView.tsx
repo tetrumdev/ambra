@@ -63,6 +63,8 @@ export type TrackCollectionViewProps = TrackListProps & {
   showPlaybackActions?: boolean;
   collapsibleHeader?: boolean;
   shuffleCollection?: () => void;
+  /** Whether the header offers a Shuffle button; the keyboard shortcut works either way. */
+  showShuffle?: boolean;
   summary?: {
     count: number;
     unit: string;
@@ -84,6 +86,7 @@ export function TrackCollectionView({
   showPlaybackActions = true,
   collapsibleHeader = false,
   shuffleCollection,
+  showShuffle = true,
   summary,
   summaryDetail,
   ...trackListProps
@@ -319,9 +322,9 @@ export function TrackCollectionView({
               <button type="button" className="libraryCompactBtn libraryCompactPlay" onClick={handlePlay} disabled={isEmpty} aria-label="Play">
                 <img src="/play.svg" alt="" aria-hidden="true" />
               </button>
-              <button type="button" className="libraryCompactBtn" onClick={handleShuffle} disabled={isEmpty} aria-label="Shuffle">
+              {showShuffle && <button type="button" className="libraryCompactBtn" onClick={handleShuffle} disabled={isEmpty} aria-label="Shuffle">
                 <img src="/shuffle.svg" alt="" aria-hidden="true" />
-              </button>
+              </button>}
               {compactActions}
             </div>
           )}
@@ -337,7 +340,7 @@ export function TrackCollectionView({
                 <img src="/play.svg" alt="" aria-hidden="true" />
                 <span>PLAY</span>
               </button>
-              <button
+              {showShuffle && <button
                 type="button"
                 className="libraryShuffleBtn"
                 onClick={handleShuffle}
@@ -345,7 +348,7 @@ export function TrackCollectionView({
               >
                 <img src="/shuffle.svg" alt="" aria-hidden="true" />
                 <span>SHUFFLE</span>
-              </button>
+              </button>}
               {playbackActions}
             </div>
           )}

@@ -1,4 +1,3 @@
-import { SWIRL_SATURATION, SWIRL_SHADE_MIN, SWIRL_SHADE_RANGE } from "./backgroundPalette";
 import { SWIRL_SHARPNESS, swirlBiases } from "./swirlProportions";
 import { SURFACE_BLACK } from "./surfaceBlack";
 
@@ -10,6 +9,13 @@ import { SURFACE_BLACK } from "./surfaceBlack";
 
 /** WebGL 1 or 2: the browser's canvas or expo-gl's context. */
 export type SwirlGL = WebGLRenderingContextBase & WebGLRenderingContextOverloads;
+
+/** A little saturation back, since blending neighbouring colors greys them. */
+export const SWIRL_SATURATION = 1.08;
+/** Per-pixel shade: the field sits a step below the cover's own brightness on every album,
+ * so the cover reads as lit and the background recedes, without changing its colors. */
+export const SWIRL_SHADE_MIN = 0.74;
+export const SWIRL_SHADE_RANGE = 0.2;
 
 export const COLOR_TRANSITION_MS = 1800;
 export const NOISE_TEXTURE_SIZE = 256;
@@ -98,7 +104,6 @@ void main() {
     + u_colors[2] * fields.z
     + u_colors[3] * fields.w;
   float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
-  // The palette is separated from the cover at exactly this saturation and shade range (backgroundPalette.ts).
   color = mix(vec3(luminance), color, ${SWIRL_SATURATION.toFixed(4)});
   color *= ${SWIRL_SHADE_MIN.toFixed(4)} + ${SWIRL_SHADE_RANGE.toFixed(4)} * fbm(fluidPoint * 2.2 + secondWarp);
   // Fixed screen-space dithering breaks up 8-bit color contours without animated grain.

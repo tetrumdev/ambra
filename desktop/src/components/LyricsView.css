@@ -31,7 +31,6 @@
     z-index: 1;
     font-family: "Stack Sans Text", sans-serif;
     text-align: left;
-    /* Keep LYRICS_COVER_DIM in utils/lyricsMotion.ts in step with this overlay. */
     background: linear-gradient(
         110deg,
         rgba(0, 0, 0, 0.48),

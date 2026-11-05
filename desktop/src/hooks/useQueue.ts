@@ -42,6 +42,8 @@ export type QueueController = {
   playStandalone: (entry: QueueItem) => void;
   addToQueue: (entry: QueueItem) => void;
   playNext: (entry: QueueItem) => void;
+  /** Several songs, in order, straight after the current one. */
+  playNextAll: (entries: QueueItem[]) => void;
   shuffleContext: (context: QueueContext) => QueueItem | undefined;
   addShuffledToQueue: (context: QueueContext) => void;
   /** `tellServer` false: the output already moved on by itself, and the server follows its report. */
@@ -189,6 +191,16 @@ export function useQueue(
     );
   }, [commitState]);
 
+  const playNextAll = useCallback((entries: QueueItem[]) => {
+    if (!entries.length) return;
+    const current = stateRef.current;
+    commitState(
+      current.current
+        ? { ...current, upcoming: [...entries, ...current.upcoming] }
+        : { ...current, current: entries[0], upcoming: [...entries.slice(1), ...current.upcoming] },
+    );
+  }, [commitState]);
+
   const shuffleContext = useCallback((context: QueueContext) => {
     const shuffled = shuffledContextEntries(context.entries);
     if (shuffled.length === 0) return undefined;
@@ -292,6 +304,7 @@ export function useQueue(
     playStandalone,
     addToQueue,
     playNext,
+    playNextAll,
     shuffleContext,
     addShuffledToQueue,
     next,

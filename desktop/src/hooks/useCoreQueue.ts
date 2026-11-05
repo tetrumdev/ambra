@@ -74,6 +74,13 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
   const playNext = useCallback((entry: QueueItem) => {
     change(state => state.current ? { ...state, upcoming: [entry, ...state.upcoming] } : { ...state, current: entry });
   }, [change]);
+  /** Several songs, in order, straight after the current one (a whole album's Play Next). */
+  const playNextAll = useCallback((entries: QueueItem[]) => {
+    if (!entries.length) return;
+    change(state => state.current
+      ? { ...state, upcoming: [...entries, ...state.upcoming] }
+      : { ...state, current: entries[0], upcoming: [...entries.slice(1), ...state.upcoming] });
+  }, [change]);
   // Shuffled once here, so every retry and every device gets the same order.
   const shuffleContext = useCallback((context: QueueContext) => {
     const shuffled = shuffledContextEntries(context.entries);
@@ -140,7 +147,7 @@ export function useCoreQueue(availableTracks: Track[]): QueueController {
     currentEntry: entries[0],
     upcomingEntries,
     isRestored: true,
-    playFromContext, playStandalone, addToQueue, playNext, shuffleContext, addShuffledToQueue,
+    playFromContext, playStandalone, addToQueue, playNext, playNextAll, shuffleContext, addShuffledToQueue,
     next, completeCurrent, previous, jumpTo, replayHistory, reorderEntries, removeHistoryEntries, removeEntries, peekNext,
   };
 }
