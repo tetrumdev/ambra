@@ -17,7 +17,7 @@ import { SURFACE_BLACK } from "../utils/surfaceBlack";
 import { reducedMotion, subscribeReducedMotion } from "../utils/reducedMotion";
 
 type FluidGradientBackgroundProps = {
-  /** Already separated from the cover's edges (separatePaletteFromCover). */
+  /** The cover's colors (swirlPalette). */
   colors: string[];
   /** Each color's share of the cover; the swirl gives it a matching share of the field. */
   weights: number[];

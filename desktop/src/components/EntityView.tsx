@@ -24,6 +24,7 @@ import { TrackColumnsContext, useTrackColumns } from "../hooks/useTrackColumns";
 import type { ColumnKey } from "../utils/trackColumnWidths";
 import { AlbumCreditsDialog, AlbumVersionsDialog } from "./AlbumDialogs";
 import { albumAudioQuality } from "../utils/albumVersions";
+import { AlbumActions } from "./AlbumActions";
 import "./EntityView.css";
 
 export type EntityPage = {
@@ -35,7 +36,8 @@ export type EntityPage = {
   releases?: Record<string, { albums: CatalogAlbum[]; nextOffset: number | null }>;
   expandedPopular?: boolean;
 };
-export type EntityAction = "play" | "standalone" | "queue" | "next" | "shuffle";
+/** "nextAll" plays every given song next, in order; "next" only the chosen one. */
+export type EntityAction = "play" | "standalone" | "queue" | "next" | "nextAll" | "shuffle";
 const albumExcludedColumns: readonly ColumnKey[] = ["album", "quality", "year", "genre"];
 export type EntityViewProps = {
   entity: BrowseEntity;
@@ -45,6 +47,8 @@ export type EntityViewProps = {
   onOpenEntity: (entity: BrowseEntity) => void;
   onAction: (action: EntityAction, tracks: Track[], id?: string) => void;
   onAddTrack: (track: Track) => void;
+  /** Saves several songs to the library, in order. */
+  onAddTracks: (tracks: Track[]) => void;
   rememberTracks: (tracks: Track[]) => void;
   playlistOptions: PlaylistMenuOptions;
   registerScrollElement: (element: HTMLDivElement | null) => void;
@@ -204,16 +208,15 @@ function AlbumView({
           )}
         </>
       }
+      showShuffle={false}
       playbackActions={
-        <button
-          type="button"
-          className="libraryShuffleBtn"
-          disabled={!tracks.length}
-          onClick={() => props.onAction("queue", tracks)}
-        >
-          <img src="/add-to-queue.svg" alt="" />
-          <span>ADD TO QUEUE</span>
-        </button>
+        <AlbumActions
+          title={album.title}
+          tracks={tracks}
+          unsaved={tracks.filter((track) => !savedTrackIds.has(track.globalId) && track.provider !== "local")}
+          onAction={props.onAction}
+          onAddTracks={props.onAddTracks}
+        />
       }
       playTrack={(id) => props.onAction("play", tracks, id)}
       playStandalone={(id) => props.onAction("standalone", tracks, id)}
