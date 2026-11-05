@@ -1,0 +1,201 @@
+.downloadActivity {
+    position: fixed;
+    left: 20px;
+    bottom: calc(var(--player-height, 90px) + 18px);
+    z-index: 12;
+    max-width: calc(100vw - 40px);
+    color: white;
+    font: 13px/1.4 "Stack Sans Text", Inter, sans-serif;
+    text-align: left;
+}
+
+body:has(.updateNotice) .downloadActivity {
+    bottom: calc(var(--player-height, 90px) + 72px);
+}
+
+.downloadActivitySummary,
+.downloadActivityPanel {
+    box-sizing: border-box;
+    border: 1px solid #535353;
+    background: rgba(22, 22, 22, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
+}
+
+.downloadActivitySummary {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 100%;
+    min-height: 42px;
+    padding: 10px 16px;
+    border-radius: 100px;
+    overflow: hidden;
+    color: inherit;
+    font: inherit;
+}
+
+.downloadActivitySummary:hover,
+.downloadActivitySummary:focus-visible {
+    border-color: #8a8a8a;
+}
+
+.downloadActivitySummary > img {
+    flex: none;
+    width: 16px;
+    height: 16px;
+}
+
+.downloadActivityCount {
+    color: #bdbdbd;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.downloadActivitySummary .dropdownChevron {
+    transform: rotate(180deg);
+}
+
+.downloadActivitySummary[aria-expanded="true"] .dropdownChevron {
+    transform: rotate(0);
+}
+
+.downloadActivity progress {
+    display: block;
+    appearance: none;
+    width: 100%;
+    height: 4px;
+    border: 0;
+    border-radius: 100px;
+    overflow: hidden;
+    background: #393939;
+    color: white;
+}
+
+.downloadActivity progress::-webkit-progress-bar {
+    background: #393939;
+}
+
+.downloadActivity progress::-webkit-progress-value {
+    background: white;
+    border-radius: 100px;
+}
+
+.downloadActivity progress::-moz-progress-bar {
+    background: white;
+    border-radius: 100px;
+}
+
+.downloadActivitySummary > progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    height: 2px;
+}
+
+.downloadActivityPanel {
+    width: min(360px, calc(100vw - 40px));
+    margin-bottom: 8px;
+    padding: 16px;
+    border-radius: 16px;
+    max-height: max(160px, calc(100dvh - var(--player-height, 90px) - 100px));
+    overflow-y: auto;
+}
+
+.downloadActivityPanel header,
+.downloadActivityRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.downloadActivityPanel h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.downloadActivityPanel button {
+    padding: 6px 10px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 12px;
+}
+
+.downloadActivityPanel button:hover,
+.downloadActivityPanel button:focus-visible {
+    background: #303030;
+}
+
+.downloadActivityPanel ul {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    margin: 18px 0;
+    padding: 0;
+    list-style: none;
+}
+
+.downloadActivityPanel li {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.downloadActivityDestination {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    font-weight: 500;
+}
+
+.downloadActivityDestination small {
+    margin-left: 8px;
+    color: #a3a2a3;
+    font-size: 11px;
+    font-weight: 400;
+}
+
+.downloadActivityMuted,
+.downloadActivityTrack,
+.downloadActivityPanel footer {
+    color: #bdbdbd;
+    font-size: 12px;
+}
+
+.downloadActivityRow > :last-child {
+    flex: none;
+    font-variant-numeric: tabular-nums;
+}
+
+.downloadActivityTrack {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.downloadActivityError {
+    color: var(--error-text);
+    font-size: 12px;
+}
+
+.downloadActivityError p {
+    margin: 6px 0 0;
+    overflow-wrap: anywhere;
+}
+
+.downloadActivityPanel footer {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding-top: 12px;
+    border-top: 1px solid #393939;
+}

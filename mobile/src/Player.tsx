@@ -40,7 +40,10 @@ import { Progress } from "./Progress";
 import { SongText } from "./SongText";
 import { Swirl } from "./Swirl";
 import { Icon } from "./Icons";
-import { PlaylistBrowser, QueueSheet } from "./TrackBrowser";
+import { QueueSheet } from "./TrackBrowser";
+import { TabStacks, ToastHost, tabs, type Route, type Tab } from "./navigation";
+import { AlbumScreen, ArtistScreen, DownloadsScreen, HomeScreen, LibraryScreen, PlaylistScreen, SectionScreen } from "./screens/Pages";
+import { DownloadSheetHost } from "./Sheets";
 import { OutputPicker } from "./OutputPicker";
 import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
@@ -106,7 +109,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
   const [trackMenuOpen, setTrackMenuOpen] = useState(false);
   const libraryBackdrop = useRef<ComponentRef<typeof View>>(null);
   const [error, setError] = useState<string | null>(null);
-  const [tab, setTab] = useState<"Library" | "Search" | "Settings">("Library");
+  const [tab, setTab] = useState<Tab>("Home");
   useEffect(() => { void loadServicePreferences().catch(reason => setError(String(reason))); }, []);
   // A normalized value preserves either endpoint when screen dimensions or safe areas change.
   const expansion = useSharedValue(1);
@@ -274,9 +277,20 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
     <View style={styles.screen}>
       <View style={styles.library} pointerEvents={expanded ? "none" : "auto"} accessibilityElementsHidden={expanded} importantForAccessibility={expanded ? "no-hide-descendants" : "auto"}>
         <BlurTargetView ref={libraryBackdrop} collapsable={false} style={StyleSheet.absoluteFill}>
-          {tab === "Library" ? <PlaylistBrowser view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} />
-            : tab === "Search" ? <SearchScreen view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} />
-            : <SettingsScreen bottomInset={layout.miniBottom + MINI_HEIGHT} onChangeServer={onChangeServer} />}
+          <TabStacks tab={tab} view={view} bottomInset={layout.miniBottom + MINI_HEIGHT} onMenuVisibilityChange={setTrackMenuOpen} onTabRoot={setTab}
+            render={(route: Route) => {
+              switch (route.kind) {
+                case "home": return <HomeScreen />;
+                case "library": return <LibraryScreen />;
+                case "search": return <SearchScreen />;
+                case "settings": return <SettingsScreen bottomInset={layout.miniBottom + MINI_HEIGHT} onChangeServer={onChangeServer} />;
+                case "section": return <SectionScreen section={route.section} />;
+                case "playlist": return <PlaylistScreen id={route.id} provider={route.provider} name={route.name} />;
+                case "album": return <AlbumScreen album={route.album} />;
+                case "artist": return <ArtistScreen artist={route.artist} />;
+                case "downloads": return <DownloadsScreen />;
+              }
+            }} />
         </BlurTargetView>
         {/* Keep native blur and touch targets mounted while a long press opens a menu. */}
         <Animated.View pointerEvents={trackMenuOpen || expanded ? "none" : "auto"} accessibilityElementsHidden={trackMenuOpen || expanded} importantForAccessibility={trackMenuOpen || expanded ? "no-hide-descendants" : "auto"} style={[styles.dock, { height: dockHeight }, dockStyle, trackMenuOpen && styles.hidden]}>
@@ -287,7 +301,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
             <View style={[StyleSheet.absoluteFill, styles.dockTint]} />
           </DockMask>
           <View style={[styles.navigation, { height: NAVIGATION_HEIGHT + insets.bottom, paddingBottom: insets.bottom }]}>
-            {(["Library", "Search", "Settings"] as const).map(value => <Touchable key={value} accessibilityRole="tab" accessibilityLabel={value} accessibilityState={{ selected: tab === value }} onPress={() => setTab(value)} style={styles.navigationButton}>
+            {tabs.map(value => <Touchable key={value} accessibilityRole="tab" accessibilityLabel={value} accessibilityState={{ selected: tab === value }} onPress={() => setTab(value)} style={styles.navigationButton}>
               <Text style={[styles.navigationLabel, tab === value && styles.navigationSelected]}>{value}</Text>
             </Touchable>)}
           </View>
@@ -346,6 +360,8 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
       </GestureDetector>
       {queueOpen && <QueueSheet view={view} onClose={closeQueue} onMenuVisibilityChange={setTrackMenuOpen} />}
       {outputOpen && <OutputPicker view={view} onClose={closeOutput} />}
+      <DownloadSheetHost />
+      <ToastHost bottom={expanded ? insets.bottom + 72 : dockHeight + 8} />
     </View>
   );
 }

@@ -115,8 +115,11 @@ export async function refreshLocalDownloads() {
 }
 
 let jobPoll: ReturnType<typeof setTimeout> | undefined;
+let downloadRefresh = 0;
 
 export async function refreshServerDownloads() {
+  const refresh = ++downloadRefresh;
+  const connectionSignal = serverConnectionSignal();
   clearTimeout(jobPoll);
   if (!getServerConnection()?.server && isTauri()) {
     publish({ server: new Set(), jobs: [] });
@@ -125,14 +128,20 @@ export async function refreshServerDownloads() {
   try {
     const response = await fetch(`${serverBaseUrl}/api/downloads`, {
       cache: "no-store",
-      signal: AbortSignal.any([serverConnectionSignal(), AbortSignal.timeout(10_000)]),
+      signal: AbortSignal.any([connectionSignal, AbortSignal.timeout(10_000)]),
     });
     if (!response.ok) return;
     const body = await response.json() as { entries: DownloadEntry[]; jobs: DownloadJob[] };
+    if (connectionSignal.aborted || refresh !== downloadRefresh) return;
     publish({ server: new Set(body.entries.map(entry => entry.id)), jobs: body.jobs });
-    // Follows running downloads until they finish.
-    if (body.jobs.some(job => !job.finished)) jobPoll = setTimeout(() => void refreshServerDownloads(), 2000);
   } catch { /* Offline: keep what was last known. */ }
+  finally {
+    // Keep following jobs through brief outages, and discover downloads started
+    // from other apps even while this app's download picker is closed.
+    if (started && refresh === downloadRefresh) {
+      jobPoll = setTimeout(() => void refreshServerDownloads(), state.jobs.some(job => !job.finished) ? 2000 : 15_000);
+    }
+  }
 }
 
 let started = false;
@@ -182,6 +191,7 @@ export async function requestDownloads(trackIds: GlobalTrackId[], quality: Downl
   });
   if (!response.ok) throw new Error(await errorMessage(response));
   const { jobs } = await response.json() as { jobs: DownloadJob[] };
+  publish({ jobs: [...state.jobs.filter(existing => !jobs.some(job => job.id === existing.id)), ...jobs] });
   void refreshServerDownloads();
   return jobs;
 }
@@ -212,7 +222,8 @@ export function openDownloadDialog(trackIds: GlobalTrackId[], title: string) {
   for (const listener of dialogListeners) listener();
 }
 
-export function closeDownloadDialog() {
+export function closeDownloadDialog(expected?: DialogRequest) {
+  if (expected && dialogRequest !== expected) return;
   dialogRequest = null;
   for (const listener of dialogListeners) listener();
 }

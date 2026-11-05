@@ -487,7 +487,7 @@ async fn pairing_payload(State(network): State<SharedNetwork>) -> Response {
     let config = network.config.read().unwrap_or_else(|p| p.into_inner());
     let payload = ambra_net::pairing::PairingPayload {
         version: 1, public_key: info.public_key, name: info.name,
-        local_addresses: info.secure_port.map(ambra_net::lan::local_addresses).unwrap_or_default(),
+        local_addresses: info.secure_port.map(ambra_net::lan::direct_addresses).unwrap_or_default(),
         public_endpoint: config.public_endpoint.or_else(|| network.pwnat_status.read().ok().and_then(|s| s.public_endpoint)),
     };
     match payload.encode() {

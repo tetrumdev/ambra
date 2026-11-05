@@ -434,21 +434,73 @@ async fn reconnect_preserves_selected_identity_and_stable_bridge() {
     restarted.await.unwrap().unwrap();
 }
 
-#[tokio::test]
-async fn tailscale_candidates_are_rejected_before_any_connection() {
+#[test]
+fn tailscale_pairing_hints_round_trip_but_never_become_public_traversal_endpoints() {
     let identity = Identity::generate().unwrap();
     for address in ["100.106.252.60:38149", "[fd7a:115c:a1e0::f537:fc3d]:38149", "[::ffff:100.117.211.104]:38149"] {
         let address: std::net::SocketAddr = address.parse().unwrap();
         assert!(!lan::is_local(address.ip()));
-        let error = lan::connect(address, identity.public_key(), &identity).await.err().unwrap();
-        assert!(error.to_string().contains("local address"));
-        let mut payload = PairingPayload { version: 1, public_key: identity.public_key(), name: "Excluded".into(), local_addresses: vec![address], public_endpoint: None };
-        assert!(payload.encode().is_err());
+        let mut payload = PairingPayload { version: 1, public_key: identity.public_key(), name: "Tailscale".into(), local_addresses: vec![address], public_endpoint: None };
+        let decoded = PairingPayload::decode(&payload.encode().unwrap()).unwrap();
+        assert_eq!(decoded.local_addresses, vec![address]);
+        assert_eq!(decoded.public_key, identity.public_key());
         payload.local_addresses.clear();
         payload.public_endpoint = Some(address);
         assert!(payload.encode().is_err());
     }
     assert!(lan::local_addresses(38149).iter().all(|a| !peeroxide_dht::address_policy::is_overlay(a.ip())));
+}
+
+/// Runs against this machine's real overlay interfaces without changing routes or credentials.
+#[tokio::test]
+#[ignore = "Requires an active Tailscale interface"]
+async fn tailscale_interfaces_carry_pinned_authenticated_http_and_audio_ranges() {
+    let addresses: Vec<_> = if_addrs::get_if_addrs().unwrap().into_iter()
+        .map(|interface| interface.ip())
+        .filter(|ip| peeroxide_dht::address_policy::is_overlay(*ip)).collect();
+    assert!(!addresses.is_empty(), "Start Tailscale before running this test");
+    for ip in addresses {
+        let identity = Identity::generate().unwrap();
+        let listener = tokio::net::TcpListener::bind(std::net::SocketAddr::new(ip, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        assert!(lan::direct_addresses(address.port()).contains(&address));
+        let stop = CancellationToken::new();
+        let app = Router::new()
+            .route("/api/network/session", get(|request: Request| async move {
+                if request.headers().get(header::AUTHORIZATION).is_some_and(|v| v == "Bearer fixture-token") {
+                    StatusCode::OK
+                } else { StatusCode::UNAUTHORIZED }
+            }))
+            .route("/api/audio", get(|request: Request| async move {
+                if request.headers().get(header::AUTHORIZATION).is_none_or(|v| v != "Bearer fixture-token") {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                assert_eq!(request.headers().get(header::RANGE).unwrap(), "bytes=100-199");
+                (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, "bytes 100-199/1000")], vec![7_u8; 100]).into_response()
+            }));
+        let task = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+        let selected = SelectedServer { public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None };
+        // Disable public discovery: this must succeed even when bootstrap UDP is blocked.
+        let timing = ambra_net::manager::Timing { hyperdht: Duration::ZERO, lan_grace: Duration::from_secs(3), ..Default::default() };
+        let manager = ConnectionManager::with_timing(Identity::generate().unwrap(), selected.clone(), Some("fixture-token".into()), timing.clone());
+        let connection = tokio::time::timeout(Duration::from_secs(3), manager.connect()).await.unwrap().unwrap();
+        assert_eq!(manager.status().state, ConnectionState::ConnectedLocal);
+        let response = manager.request(hyper::Request::builder().uri("/api/audio")
+            .header(header::RANGE, "bytes=100-199").body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+        assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 100-199/1000");
+        use http_body_util::BodyExt;
+        assert_eq!(response.into_body().collect().await.unwrap().to_bytes().as_ref(), &[7_u8; 100]);
+        let wrong = Identity::generate().unwrap();
+        assert!(tokio::time::timeout(Duration::from_secs(3), lan::connect(address, wrong.public_key(), &wrong)).await.unwrap().is_err());
+        let unauthorized = ConnectionManager::with_timing(Identity::generate().unwrap(), selected, Some("wrong-token".into()), timing);
+        assert!(tokio::time::timeout(Duration::from_secs(3), unauthorized.connect()).await.unwrap().is_err());
+        unauthorized.shutdown().await;
+        connection.close();
+        manager.shutdown().await;
+        stop.cancel();
+        task.await.unwrap().unwrap();
+    }
 }
 
 #[tokio::test]

@@ -108,6 +108,10 @@ pub(super) struct AudioQuality {
     requested_quality: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     source_format_verified: Option<bool>,
+    /// The device receives the decoded samples unchanged: exclusive output at the source's
+    /// rate and depth, with no DSP, normalization or volume change.
+    #[serde(default)]
+    bit_perfect: bool,
 }
 
 #[derive(Serialize)]
@@ -809,6 +813,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 if self.handle_command(command) {
                     break;
                 }
+                self.report_bit_perfect();
                 continue;
             }
             if let Err(error) = self.pump() {
@@ -816,6 +821,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     self.fail(error);
                 }
             }
+            self.report_bit_perfect();
         }
         if let Some(mut output) = self.output.take() {
             let _ = output.pause();
@@ -1146,6 +1152,27 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     /// so dragging the slider never interrupts playback.
     fn output_processed(&self) -> bool {
         signal_processed(&self.audio_settings) || self.gain.amplitude() != 1.0
+    }
+
+    /// Whether the open output receives the decoded samples untouched.
+    fn bit_perfect(&self) -> bool {
+        let (Some(output), Some(spec)) = (self.output.as_ref(), self.spec) else { return false };
+        self.exclusive_mode
+            && !self.output_processed()
+            && output.quantization_bits().is_some_and(|bits| bits >= u32::from(spec.bits_per_sample))
+    }
+
+    /// Publishes a change in `bit_perfect`; cheap enough to call after every command and pump.
+    fn report_bit_perfect(&mut self) {
+        let bit_perfect = self.bit_perfect();
+        if lock_status(&self.status).audio_quality.as_ref().is_none_or(|quality| quality.bit_perfect == bit_perfect) {
+            return;
+        }
+        update_status(&self.status, |status| {
+            if let Some(quality) = status.audio_quality.as_mut() {
+                quality.bit_perfect = bit_perfect;
+            }
+        });
     }
 
     fn normalization_gain_db(&self) -> Option<f64> {

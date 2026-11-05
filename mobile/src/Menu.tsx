@@ -7,25 +7,33 @@ import { colors, fonts } from "./theme";
 import { Touchable } from "./Touchable";
 import { Artwork } from "./Artwork";
 
-export type MenuAction = { label: string; icon: IconName; destructive?: boolean; run: () => void };
+export type MenuAction = { label: string; icon: IconName; destructive?: boolean; disabled?: boolean; run: () => void };
 
 /** A song's options, named and ordered as in desktop's menus (TrackPlaybackMenu, Queue). */
-export function Menu({ track, actions, onClose, onVisibilityChange }: { track: Track; actions: MenuAction[]; onClose: () => void; onVisibilityChange?: (visible: boolean) => void }) {
+export function Menu({ track, title, subtitle, actions, onClose, onVisibilityChange }: {
+  /** The song the menu is for; collection menus give a `title` instead. */
+  track?: Track;
+  title?: string;
+  subtitle?: string;
+  actions: MenuAction[];
+  onClose: () => void;
+  onVisibilityChange?: (visible: boolean) => void;
+}) {
   useLayoutEffect(() => {
     onVisibilityChange?.(true);
     return () => onVisibilityChange?.(false);
   }, [onVisibilityChange]);
   return (
     <Sheet
-      label={`Options for ${track.name}`}
+      label={`Options for ${track?.name ?? title ?? ""}`}
       onClose={onClose}
       variant="menu"
       dragAnywhere
       grip={<View style={styles.heading}>
-        <Artwork track={track} size={40} />
+        {track && <Artwork track={track} size={40} />}
         <View style={styles.headingText}>
-          <Text numberOfLines={1} style={styles.title}>{track.name}</Text>
-          <Text numberOfLines={1} style={styles.artist}>{track.artist}</Text>
+          <Text numberOfLines={1} style={styles.title}>{track?.name ?? title}</Text>
+          {(track?.artist ?? subtitle) && <Text numberOfLines={1} style={styles.artist}>{track?.artist ?? subtitle}</Text>}
         </View>
       </View>}
     >
@@ -37,6 +45,7 @@ export function Menu({ track, actions, onClose, onVisibilityChange }: { track: T
             highlight
             scale={0.98}
             haptic="select"
+            disabled={action.disabled}
             onPress={() => { close(); action.run(); }}
             style={styles.action}
           >

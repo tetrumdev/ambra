@@ -9,6 +9,13 @@ import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
 import { colors } from "./src/theme";
 import { usePhoneOutput } from "./src/usePhoneOutput";
+import { followPhoneDownloads, refreshServerDownloads, startPhoneDownloads, useDownloads } from "./src/downloads";
+import { refreshLibrary } from "./src/library";
+import { forgetState } from "./src/sharedState";
+import { useOfflineSession } from "./src/offlineSession";
+
+/** The server counts as away after this long out of reach, and downloads play from the phone. */
+const OFFLINE_AFTER_MS = 10_000;
 
 type Saved = { address: string | null; paired: boolean };
 
@@ -22,6 +29,24 @@ export default function App() {
   const [changingServer, setChangingServer] = useState(false);
   const paired = !!saved?.paired && !changingServer;
   usePhoneOutput(paired);
+  const [unreachableSince, setUnreachableSince] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const { phone } = useDownloads();
+  const offline = paired && unreachableSince !== null && now - unreachableSince >= OFFLINE_AFTER_MS && phone.size > 0;
+  useOfflineSession(offline);
+  useEffect(() => { void startPhoneDownloads(); }, []);
+  useEffect(() => {
+    if (!paired) return;
+    forgetState();
+    void refreshLibrary();
+    void refreshServerDownloads();
+    return followPhoneDownloads();
+  }, [paired]);
+  useEffect(() => {
+    if (unreachableSince === null) return;
+    const timer = setInterval(() => setNow(Date.now()), 2000);
+    return () => clearInterval(timer);
+  }, [unreachableSince]);
   useEffect(() => {
     let disposed = false;
     void restore().then(value => { if (!disposed) setSaved(value); }).catch(error => {
@@ -34,8 +59,16 @@ export default function App() {
     if (!paired) return;
     let disposed = false;
     const refresh = () => void networkStatus().then(status => {
-      if (!disposed) setNetworkError(status.state.startsWith("Connected") ? null : status.error ?? `Server ${status.state.toLowerCase()}`);
-    }).catch(error => { if (!disposed) setNetworkError(String(error)); });
+      if (disposed) return;
+      const connected = status.state.startsWith("Connected");
+      setNetworkError(connected ? null : status.error ?? `Server ${status.state.toLowerCase()}`);
+      setUnreachableSince(current => {
+        if (!connected) return current ?? Date.now();
+        // Back from being away: what changed meanwhile is loaded again.
+        if (current !== null) void refreshLibrary();
+        return null;
+      });
+    }).catch(error => { if (!disposed) { setNetworkError(String(error)); setUnreachableSince(current => current ?? Date.now()); } });
     refresh();
     const timer = setInterval(refresh, 3000);
     return () => { disposed = true; clearInterval(timer); };

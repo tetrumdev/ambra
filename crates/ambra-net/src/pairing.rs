@@ -47,7 +47,7 @@ impl PairingPayload {
         if self
             .local_addresses
             .iter()
-            .any(|a| !crate::lan::is_local(a.ip()) || a.port() == 0)
+            .any(|a| !crate::lan::is_direct(a.ip()) || a.port() == 0)
         {
             return Err("Invalid local endpoint hint".into());
         }

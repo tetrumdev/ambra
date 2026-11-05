@@ -160,13 +160,9 @@
 
 #queueImg {
     display: block;
-
+    width: 20px;
     height: auto;
     object-fit: contain;
-}
-
-#queueImg {
-    width: 20px;
 }
 
 /* The icons share one height and one left edge, so the speaker keeps its size and place

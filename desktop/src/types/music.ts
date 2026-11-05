@@ -28,6 +28,8 @@ export type AudioQuality = {
   requestedQuality?: string;
   sourceFormatVerified?: boolean;
   playbackBackend?: "librespot" | "soloist";
+  /** The device receives the decoded samples unchanged (exclusive output, no DSP, leveling or volume change). */
+  bitPerfect?: boolean;
 };
 
 export type Track = {

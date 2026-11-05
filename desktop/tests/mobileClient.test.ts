@@ -22,7 +22,7 @@ mock.module("../../mobile/modules/ambra-network/src", () => ({
   networkCall: async (operation: string, args: unknown) => { nativeCalls.push({ operation, args }); return { baseUrl: "http://phone-server:38147", state: "ConnectedLocal" }; },
 }));
 mock.module("../../mobile/node_modules/react-native", () => ({ AppState: { addEventListener: () => ({ remove() {} }) } }));
-const { changeQueue, command, coverPalette, currentTrack, endpoints, megaPlaylist, phoneMediaUrl, refreshSession, restore, requestPairing, serverAddress, sessionView, sessionViewAge, trackLyrics } = await import("../../mobile/src/client");
+const { changeQueue, command, coverPalette, currentTrack, endpoints, phoneMediaUrl, refreshSession, restore, requestPairing, serverAddress, sessionView, sessionViewAge, trackLyrics } = await import("../../mobile/src/client");
 const originalFetch = globalThis.fetch;
 beforeAll(async () => {
   globalThis.fetch = mock(async (input: string | URL | Request) => response({
@@ -87,23 +87,38 @@ test("local swirl colors come from the paired server's artwork file, never an ar
   expect(await coverPalette("local", "file:///private/cover.jpg")).toBeNull();
 });
 
-test("MEGA loads the saved playlist order and rebases artwork onto the paired server", async () => {
-  globalThis.fetch = mock(async () => response({ values: { "ambra.playlists.v1": JSON.stringify({ version: 1, playlists: [{ id: "mega", name: "MEGA", trackIds: ["missing", "a"] }], tracks: [track] }) } })) as typeof fetch;
-  const loaded = await megaPlaylist(new AbortController().signal);
-  expect(loaded.tracks.map(song => song.globalId)).toEqual(["a"]);
-  expect(loaded.unavailableCount).toBe(1);
-  expect(loaded.tracks[0].cover).toBe("http://phone-server:38147/api/cover");
+const library = await import("../../mobile/src/library");
+const sharedState = await import("../../mobile/src/sharedState");
+const libraryServer = (values: Record<string, string>) => mock(async (input: RequestInfo | URL) => {
+  const url = String(input);
+  if (url.endsWith("/api/state")) return response({ revision: 1, values });
+  if (url.endsWith("/api/library") || url.endsWith("/api/music/local/tracks")) return response(url.endsWith("/api/library") ? { tracks: [] } : []);
+  return response({ error: "unused" }, 404);
+}) as unknown as typeof fetch;
+
+test("AMBRA playlists load in their saved order and rebase artwork onto the paired server", async () => {
+  sharedState.forgetState();
+  globalThis.fetch = libraryServer({ "ambra.playlists.v1": JSON.stringify({ version: 1, playlists: [{ id: "mega", name: "MEGA", trackIds: ["missing", "a"] }], tracks: [track] }) });
+  await library.refreshLibrary();
+  const playlist = library.librarySnapshot().playlists[0];
+  const songs = library.playlistSongs(playlist);
+  expect(songs.map(song => song.globalId)).toEqual(["a"]);
+  expect(playlist.trackIds.length - songs.length).toBe(1);
+  expect(songs[0].cover).toBe("http://phone-server:38147/api/cover");
 });
 
-test("MEGA tidies bound songs like desktop, so they sit together and shuffle as one", async () => {
+test("playlists tidy bound songs like desktop, so they sit together and shuffle as one", async () => {
+  sharedState.forgetState();
   const songs = ["a", "b", "c", "d", "e"].map(globalId => ({ ...track, globalId }));
   // Saved out of date: "e" sits apart from "b", and the second package lost a song.
   const playlists = [{ id: "mega", name: "MEGA", trackIds: ["a", "b", "c", "d", "e"], packages: [["e", "b"], ["d", "gone"]] }];
-  globalThis.fetch = mock(async () => response({ values: { "ambra.playlists.v1": JSON.stringify({ version: 1, playlists, tracks: songs }) } })) as typeof fetch;
-  const loaded = await megaPlaylist(new AbortController().signal);
-  expect(loaded.tracks.map(song => song.globalId)).toEqual(["a", "b", "e", "c", "d"]);
-  expect(loaded.playlist.packages).toEqual([["b", "e"]]);
-  const shuffled = shuffledEntries(playlistEntries(loaded.playlist, loaded.tracks), () => 0).map(item => item.globalTrackId);
+  globalThis.fetch = libraryServer({ "ambra.playlists.v1": JSON.stringify({ version: 1, playlists, tracks: songs }) });
+  await library.refreshLibrary();
+  const playlist = library.librarySnapshot().playlists[0];
+  const loaded = library.playlistSongs(playlist);
+  expect(loaded.map(song => song.globalId)).toEqual(["a", "b", "e", "c", "d"]);
+  expect(playlist.packages).toEqual([["b", "e"]]);
+  const shuffled = shuffledEntries(playlistEntries(playlist, loaded as never), () => 0).map(item => item.globalTrackId);
   expect(shuffled.indexOf("e")).toBe(shuffled.indexOf("b") + 1);
 });
 

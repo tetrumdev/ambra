@@ -658,12 +658,36 @@ fn text(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
 
+pub(super) fn http_client() -> Result<reqwest::Client, reqwest::Error> {
+    // Full lossless files can take much longer than the API client's 20-second
+    // total timeout. Bound connection and stalled reads, not an active transfer.
+    crate::http_client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(60))
+        .build()
+}
+
+fn transfer_error(error: reqwest::Error) -> String {
+    if error.is_timeout() {
+        "Audio download timed out while waiting for data".to_owned()
+    } else {
+        let error = error.without_url();
+        let mut message = format!("Audio download failed: {error}");
+        let mut source = std::error::Error::source(&error);
+        while let Some(cause) = source {
+            message.push_str(&format!(": {cause}"));
+            source = cause.source();
+        }
+        message
+    }
+}
+
 /// Streams `url` into `writer`.
 async fn fetch_into(client: &reqwest::Client, url: &str, writer: &mut impl Write) -> Result<(), String> {
-    let response = client.get(url).send().await.map_err(text)?.error_for_status().map_err(text)?;
+    let response = client.get(url).send().await.map_err(transfer_error)?.error_for_status().map_err(transfer_error)?;
     let mut body = response.bytes_stream();
     while let Some(chunk) = body.next().await {
-        writer.write_all(&chunk.map_err(text)?).map_err(text)?;
+        writer.write_all(&chunk.map_err(transfer_error)?).map_err(text)?;
     }
     Ok(())
 }
@@ -691,7 +715,7 @@ async fn produce(
             let container = container_for_mime(&source.mime_type, "flac");
             let file = format!("{stem}.{container}");
             let mut pending = store.begin(&file).map_err(text)?;
-            fetch_into(&state.http_client, &source.url, pending.writer()).await?;
+            fetch_into(&state.download_http_client, &source.url, pending.writer()).await?;
             let size = store.finish(pending).map_err(text)?;
             Ok(Produced {
                 file,
@@ -721,7 +745,7 @@ async fn produce(
                     let container = container_for_mime(&mime_type, "m4a");
                     let file = format!("{stem}.{container}");
                     let mut pending = store.begin(&file).map_err(text)?;
-                    fetch_into(&state.http_client, &url, pending.writer()).await?;
+                    fetch_into(&state.download_http_client, &url, pending.writer()).await?;
                     let size = store.finish(pending).map_err(text)?;
                     Ok(Produced {
                         file,
@@ -734,7 +758,7 @@ async fn produce(
                     })
                 }
                 PlaybackSource::Dash { initialization_url, media_url_template, start_number, segment_count, .. } => {
-                    let init = download_media_bytes(&state.http_client, &initialization_url).await.map_err(|error| error.message)?;
+                    let init = download_media_bytes(&state.download_http_client, &initialization_url).await.map_err(|error| error.message)?;
                     let segment_url = |number: u32| media_url_template.replace("$Number$", &number.to_string());
                     let last = segment_count.map_or(start_number.saturating_add(MAX_SEGMENTS), |count| start_number.saturating_add(count));
                     let known_count = segment_count.is_some();
@@ -743,7 +767,7 @@ async fn produce(
                         let frames_file = format!("{stem}.frames");
                         let mut frames = store.begin(&frames_file).map_err(text)?;
                         for number in start_number..last {
-                            let segment = match download_media_bytes(&state.http_client, &segment_url(number)).await {
+                            let segment = match download_media_bytes(&state.download_http_client, &segment_url(number)).await {
                                 Ok(segment) => segment,
                                 Err(_) if !known_count && number > start_number => break,
                                 Err(error) => return Err(error.message),
@@ -767,7 +791,7 @@ async fn produce(
                         let mut pending = store.begin(&file).map_err(text)?;
                         pending.writer().write_all(&init).map_err(text)?;
                         for number in start_number..last {
-                            let segment = match download_media_bytes(&state.http_client, &segment_url(number)).await {
+                            let segment = match download_media_bytes(&state.download_http_client, &segment_url(number)).await {
                                 Ok(segment) => segment,
                                 Err(_) if !known_count && number > start_number => break,
                                 Err(error) => return Err(error.message),
@@ -839,6 +863,46 @@ mod tests {
 
     fn json(bytes: &Bytes) -> serde_json::Value {
         serde_json::from_slice(bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn full_audio_downloads_outlive_the_api_timeout_but_stalled_reads_fail() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/audio", listener.local_addr().unwrap());
+        let app = Router::new().route("/audio", get(|| async {
+            let chunks = futures_util::stream::unfold(0, |index| async move {
+                match index {
+                    0 => Some((Ok::<_, io::Error>(Bytes::from_static(b"first")), 1)),
+                    1 => {
+                        tokio::time::sleep(Duration::from_millis(150)).await;
+                        Some((Ok(Bytes::from_static(b"last!")), 2))
+                    }
+                    _ => None,
+                }
+            });
+            ([(CONTENT_LENGTH, "10")], Body::from_stream(chunks))
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        // Reqwest labels an expired body deadline as a decode error even though
+        // the response is audio, not JSON. This reproduces the reported failure.
+        let limited = crate::http_client::builder().timeout(Duration::from_millis(50)).build().unwrap();
+        let response = limited.get(&url).send().await.unwrap();
+        let error = response.bytes().await.unwrap_err();
+        assert!(error.is_decode());
+        assert!(error.is_timeout());
+        assert!(error.to_string().starts_with("error decoding response body"));
+
+        let mut audio = Vec::new();
+        fetch_into(&http_client().unwrap(), &url, &mut audio).await.unwrap();
+        assert_eq!(audio, b"firstlast!");
+
+        let stalled = crate::http_client::builder().read_timeout(Duration::from_millis(50)).build().unwrap();
+        let mut partial = Vec::new();
+        let error = fetch_into(&stalled, &url, &mut partial).await.unwrap_err();
+        assert_eq!(error, "Audio download timed out while waiting for data");
+        assert_eq!(partial, b"first");
+        server.abort();
     }
 
     #[tokio::test]

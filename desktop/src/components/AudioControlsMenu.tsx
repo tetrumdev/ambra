@@ -14,12 +14,19 @@ type AudioControlsMenuProps = {
   anchor: RefObject<HTMLButtonElement | null>;
   children: ReactNode;
   onClose: () => void;
+  label?: string;
+  /** Which edge of the anchor the panel lines up with. */
+  align?: "right" | "center";
+  className?: string;
 };
 
 export function AudioControlsMenu({
   anchor,
   children,
   onClose,
+  label = "Audio controls",
+  align = "right",
+  className,
 }: AudioControlsMenuProps) {
   const panel = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(panel);
@@ -36,7 +43,9 @@ export function AudioControlsMenu({
       const left = Math.max(
         4,
         Math.min(
-          anchorBounds.right - menuBounds.width,
+          align === "center"
+            ? anchorBounds.left + anchorBounds.width / 2 - menuBounds.width / 2
+            : anchorBounds.right - menuBounds.width,
           window.innerWidth - menuBounds.width - 4,
         ),
       );
@@ -62,13 +71,14 @@ export function AudioControlsMenu({
       observer.disconnect();
       window.removeEventListener("resize", reposition);
     };
-  }, [anchor]);
+  }, [anchor, align]);
 
   useEffect(() => {
-    panel.current
+    // With nothing to operate, the panel itself takes focus so Escape still closes it.
+    (panel.current
       ?.querySelector<HTMLElement>(
         '[role="radio"][aria-checked="true"]:not(:disabled), button:not(:disabled), input:not(:disabled)',
-      )
+      ) ?? panel.current)
       ?.focus();
   }, []);
 
@@ -86,14 +96,15 @@ export function AudioControlsMenu({
     >
       <div
         ref={panel}
-        className="devAudioControls"
+        className={className ? `devAudioControls ${className}` : "devAudioControls"}
         role="dialog"
-        aria-label="Audio controls"
+        aria-label={label}
+        tabIndex={-1}
         style={{
           left: position.left,
           top: position.top,
-          // It opens above its button, aligned to its right edge.
-          transformOrigin: "right bottom",
+          // It opens above its button, aligned to its right edge or centre.
+          transformOrigin: align === "center" ? "center bottom" : "right bottom",
           visibility: position.ready ? "visible" : "hidden",
         }}
         onClick={(event) => event.stopPropagation()}

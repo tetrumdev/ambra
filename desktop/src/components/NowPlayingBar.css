@@ -87,6 +87,7 @@
 }
 
 .playbackReadout {
+    position: relative;
     grid-column: 2;
     grid-row: 2;
     min-width: 0;
@@ -157,28 +158,13 @@
     width: 32px;
 }
 
-.playbackQuality {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    justify-content: center;
-    gap: 3px 8px;
-    font-family: "Stack Sans Text", sans-serif;
-    font-size: 0.7rem;
-    line-height: 1.4;
-    text-align: center;
-    color: #dedede;
-    font-variant-numeric: tabular-nums;
-}
-
-.playbackQualityName {
-    font-weight: 600;
-    color: #fff;
-    white-space: nowrap;
-}
-
-.playbackQualityDetails {
-    text-wrap: balance;
+/* Hangs just past the progress bar's right end, outside the layout, so the bar keeps its width and centre. */
+.playbackReadout > .qualityLight {
+    position: absolute;
+    left: 100%;
+    top: 50%;
+    margin-left: 20px;
+    transform: translateY(-50%);
 }
 
 #bottomInfoBar[data-variant="compact"] .playbackReadout {
@@ -186,10 +172,6 @@
     align-self: center;
     margin-top: 0;
     gap: 7px;
-}
-
-#bottomInfoBar[data-variant="compact"] .playbackQuality {
-    font-size: 0.65rem;
 }
 
 #bottomInfoBar[data-variant="compact"] #playbackCluster {
@@ -236,20 +218,6 @@
 
 #compactArtwork:disabled {
     cursor: default;
-}
-
-#queueBtn {
-    background: transparent;
-    border: none;
-    width: 35px;
-    cursor: default;
-    align-self: center;
-}
-
-#queueImg {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
 }
 
 /* Pinned to the same corner in both layouts, so the volume and queue never move

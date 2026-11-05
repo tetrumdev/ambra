@@ -1,6 +1,5 @@
 import * as SecureStore from "expo-secure-store";
 import { AppState } from "react-native";
-import { normalizePackages } from "./queueModel";
 import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
 import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { SessionClock } from "./sessionClock";
@@ -145,10 +144,16 @@ export function thumbnailArtwork(track: Track | null | undefined) {
 // Saved queues hold server URLs as the saving computer knew them (desktop/src/api/serverConnection.ts).
 const SAVED_SERVER_URL = /http:\/\/[^/"\\\s]+:\d+(?:\/[a-f0-9]{64})?(\/api\/[^"\\\s]*)/g;
 const TOKEN_IN_QUERY = /([?&])access_token=[^&#"\\]*&?/;
-function rebased(text: string) {
+/** Saved text with its server URLs moved onto this phone's bridge. */
+export function rebased(text: string) {
   return text
     .replace(SAVED_SERVER_URL, (_, path: string) => serverUrl(path.replace(TOKEN_IN_QUERY, "$1").replace(/[?&]$/, "")))
     .replace(/"(\/api\/music\/local\/files\/[^"\\\s]+)/g, (_, path: string) => `"${serverUrl(path)}`);
+}
+
+/** Text for shared state: bridge URLs lose this phone's capability and token, as desktop saves them. */
+export function forSharing(text: string) {
+  return text.replace(SAVED_SERVER_URL, url => url.replace(TOKEN_IN_QUERY, "$1").replace(/[?&]$/, "").replace(/\/[a-f0-9]{64}(?=\/api\/)/, ""));
 }
 
 /** The current server address, which changes when the phone moves between networks. */
@@ -285,9 +290,25 @@ export function setLocalPlayback(next: LocalPlayback | null) {
 
 export function setLocalControl(control: typeof localControl) { localControl = control; }
 
-export const sessionView = () => shown;
+/** Phone-only playback of downloads while the server can't be reached (`offlineSession.ts`). */
+type Offline = {
+  view(): SessionView;
+  age(): number;
+  command(action: string, details: Record<string, unknown>): Promise<void>;
+  change(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play: boolean): Promise<void>;
+};
+let offline: Offline | null = null;
+export function setOfflineSession(next: Offline | null) {
+  offline = next;
+  show();
+}
+export const offlineActive = () => offline !== null;
+/** Lets the offline session announce its changes to everything following the session. */
+export const notifySession = () => show();
+
+export const sessionView = () => offline ? offline.view() : shown;
 /** Seconds since the view's position was true. */
-export const sessionViewAge = () => local && view ? Math.max(0, (Date.now() - local.at) / 1000) : playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
+export const sessionViewAge = () => offline ? offline.age() : local && view ? Math.max(0, (Date.now() - local.at) / 1000) : playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
 
 export function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -347,6 +368,7 @@ function inOrder<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export function command(action: string, details: Record<string, unknown> = {}) {
+  if (offline) return offline.command(action, details);
   if (localControl?.(action, details)) return Promise.resolve();
   const epoch = connectionEpoch;
   return inOrder(async () => {
@@ -413,6 +435,7 @@ export function phoneMediaUrl(source: string) {
 
 /** Apply against the latest queue; rebase on conflicts without losing another device's edits. */
 export function changeQueue(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play = false) {
+  if (offline) return offline.change(change, play);
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
@@ -440,25 +463,6 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
 
 export type MobilePlaylist = { id: string; name: string; trackIds: string[]; packages?: string[][] };
 export type PlaylistContents = { playlist: MobilePlaylist; tracks: Track[]; unavailableCount: number };
-
-/** This first library view deliberately opens MEGA, using the desktop's saved order and tracks. */
-export async function megaPlaylist(signal: AbortSignal): Promise<PlaylistContents> {
-  // All shared state comes at once; even compressed it's the largest request, so it may take a while over a relay.
-  const state = await request<{ values: Record<string, string> }>("/api/state", { signal, timeoutMs: 60_000 });
-  const encoded = state.values["ambra.playlists.v1"];
-  const saved = encoded ? JSON.parse(rebased(encoded)) as { playlists: MobilePlaylist[]; tracks: Track[] } : null;
-  const found = saved?.playlists.find(item => item.id === "1255df67-7977-4f0e-8e69-23420d41c563")
-    ?? saved?.playlists.find(item => item.name.trim().toLowerCase() === "mega");
-  if (!found) throw new Error("MEGA isn't on this server yet. Open it on desktop and sync your playlists, then retry.");
-  // Tidied exactly as desktop loads it (utils/playlistStorage.ts), so bound songs sit together
-  // in the list and every package shuffles as one, even if the saved one is out of date.
-  const stored = Array.isArray(found.packages) ? found.packages.filter(pack => Array.isArray(pack) && pack.every(id => typeof id === "string")) : [];
-  const { trackIds, packages } = normalizePackages([...new Set(found.trackIds)], stored);
-  const playlist: MobilePlaylist = { ...found, trackIds, packages };
-  const byId = new Map(saved!.tracks.map(track => [track.globalId, track]));
-  const tracks = playlist.trackIds.flatMap(id => byId.get(id) ?? []);
-  return { playlist, tracks, unavailableCount: playlist.trackIds.length - tracks.length };
-}
 
 export function currentTrack(current: SessionView | null): Track | null {
   const id = current?.queue.current?.globalTrackId;

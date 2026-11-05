@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.quantium.ambra.remote",
-      "buildNumber": "7",
+      "buildNumber": "9",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
@@ -78,7 +78,9 @@
           "microphonePermission": false,
           "recordAudioAndroid": false
         }
-      ]
+      ],
+      "expo-web-browser",
+      "expo-sharing"
     ],
     "backgroundColor": "#000000",
     "extra": {

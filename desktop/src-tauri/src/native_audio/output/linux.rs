@@ -8,6 +8,7 @@ use alsa::{
 
 use super::{AudioOutput, NativeAudioDevice, StreamSpec, normalized_to_signed, writable_frames};
 use super::reservation::DeviceReservation;
+use super::system_audio::SilentSystemAudio;
 
 /// The system mixer (PipeWire, PulseAudio or dmix, whichever ALSA routes "default" to).
 const DEFAULT_DEVICE: &str = "default";
@@ -69,6 +70,8 @@ pub struct PlatformOutput {
     reservation: Option<DeviceReservation>,
     /// The card's PipeWire volume from before exclusive playback, put back once it's returned.
     sink_level: Option<SinkLevel>,
+    // Restore system routes only after PCM closes and the reservation is released.
+    system_audio: Option<SilentSystemAudio>,
 }
 
 
@@ -482,6 +485,7 @@ impl PlatformOutput {
     fn open_exclusive(spec: StreamSpec, id: &str, processed: bool) -> Result<Self, String> {
         // Read before the reservation makes PipeWire take the card's sink down.
         let sink_level = sink_level(id);
+        let system_audio = SilentSystemAudio::for_device(id, pipewire_node(id).is_some())?;
         let reservation = DeviceReservation::for_device(id)?;
         // Untouched 16-bit audio goes out at its own depth; everything else at 24 bits.
         let candidates: &[DeviceFormat] = match spec.bits_per_sample {
@@ -524,6 +528,7 @@ impl PlatformOutput {
         output.device = Some(id.to_owned());
         output.reservation = reservation;
         output.sink_level = sink_level;
+        output.system_audio = system_audio;
         Ok(output)
     }
 
@@ -603,6 +608,7 @@ impl PlatformOutput {
             bytes: Vec::with_capacity(buffer_frames * spec.channels * format.bytes_per_sample()),
             reservation: None,
             sink_level: None,
+            system_audio: None,
         })
     }
 

@@ -2,7 +2,6 @@ import { useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import type { BrowseEntity } from "../utils/browse";
 import type { AudioDeckController } from "../hooks/useAudioPlayer";
 import type { AudioQuality, Track } from "../types/music";
-import { formatAudioQuality } from "../utils/audioQuality";
 import type { PlaybackClock } from "../utils/playbackClock";
 import "./NowPlayingBar.css";
 import { AudioDecks } from "./AudioDecks";
@@ -10,6 +9,7 @@ import { PlaybackProgress } from "./PlaybackProgress";
 import { PlayerControls } from "./PlayerControls";
 import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
+import { QualityLight } from "./QualityLight";
 import { TrackArtwork } from "./TrackArtwork";
 import { motion } from "../utils/motion";
 import { reducedMotion } from "../utils/reducedMotion";
@@ -108,7 +108,6 @@ export function NowPlayingBar({
   direction,
 }: NowPlayingBarProps) {
   const isEmpty = track === undefined;
-  const quality = track && showAudioQuality ? formatAudioQuality(track, audioQuality) : null;
 
   // A new song's details ease in from the side the player moved towards, the way the big
   // cover does. Only what actually changed moves: the next song on the same album slides in
@@ -176,12 +175,7 @@ export function NowPlayingBar({
             onSeek={onSeek}
             disabled={isEmpty}
           />
-          {quality && (
-            <div className="playbackQuality" role="group" aria-label="Audio quality" data-tooltip={quality.description}>
-              <span className="playbackQualityName">{quality.name}</span>
-              <span className="playbackQualityDetails">{quality.details}</span>
-            </div>
-          )}
+          {track && showAudioQuality && <QualityLight track={track} audioQuality={audioQuality} />}
         </div>
       </div>
       <div id="extraCtrlsCluster">

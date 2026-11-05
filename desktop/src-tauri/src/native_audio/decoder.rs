@@ -313,6 +313,7 @@ impl FileDecodedSource {
             capture_format: None,
             requested_quality: None,
             source_format_verified: None,
+            bit_perfect: false,
         };
 
         let cache_key = loudness::cache_key(&source);

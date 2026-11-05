@@ -113,15 +113,39 @@ test("a near-black border keeps a near-black swirl dark instead of lifting it to
   expect(separated.slice(2)).toEqual(colors.slice(2));
 });
 
-test("a saturated border too bright to clear by lifting darkens the matching swirl color instead", () => {
+test("a saturated swirl color matching the border stays recognizably the cover's color", () => {
   const red = [226 / 255, 0, 1 / 255];
   const edges = edgesOf([red]);
   const separated = separatePaletteFromCover(["#e20001", "#202020", "#202020", "#202020"], edges);
-  expect(lightness(separated[0])).toBeLessThan(lightness("#e20001"));
-  expect(clearance(separated[0], edges)).toBeGreaterThan(-0.003);
+  expect(Math.abs(lightness(separated[0]) - lightness("#e20001"))).toBeLessThanOrEqual(0.141);
   const [r, g, b] = rgb(separated[0]);
   expect(r).toBeGreaterThan(g * 4);
   expect(r).toBeGreaterThan(b * 4);
+});
+
+test("a vivid cover whose edges hold every palette color keeps a vivid swirl", () => {
+  // twenty one pilots, Clancy: red and yellow run off every side of the cover.
+  const edges = edgesOf([[0.89, 0.24, 0.22], [0.99, 0.9, 0.12], [0.145, 0.145, 0.137], [0.92, 0.48, 0.2]]);
+  const colors = ["#de4036", "#fbdc21", "#2f2a29", "#ec8730"];
+  const separated = separatePaletteFromCover(colors, edges);
+  for (const index of [0, 1, 3]) {
+    // Colorful colors only darken, never wash out toward coral or pastel.
+    expect(lightness(separated[index])).toBeLessThanOrEqual(lightness(colors[index]) + 0.001);
+    expect(Math.abs(lightness(separated[index]) - lightness(colors[index]))).toBeLessThanOrEqual(0.141);
+    const [, a, b] = perceptualColor(rgb(separated[index]));
+    const [, a0, b0] = perceptualColor(rgb(colors[index]));
+    expect(Math.hypot(a, b)).toBeGreaterThan(Math.hypot(a0, b0) * 0.8);
+  }
+});
+
+test("a grayscale cover whose border runs from black to white keeps its grays", () => {
+  // Billy Joel, The Stranger: white wall at the top, black bedding at the bottom.
+  const edges = { colors: [0.1765, 0.1725, 0.1647, 0.1216, 0.1137, 0.1176, 0.5176, 0.5176, 0.5137, 0.2, 0.1961, 0.1882, 0.149, 0.1451, 0.1412, 0.1765, 0.1725, 0.1647, 0.2392, 0.2353, 0.2353, 0.3569, 0.3569, 0.3569, 0.1569, 0.1529, 0.1451, 0.2667, 0.2667, 0.2588, 0.3922, 0.3882, 0.3882, 0.8235, 0.8235, 0.8235, 0.1373, 0.1333, 0.1294, 0.0941, 0.0863, 0.0902, 0.1843, 0.1804, 0.1725, 0.9216, 0.9216, 0.9216, 0.149, 0.1451, 0.1412, 0.5804, 0.5804, 0.5804, 0.1961, 0.1922, 0.1843, 0.9373, 0.9373, 0.9373, 0.149, 0.1451, 0.1373, 0.1137, 0.1059, 0.1098, 0.1451, 0.1412, 0.1333, 0.9451, 0.9451, 0.9451, 0.1412, 0.1373, 0.1333, 0.1137, 0.1059, 0.1059, 0.1373, 0.1294, 0.1294, 0.3333, 0.3294, 0.3255, 0.1529, 0.149, 0.1412, 0.1098, 0.102, 0.1059, 0.1137, 0.1059, 0.1059, 0.4863, 0.4863, 0.4863] };
+  const colors = ["#1e1c1c", "#e7e7e7", "#909090", "#515150"];
+  const separated = separatePaletteFromCover(colors, edges);
+  // No gray can clear every edge, so none is crushed into black.
+  expect(separated.slice(1)).toEqual(colors.slice(1));
+  expect(lightness(separated[0])).toBeLessThanOrEqual(lightness(colors[0]));
 });
 
 // Set AMBRA_TEST_CHROME to a Chromium executable to run the production GLSL in a real WebGL context.

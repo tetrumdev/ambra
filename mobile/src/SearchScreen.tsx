@@ -2,13 +2,17 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchSession, SearchSnapshot } from "../../desktop/src/utils/searchSession";
-import type { Track } from "../../desktop/src/types/music";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
 import { openSearch } from "./catalog";
-import { changeQueue, command, currentTrack, type QueueItem, type SessionView } from "./client";
+import { changeQueue, command, currentTrack, type QueueItem } from "./client";
 import { TrackRow } from "./TrackBrowser";
-import { Menu, type MenuAction } from "./Menu";
-import { enqueueEntries, playEntries } from "./queueModel";
+import { playEntries } from "./queueModel";
+import { catalogSearch, type CatalogPage } from "./library";
+import { useNavigation } from "./navigation";
+import { useTrackMenus } from "./TrackMenus";
+import { CardRow } from "./screens/Cards";
+import { albumCard, artistCard } from "./screens/Pages";
+import { searchText, textRelevance } from "../../desktop/src/utils/catalogRanking";
 import { servicePreferences, services, subscribeServicePreferences, type Service } from "./servicePreferences";
 import { Icon } from "./Icons";
 import { Touchable } from "./Touchable";
@@ -16,7 +20,18 @@ import { colors, fonts } from "./theme";
 
 const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], isSearching: false, hasMore: false, error: null, canRetry: false };
 
-export function SearchScreen({ view, bottomInset, onMenuVisibilityChange }: { view: SessionView | null; bottomInset: number; onMenuVisibilityChange: (open: boolean) => void }) {
+/** Merges each service's catalog answer, best name matches first and one card per name. */
+function mergeCatalog(query: string, pages: CatalogPage[]) {
+  const unique = <T,>(items: T[], key: (item: T) => string) => [...new Map(items.map(item => [key(item), item])).values()];
+  const artists = unique(pages.flatMap(page => page.artists), artist => searchText(artist.name))
+    .sort((a, b) => textRelevance(b.name, query) - textRelevance(a.name, query)).slice(0, 12);
+  const albums = unique(pages.flatMap(page => page.albums), album => `${searchText(album.title)}:${searchText(album.artist)}`)
+    .sort((a, b) => textRelevance(b.title, query) - textRelevance(a.title, query)).slice(0, 16);
+  return { artists, albums };
+}
+
+export function SearchScreen() {
+  const { view, bottomInset, push } = useNavigation();
   const insets = useSafeAreaInsets();
   const selected = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
   const [query, setQuery] = useState("");
@@ -25,7 +40,8 @@ export function SearchScreen({ view, bottomInset, onMenuVisibilityChange }: { vi
   const [response, setResponse] = useState({ key: "", snapshot: empty });
   const [attempt, setAttempt] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [menu, setMenu] = useState<{ key: string; track: Track; entries: QueueItem[]; results: Track[] } | null>(null);
+  const [catalog, setCatalog] = useState<{ key: string; value: ReturnType<typeof mergeCatalog> } | null>(null);
+  const { openPlayback, openEdit, menus } = useTrackMenus();
   const session = useRef<SearchSession | null>(null);
   const searchKey = JSON.stringify([query.trim(), selected, provider, attempt]);
   const snapshot = response.key === searchKey ? response.snapshot : query.trim() ? { ...empty, isSearching: true } : empty;
@@ -41,7 +57,17 @@ export function SearchScreen({ view, bottomInset, onMenuVisibilityChange }: { vi
         if (!abort.signal.aborted) setResponse({ key: searchKey, snapshot: { ...empty, error: reason instanceof Error ? reason.message : "Search failed. Try again.", canRetry: true } });
       });
     }, 300);
-    return () => { clearTimeout(timer); abort.abort(); };
+    // Artists and albums, as desktop's catalog search finds them, alongside the songs.
+    const catalogTimer = setTimeout(() => {
+      if (!trimmed) return;
+      const providers = services.filter(service => selected[service] && (provider === "all" || provider === service));
+      void Promise.allSettled(providers.map(service => catalogSearch(trimmed, service, abort.signal))).then(results => {
+        if (abort.signal.aborted) return;
+        const pages = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
+        setCatalog({ key: searchKey, value: mergeCatalog(trimmed, pages) });
+      });
+    }, 350);
+    return () => { clearTimeout(timer); clearTimeout(catalogTimer); abort.abort(); };
   }, [query, selected, provider, searchKey]);
   const results = snapshot.results;
   const entries = useMemo<QueueItem[]>(() => results.map((track, index) => ({ globalTrackId: track.globalId, source: { kind: "search", id: query.trim(), entryId: index + 1 } })), [results, query]);
@@ -53,14 +79,10 @@ export function SearchScreen({ view, bottomInset, onMenuVisibilityChange }: { vi
   const play = useCallback((index: number) => {
     run(() => currentTrack(view)?.globalId === results[index]?.globalId ? command(view?.playing ? "pause" : "play") : changeQueue(queue => playEntries(queue, entries.slice(index), results), true));
   }, [run, view, entries, results]);
-  const more = useCallback((index: number) => setMenu({ key: searchKey, track: results[index], entries: entries.slice(index), results }), [searchKey, results, entries]);
+  const hold = useCallback((index: number) => openPlayback(index, entries, results), [openPlayback, entries, results]);
+  const more = useCallback((index: number) => openEdit(results[index]), [openEdit, results]);
   const now = currentTrack(view);
-  const actions = (selection: NonNullable<typeof menu>): MenuAction[] => [
-    { label: "Standalone Play", icon: "play", run: () => run(() => changeQueue(queue => playEntries(queue, [selection.entries[0]], selection.results), true)) },
-    { label: "Play from Here", icon: "skip", run: () => run(() => changeQueue(queue => playEntries(queue, selection.entries, selection.results), true)) },
-    { label: "Play Next", icon: "playNext", run: () => run(() => changeQueue(queue => enqueueEntries(queue, [selection.entries[0]], selection.results, true), !view?.queue.current)) },
-    { label: "Add to Queue", icon: "addToQueue", run: () => run(() => changeQueue(queue => enqueueEntries(queue, [selection.entries[0]], selection.results), !view?.queue.current)) },
-  ];
+  const found = catalog?.key === searchKey && query.trim() ? catalog.value : null;
   return <View style={styles.screen}>
     <View style={{ paddingTop: insets.top + 24, paddingHorizontal: 24 }}>
       <Text accessibilityRole="header" style={styles.title}>Search</Text>
@@ -76,12 +98,17 @@ export function SearchScreen({ view, bottomInset, onMenuVisibilityChange }: { vi
       </ScrollView>
     </View>
     <FlatList data={results} keyExtractor={track => track.globalId} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" contentContainerStyle={{ paddingHorizontal: 12, paddingBottom: bottomInset + 24 }} scrollIndicatorInsets={{ bottom: bottomInset }} extraData={`${now?.globalId}:${view?.playing}`} initialNumToRender={12} maxToRenderPerBatch={8}
-      renderItem={({ item, index }) => <View><TrackRow track={item} index={index} active={now?.globalId === item.globalId} playing={!!view?.playing} onPress={play} onMore={more} /><Text style={styles.provider}>{musicProviderName(item.provider)}</Text></View>}
+      renderItem={({ item, index }) => <View><TrackRow track={item} index={index} active={now?.globalId === item.globalId} playing={!!view?.playing} onPress={play} onHold={hold} onMore={more} /><Text style={styles.provider}>{musicProviderName(item.provider)}</Text></View>}
       onEndReached={() => { if (snapshot.hasMore && !snapshot.isSearching) void session.current?.loadMore(); }} onEndReachedThreshold={0.5}
-      ListHeaderComponent={error || snapshot.error ? <View style={styles.notice}><Text accessibilityRole="alert" style={styles.error}>{error ?? snapshot.error}</Text>{snapshot.canRetry && <Touchable accessibilityRole="button" onPress={() => setAttempt(value => value + 1)} style={styles.retry}><Text style={styles.retryText}>Retry search</Text></Touchable>}</View> : undefined}
+      ListHeaderComponent={<View>
+        {error || snapshot.error ? <View style={styles.notice}><Text accessibilityRole="alert" style={styles.error}>{error ?? snapshot.error}</Text>{snapshot.canRetry && <Touchable accessibilityRole="button" onPress={() => setAttempt(value => value + 1)} style={styles.retry}><Text style={styles.retryText}>Retry search</Text></Touchable>}</View> : null}
+        {!!found?.artists.length && <View style={styles.catalog}><CardRow title="Artists" cards={found.artists.map(artist => artistCard(artist, push))} /></View>}
+        {!!found?.albums.length && <View style={styles.catalog}><CardRow title="Albums" cards={found.albums.map(album => albumCard(album, push))} /></View>}
+        {results.length > 0 && <Text style={styles.songsHeading}>Songs</Text>}
+      </View>}
       ListEmptyComponent={!snapshot.isSearching && !snapshot.error ? <Text style={styles.empty}>{query.trim() ? "No matching songs. Try another title or artist." : "Search connected services together. Matching recordings merge automatically, with desktop’s relevance and quality ranking."}</Text> : undefined}
       ListFooterComponent={snapshot.isSearching ? <ActivityIndicator accessibilityLabel="Searching music services" color={colors.muted} style={styles.loading} /> : undefined} />
-    {menu?.key === searchKey && <Menu track={menu.track} actions={actions(menu)} onClose={() => setMenu(null)} onVisibilityChange={onMenuVisibilityChange} />}
+    {menus}
   </View>;
 }
 
@@ -103,4 +130,6 @@ const styles = StyleSheet.create({
   error: { color: colors.error, fontFamily: fonts.sans, fontSize: 14, lineHeight: 21 },
   retry: { minHeight: 44, justifyContent: "center" },
   retryText: { color: "white", fontFamily: fonts.sans, fontSize: 14 },
+  catalog: { marginHorizontal: -12 },
+  songsHeading: { color: "white", fontFamily: fonts.sans, fontSize: 20, fontWeight: "600", paddingHorizontal: 12, paddingTop: 20, paddingBottom: 8 },
 });

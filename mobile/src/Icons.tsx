@@ -17,6 +17,15 @@ const assets = {
   check: require("../../desktop/public/check.svg"),
   search: require("../../desktop/public/search.svg"),
   settings: require("../../desktop/public/settings.svg"),
+  download: require("../../desktop/public/download.svg"),
+  add: require("../../desktop/public/add.svg"),
+  album: require("../../desktop/public/album.svg"),
+  credits: require("../../desktop/public/credits.svg"),
+  edit: require("../../desktop/public/edit.svg"),
+  duplicate: require("../../desktop/public/duplicate.svg"),
+  playlistAdd: require("../../desktop/public/playlist-add.svg"),
+  back: require("../../desktop/public/back.svg"),
+  sparkle: require("../../desktop/public/sparkle.svg"),
 };
 
 export type IconName = keyof typeof assets;
