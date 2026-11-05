@@ -8,7 +8,19 @@ name = "ambra_mobile"
 crate-type = ["staticlib", "cdylib", "rlib"]
 [dependencies]
 ambra-net = { path = "../ambra-net" }
+ambra-vault = { path = "../ambra-vault" }
+axum = "0.8.9"
+bytes = "1"
+futures-util = "0.3"
+getrandom = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http2"] }
+lofty = "0.24"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "net", "macros", "time", "fs", "io-util"] }
+tokio-util = { version = "0.7", features = ["io"] }
+urlencoding = "2"
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

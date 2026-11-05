@@ -19,10 +19,8 @@ import { invokeOn, useEndpoints } from "../utils/playbackTarget";
 import { coreCommand, coreView, subscribeCore, type CoreOutput } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 
-/** How far Up and Down change the volume, in percent. */
+/** How far keyboard and wheel input change the volume, in percent. */
 const VOLUME_STEP = 5;
-/** Percent per pixel scrolled: one mouse wheel notch is about 100 pixels, so it moves one step. */
-const WHEEL_VOLUME_PER_PIXEL = VOLUME_STEP / 100;
 /** Where unmuting goes for an output that was already silent when muted. */
 const UNMUTE_FALLBACK_VOLUME = 50;
 // Each output's level before M muted it, so M restores it.
@@ -204,7 +202,7 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
-  // Scrolling over the volume control glides the level; a trackpad moves it in fine steps.
+  // Wheel distances vary between platforms; each vertical event moves one fixed step.
   const volumeControl = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const control = volumeControl.current;
@@ -212,12 +210,10 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
     const handleWheel = (event: WheelEvent) => {
       // The output list in the open menu scrolls as usual.
       if (event.target instanceof Element && event.target.closest(".audioDeviceList")) return;
-      const pixels = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16
-        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * 400 : event.deltaY;
-      if (pixels === 0) return;
+      if (event.deltaY === 0) return;
       event.preventDefault();
-      const next = clampVolume(latestVolume.current - pixels * WHEEL_VOLUME_PER_PIXEL);
-      if (next !== latestVolume.current) shortcuts.current.changeVolume(Math.round(next * 10) / 10);
+      const next = clampVolume(latestVolume.current - Math.sign(event.deltaY) * VOLUME_STEP);
+      if (next !== latestVolume.current) shortcuts.current.changeVolume(next);
     };
     control.addEventListener("wheel", handleWheel, { passive: false });
     return () => control.removeEventListener("wheel", handleWheel);

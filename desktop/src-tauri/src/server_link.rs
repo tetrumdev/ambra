@@ -336,6 +336,16 @@ fn answer(response: reqwest::blocking::Response) -> Result<Value, String> {
     }
 }
 
+fn pairing_addresses(address: &str) -> Result<Vec<SocketAddr>, String> {
+    use std::net::ToSocketAddrs;
+    let addresses: Vec<_> = address.to_socket_addrs().map_err(|e| e.to_string())?
+        .filter(|a| ambra_net::lan::is_direct(a.ip())).collect();
+    if addresses.is_empty() {
+        return Err("Manual pairing requires a LAN or Tailscale address; use the server pairing link across networks".into());
+    }
+    Ok(addresses)
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PairingStarted {
@@ -352,10 +362,8 @@ async fn pairing_target(address: &str) -> Result<ambra_net::pairing::PairingPayl
         let address = normalize_address(address)?;
         // Manual bootstrap exchanges public hints only; approval verifies the pinned key.
         tauri::async_runtime::spawn_blocking(move || {
-            use std::net::ToSocketAddrs;
-            let addresses: Vec<_> = address.to_socket_addrs().map_err(|e| e.to_string())?
-                .filter(|a| ambra_net::lan::is_local(a.ip())).collect();
-            let endpoint = addresses.first().ok_or("Manual pairing requires a native LAN address; use the server pairing link across networks")?;
+            let addresses = pairing_addresses(&address)?;
+            let endpoint = &addresses[0];
             let info = http()?.get(format!("http://{endpoint}/api/server/info")).send().map_err(|e| e.to_string()).and_then(answer)?;
             let public_key = serde_json::from_value(info["publicKey"].clone()).map_err(|_| "Server needs an update before encrypted pairing")?;
             let port = info["securePort"].as_u64().and_then(|p| u16::try_from(p).ok()).ok_or("Secure listener unavailable")?;
@@ -623,10 +631,18 @@ mod pairing_handoff_tests {
     }
 
     #[tokio::test]
-    async fn manual_pairing_rejects_tailscale_before_bootstrap_http() {
-        for address in ["100.106.252.60", "[fd7a:115c:a1e0::f537:fc3d]:38147"] {
+    async fn manual_pairing_rejects_public_addresses_before_bootstrap_http() {
+        for address in ["8.8.8.8", "[2606:4700:4700::1111]:38147"] {
             let error = pairing_target(address).await.unwrap_err();
-            assert!(error.contains("native LAN address"), "{error}");
+            assert!(error.contains("LAN or Tailscale address"), "{error}");
+        }
+    }
+
+    #[test]
+    fn manual_pairing_accepts_tailscale_addresses() {
+        for address in ["100.106.252.60", "[fd7a:115c:a1e0::f537:fc3d]:38147"] {
+            let address = normalize_address(address).unwrap();
+            assert_eq!(pairing_addresses(&address).unwrap(), vec![address.parse::<SocketAddr>().unwrap()]);
         }
     }
 }

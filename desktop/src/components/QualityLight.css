@@ -1,0 +1,128 @@
+.qualityLight {
+    --tier-bitPerfect: #b37cff;
+    --tier-hiRes: #4fa8ff;
+    --tier-lossless: #4cd18a;
+    --tier-lossy: #f2b544;
+    --tier-unknown: #8a8a8a;
+    display: grid;
+    place-items: center;
+}
+
+.qualityLightButton {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    appearance: none;
+    -webkit-appearance: none;
+    cursor: default;
+    outline: none;
+}
+
+.qualityLightButton:focus-visible {
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+/* Hovering brightens the light itself instead of drawing a backdrop. */
+.qualityLightButton:hover .qualityLightDot,
+.qualityLightButton[aria-expanded="true"] .qualityLightDot {
+    opacity: 1;
+    filter: brightness(1.25);
+    box-shadow: 0 0 10px 2px color-mix(in srgb, var(--tint) 45%, transparent);
+}
+
+.qualityLightDot {
+    --tier: var(--tier-unknown);
+    /* A slightly tinted light rather than a colored disc: a soft white core that
+       fades into its tint, with no hard edge. */
+    --tint: color-mix(in srgb, var(--tier) 45%, white);
+    width: 9px;
+    height: 9px;
+    border-radius: 999px;
+    background: radial-gradient(circle,
+        color-mix(in srgb, var(--tint) 70%, white) 0%,
+        var(--tint) 45%,
+        color-mix(in srgb, var(--tint) 0%, transparent) 100%);
+    box-shadow: 0 0 8px 1px color-mix(in srgb, var(--tint) 30%, transparent);
+    opacity: 0.9;
+    transition: box-shadow 0.2s, opacity 0.2s, filter 0.2s;
+}
+
+[data-tier="bitPerfect"] .qualityLightDot { --tier: var(--tier-bitPerfect); }
+[data-tier="hiRes"] .qualityLightDot { --tier: var(--tier-hiRes); }
+[data-tier="lossless"] .qualityLightDot { --tier: var(--tier-lossless); }
+[data-tier="lossy"] .qualityLightDot { --tier: var(--tier-lossy); }
+
+/* The panel is portalled out of .qualityLight, so it carries the tier colors itself. */
+.qualityPanel {
+    --tier-bitPerfect: #b37cff;
+    --tier-hiRes: #4fa8ff;
+    --tier-lossless: #4cd18a;
+    --tier-lossy: #f2b544;
+    --tier-unknown: #8a8a8a;
+    width: max-content;
+    min-width: 260px;
+    max-width: min(420px, calc(100vw - 8px));
+    gap: 8px;
+    text-align: left;
+    padding: 12px;
+    font-family: "Stack Sans Text", sans-serif;
+    outline: none;
+}
+
+.qualityPanelHeader {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 2px 8px;
+    border-bottom: 1px solid #2f2f2f;
+}
+
+.qualityPanelTitle {
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+
+.qualityPanelSubtitle {
+    margin-left: auto;
+    color: #a3a2a3;
+    font-size: 0.7rem;
+}
+
+.qualityPanelRows {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 0;
+    padding: 0 2px;
+}
+
+.qualityPanelRow {
+    display: grid;
+    grid-template-columns: 110px max-content;
+    gap: 16px;
+    font-size: 0.75rem;
+    line-height: 1.4;
+}
+
+.qualityPanelRow dt {
+    color: #a3a2a3;
+}
+
+.qualityPanelRow dd {
+    margin: 0;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+
+.qualityPanelNote {
+    margin: 0;
+    padding: 0 2px;
+    color: #a3a2a3;
+    font-size: 0.7rem;
+    line-height: 1.4;
+}

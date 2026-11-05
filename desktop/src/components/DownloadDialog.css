@@ -5,8 +5,7 @@
     min-width: 0;
 }
 
-.downloadDialogContent p,
-.downloadProgress small {
+.downloadDialogContent p {
     margin: 0;
     color: #bdbdbd;
     font-size: 14px;
@@ -26,30 +25,91 @@
     color: #bdbdbd;
 }
 
-.downloadQuality select {
-    height: 40px;
-    padding: 0 12px;
+.downloadQualityTrigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 40px;
+    padding: 10px 16px;
     font: inherit;
     font-size: 14px;
     color: white;
     background: rgba(22, 22, 22, 0.6);
     border: 1px solid #535353;
     border-radius: 100px;
-    outline: none;
+    text-align: left;
 }
 
-.downloadQuality select:focus-visible {
+.downloadQualityTrigger:hover:not(:disabled),
+.downloadQualityTrigger:focus-visible {
     border-color: rgb(140, 140, 140);
 }
 
-.downloadTargets {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+.downloadQualityTrigger .dropdownChevron {
+    transform: rotate(0);
 }
 
-.downloadTargets .menuItem {
+.downloadQualityTrigger[aria-expanded="true"] .dropdownChevron {
+    transform: rotate(180deg);
+}
+
+.downloadQualityMenu {
+    inset: auto;
+    margin: 0;
+    padding: 6px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    transform-origin: center top;
+}
+
+.downloadQualityMenu:not(:popover-open) {
+    display: none;
+}
+
+.downloadQualityMenu .audioDeviceOption {
     width: 100%;
+    height: auto;
+    min-height: 36px;
+    padding-block: 8px;
+}
+
+.downloadTargets {
+    align-self: stretch;
+    margin-top: 4px;
+}
+
+.downloadTargets button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    height: auto;
+    min-height: 40px;
+    padding: 10px 16px;
+    font-size: 14px;
+}
+
+.downloadTargets img {
+    width: 16px;
+    height: 16px;
+    filter: invert(1);
+}
+
+.downloadTargets .downloadClientTarget {
+    color: white;
+    background: transparent;
+    border-color: #535353;
+}
+
+.downloadTargets .downloadClientTarget:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.07);
+    border-color: #8a8a8a;
+}
+
+.downloadClientTarget img {
+    filter: none;
 }
 
 .downloadClients {
@@ -77,7 +137,7 @@
     font-size: 14px;
 }
 
-.downloadClients input {
+.downloadClients input[type="checkbox"] {
     width: 16px;
     height: 16px;
     margin: 0;
@@ -87,24 +147,4 @@
 .downloadStart {
     align-self: flex-end;
     width: 120px;
-}
-
-.downloadProgress {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-    font-size: 14px;
-}
-
-.downloadProgress li {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 2px 12px;
-}
-
-.downloadProgress small {
-    grid-column: 1 / -1;
 }

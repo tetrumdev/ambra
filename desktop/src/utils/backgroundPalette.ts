@@ -130,6 +130,13 @@ const KEEP_SPACING = 0.5;
 const BLEND_STEPS = 8;
 /** Borders darker than this (Oklab lightness) need a lightness step, not only a perceptual one. */
 const DARK_BORDER = 0.3;
+/** The furthest (Oklab lightness) a colorful swirl color may move. Further, it stops reading as
+ * the cover's color: a red and yellow cover with red and yellow edges became a brown and olive
+ * swirl. Colorful colors only darken: lifting them washes red into coral and orange and makes the
+ * field glare. Past the budget the color moves only that far and keeps its identity. Near-neutral
+ * colors (Oklab chroma below CHROMATIC) still move freely; a lighter gray is still gray. */
+const MAX_CHROMATIC_SHIFT = 0.14;
+const CHROMATIC = 0.04;
 
 /** Sample the mixture grid with earlier colors, including three- and four-color blends. */
 function blendSamples(previous: Rgb[]) {
@@ -210,7 +217,10 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
   let lower: { from: number; to: number } | null = null;
   for (const index of parsed.map((_, index) => index).sort((a, b) => original[a][0] - original[b][0])) {
     const [lightness, a, b] = original[index];
-    const floor = lower ? lower.to + KEEP_SPACING * (lightness - lower.from) : 0;
+    const chromatic = Math.hypot(a, b) >= CHROMATIC;
+    const budget = chromatic ? MAX_CHROMATIC_SHIFT : 1;
+    const floor = Math.min(chromatic ? lightness : lightness + budget,
+      lower ? lower.to + KEEP_SPACING * (lightness - lower.from) : 0);
     const blends = blendSamples(previous);
     // Same hue and saturation at another lightness.
     const at = (target: number) => {
@@ -224,18 +234,21 @@ export function separatePaletteFromCover(colors: string[], edges: CoverEdgeSampl
       let best = { lightness, clearance: -Infinity };
       chosen = NaN;
       // Preserve spacing when possible; clearance takes priority when a blend would cross the border.
-      for (const minimum of [floor, lower?.to ?? 0]) {
+      for (const minimum of [floor, Math.min(floor, lower?.to ?? 0)]) {
         if (!Number.isNaN(chosen)) break;
-        for (let step = 0; step * LIGHTNESS_STEP <= 1 && Number.isNaN(chosen); step++) {
+        for (let step = 0; step * LIGHTNESS_STEP <= budget + 1e-9 && Number.isNaN(chosen); step++) {
           for (const candidate of [lightness + step * LIGHTNESS_STEP, lightness - step * LIGHTNESS_STEP]) {
-            if (candidate < minimum || candidate < 0 || candidate > 1) continue;
+            if (candidate < minimum || candidate < 0 || candidate > 1 || (chromatic && candidate > lightness)) continue;
             const margin = clearance(at(candidate), blends);
             if (margin >= 0) { chosen = candidate; break; }
             if (margin > best.clearance) best = { lightness: candidate, clearance: margin };
           }
         }
       }
-      if (Number.isNaN(chosen)) chosen = best.lightness;
+      // No lightness within reach clears every edge. A colorful color still takes the most
+      // distinct shade within its small budget. A gray stays put: when the border runs from
+      // black to white, moving it would only collapse the whole palette into black.
+      if (Number.isNaN(chosen)) chosen = chromatic ? best.lightness : Math.max(lightness, Math.min(floor, 1));
       result[index] = toHex(at(chosen) as Rgb);
     }
     // A color kept below a dark border blends across it on its way to any lighter color; that

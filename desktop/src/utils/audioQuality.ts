@@ -1,4 +1,5 @@
 import type { AudioQuality, Track } from "../types/music";
+import { musicProviderName } from "./musicProviderName";
 
 function positive(value: number | null | undefined) {
   return value != null && Number.isFinite(value) && value > 0 ? value : null;
@@ -39,13 +40,15 @@ function qualityFields(track: Track, decoded?: AudioQuality | null) {
 export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) {
   if (decoded?.captureFormat) {
     const capture = decoded.captureFormat;
+    const bitDepth = positive(Number(capture.sampleFormat.match(/\d+/)?.[0]));
     return {
       name: decoded.requestedQuality === "lossless" ? "Lossless requested" : "Soloist capture",
-      details: `${capture.sampleFormat.toUpperCase()} PCM · ${capture.sampleRate / 1000} kHz · ${capture.channels === 2 ? "Stereo" : `${capture.channels} channels`}`,
+      details: ["PCM", bitDepth ? `${bitDepth}-bit` : null, `${capture.sampleRate / 1000} kHz`,
+        capture.channels === 1 ? "Mono" : capture.channels === 2 ? "Stereo" : `${capture.channels} channels`].filter(Boolean).join(" · "),
       description: `Requested Spotify quality: ${decoded.requestedQuality ?? "unknown"}. Original Spotify codec and bit depth are unverified. These details describe captured PCM before Ambra output conversion and DSP.`,
     };
   }
-  const { codec, lossless, bitDepth, sampleRate, channels, bitrate, estimated } = qualityFields(track, decoded);
+  const { codec, lossless, bitDepth, sampleRate, channels } = qualityFields(track, decoded);
   const hiRes = lossless && ((bitDepth ?? 0) > 16 || (sampleRate ?? 0) > 48);
   const name = lossless
     ? hiRes ? "Hi-Res Lossless" : bitDepth === 16 && sampleRate === 44.1 ? "CD Quality" : "Lossless"
@@ -55,18 +58,63 @@ export function formatAudioQuality(track: Track, decoded?: AudioQuality | null) 
     bitDepth ? `${bitDepth}-bit` : null,
     sampleRate ? `${Number(sampleRate.toFixed(3))} kHz` : null,
     channels ? channels === 1 ? "Mono" : channels === 2 ? "Stereo" : `${channels} channels` : null,
-    bitrate ? `${estimated ? "≈" : ""}${Math.round(bitrate).toLocaleString("en-US")} kbps` : "Bitrate unavailable",
   ].filter((value): value is string => value != null);
   return {
     name,
     details: specs.join(" · "),
     description: [
       decoded ? "Source audio before output conversion." : "Reported source quality; decoded details are not available yet.",
-      estimated ? "Average encoded bitrate estimated from file size and duration, including container metadata." : null,
       decoded?.normalizationGainDb != null && Number.isFinite(decoded.normalizationGainDb)
         ? `Volume normalized by ${decoded.normalizationGainDb > 0 ? "+" : "−"}${Math.abs(decoded.normalizationGainDb).toFixed(1)} dB.`
         : null,
     ].filter(Boolean).join(" "),
+  };
+}
+
+export type QualityTier = "bitPerfect" | "hiRes" | "lossless" | "lossy" | "unknown";
+
+const tierLabels: Record<QualityTier, string> = {
+  bitPerfect: "Bit-perfect",
+  hiRes: "Hi-Res Lossless",
+  lossless: "Lossless",
+  lossy: "Lossy",
+  unknown: "Quality unavailable",
+};
+
+/** Everything the quality light and its popup show: one tier for the color, then the signal path. */
+export function signalPathQuality(track: Track, decoded?: AudioQuality | null) {
+  const quality = formatAudioQuality(track, decoded);
+  const { lossless, bitrate, estimated } = qualityFields(track, decoded);
+  const capture = decoded?.captureFormat != null;
+  const tier: QualityTier = capture ? "lossy"
+    : quality.name === "Quality unavailable" ? "unknown"
+    : !lossless ? "lossy"
+    : decoded?.bitPerfect ? "bitPerfect"
+    : quality.name === "Hi-Res Lossless" ? "hiRes" : "lossless";
+  const gain = decoded?.normalizationGainDb;
+  const rows: { label: string; value: string }[] = [
+    { label: "Service", value: musicProviderName(track.provider) },
+    { label: "Format", value: quality.details || "Unknown" },
+  ];
+  if (bitrate != null) rows.push({ label: "Bitrate", value: `${estimated ? "~" : ""}${Math.round(bitrate).toLocaleString()} kbps` });
+  if (decoded) {
+    rows.push({
+      label: "Volume leveling",
+      value: gain == null || !Number.isFinite(gain) ? "Off"
+        : Math.abs(gain) < 0.05 ? "0.0 dB" : `${gain > 0 ? "+" : "−"}${Math.abs(gain).toFixed(1)} dB, transparent`,
+    });
+    rows.push({
+      label: "Output",
+      value: decoded.bitPerfect ? "Bit-perfect" : capture ? "Captured PCM, processed in 64-bit" : "Processed in 64-bit, dithered",
+    });
+  }
+  return {
+    tier,
+    label: tier === "lossless" ? quality.name : tierLabels[tier],
+    /** The source's own class, which stays visible when the output is bit-perfect. */
+    name: quality.name,
+    rows,
+    note: capture ? quality.description : decoded ? null : "Reported quality; decoded details are not available yet.",
   };
 }
 

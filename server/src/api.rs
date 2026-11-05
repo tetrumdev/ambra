@@ -82,6 +82,7 @@ struct AppState {
     pending_qobuz_login: Arc<Mutex<Option<PendingLogin<QobuzLogin>>>>,
     pending_spotify_login: Arc<Mutex<Option<PendingLogin<SpotifyLogin>>>>,
     http_client: reqwest::Client,
+    download_http_client: reqwest::Client,
     library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
     search_cache: Arc<RwLock<HashMap<SearchCacheKey, CachedSearchPage>>>,
     catalog_cache:
@@ -172,6 +173,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
             crate::storage::cache_subdirectory("artwork"),
         )),
         http_client,
+        download_http_client: downloads::http_client()?,
         library_entries: Arc::new(RwLock::new(initial_library_entries())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
         catalog_cache: Arc::new(RwLock::new(HashMap::new())),

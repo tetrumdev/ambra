@@ -318,6 +318,7 @@ pub(in crate::api) fn state(directory: &std::path::Path) -> AppState {
         pending_qobuz_login: Arc::new(Mutex::new(None)),
         pending_spotify_login: Arc::new(Mutex::new(None)),
         http_client: client.clone(),
+        download_http_client: downloads::http_client().unwrap(),
         library_entries: Arc::new(RwLock::new(Vec::new())),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
         catalog_cache: Arc::new(RwLock::new(HashMap::new())),

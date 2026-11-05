@@ -59,6 +59,7 @@ impl LivePcm {
             capture_format: Some(self.info.format.clone()),
             requested_quality: Some(self.info.requested_quality.clone()),
             source_format_verified: Some(false),
+            bit_perfect: false,
         }
     }
     pub fn decode_next(&mut self) -> Result<Option<&[f64]>, String> {
