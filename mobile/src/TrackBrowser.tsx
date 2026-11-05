@@ -1,50 +1,22 @@
-import { Image } from "expo-image";
 import { LinearGradient } from "expo-linear-gradient";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, FlatList, Platform, RefreshControl, StyleSheet, Text, View } from "react-native";
-import Animated, { FadeInDown, FadeOut } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FlatList, StyleSheet, Text, View } from "react-native";
 import { Artwork } from "./Artwork";
-import { changeQueue, command, currentTrack, megaPlaylist, serverAddress, subscribe, thumbnailArtwork, type PlaylistContents, type QueueItem, type SessionView, type Track } from "./client";
+import { changeQueue, command, currentTrack, type PlaylistContents, type SessionView, type Track } from "./client";
 import { Icon } from "./Icons";
-import { Menu, type MenuAction } from "./Menu";
-import { editUpcoming, enqueueEntries, playEntries, playlistEntries, shuffledEntries } from "./queueModel";
+import { Menu } from "./Menu";
+import { editUpcoming } from "./queueModel";
 import { Sheet } from "./Sheet";
 import { colors, fonts, haptic } from "./theme";
 import { Touchable } from "./Touchable";
-import { serviceAllowed, servicePreferences, subscribeServicePreferences } from "./servicePreferences";
+import { ROW_HEIGHT, ReorderRow, moved, useReorder } from "./reorder";
 
-const placeholder = require("../assets/ambra.png");
 const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 const message = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback;
-const playFrom = (entries: QueueItem[], tracks: Track[], index: number) => changeQueue(queue => playEntries(queue, entries.slice(index), tracks), true);
-
-type Toast = { id: number; text: string; error: boolean };
-/** Brief word that something off-screen happened, like a song joining the queue. */
-function useToast() {
-  const [toast, setToast] = useState<Toast | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const show = useCallback((text: string, error = false) => {
-    clearTimeout(timer.current);
-    setToast({ id: Date.now(), text, error });
-    timer.current = setTimeout(() => setToast(null), 2200);
-  }, []);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return [toast, show] as const;
-}
-
-function ToastView({ toast, bottom }: { toast: Toast | null; bottom: number }) {
-  if (!toast) return null;
-  return (
-    <Animated.View key={toast.id} entering={FadeInDown.duration(220)} exiting={FadeOut.duration(160)} pointerEvents="none" style={[styles.toast, { bottom }]}>
-      <Text accessibilityRole="alert" accessibilityLiveRegion="polite" style={[styles.toastText, toast.error && { color: colors.error }]}>{toast.text}</Text>
-    </Animated.View>
-  );
-}
 
 type Bound = "first" | "middle" | "last";
 /** Where each song sits in the songs bound with it; a package with one playable song isn't shown. */
-function boundRows(contents: PlaylistContents | null) {
+export function boundRows(contents: Pick<PlaylistContents, "playlist" | "tracks"> | null) {
   const rows = new Map<string, Bound>();
   const playable = new Set(contents?.tracks.map(track => track.globalId));
   for (const pack of contents?.playlist.packages ?? []) {
@@ -55,15 +27,22 @@ function boundRows(contents: PlaylistContents | null) {
   return rows;
 }
 
-export const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, onPress, onMore }: {
+export const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, downloaded, holdDrags = false, onPress, onMore, onHold }: {
   track: Track;
   index: number;
   active: boolean;
   playing: boolean;
   /** Bound songs read as one block, in desktop's amber (.libraryItem[data-package]). */
   bound?: Bound;
+  /** Saved on this phone, shown with desktop's download glyph. */
+  downloaded?: boolean;
   onPress: (index: number) => void;
+  /** The ⋯ button: desktop's edit menu. */
   onMore?: (index: number) => void;
+  /** Holding the row: desktop's playback menu; the edit menu when there's none. */
+  onHold?: (index: number) => void;
+  /** The hold belongs to a drag gesture around the row (`ReorderRow`), which opens the menu itself. */
+  holdDrags?: boolean;
 }) {
   return (
     <Touchable
@@ -76,7 +55,7 @@ export const TrackRow = memo(function TrackRow({ track, index, active, playing, 
       haptic="select"
       unstable_pressDelay={40}
       onPress={() => onPress(index)}
-      onLongPress={onMore && (() => onMore(index))}
+      onLongPress={!holdDrags && (onHold ?? onMore) ? () => (onHold ?? onMore)!(index) : undefined}
       style={[styles.trackRow, bound && styles[bound]]}
     >
       {bound && <LinearGradient pointerEvents="none" colors={["rgba(53, 32, 0, 0.5)", "transparent"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />}
@@ -85,142 +64,12 @@ export const TrackRow = memo(function TrackRow({ track, index, active, playing, 
         <Text numberOfLines={1} style={[styles.trackName, active && styles.activeName]}>{track.name}</Text>
         <Text numberOfLines={1} style={styles.trackArtist}>{track.artist}</Text>
       </View>
+      {downloaded && <Icon name="download" size={11} color={colors.muted} />}
       {active ? <Icon name={playing ? "pause" : "play"} size={12} /> : <Text style={styles.duration}>{clock(track.durationSeconds)}</Text>}
       {onMore ? <Touchable accessibilityRole="button" accessibilityLabel={`Options for ${track.name}`} haptic="select" hitSlop={6} onPress={() => onMore(index)} style={styles.more}>
         <Icon name="more" rotation={90} size={16} color={colors.muted} />
       </Touchable> : <View style={styles.moreSpacer} />}
     </Touchable>
-  );
-});
-
-/** MEGA, as desktop's playlist page: tap a song to play from it, hold it for its options. */
-export const PlaylistBrowser = memo(function PlaylistBrowser({ view, bottomInset, onMenuVisibilityChange }: { view: SessionView | null; bottomInset: number; onMenuVisibilityChange?: (visible: boolean) => void }) {
-  const insets = useSafeAreaInsets();
-  const enabled = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
-  const [contents, setContents] = useState<PlaylistContents | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [menu, setMenu] = useState<number | null>(null);
-  const [reload, setReload] = useState(0);
-  const [toast, showToast] = useToast();
-  const address = useSyncExternalStore(subscribe, serverAddress);
-
-  // Loaded once (and again on another network, since its artwork points at the server's address), not each time the player closes: parsing the saved library is the heaviest work the app does.
-  useEffect(() => {
-    const abort = new AbortController();
-    void megaPlaylist(abort.signal).then(value => {
-      if (abort.signal.aborted) return;
-      setContents(value);
-      setLoadError(null);
-    }).catch(reason => {
-      if (!abort.signal.aborted) setLoadError(message(reason, "Couldn't load MEGA."));
-    }).finally(() => {
-      if (abort.signal.aborted) return;
-      setLoading(false);
-      setRefreshing(false);
-    });
-    return () => abort.abort();
-  }, [reload, address]);
-
-  const tracks = useMemo(() => contents?.tracks.filter(track => serviceAllowed(track.provider, enabled)) ?? [], [contents, enabled]);
-  const entries = useMemo(() => contents ? playlistEntries(contents.playlist, tracks) : [], [contents, tracks]);
-  const bound = useMemo(() => boundRows(contents ? { ...contents, tracks } : null), [contents, tracks]);
-  const now = currentTrack(view);
-  const playing = !!view?.playing;
-
-  // Rows keep stable handlers, so a session update only redraws the rows whose state changed.
-  const latest = useRef({ view, entries, tracks });
-  useLayoutEffect(() => { latest.current = { view, entries, tracks }; });
-  const run = useCallback((work: () => Promise<void>, done?: string) => {
-    if (!latest.current.view?.output) {
-      haptic.warning();
-      showToast("Choose an output in the player first");
-      return;
-    }
-    void work().then(() => {
-      if (!done) return;
-      haptic.success();
-      showToast(done);
-    }).catch(reason => {
-      haptic.error();
-      showToast(message(reason, "Couldn't update playback. Please try again."), true);
-    });
-  }, [showToast]);
-  const onPress = useCallback((index: number) => {
-    const { view, entries, tracks } = latest.current;
-    run(() => currentTrack(view)?.globalId === tracks[index]?.globalId ? command(view?.playing ? "pause" : "play") : playFrom(entries, tracks, index));
-  }, [run]);
-  const onMore = useCallback((index: number) => setMenu(index), []);
-  const closeMenu = useCallback(() => setMenu(null), []);
-
-  // Like desktop, adding to an empty queue starts it.
-  const enqueue = (index: number, next: boolean) =>
-    run(() => changeQueue(queue => enqueueEntries(queue, [entries[index]], [tracks[index]], next), !view?.queue.current), next ? "Playing next" : "Added to queue");
-  const menuActions = (index: number): MenuAction[] => [
-    { label: "Standalone Play", icon: "play", run: () => run(() => changeQueue(queue => playEntries(queue, [entries[index]], [tracks[index]]), true)) },
-    { label: "Play from Here", icon: "skip", run: () => run(() => playFrom(entries, tracks, index)) },
-    { label: "Play Next", icon: "playNext", run: () => enqueue(index, true) },
-    { label: "Add to Queue", icon: "addToQueue", run: () => enqueue(index, false) },
-  ];
-
-  const totalMinutes = Math.round(tracks.reduce((sum, track) => sum + track.durationSeconds, 0) / 60);
-  const empty = !tracks.length;
-  const header = (
-    <View style={{ paddingTop: insets.top + 24 }}>
-      <View style={styles.hero}>
-        <View style={styles.mosaic}>
-          {Array.from({ length: 4 }, (_, index) => <Image key={index} source={thumbnailArtwork(tracks[index]) || placeholder} contentFit={tracks[index]?.cover ? "cover" : "contain"} enforceEarlyResizing cachePolicy="disk" transition={0} style={styles.tile} />)}
-        </View>
-        <View style={styles.heroText}>
-          <Text style={styles.title} numberOfLines={2} adjustsFontSizeToFit minimumFontScale={0.6}>{contents?.playlist.name ?? "MEGA"}</Text>
-          {contents && <Text style={styles.summary}>{tracks.length} {tracks.length === 1 ? "track" : "tracks"}{totalMinutes > 0 ? `  •  ${totalMinutes >= 60 ? `${Math.floor(totalMinutes / 60)} hr ` : ""}${totalMinutes % 60} min` : ""}</Text>}
-        </View>
-      </View>
-      <View style={styles.playActions}>
-        <Touchable accessibilityRole="button" accessibilityLabel={`Play ${contents?.playlist.name ?? "MEGA"}`} disabled={empty} haptic="firm" hapticOnPressIn onPress={() => run(() => playFrom(entries, tracks, 0))} style={styles.playButton}>
-          <Icon name="play" size={14} color="black" />
-          <Text style={styles.playLabel}>PLAY</Text>
-        </Touchable>
-        <Touchable accessibilityRole="button" accessibilityLabel={`Shuffle ${contents?.playlist.name ?? "MEGA"}`} disabled={empty} haptic="firm" hapticOnPressIn onPress={() => {
-          // Shuffled once, so a conflict retry keeps the same order.
-          const shuffled = shuffledEntries(entries);
-          run(() => changeQueue(queue => playEntries(queue, shuffled, tracks), true));
-        }} style={styles.shuffleButton}>
-          <Icon name="shuffle" size={18} />
-          <Text style={styles.shuffleLabel}>SHUFFLE</Text>
-        </Touchable>
-      </View>
-      {!!contents?.unavailableCount && <Text style={styles.notice}>{contents.unavailableCount} {contents.unavailableCount === 1 ? "song is" : "songs are"} unavailable.</Text>}
-      {loadError && <View style={styles.errorBox}>
-        <Text accessibilityRole="alert" style={[styles.notice, styles.errorText]}>{loadError}</Text>
-        <Touchable accessibilityRole="button" onPress={() => { setLoading(true); setReload(value => value + 1); }} style={styles.retry}><Text style={styles.retryLabel}>Retry</Text></Touchable>
-      </View>}
-      {loading && !contents && <ActivityIndicator color={colors.muted} style={styles.loading} />}
-    </View>
-  );
-
-  return (
-    <View style={styles.browser}>
-      <FlatList
-        data={tracks}
-        keyExtractor={(track, index) => `${track.globalId}:${index}`}
-        contentContainerStyle={[styles.listContent, { paddingBottom: bottomInset + 16 }]}
-        scrollIndicatorInsets={{ bottom: bottomInset }}
-        extraData={`${now?.globalId}:${playing}`}
-        initialNumToRender={12}
-        maxToRenderPerBatch={8}
-        windowSize={5}
-        removeClippedSubviews={Platform.OS === "android"}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { haptic.tap(); setRefreshing(true); setReload(value => value + 1); }} tintColor="white" colors={["black"]} progressBackgroundColor="white" progressViewOffset={insets.top} />}
-        ListHeaderComponent={header}
-        ListEmptyComponent={!loading && !loadError ? <Text style={styles.empty}>No songs in this playlist yet.</Text> : undefined}
-        renderItem={({ item, index }) => <TrackRow track={item} index={index} active={now?.globalId === item.globalId} playing={playing} bound={bound.get(item.globalId)} onPress={onPress} onMore={onMore} />}
-      />
-      <View pointerEvents="none" style={[styles.statusShade, { height: insets.top }]} />
-      <ToastView toast={toast} bottom={bottomInset + 8} />
-      {menu !== null && tracks[menu] && <Menu track={tracks[menu]} actions={menuActions(menu)} onClose={closeMenu} onVisibilityChange={onMenuVisibilityChange} />}
-    </View>
   );
 });
 
@@ -257,6 +106,23 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
     }));
   };
   const menuTrack = menu !== null ? byId.get(upcoming[menu]?.globalTrackId ?? "") : undefined;
+  // Hold an upcoming song, then drag it to its new place in the queue.
+  const list = useRef<FlatList<unknown>>(null);
+  const reorder = useReorder({
+    list,
+    count: upcoming.length,
+    onMove: (from, to) => {
+      const expected = latest.current?.queueRevision ?? 0;
+      perform(() => changeQueue((queue, revision) => {
+        if (revision !== expected) throw new Error("The queue changed on another device. Please try again.");
+        return { ...queue, upcoming: moved(queue.upcoming, from, to) };
+      }));
+    },
+    renderLifted: index => {
+      const track = byId.get(upcoming[index]?.globalTrackId ?? "");
+      return track ? <TrackRow track={track} index={index} active={false} playing={false} onPress={() => {}} /> : null;
+    },
+  });
 
   return <>
     <Sheet
@@ -271,9 +137,11 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
         {upcoming.length > 0 && <Touchable accessibilityRole="button" accessibilityLabel="Clear upcoming songs" haptic="warning" onPress={clear} style={styles.retry}><Text style={styles.clearLabel}>Clear</Text></Touchable>}
       </View>}
     >
-      {() => <>
+      {() => <View style={styles.queueList} {...reorder.containerProps}>
         {error && <Text accessibilityRole="alert" style={[styles.notice, styles.errorText]}>{error}</Text>}
         <FlatList
+          ref={list as never}
+          {...reorder.listProps}
           style={styles.queueList}
           data={upcoming}
           initialNumToRender={12}
@@ -281,22 +149,25 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
           windowSize={5}
           keyExtractor={(item, index) => `${item.globalTrackId}:${index}`}
           extraData={byId}
-          ListHeaderComponent={<View>
+          ListHeaderComponent={<View onLayout={event => reorder.onRowsLayout(event.nativeEvent.layout.height)}>
             <Text style={styles.sectionLabel}>Now Playing</Text>
             {now
               ? <TrackRow track={now} index={-1} active playing={playing} onPress={toggle} />
               : <Text style={styles.empty}>Nothing playing</Text>}
             <Text style={styles.sectionLabel}>Up Next{upcoming.length ? `  •  ${upcoming.length}` : ""}</Text>
           </View>}
-          ListEmptyComponent={<Text style={styles.empty}>Nothing up next. Hold a song in MEGA to add it.</Text>}
+          ListEmptyComponent={<Text style={styles.empty}>Nothing up next. Hold a song and choose Add to Queue.</Text>}
           renderItem={({ item, index }) => {
             const track = byId.get(item.globalTrackId);
-            return track
-              ? <TrackRow track={track} index={index} active={false} playing={false} onPress={onPress} onMore={onMore} />
-              : <Text style={styles.empty}>Unavailable song</Text>;
+            return <ReorderRow index={index} reorder={reorder} enabled onHold={onMore}>
+              {track
+                ? <TrackRow track={track} index={index} active={false} playing={false} holdDrags onPress={onPress} onMore={onMore} />
+                : <Text style={[styles.empty, styles.unavailable]}>Unavailable song</Text>}
+            </ReorderRow>;
           }}
         />
-      </>}
+        {reorder.overlay}
+      </View>}
     </Sheet>
     {menu !== null && menuTrack && <Menu track={menuTrack} onClose={() => setMenu(null)} onVisibilityChange={onMenuVisibilityChange} actions={[
       { label: "Play from Here", icon: "skip", run: () => edit(menu, "play") },
@@ -346,6 +217,7 @@ const styles = StyleSheet.create({
   sheetSubtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: 12 },
   clearLabel: { color: colors.secondary, fontFamily: fonts.sans, fontWeight: "600", fontSize: 14 },
   queueList: { flex: 1 },
+  unavailable: { height: ROW_HEIGHT, paddingVertical: 0, lineHeight: ROW_HEIGHT },
   // .queueSectionTitle in desktop/src/components/Queue.css.
   sectionLabel: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 12, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingHorizontal: 8, paddingTop: 18, paddingBottom: 6 },
 });

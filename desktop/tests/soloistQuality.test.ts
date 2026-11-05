@@ -11,6 +11,6 @@ test("32-bit PCM capture never claims a verified Spotify lossless source", () =>
   });
   expect(quality.name).toBe("Lossless requested");
   expect(quality.name).not.toContain("Hi-Res");
-  expect(quality.details).toContain("S32LE PCM");
+  expect(quality.details).toBe("PCM · 32-bit · 44.1 kHz · Stereo");
   expect(quality.description).toContain("unverified");
 });

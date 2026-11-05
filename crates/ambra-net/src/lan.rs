@@ -57,6 +57,12 @@ pub fn is_local(ip: IpAddr) -> bool {
     }
 }
 
+/// An already routed LAN or Tailscale address can use the pinned TCP transport.
+/// Overlay addresses remain excluded from native discovery and public NAT traversal.
+pub fn is_direct(ip: IpAddr) -> bool {
+    is_local(ip) || is_overlay(ip)
+}
+
 pub fn broadcast_targets() -> Vec<SocketAddr> {
     let mut targets = vec![SocketAddr::from((Ipv4Addr::BROADCAST, DISCOVERY_PORT))];
     for interface in if_addrs::get_if_addrs().unwrap_or_default() {
@@ -242,13 +248,29 @@ pub fn local_addresses(port: u16) -> Vec<SocketAddr> {
         .collect()
 }
 
+/// Pairing links include installed overlay addresses as well as native LAN hints.
+pub fn direct_addresses(port: u16) -> Vec<SocketAddr> {
+    let mut overlays = Vec::new();
+    for interface in if_addrs::get_if_addrs().unwrap_or_default() {
+        let address = SocketAddr::new(interface.ip(), port);
+        if is_overlay(interface.ip()) && !overlays.contains(&address) {
+            overlays.push(address);
+        }
+    }
+    overlays.truncate(16);
+    let mut addresses = local_addresses(port);
+    addresses.truncate(16 - overlays.len());
+    addresses.extend(overlays);
+    addresses
+}
+
 pub async fn connect(
     address: SocketAddr,
     key: PublicKey,
     identity: &Identity,
 ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
-    if !is_local(address.ip()) {
-        return Err("LAN connections require a local address".into());
+    if !is_direct(address.ip()) {
+        return Err("Direct connections require a LAN or Tailscale address".into());
     }
     let raw = TcpStream::connect(address).await?;
     raw.set_nodelay(true)?;
@@ -271,7 +293,7 @@ pub async fn serve(
             accepted = listener.accept() => {
                 let (raw, address) = accepted?;
                 // A globally reachable TCP socket must not become a fourth remote method.
-                if !is_local(address.ip()) { continue; }
+                if !is_direct(address.ip()) { continue; }
                 let Ok(permit) = limit.clone().try_acquire_owned() else { continue; };
                 let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone();
                 tasks.spawn(async move {
@@ -291,6 +313,25 @@ pub async fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn direct_policy_allows_routed_overlays_without_treating_them_as_native_lan() {
+        for address in ["100.64.0.1", "100.127.255.254", "fd7a:115c:a1e0::1", "::ffff:100.88.191.47"] {
+            let ip = address.parse().unwrap();
+            assert!(is_direct(ip), "{address}");
+            assert!(!is_local(ip), "{address}");
+        }
+        for address in ["192.168.1.20", "127.0.0.1", "::1", "fd12::1"] {
+            assert!(is_direct(address.parse().unwrap()), "{address}");
+        }
+        for address in ["8.8.8.8", "100.63.255.255", "100.128.0.1", "2606:4700:4700::1111"] {
+            assert!(!is_direct(address.parse().unwrap()), "{address}");
+        }
+        let advertised = direct_addresses(38149);
+        assert!(advertised.len() <= 16);
+        assert!(advertised.iter().all(|a| is_direct(a.ip()) && a.port() == 38149));
+        assert!(local_addresses(38149).iter().all(|a| !is_overlay(a.ip())));
+    }
+
     #[tokio::test]
     async fn discovery_ignores_malformed_packets_and_retains_distinct_servers() {
         let server = UdpSocket::bind("127.0.0.1:0").await.unwrap();

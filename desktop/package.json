@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "tauri": "bun scripts/tauri.ts",
     "release": "../scripts/release.sh",
-    "test": "bun test --isolate tests/*.test.ts && bun test tests/discoverHome.test.tsx && bun test tests/localPlayback.test.tsx && bun test tests/nativePlaybackRecovery.test.tsx && bun test tests/clientStartup.test.tsx && bun test tests/artworkLoading.test.tsx && bun test tests/artworkQuality.test.tsx && bun test tests/lyricsPerformance.test.tsx && bun test tests/pageNavigation.test.tsx && bun test tests/backgroundLighting.test.tsx && bun test tests/serviceSignIn.test.tsx && bun test tests/trackPlaybackMenu.test.tsx"
+    "test": "bun test --isolate tests/*.test.ts && bun test tests/discoverHome.test.tsx && bun test tests/localPlayback.test.tsx && bun test tests/nativePlaybackRecovery.test.tsx && bun test tests/clientStartup.test.tsx && bun test tests/artworkLoading.test.tsx && bun test tests/artworkQuality.test.tsx && bun test tests/lyricsPerformance.test.tsx && bun test tests/pageNavigation.test.tsx && bun test tests/backgroundLighting.test.tsx && bun test tests/serviceSignIn.test.tsx && bun test tests/trackPlaybackMenu.test.tsx && bun test tests/downloadDialog.test.tsx && bun test tests/extraCtrls.test.tsx"
   },
   "dependencies": {
     "@gsap/react": "^2.1.2",
@@ -20,8 +20,7 @@
     "dashjs": "^5.2.1",
     "gsap": "^3.15.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "tauri": "^0.15.0"
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.12.1",

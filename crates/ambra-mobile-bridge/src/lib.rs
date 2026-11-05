@@ -1,4 +1,7 @@
 //! Small JSON ABI for Expo native modules. All sockets, discovery and connection policy stay in Rust.
+mod imports;
+mod login;
+mod offline;
 use ambra_net::{
     ConnectionManager, Identity, SelectedServer, bridge::Bridge, pairing::PairingPayload,
 };
@@ -92,6 +95,60 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
                 session.bridge.prefetch(path);
             }
             Ok(Value::Null)
+        }
+        // Downloads on this phone: they open and play without any server connection.
+        "offline_open" => Ok(json!({ "baseUrl": offline::open(directory).await?.base_url() })),
+        "offline_list" => Ok(offline::open(directory).await?.list()),
+        "offline_jobs" => Ok(offline::open(directory).await?.jobs()),
+        "offline_remove" => {
+            let ids = args["ids"]
+                .as_array()
+                .ok_or("Missing download IDs")?
+                .iter()
+                .filter_map(|id| id.as_str().map(str::to_owned))
+                .collect::<Vec<_>>();
+            offline::open(directory).await?.remove(&ids)?;
+            Ok(Value::Null)
+        }
+        "offline_download" => {
+            let quality = args["quality"]
+                .as_str()
+                .map_or(Some(ambra_vault::Quality::Max), ambra_vault::Quality::parse)
+                .ok_or("Unknown download quality")?;
+            let provider = args["provider"].as_str().ok_or("Missing provider")?.to_owned();
+            let track_id = args["providerTrackId"].as_str().ok_or("Missing track ID")?.to_owned();
+            let manager = SESSION
+                .lock()
+                .map_err(|_| "Native session lock failed")?
+                .as_ref()
+                .map(|session| session.manager.clone())
+                .ok_or("Connect to the server to download")?;
+            let offline = offline::open(directory).await?;
+            Ok(json!({ "id": offline.start(manager, provider, track_id, quality)? }))
+        }
+        // Service sign-in: the in-app browser's loopback redirect is taken here.
+        "login_listen" => {
+            login::listen(args["redirect"].as_str().ok_or("Missing sign-in redirect")?).await?;
+            Ok(Value::Null)
+        }
+        "login_result" => Ok(json!({ "url": login::result() })),
+        "login_stop" => {
+            login::stop();
+            Ok(Value::Null)
+        }
+        // A music file picked on this phone, into the server's permanent library.
+        "import_file" => {
+            let uri = args["uri"].as_str().ok_or("Missing file")?;
+            let path = uri.strip_prefix("file://").unwrap_or(uri);
+            let path = urlencoding::decode(path).map_err(|_| "Invalid file path")?.into_owned();
+            let name = args["name"].as_str().unwrap_or("Unknown Track").to_owned();
+            let manager = SESSION
+                .lock()
+                .map_err(|_| "Native session lock failed")?
+                .as_ref()
+                .map(|session| session.manager.clone())
+                .ok_or("Connect to the server to import music")?;
+            Ok(imports::import(&manager, std::path::Path::new(&path), &name).await?)
         }
         "discover" => Ok(serde_json::to_value(
             ambra_net::lan::discover(std::time::Duration::from_millis(750)).await?,

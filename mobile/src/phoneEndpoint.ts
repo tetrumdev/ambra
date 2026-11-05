@@ -4,6 +4,7 @@ import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
 import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, setLocalControl, setLocalPlayback, subscribe } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
+import { phoneUrlForSource } from "./downloads";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
 let info: PhoneEndpointInfo | null = null;
@@ -91,8 +92,9 @@ export function followPhoneOutput() {
     player = new PhonePlayback({
       create: source => createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
-      mediaUrl: phoneMediaUrl,
-      prefetch: prefetchMedia,
+      // A song downloaded to this phone plays from that copy, sparing the network.
+      mediaUrl: source => phoneUrlForSource(source) ?? phoneMediaUrl(source),
+      prefetch: source => { if (!phoneUrlForSource(source)) prefetchMedia(source); },
       metadata,
       ownsOutput,
       changed,
