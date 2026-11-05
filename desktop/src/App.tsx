@@ -520,12 +520,19 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     let disposed = false;
     let stopListening: (() => void) | undefined;
     const appWindow = getCurrentWindow();
+    let known: boolean | null = null;
     const syncFullscreen = async () => {
       try {
         const fullscreen = await appWindow.isFullscreen();
-        if (!disposed) {
-          setIsFullscreen(fullscreen);
+        if (disposed) return;
+        setIsFullscreen(fullscreen);
+        // However fullscreen changed (macOS's green button, its menu or shortcut, the window
+        // manager, or ours), the window's style change can take keyboard focus from the page,
+        // and every shortcut stops until it's clicked. Hand it back when the window has focus.
+        if (known !== null && known !== fullscreen && await appWindow.isFocused()) {
+          await getCurrentWebview().setFocus();
         }
+        known = fullscreen;
       } catch (error) {
         console.error("Could not read fullscreen state:", error);
         if (!disposed) setIsFullscreen(false);
@@ -537,10 +544,20 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       if (disposed) unlisten();
       else stopListening = unlisten;
     });
+    // macOS can give the window focus back only once the fullscreen Space finishes animating,
+    // without giving it to the page. The page is the window's only content, so it always takes it.
+    let stopFocus: (() => void) | undefined;
+    void appWindow.onFocusChanged(({ payload: focused }) => {
+      if (focused) void getCurrentWebview().setFocus().catch(() => {});
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopFocus = unlisten;
+    });
 
     return () => {
       disposed = true;
       stopListening?.();
+      stopFocus?.();
     };
   }, []);
 
@@ -877,6 +894,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       if (action === "standalone") { queue.playStandalone(entry); player.playTrack(track.globalId, track); return; }
       const start = !queue.currentEntry;
       if (action === "next") queue.playNext(entry);
+      else if (action === "nextAll") queue.playNextAll(context.entries);
       else for (const item of context.entries) queue.addToQueue(item);
       if (start) player.playTrack(track.globalId, track);
     } catch (error) { console.warn("Could not play catalog tracks:", error); }
@@ -885,6 +903,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const onEntityAction = useStableCallback((action: EntityAction, tracks: Track[], id?: string) => { void entityAction(action, tracks, id); });
   const libraryTrackIds = useMemo(() => new Set(library.tracks.map(track => track.globalId)), [library.tracks]);
   const addEntityTrack = useStableCallback((track: Track) => { if (track.provider !== "local") void library.addTrack(track.provider, track.providerTrackId); });
+  // One at a time, so the songs land in the library in album order.
+  const addEntityTracks = useStableCallback(async (tracks: Track[]) => {
+    for (const track of tracks) if (track.provider !== "local") await library.addTrack(track.provider, track.providerTrackId);
+  });
   // The now-playing title's library menu.
   const currentTrackId = player.currentTrack?.globalId;
   const currentInLibrary = useMemo(
@@ -1428,7 +1450,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           />
         ) : browseEntity ? <EntityView key={entityKey(browseEntity)} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
           onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
-          onAddTrack={addEntityTrack}
+          onAddTrack={addEntityTrack} onAddTracks={tracks => void addEntityTracks(tracks)}
           rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
           <SearchView
             onOpenEntity={openEntity}

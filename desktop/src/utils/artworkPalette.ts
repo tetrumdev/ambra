@@ -1,4 +1,4 @@
-import { separateCollapsedPalette, separatePaletteFromCover } from "./backgroundPalette";
+import { separateCollapsedPalette } from "./backgroundPalette";
 
 export type ArtworkPalette = {
   colors: string[];
@@ -50,11 +50,11 @@ export function parseArtworkPalette(value: unknown): ArtworkPalette | null {
   };
 }
 
-/** Every renderer uses the same cover contrast, regardless of view or screen size. */
+/**
+ * The swirl is drawn from the cover's own colors, unaltered, so it always matches the cover.
+ * Only a cover too uniform to swirl at all gets its shades spread apart. The cover stands out
+ * through the field's lower tone (swirlShader.ts) and its own shadow, never by recoloring.
+ */
 export function swirlPalette(palette: ArtworkPalette): ArtworkPalette {
-  return {
-    ...palette,
-    colors: separatePaletteFromCover(separateCollapsedPalette(palette.colors),
-      palette.edgeColors ? { colors: palette.edgeColors } : null),
-  };
+  return { ...palette, colors: separateCollapsedPalette(palette.colors) };
 }

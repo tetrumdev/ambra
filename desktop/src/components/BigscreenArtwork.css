@@ -40,6 +40,13 @@
     visibility: visible;
 }
 
+/* The swirl is drawn in the cover's own colors, so a soft shadow lifts the cover off it. */
+#albumCover:not([data-empty="true"]) {
+    box-shadow:
+        0 4px 16px rgba(0, 0, 0, 0.28),
+        0 18px 60px rgba(0, 0, 0, 0.42);
+}
+
 /* Opening and closing the player is instant. */
 .playerStage {
     position: fixed;
