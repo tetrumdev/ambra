@@ -123,8 +123,10 @@ export function AppScrollbar({ scrollElement, hidden = false }: AppScrollbarProp
         node && node !== scrollElement && node !== rail; node = node.parentElement) {
         if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) return;
       }
-      // Fine trackpad deltas already carry momentum; keep their native, direct response.
-      if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 40 && event.currentTarget !== rail) {
+      // Trackpad deltas already carry momentum; keep their native, direct response.
+      // Fast gestures can exceed mouse-wheel deltas. Taking over midway cancels
+      // the WebView's edge spring and clamps overscroll back to the boundary.
+      if (event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && event.currentTarget !== rail) {
         stopMotion();
         return;
       }

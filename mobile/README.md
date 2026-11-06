@@ -41,7 +41,7 @@ Playback requires rebuilding and installing Ambra with its native networking and
 
 For an installed iPhone app that runs without Expo Go or Metro, run `bunx eas-cli@latest build --platform ios --profile preview` from `mobile/`, then install the resulting internal-distribution build. EAS requires an Expo account and Apple signing credentials/device registration. `eas.json` also includes a production profile. Locking the screen or switching apps is supported; force-quitting the playback app terminates playback. Validate locked playback, headphone play/pause, next/previous, seeks, track completion, interruptions and output switching on a physical device.
 
-The project is linked to https://expo.dev/accounts/eggwithpants/projects/ambra. The first iOS preview build needs Apple signing setup for `com.quantium.ambra.remote`, plus registration of the test iPhone. A non-interactive build cannot create those initial credentials. Run the preview build command interactively for that first setup; subsequent builds can reuse the saved credentials. The mini-player has an opaque background of its own, independent of the dock's fade mask.
+The project is linked to https://expo.dev/accounts/eggwithpants/projects/ambra. The first iOS preview build needs Apple signing setup for `com.tetrum.ambra.remote`, plus registration of the test iPhone. A non-interactive build cannot create those initial credentials. Run the preview build command interactively for that first setup; subsequent builds can reuse the saved credentials. The mini-player has an opaque background of its own, independent of the dock's fade mask.
 
 ## Lyrics
 

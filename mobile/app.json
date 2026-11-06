@@ -9,7 +9,7 @@
     "userInterfaceStyle": "dark",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.quantium.ambra.remote",
+      "bundleIdentifier": "com.tetrum.ambra.remote",
       "buildNumber": "9",
       "infoPlist": {
         "UIBackgroundModes": [

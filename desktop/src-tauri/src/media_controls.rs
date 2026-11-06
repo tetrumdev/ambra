@@ -82,7 +82,7 @@ pub fn setup(app: &mut App) -> Result<(), Box<dyn std::error::Error>> {
     let hwnd = None;
 
     let config = PlatformConfig {
-        dbus_name: "com.quantium.ambra",
+        dbus_name: "com.tetrum.ambra",
         display_name: "AMBRA",
         hwnd,
     };
@@ -411,7 +411,7 @@ fn publish_macos_media_details(snapshot: &PublishedMediaState) {
         let default_rate: id = msg_send![class!(NSNumber), numberWithDouble: 1.0_f64];
         let elapsed: id = msg_send![class!(NSNumber), numberWithDouble: snapshot.position_seconds];
         let media_type: id = msg_send![class!(NSNumber), numberWithUnsignedInteger: 1_usize];
-        let service = NSString::alloc(nil).init_str("com.quantium.ambra");
+        let service = NSString::alloc(nil).init_str("com.tetrum.ambra");
         let _: () = msg_send![now_playing, setObject: rate_number
                                         forKey: MPNowPlayingInfoPropertyPlaybackRate];
         let _: () = msg_send![now_playing, setObject: default_rate
