@@ -20,7 +20,7 @@ if [ "${executable##*/}" = "AMBRA" ]; then
   /usr/bin/codesign \
     --force \
     --sign - \
-    --identifier com.quantium.ambra \
+    --identifier com.tetrum.ambra \
     "$bundle_path"
 
   exec "$bundle_executable" "$@"
