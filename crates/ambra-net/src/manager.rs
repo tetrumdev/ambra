@@ -17,10 +17,12 @@ pub enum ConnectionState {
     ConnectingLocal,
     ConnectingPwnat,
     ConnectingHyperDHT,
+    ConnectingPublic,
     Authenticating,
     ConnectedLocal,
     ConnectedPwnat,
     ConnectedHyperDHT,
+    ConnectedPublic,
     Reconnecting,
     Failed,
 }
@@ -29,9 +31,25 @@ pub enum Method {
     Lan,
     Pwnat,
     HyperDHT,
+    /// The server's router-forwarded TCP port, dialed directly over the Internet.
+    Public,
 }
-/// The complete policy: no fourth strategy can be selected.
-pub const METHODS: [Method; 3] = [Method::Lan, Method::HyperDHT, Method::Pwnat];
+/// The complete policy, in fallback order. Public and HyperDHT race each other.
+pub const METHODS: [Method; 4] = [Method::Lan, Method::Public, Method::HyperDHT, Method::Pwnat];
+impl Method {
+    fn connected(self) -> ConnectionState {
+        match self {
+            Method::Lan => ConnectionState::ConnectedLocal,
+            Method::Pwnat => ConnectionState::ConnectedPwnat,
+            Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
+            Method::Public => ConnectionState::ConnectedPublic,
+        }
+    }
+    /// Away from home: worth checking periodically whether the LAN is back.
+    fn away(self) -> bool {
+        matches!(self, Method::HyperDHT | Method::Public | Method::Pwnat)
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectedServer {
@@ -40,12 +58,17 @@ pub struct SelectedServer {
     pub local_addresses: Vec<SocketAddr>,
     #[serde(default)]
     pub public_endpoint: Option<SocketAddr>,
+    /// Router-forwarded public TCP endpoints of the encrypted listener.
+    #[serde(default)]
+    pub public_tcp: Vec<SocketAddr>,
 }
 #[derive(Clone, Debug)]
 pub struct Timing {
     pub lan: Duration,
     pub pwnat: Duration,
     pub hyperdht: Duration,
+    /// A whole public TCP race: every candidate's connect plus the Noise handshake.
+    pub public: Duration,
     pub retry: Duration,
     /// Prefer LAN for this long before starting public discovery.
     pub lan_grace: Duration,
@@ -57,6 +80,7 @@ impl Default for Timing {
             pwnat: Duration::from_secs(8),
             // Preserve the full signaling and restrictive-NAT retry window.
             hyperdht: Duration::from_secs(75),
+            public: Duration::from_secs(8),
             retry: Duration::from_secs(5),
             lan_grace: Duration::from_millis(250),
         }
@@ -71,12 +95,31 @@ pub struct Status {
     pub error: Option<String>,
 }
 
+const MAX_PUBLIC: usize = 8;
+const PUBLIC_STAGGER: Duration = Duration::from_millis(200);
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EndpointCache {
+    server: PublicKey,
+    public_tcp: Vec<SocketAddr>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionReply {
+    #[serde(default)]
+    public_endpoints: Vec<SocketAddr>,
+}
+
 pub struct ConnectionManager {
     pub selected: SelectedServer,
     identity: Identity,
     token: RwLock<Option<String>>,
     dht: hyperdht::Client,
     pwnat: pwnat::Client,
+    /// Public TCP candidates, best first: pairing hints, the cache, and what the server reports.
+    public_tcp: std::sync::Mutex<Vec<SocketAddr>>,
+    endpoint_cache: std::sync::Mutex<Option<std::path::PathBuf>>,
     active: RwLock<Option<Arc<HttpConnection>>>,
     /// An encrypted HyperDHT session held open, unauthenticated, while another method is
     /// active. Authorizing it takes one request, so losing the LAN never waits for discovery.
@@ -123,6 +166,8 @@ impl ConnectionManager {
         Arc::new_cyclic(|owner| Self {
             dht: hyperdht::Client::new(identity.clone()),
             pwnat: pwnat::Client::default(),
+            public_tcp: std::sync::Mutex::new(selected.public_tcp.clone()),
+            endpoint_cache: Default::default(),
             identity,
             selected,
             token: RwLock::new(token),
@@ -222,8 +267,117 @@ impl ConnectionManager {
                 state(ConnectionState::ConnectingHyperDHT, Some(method));
                 self.dht.connect(self.selected.public_key).await?
             }
+            Method::Public => {
+                state(ConnectionState::ConnectingPublic, Some(method));
+                let (address, connected) = self.connect_public().await?;
+                self.remember_public(address, None);
+                connected
+            }
         };
         HttpConnection::new(io, pump).await
+    }
+
+    /// Persist public endpoints across restarts, so a device that last saw the server at
+    /// home can reach it from elsewhere without any discovery. Call before connecting.
+    pub fn use_endpoint_cache(&self, path: std::path::PathBuf) {
+        if let Ok(bytes) = std::fs::read(&path) {
+            if let Ok(cache) = serde_json::from_slice::<EndpointCache>(&bytes) {
+                if cache.server == self.selected.public_key {
+                    let mut known = self.public_tcp.lock().unwrap_or_else(|p| p.into_inner());
+                    for address in cache.public_tcp.into_iter().rev() {
+                        known.retain(|a| *a != address);
+                        known.insert(0, address);
+                    }
+                    known.truncate(MAX_PUBLIC);
+                }
+            }
+        }
+        *self.endpoint_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(path);
+    }
+
+    /// Known public TCP endpoints, best first.
+    pub fn public_endpoints(&self) -> Vec<SocketAddr> {
+        self.public_tcp.lock().unwrap_or_else(|p| p.into_inner()).clone()
+    }
+
+    fn save_endpoints(&self, endpoints: &[SocketAddr]) {
+        let Some(path) = self.endpoint_cache.lock().unwrap_or_else(|p| p.into_inner()).clone() else { return };
+        let cache = EndpointCache { server: self.selected.public_key, public_tcp: endpoints.to_vec() };
+        let Ok(bytes) = serde_json::to_vec(&cache) else { return };
+        let temporary = path.with_extension("tmp");
+        if std::fs::write(&temporary, bytes).and_then(|_| std::fs::rename(&temporary, &path)).is_err() {
+            tracing::debug!(path = %path.display(), "Could not save public endpoints");
+        }
+    }
+
+    /// Records `winner` as the first candidate and, when given, replaces the rest with the
+    /// server's current list (its public address can change while the device is away).
+    fn remember_public(&self, winner: SocketAddr, reported: Option<Vec<SocketAddr>>) {
+        let snapshot = {
+            let mut known = self.public_tcp.lock().unwrap_or_else(|p| p.into_inner());
+            let mut next = reported.unwrap_or_else(|| known.clone());
+            next.retain(|address| !crate::lan::is_direct(address.ip()) && address.port() != 0);
+            if next.contains(&winner) || known.contains(&winner) {
+                next.retain(|a| *a != winner);
+                next.insert(0, winner);
+            }
+            next.dedup();
+            next.truncate(MAX_PUBLIC);
+            let cached = self.endpoint_cache.lock().unwrap_or_else(|p| p.into_inner()).as_ref().is_some_and(|path| path.exists());
+            if *known == next && cached { return; }
+            *known = next.clone();
+            next
+        };
+        tracing::info!(endpoints = ?snapshot, "Public endpoints updated");
+        self.save_endpoints(&snapshot);
+    }
+
+    /// Reads the server's router-forwarded endpoints from an authorized session reply.
+    async fn learn_endpoints(&self, response: Response<Incoming>) {
+        use http_body_util::BodyExt;
+        let Ok(Ok(body)) = tokio::time::timeout(Duration::from_secs(5), http_body_util::Limited::new(response.into_body(), 16 * 1024).collect()).await else { return };
+        let Ok(session) = serde_json::from_slice::<SessionReply>(&body.to_bytes()) else { return };
+        if session.public_endpoints.is_empty() { return; }
+        let current = self.public_endpoints();
+        let winner = current.first().copied().filter(|a| session.public_endpoints.contains(a)).unwrap_or(session.public_endpoints[0]);
+        self.remember_public(winner, Some(session.public_endpoints));
+    }
+
+    /// Happy-eyeballs over the public candidates: each starts a little after the previous
+    /// one, and the first to finish the pinned Noise handshake wins. Restrictive networks
+    /// often allow only TCP/443, so 443 on each known address is tried as well.
+    async fn connect_public(&self) -> Result<(SocketAddr, (tokio::io::DuplexStream, crate::transport::Pump))> {
+        let mut candidates = self.public_endpoints();
+        let mut extra = Vec::new();
+        for address in &candidates {
+            let https = SocketAddr::new(address.ip(), 443);
+            if !candidates.contains(&https) && !extra.contains(&https) { extra.push(https); }
+        }
+        candidates.extend(extra);
+        if candidates.is_empty() {
+            return Err("No public endpoint known yet; connect once at home to learn it".into());
+        }
+        let mut attempts = tokio::task::JoinSet::new();
+        let mut errors = Vec::new();
+        for (index, address) in candidates.into_iter().enumerate() {
+            let identity = self.identity.clone();
+            let key = self.selected.public_key;
+            attempts.spawn(async move {
+                tokio::time::sleep(PUBLIC_STAGGER * index as u32).await;
+                (address, crate::lan::connect_public(address, key, &identity).await)
+            });
+        }
+        while let Some(joined) = attempts.join_next().await {
+            match joined {
+                Ok((address, Ok(connected))) => {
+                    tracing::info!(%address, "Public TCP endpoint answered");
+                    return Ok((address, connected));
+                }
+                Ok((address, Err(error))) => errors.push(format!("{address}: {error}")),
+                Err(_) => {}
+            }
+        }
+        Err(errors.join(", ").into())
     }
 
     async fn authenticate(&self, connection: &HttpConnection, method: Method) -> Result<()> {
@@ -242,15 +396,8 @@ impl ConnectionManager {
             if !response.status().is_success() {
                 return Err("Device authorization failed; pairing may have been revoked".into());
             }
-            self.state(
-                match method {
-                    Method::Lan => ConnectionState::ConnectedLocal,
-                    Method::Pwnat => ConnectionState::ConnectedPwnat,
-                    Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
-                },
-                Some(method),
-                None,
-            );
+            self.learn_endpoints(response).await;
+            self.state(method.connected(), Some(method), None);
         }
         tracing::debug!(
             ?method,
@@ -374,20 +521,13 @@ impl ConnectionManager {
         if !response.status().is_success() {
             return Err("Device authorization failed; pairing may have been revoked".into());
         }
+        self.learn_endpoints(response).await;
         *self.token.write().await = Some(token);
         let method = self
             .status()
             .method
             .ok_or("Missing encrypted transport method")?;
-        self.state(
-            match method {
-                Method::Lan => ConnectionState::ConnectedLocal,
-                Method::Pwnat => ConnectionState::ConnectedPwnat,
-                Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
-            },
-            Some(method),
-            None,
-        );
+        self.state(method.connected(), Some(method), None);
         Ok(())
     }
 
@@ -495,7 +635,7 @@ impl ConnectionManager {
     async fn maintain(&self, active: &Arc<HttpConnection>, method: Option<Method>, network: &mut watch::Receiver<u64>) {
         let authorized = self.token.read().await.is_some();
         let roaming = self.roaming.load(std::sync::atomic::Ordering::Relaxed);
-        let away = method == Some(Method::HyperDHT);
+        let away = method.is_some_and(Method::away);
         let mut upgrade = tokio::time::interval(Duration::from_secs(30));
         upgrade.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         upgrade.tick().await;
@@ -517,10 +657,10 @@ impl ConnectionManager {
                         tracing::info!(?method, "Connection stopped answering after a network change");
                         return;
                     }
-                    if away && authorized && self.upgrade_to_lan().await { return; }
+                    if away && authorized && self.upgrade(method).await { return; }
                 }
                 _ = upgrade.tick(), if away && authorized => {
-                    if self.upgrade_to_lan().await { return; }
+                    if self.upgrade(method).await { return; }
                 }
             }
         }
@@ -566,14 +706,22 @@ impl ConnectionManager {
         }
     }
 
-    /// Moves back to the LAN when it answers again. The new session is newer, so the server
-    /// closes the HyperDHT one once the LAN session is authorized.
-    async fn upgrade_to_lan(&self) -> bool {
-        let Ok(Ok(connection)) = tokio::time::timeout(self.timing.lan, self.attempt_reporting(Method::Lan, false)).await else {
+    /// Moves to a better path when one answers: back to the LAN, or from HyperDHT to the
+    /// forwarded TCP port. The new session is newer, so the server closes the old one once
+    /// it is authorized.
+    async fn upgrade(&self, current: Option<Method>) -> bool {
+        if self.upgrade_to(Method::Lan, self.timing.lan).await { return true; }
+        current == Some(Method::HyperDHT)
+            && !self.public_endpoints().is_empty()
+            && self.upgrade_to(Method::Public, self.timing.public).await
+    }
+
+    async fn upgrade_to(&self, method: Method, budget: Duration) -> bool {
+        let Ok(Ok(connection)) = tokio::time::timeout(budget, self.attempt_reporting(method, false)).await else {
             return false;
         };
-        if tokio::time::timeout(Duration::from_secs(5), self.authenticate(&connection, Method::Lan)).await.is_ok_and(|result| result.is_ok()) {
-            tracing::info!("Returned to the LAN");
+        if tokio::time::timeout(Duration::from_secs(5), self.authenticate(&connection, method)).await.is_ok_and(|result| result.is_ok()) {
+            tracing::info!(?method, "Moved to a better connection");
             if let Some(old) = self.active.write().await.replace(connection) { old.close(); }
             true
         } else {
@@ -650,10 +798,14 @@ where
                 }
                 _ = tokio::time::sleep(timing.lan_grace) => {}
             }
+            // Off the LAN, the forwarded TCP port connects in one round trip when the
+            // network allows it; HyperDHT hole punching covers routers without forwarding.
+            let public = tokio::time::timeout(timing.public, attempt(Method::Public));
+            tokio::pin!(public);
             let dht = tokio::time::timeout(timing.hyperdht, attempt(Method::HyperDHT));
             tokio::pin!(dht);
-            let mut dht_done = false;
-            while !lan_done || !dht_done {
+            let (mut public_done, mut dht_done) = (false, false);
+            while !lan_done || !public_done || !dht_done {
                 tokio::select! {
                     biased;
                     result = &mut lan, if !lan_done => {
@@ -661,6 +813,13 @@ where
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Lan, connection)),
                             result => errors.push(attempt_error(Method::Lan, result, timing.lan)),
+                        }
+                    }
+                    result = &mut public, if !public_done => {
+                        public_done = true;
+                        match result {
+                            Ok(Ok(connection)) => return Ok((Method::Public, connection)),
+                            result => errors.push(attempt_error(Method::Public, result, timing.public)),
                         }
                     }
                     result = &mut dht, if !dht_done => {
@@ -747,6 +906,7 @@ mod tests {
                             std::future::pending::<Result<()>>().await
                         }
                         Method::HyperDHT => Ok(()),
+                        Method::Public => std::future::pending::<Result<()>>().await,
                         Method::Pwnat => panic!("pwnat must remain fallback"),
                     }
                 }
@@ -783,7 +943,7 @@ mod tests {
                 if available {
                     METHODS.to_vec()
                 } else {
-                    METHODS[..2].to_vec()
+                    METHODS[..3].to_vec()
                 }
             );
         }
@@ -798,6 +958,7 @@ mod tests {
             |method| async move {
                 match method {
                     Method::Lan => Err("LAN down".into()),
+                    Method::Public => Err("no forwarded port".into()),
                     Method::HyperDHT => {
                         // A slow handshake followed by a successful late punch must not
                         // be cancelled by the manager's shorter, outer timeout.
@@ -830,6 +991,21 @@ mod tests {
         assert!(error.contains("Lan: unavailable"));
         assert!(error.contains("HyperDHT: connection timed out after 75.0s"));
         assert!(error.contains("Pwnat: unavailable"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn public_tcp_races_hyperdht_and_wins_when_faster() {
+        let started = tokio::time::Instant::now();
+        let result = raced(&Timing::default(), &CancellationToken::new(), false, |method| async move {
+            match method {
+                Method::Lan => Err("away".into()),
+                Method::Public => { tokio::time::sleep(Duration::from_millis(80)).await; Ok(()) }
+                Method::HyperDHT => { tokio::time::sleep(Duration::from_secs(3)).await; Ok(()) }
+                Method::Pwnat => panic!("not needed"),
+            }
+        }).await.unwrap();
+        assert_eq!(result.0, Method::Public);
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 
     #[tokio::test]

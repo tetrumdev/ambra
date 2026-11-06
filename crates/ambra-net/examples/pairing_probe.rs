@@ -23,6 +23,7 @@ async fn main() -> ambra_net::Result<()> {
         public_key: payload.public_key,
         local_addresses: payload.local_addresses.clone(),
         public_endpoint: payload.public_endpoint,
+        public_tcp: payload.public_tcp.clone(),
     };
     let pwnat_only = args.iter().any(|a| a == "--pwnat-only");
     let hyperdht_only = args.iter().any(|a| a == "--hyperdht-only");

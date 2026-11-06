@@ -6,6 +6,7 @@ pub mod lan;
 pub mod manager;
 pub mod media_cache;
 pub mod pairing;
+pub mod portmap;
 pub mod pwnat;
 pub mod transport;
 pub use identity::{Identity, PublicKey};

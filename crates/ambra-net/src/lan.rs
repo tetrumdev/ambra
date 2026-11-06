@@ -272,10 +272,55 @@ pub async fn connect(
     if !is_direct(address.ip()) {
         return Err("Direct connections require a LAN or Tailscale address".into());
     }
+    connect_tcp(address, key, identity).await
+}
+
+/// Dials the server's router-forwarded public TCP port. The same pinned Noise handshake
+/// as on the LAN authenticates the server, so the path itself need not be trusted.
+pub async fn connect_public(
+    address: SocketAddr,
+    key: PublicKey,
+    identity: &Identity,
+) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
+    if is_direct(address.ip()) || address.port() == 0 || address.ip().is_unspecified() {
+        return Err("Not a public endpoint".into());
+    }
+    connect_tcp(address, key, identity).await
+}
+
+async fn connect_tcp(
+    address: SocketAddr,
+    key: PublicKey,
+    identity: &Identity,
+) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
     let raw = TcpStream::connect(address).await?;
     raw.set_nodelay(true)?;
     let (io, _, pump) = transport::secure(raw, identity, Some(key)).await?;
     Ok((io, pump))
+}
+
+type PerAddressMap = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<IpAddr, usize>>>;
+/// Counts open connections from one public address; released on drop.
+struct PerAddress(PerAddressMap, IpAddr);
+impl PerAddress {
+    const LIMIT: usize = 8;
+    fn acquire(map: &PerAddressMap, ip: IpAddr) -> Option<Self> {
+        let mut counts = map.lock().ok()?;
+        let count = counts.entry(ip).or_default();
+        if *count >= Self::LIMIT { return None; }
+        *count += 1;
+        Some(Self(map.clone(), ip))
+    }
+}
+impl Drop for PerAddress {
+    fn drop(&mut self) {
+        if let Ok(mut counts) = self.0.lock() {
+            if let Some(count) = counts.get_mut(&self.1) {
+                *count -= 1;
+                if *count == 0 { counts.remove(&self.1); }
+            }
+        }
+    }
 }
 
 pub async fn serve(
@@ -285,6 +330,7 @@ pub async fn serve(
     cancel: CancellationToken,
 ) -> Result<()> {
     let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
+    let per_address: PerAddressMap = Default::default();
     let mut tasks = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
@@ -292,12 +338,17 @@ pub async fn serve(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             accepted = listener.accept() => {
                 let (raw, address) = accepted?;
-                // A globally reachable TCP socket must not become a fourth remote method.
-                if !is_direct(address.ip()) { continue; }
+                // Internet peers arrive through a router-forwarded port. They get the same
+                // pinned Noise handshake and bearer authorization as HyperDHT peers, but one
+                // address may not hold more than a few of the shared connection slots.
+                let public = !is_direct(address.ip());
+                let Some(per_address) = (!public).then_some(None).or_else(|| PerAddress::acquire(&per_address, address.ip()).map(Some)) else { continue; };
                 let Ok(permit) = limit.clone().try_acquire_owned() else { continue; };
+                let _ = raw.set_nodelay(true);
                 let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
+                    let _per_address = per_address;
                     if let Ok(Ok((io, mut peer, pump))) = tokio::time::timeout(Duration::from_secs(5), transport::secure(raw, &identity, None)).await {
                         peer.address = address;
                         let _ = transport::serve(io, pump, peer, app, cancel).await;

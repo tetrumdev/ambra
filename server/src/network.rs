@@ -49,6 +49,8 @@ pub struct Network {
     pub secure_listening: RwLock<Option<SocketAddr>>,
     pub dht_status: ambra_net::hyperdht::SharedStatus,
     pub pwnat_status: ambra_net::pwnat::SharedStatus,
+    /// Router-forwarded public TCP endpoints of the secure listener.
+    pub port_mapping: RwLock<ambra_net::portmap::Status>,
     pub lan_error: RwLock<Option<String>>,
     pub discovery_error: RwLock<Option<String>>,
     pub changed: tokio::sync::Notify,
@@ -61,6 +63,10 @@ pub struct Network {
 pub type SharedNetwork = Arc<Network>;
 
 impl Network {
+    pub fn public_endpoints(&self) -> Vec<SocketAddr> {
+        self.port_mapping.read().map(|status| status.endpoints.clone()).unwrap_or_default()
+    }
+
     #[cfg(test)]
     pub fn new(config: ServerConfig) -> SharedNetwork { Self::with_identity(config, ambra_net::Identity::generate().unwrap()) }
 
@@ -71,6 +77,7 @@ impl Network {
             secure_listening: RwLock::new(None),
             dht_status: Arc::new(RwLock::new(Default::default())),
             pwnat_status: Arc::new(RwLock::new(Default::default())),
+            port_mapping: RwLock::new(Default::default()),
             lan_error: RwLock::new(None),
             discovery_error: RwLock::new(None),
             changed: tokio::sync::Notify::new(),
@@ -457,8 +464,9 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
     }
 }
 
-async fn authenticated_session(caller: axum::Extension<crate::access::Caller>) -> Json<serde_json::Value> {
-    Json(json!({ "clientId": caller.0.client_id }))
+async fn authenticated_session(State(network): State<SharedNetwork>, caller: axum::Extension<crate::access::Caller>) -> Json<serde_json::Value> {
+    // Paired devices learn where to reach the server from outside its network.
+    Json(json!({ "clientId": caller.0.client_id, "publicEndpoints": network.public_endpoints() }))
 }
 
 async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json::Value> {
@@ -470,7 +478,7 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
         "publicKey": network.identity.public_key(),
         "listening": *network.listening.read().unwrap_or_else(|p| p.into_inner()),
         "secureListening": *network.secure_listening.read().unwrap_or_else(|p| p.into_inner()),
-        "hyperdht": dht, "pwnat": ambra_net::pwnat::capability(),
+        "hyperdht": dht, "portMapping": *network.port_mapping.read().unwrap_or_else(|p| p.into_inner()), "pwnat": ambra_net::pwnat::capability(),
         "pwnatStatus": pwnat,
         "pwnatError": pwnat.error,
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
@@ -489,6 +497,7 @@ async fn pairing_payload(State(network): State<SharedNetwork>) -> Response {
         version: 1, public_key: info.public_key, name: info.name,
         local_addresses: info.secure_port.map(ambra_net::lan::direct_addresses).unwrap_or_default(),
         public_endpoint: config.public_endpoint.or_else(|| network.pwnat_status.read().ok().and_then(|s| s.public_endpoint)),
+        public_tcp: network.public_endpoints(),
     };
     match payload.encode() {
         Ok(link) => {
