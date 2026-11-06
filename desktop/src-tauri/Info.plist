@@ -7,7 +7,7 @@
   <key>CFBundleExecutable</key>
   <string>AMBRA</string>
   <key>CFBundleIdentifier</key>
-  <string>com.quantium.ambra</string>
+  <string>com.tetrum.ambra</string>
   <key>CFBundleName</key>
   <string>AMBRA</string>
   <key>CFBundlePackageType</key>

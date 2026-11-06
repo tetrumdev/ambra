@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const APP_ID: &str = "com.quantium.ambra";
+const APP_ID: &str = "com.tetrum.ambra";
 
 pub fn config_path(filename: &str) -> PathBuf {
     path_in(config_directory(), filename, "config")

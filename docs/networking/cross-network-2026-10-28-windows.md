@@ -165,10 +165,10 @@ Release builds of this code are installed on both machines. The Mac build matche
 
 | | Installed | Backup |
 |---|---|---|
-| Windows | `C:\Users\ewph\.cargo\bin\ambra-server.exe` and `%APPDATA%\com.quantium.ambra\data\server-bin\ambra-server.exe`, SHA-256 prefix `2689773E91C1` | `ambra-server.exe.bak-20261028` beside each |
-| Mac | `/Applications/AMBRA.app`, 0.2.1, ad-hoc signed, no server bundled; binary SHA-256 prefix `6b2c9fa6573c` | `~/Library/Application Support/com.quantium.ambra-app-backup-20261028/AMBRA.app` |
+| Windows | `C:\Users\ewph\.cargo\bin\ambra-server.exe` and `%APPDATA%\com.tetrum.ambra\data\server-bin\ambra-server.exe`, SHA-256 prefix `2689773E91C1` | `ambra-server.exe.bak-20261028` beside each |
+| Mac | `/Applications/AMBRA.app`, 0.2.1, ad-hoc signed, no server bundled; binary SHA-256 prefix `6b2c9fa6573c` | `~/Library/Application Support/com.tetrum.ambra-app-backup-20261028/AMBRA.app` |
 
-The Windows server runs headless (`serve`, launched via WMI) and logs to `%APPDATA%\com.quantium.ambra\data\server.log`. Restart it from the PC's own terminal (`ambra-server stop`, then `ambra-server start`) to get the tray back.
+The Windows server runs headless (`serve`, launched via WMI) and logs to `%APPDATA%\com.tetrum.ambra\data\server.log`. Restart it from the PC's own terminal (`ambra-server stop`, then `ambra-server start`) to get the tray back.
 
 **Rollback:** copy the `.bak-20261028` files over the installed Windows binaries, and copy the backed-up `AMBRA.app` back into `/Applications`.
 

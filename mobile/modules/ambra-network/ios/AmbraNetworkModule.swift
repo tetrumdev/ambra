@@ -49,7 +49,7 @@ public class AmbraNetworkModule: Module {
         guard let last = previous.value, last != signature else { return }
         _ = try? AmbraNetworkModule.call("network_changed", "{}")
       }
-      monitor.start(queue: DispatchQueue(label: "com.quantium.ambra.network-path"))
+      monitor.start(queue: DispatchQueue(label: "com.tetrum.ambra.network-path"))
       self.monitor = monitor
     }
 
