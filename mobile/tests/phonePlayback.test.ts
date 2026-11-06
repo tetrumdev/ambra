@@ -49,3 +49,47 @@ test("without a queued song the end is reported, and a later queue command is pr
   await playback.execute("queue_native_audio", { source: "/api/d", expectedSource: "/api/a" });
   expect(prefetched).toEqual(["/api/c", "/api/d"]);
 });
+
+test("a skip pauses the old song until the core loads the next one", async () => {
+  const created: { source: string; player: PhonePlayer; emit: Listener }[] = [];
+  const playback = new PhonePlayback(host(created, []));
+  await playback.execute("load_native_audio", { source: "/api/a", positionSeconds: 0, autoplay: true });
+  const old = created[0].player;
+  expect(old.playing).toBe(true);
+  expect(playback.holdForSkip()).toBe(true);
+  expect(old.playing).toBe(false);
+  // Reported as still playing, waiting on the next song, not as the listener's own pause.
+  created[0].emit({ isLoaded: true, playing: false, isBuffering: false, currentTime: 10 });
+  expect(playback.status()).toMatchObject({ isPlaying: false, buffering: true });
+  expect(playback.status().control).toBeUndefined();
+  await playback.execute("load_native_audio", { source: "/api/b", positionSeconds: 0, autoplay: true });
+  expect(created[1].player.playing).toBe(true);
+  created[1].emit({ isLoaded: true, playing: true, isBuffering: false, currentTime: 0 });
+  expect(playback.status().buffering).toBe(false);
+});
+
+test("a previous that restarts the song plays on after the core's seek", async () => {
+  const created: { source: string; player: PhonePlayer; emit: Listener }[] = [];
+  const playback = new PhonePlayback(host(created, []));
+  await playback.execute("load_native_audio", { source: "/api/a", positionSeconds: 0, autoplay: true });
+  playback.holdForSkip();
+  expect(created[0].player.playing).toBe(false);
+  await playback.execute("seek_native_audio", { positionSeconds: 0 });
+  expect(created[0].player.playing).toBe(true);
+  created[0].emit({ isLoaded: true, playing: true, isBuffering: false, currentTime: 0 });
+  expect(playback.status().buffering).toBe(false);
+});
+
+test("a skip with nothing to skip to resumes, and a lost one becomes a pause", async () => {
+  const created: { source: string; player: PhonePlayer; emit: Listener }[] = [];
+  const playback = new PhonePlayback(host(created, []));
+  await playback.execute("load_native_audio", { source: "/api/a", positionSeconds: 0, autoplay: true });
+  playback.holdForSkip();
+  playback.endSkip(true);
+  expect(created[0].player.playing).toBe(true);
+  playback.holdForSkip();
+  playback.endSkip(false);
+  expect(created[0].player.playing).toBe(false);
+  created[0].emit({ isLoaded: true, playing: false, isBuffering: false, currentTime: 0 });
+  expect(playback.status()).toMatchObject({ buffering: false, control: { seq: 1, playing: false } });
+});

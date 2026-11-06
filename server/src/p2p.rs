@@ -36,6 +36,71 @@ where
     }
 }
 
+/// External ports to request, best first. Restrictive networks (schools, offices, hotels)
+/// commonly allow only HTTPS ports, so those come before the listener's own port.
+fn wanted_ports(internal: u16) -> Vec<u16> {
+    let mut ports = vec![443, 8443, internal];
+    ports.dedup();
+    ports
+}
+
+/// Keeps a router port forwarded to the secure listener while remote networking is on.
+/// Clients learn the resulting endpoints from their authorized session and dial them
+/// directly when away from home, the same way an app reaches its vendor's server.
+async fn forward_ports(network: SharedNetwork, internal: u16, cancel: CancellationToken) {
+    const LEASE: Duration = Duration::from_secs(60 * 60);
+    let mut held: Vec<(ambra_net::portmap::Gateway, u16)> = Vec::new();
+    loop {
+        let mut granted = Vec::new();
+        let mut errors = Vec::new();
+        let mut method = None;
+        let gateways = tokio::select! { _ = cancel.cancelled() => break, g = ambra_net::portmap::discover() => g };
+        for gateway in gateways {
+            // Renew what this router already granted before asking for anything better.
+            let mut order: Vec<u16> = held.iter().filter(|(g, _)| *g == gateway).map(|(_, p)| *p).collect();
+            for port in wanted_ports(internal) { if !order.contains(&port) { order.push(port); } }
+            for external in order {
+                match gateway.map_tcp(external, internal, LEASE).await {
+                    Ok(port) if port == external => {
+                        granted.push((gateway.clone(), port));
+                        // NAT-PMP keeps one mapping per internal port; asking again would move it.
+                        if gateway.method() == "NAT-PMP" { break; }
+                    }
+                    Ok(port) => {
+                        // NAT-PMP picked another port: release it and ask for the next preference,
+                        // unless nothing better remains.
+                        if external == internal { granted.push((gateway.clone(), port)); break; }
+                        gateway.unmap_tcp(port, internal).await;
+                    }
+                    Err(error) => errors.push(format!("{} {external}: {error}", gateway.method())),
+                }
+            }
+            if !granted.is_empty() { method = Some(gateway.method()); break; }
+        }
+        // Mappings no longer granted (another router, a changed address) are released.
+        for (gateway, port) in held.drain(..) {
+            if !granted.iter().any(|(g, p)| *g == gateway && *p == port) { gateway.unmap_tcp(port, internal).await; }
+        }
+        let endpoints: Vec<SocketAddr> = granted.iter().map(|(g, p)| SocketAddr::new(g.external_ip.into(), *p)).collect();
+        let changed = {
+            let mut status = network.port_mapping.write().unwrap_or_else(|p| p.into_inner());
+            let changed = status.endpoints != endpoints;
+            *status = ambra_net::portmap::Status {
+                method,
+                endpoints: endpoints.clone(),
+                error: endpoints.is_empty().then(|| if errors.is_empty() { "No UPnP or NAT-PMP router found".to_owned() } else { errors.join("; ") }),
+            };
+            changed
+        };
+        if changed { eprintln!("Public TCP endpoints: {endpoints:?} ({})", method.unwrap_or("none")); }
+        held = granted;
+        let wait = if held.is_empty() { Duration::from_secs(60) } else { LEASE / 3 };
+        tokio::select! { _ = cancel.cancelled() => break, _ = tokio::time::sleep(wait) => {} }
+    }
+    for (gateway, port) in held { let _ = tokio::time::timeout(Duration::from_secs(2), gateway.unmap_tcp(port, internal)).await; }
+    *network.port_mapping.write().unwrap_or_else(|p| p.into_inner()) = Default::default();
+}
+
 pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr, cancel: CancellationToken) {
     let port = network.config.read().unwrap_or_else(|p| p.into_inner()).secure_port;
     let secure = SocketAddr::new(address.ip(), port);
@@ -93,6 +158,7 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
             let stop = cancel.child_token(); remote_cancel = Some(stop.clone());
             let status = network.dht_status.clone(); let identity = network.identity.clone(); let dht_app = app.clone(); let stop_dht = stop.clone();
             let pwnat_status = network.pwnat_status.clone();
+            remote_tasks.spawn(forward_ports(network.clone(), port, stop.clone()));
             remote_tasks.spawn(async move {
                 supervise_listener(stop_dht.clone(), || async {
                     let result = ambra_net::hyperdht::serve(identity.clone(), dht_app.clone(), status.clone(), stop_dht.clone(), Some(pwnat_status.clone())).await;

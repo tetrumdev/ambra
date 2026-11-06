@@ -86,6 +86,9 @@ struct Transport {
     /// What the output had loaded when it went out of reach. It's kept, rather than loaded
     /// again, if the same output comes back still playing that song.
     orphaned: Option<Loaded>,
+    /// A skip the output hasn't been told of: it pauses the song being left before anything
+    /// else, so a slow or failing load of the next one can't leave the old one playing on.
+    silence_skipped: bool,
 }
 
 impl Transport {
@@ -791,6 +794,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
             } else {
                 transport.generation += 1;
             }
+            transport.silence_skipped = true;
             drop(transport);
             core.changed();
             Ok(())
@@ -856,6 +860,7 @@ async fn skip(core: &Core, forward: bool) -> Result<(), String> {
         transport.pending_seek = None;
         transport.set_position(0.0);
         transport.buffering = transport.playing;
+        transport.silence_skipped = true;
         drop(transport);
         core.changed();
     }
@@ -1019,6 +1024,20 @@ async fn step(core: &Core) -> Result<(), String> {
     // The output's own changes the core knows of when it sends a command. The output ignores a
     // play, pause or seek decided before its latest own change.
     let known = || core.transport().known_control(&endpoint_instance);
+
+    // A skip silences the song being left at once, before the next one is resolved and loaded.
+    let silence = {
+        let mut transport = core.transport();
+        let skipped = std::mem::take(&mut transport.silence_skipped);
+        transport.loaded.as_ref().filter(|_| skipped).map(|loaded| loaded.endpoint_id.clone())
+    };
+    if let Some(loaded_endpoint) = silence {
+        // Without `control`, so a play the output made just before can't keep the old song going.
+        let _ = remote!(core.endpoints.call(&loaded_endpoint, "pause_native_audio", json!({})));
+        let mut transport = core.transport();
+        // A previous that restarts the song is only a seek: play on after it, as before.
+        if transport.playing && transport.pending_play.is_none() { transport.pending_play = Some(true); }
+    }
 
     let mut source = canonical_source.clone();
     let mut live = false;
@@ -1452,6 +1471,16 @@ mod driver_tests {
             self.state.value(HISTORY_KEY).await.unwrap()
         }
 
+        async fn wait_for_command_after(&self, command: &str, skip: usize) {
+            for _ in 0..80 {
+                if self.received.lock().unwrap().iter().skip(skip).any(|(received, _)| received == command) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            panic!("timed out waiting for {command}: {:?}", self.received.lock().unwrap());
+        }
+
         async fn wait_for_command(&self, command: &str) {
             for _ in 0..80 {
                 if self.received.lock().unwrap().iter().any(|(received, _)| received == command) {
@@ -1494,6 +1523,52 @@ mod driver_tests {
     /// What the core sends an output for track `id`: the path its full `audio` URL names.
     fn source(id: &str) -> String {
         format!("/api/providers/qobuz/tracks/{id}/stream")
+    }
+
+    /// The commands the output received after the first `skip` of them.
+    fn received_after(h: &Harness, skip: usize) -> Vec<(String, Value)> {
+        h.received.lock().unwrap()[skip..].to_vec()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_skip_pauses_the_song_being_left_before_loading_the_next() {
+        let h = Harness::playing_output().await;
+        let before = h.received.lock().unwrap().len();
+        h.post("/api/session/command", json!({ "action": "next" })).await;
+        h.wait_for_command_after("load_native_audio", before).await;
+        let commands: Vec<String> = received_after(&h, before).into_iter().map(|(command, _)| command).collect();
+        let pause = commands.iter().position(|command| command == "pause_native_audio").expect("the old song is paused");
+        let load = commands.iter().position(|command| command == "load_native_audio").unwrap();
+        assert!(pause < load, "paused before the next song loads: {commands:?}");
+        let (_, pause_args) = &received_after(&h, before)[pause];
+        assert!(pause_args.get("control").is_none(), "never overruled by the output's own latest play");
+        let (_, load_args) = received_after(&h, before).into_iter().find(|(command, _)| command == "load_native_audio").unwrap();
+        assert_eq!(load_args["source"], source("b"));
+        assert_eq!(load_args["autoplay"], true);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_previous_that_restarts_pauses_then_seeks_and_plays_on() {
+        let h = Harness::playing_output().await;
+        let before = h.received.lock().unwrap().len();
+        h.post("/api/session/command", json!({ "action": "previous" })).await;
+        h.wait_for_command_after("play_native_audio", before).await;
+        let commands: Vec<String> = received_after(&h, before).into_iter().map(|(command, _)| command).collect();
+        assert_eq!(commands, ["pause_native_audio", "seek_native_audio", "play_native_audio"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_next_with_nothing_after_leaves_the_song_playing() {
+        let h = Harness::playing_output().await;
+        h.post("/api/session/command", json!({ "action": "next" })).await;
+        h.wait_for_command_after("load_native_audio", 1).await;
+        h.report(json!({ "currentSource": source("b"), "currentTime": 10.0, "duration": 200.0, "isPlaying": true, "buffering": false, "ended": false })).await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let before = h.received.lock().unwrap().len();
+        h.post("/api/session/command", json!({ "action": "next" })).await;
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(received_after(&h, before).iter().all(|(command, _)| command != "pause_native_audio"));
+        assert!(h.core.transport().playing);
     }
 
     #[tokio::test(flavor = "multi_thread")]

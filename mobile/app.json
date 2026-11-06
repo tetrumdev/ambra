@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.tetrum.ambra.remote",
-      "buildNumber": "9",
+      "buildNumber": "10",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
