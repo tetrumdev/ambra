@@ -30,6 +30,11 @@ export class PhonePlayback {
   private ended = false;
   private busy = false;
   private intendedPlaying = false;
+  /**
+   * Paused for a skip until the core answers with the next song (or a seek, for a previous
+   * that restarts). A skip lost to latency then can't leave the old song playing on.
+   */
+  private skipping = false;
   private previous: { position: number; at: number; playing: boolean } | null = null;
   private volume = 100;
   private metadataSignature = "";
@@ -48,7 +53,7 @@ export class PhonePlayback {
       currentTime: this.player?.currentTime ?? 0,
       duration: this.player?.duration ?? 0,
       isPlaying: !this.ended && (this.native?.playing ?? false),
-      buffering: !!this.source && !this.error && (this.busy || !this.native?.isLoaded || !!this.native?.isBuffering),
+      buffering: !!this.source && !this.error && (this.busy || this.skipping || !this.native?.isLoaded || !!this.native?.isBuffering),
       ended: this.ended,
       error: this.error ?? this.native?.error ?? null,
       ...(this.control.seq > 0 ? { control: { ...this.control } } : {}),
@@ -69,10 +74,37 @@ export class PhonePlayback {
     return typeof args.control === "number" && args.control < this.control.seq;
   }
 
+  /** Pauses the current song while a skip goes to the core; false if nothing plays here. */
+  holdForSkip() {
+    if (!this.player || this.loading) return false;
+    this.skipping = true;
+    this.player.pause();
+    this.host.changed();
+    return true;
+  }
+
+  /**
+   * Ends a skip hold the core settled without a new song or seek: `resume` when it had nothing
+   * to skip to, otherwise (the skip never reached it) the pause becomes this phone's own.
+   */
+  endSkip(resume: boolean) {
+    if (!this.skipping || !this.player) return;
+    this.skipping = false;
+    if (resume) {
+      if (this.intendedPlaying) this.player.play();
+    } else {
+      this.intendedPlaying = false;
+      this.changedHere(false);
+    }
+    this.host.changed();
+  }
+
   /** Plays, pauses or seeks at once, for the listener holding this phone. */
   async local(action: "play" | "pause" | "seek", positionSeconds?: number) {
     const player = this.player;
     if (!player) return;
+    const held = this.skipping;
+    this.skipping = false;
     if (action === "seek") {
       const position = Number(positionSeconds);
       if (!Number.isFinite(position) || position < 0) return;
@@ -81,6 +113,7 @@ export class PhonePlayback {
       this.ended = false;
       this.host.changed();
       try { await player.seekTo(position); } finally { this.busy = false; this.previous = null; this.host.changed(); }
+      if (held && this.player === player && this.intendedPlaying) player.play();
       return;
     }
     const playing = action === "play";
@@ -108,7 +141,7 @@ export class PhonePlayback {
     }
     // Lock-screen controls, headphone disconnection and interruptions are this phone's own
     // changes too; the core takes them on from the next report.
-    if (!this.busy && this.host.ownsOutput() && status.isLoaded && !status.isBuffering && !status.error && !this.ended && previous) {
+    if (!this.busy && !this.skipping && this.host.ownsOutput() && status.isLoaded && !status.isBuffering && !status.error && !this.ended && previous) {
       if (status.playing !== previous.playing && status.playing !== this.intendedPlaying) {
         this.intendedPlaying = status.playing;
         this.changedHere(status.playing);
@@ -187,11 +220,13 @@ export class PhonePlayback {
       }
       case "play_native_audio":
         if (this.overruled(args)) return null;
+        this.skipping = false;
         if ((this.error || this.native?.error) && this.source) await this.load(this.source, this.player?.currentTime ?? 0, true);
         else { this.ended = false; this.intendedPlaying = true; this.player?.play(); }
         return null;
       case "pause_native_audio":
         if (this.overruled(args)) return null;
+        this.skipping = false;
         this.intendedPlaying = false;
         this.player?.pause();
         return null;
@@ -199,9 +234,14 @@ export class PhonePlayback {
         if (this.overruled(args)) return null;
         const position = Number(args.positionSeconds);
         if (!Number.isFinite(position) || position < 0) throw new Error("Invalid playback position.");
+        const player = this.player;
+        const held = this.skipping;
+        this.skipping = false;
         this.busy = true;
         this.ended = false;
-        try { await this.player?.seekTo(position); } finally { this.busy = false; this.previous = null; }
+        try { await player?.seekTo(position); } finally { this.busy = false; this.previous = null; }
+        // A previous that restarts the song arrives as a seek; play on from the start.
+        if (held && player && this.player === player && this.intendedPlaying) player.play();
         return null;
       }
       case "queue_native_audio":
@@ -250,6 +290,7 @@ export class PhonePlayback {
     this.busy = false;
     this.previous = null;
     this.intendedPlaying = false;
+    this.skipping = false;
     if (player) {
       player.pause();
       player.setActiveForLockScreen(false);

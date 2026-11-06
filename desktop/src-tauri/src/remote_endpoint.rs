@@ -114,6 +114,11 @@ pub async fn shared_output_control(app: AppHandle, action: String, position_seco
     let agent = app.state::<SharedOutput>().0.lock().await.as_ref().map(|running| running.agent.clone())
         .ok_or("This device isn't playing for the server")?;
     let player = app.state::<NativeAudioPlayer>();
+    // Silences the song being left while a skip goes to the core. Not this listener's own
+    // pause: the core's load of the next song (or seek, for a restart) plays on as asked.
+    if action == "hold" {
+        return native_audio::pause_native_audio(player).await;
+    }
     let playing = match action.as_str() {
         "play" => true,
         "pause" => false,

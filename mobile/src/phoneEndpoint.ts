@@ -2,7 +2,7 @@ import { createAudioPlayer } from "expo-audio";
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
-import { Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, setLocalControl, setLocalPlayback, subscribe } from "./client";
+import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, setLocalControl, setLocalPlayback, subscribe } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { phoneUrlForSource } from "./downloads";
 
@@ -18,6 +18,11 @@ const instanceId = () => `phone-${Date.now()}-${Math.random().toString(36).slice
 const QUIET_MS = 8000;
 /** The phone's own position is shown again once it drifts this far from the one last shown. */
 const LOCAL_DRIFT_SECONDS = 0.5;
+/** Changes when a skip moves the queue, even onto another copy of the same song. */
+const queueMark = (view: SessionView | null) => {
+  const queue = view?.queue;
+  return JSON.stringify([queue?.current?.globalTrackId ?? null, queue?.history?.length ?? 0, queue?.upcoming.length ?? 0]);
+};
 
 /** The phone reports presence and executes the core's output commands, just as desktop does. */
 export function followPhoneOutput() {
@@ -114,6 +119,18 @@ export function followPhoneOutput() {
       if (action === "seek" && Number.isFinite(Number(details.positionSeconds))) {
         void player.local("seek", Math.max(0, Number(details.positionSeconds)));
         return true;
+      }
+      if (action === "next" || action === "previous") {
+        // Silence the old song until the core moves on, so a slow or lost skip can't let it
+        // play on. The core then loads the next song, or seeks for a previous that restarts.
+        const before = queueMark(sessionView());
+        const held = player;
+        if (!held.holdForSkip()) return false;
+        return answer => {
+          if (!answer) held.endSkip(false);
+          // A next with nothing after the current song leaves the queue as it was.
+          else if (action === "next" && queueMark(answer) === before) held.endSkip(true);
+        };
       }
       return false;
     });

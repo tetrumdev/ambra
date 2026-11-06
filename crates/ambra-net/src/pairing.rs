@@ -13,6 +13,9 @@ pub struct PairingPayload {
     pub local_addresses: Vec<std::net::SocketAddr>,
     #[serde(default)]
     pub public_endpoint: Option<std::net::SocketAddr>,
+    /// Router-forwarded TCP endpoints. Omitted when empty so older apps still read the link.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_tcp: Vec<std::net::SocketAddr>,
 }
 impl PairingPayload {
     pub fn encode(&self) -> Result<String> {
@@ -50,6 +53,14 @@ impl PairingPayload {
             .any(|a| !crate::lan::is_direct(a.ip()) || a.port() == 0)
         {
             return Err("Invalid local endpoint hint".into());
+        }
+        if self.public_tcp.len() > 8
+            || self.public_tcp.iter().any(|a| match a.ip() {
+                std::net::IpAddr::V4(ip) => !crate::portmap::is_public(ip) || a.port() == 0,
+                std::net::IpAddr::V6(_) => true,
+            })
+        {
+            return Err("Invalid public endpoint hint".into());
         }
         if let Some(endpoint) = self.public_endpoint { crate::pwnat::validate_endpoint(endpoint)?; }
         Ok(())

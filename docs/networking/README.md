@@ -1,5 +1,7 @@
 # Native networking: implementation and validation report
 
+**November 6, 2026:** remote connections now use a router-forwarded public TCP port (UPnP/NAT-PMP), raced with HyperDHT. This supersedes the "no port-mapping strategy" policy below. See [router-forwarded public TCP](public-tcp-2026-11-06.md).
+
 October 29 implementation and physical benchmark results: [autonomous P2P overnight optimization](autonomous-p2p-overnight-2026-10-29.md).
 
 **Autonomous diagnostics and physical validation (October 28, 2026):** see [the autonomous investigation](autonomous-2026-10-28.md) for native hotspot/home measurements, UDX and playback recovery fixes, helper health/install commands, repeatable headless tests, and remaining pwnat limitations. Start with `cargo run --manifest-path crates/ambra-net/Cargo.toml --example network_diagnose --locked` when the GUI cannot connect. Reports redact addresses by default.

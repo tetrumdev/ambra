@@ -48,6 +48,8 @@ pub struct JoinedServer {
     pub local_addresses: Vec<SocketAddr>,
     #[serde(default)]
     pub public_endpoint: Option<SocketAddr>,
+    #[serde(default)]
+    pub public_tcp: Vec<SocketAddr>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -250,8 +252,10 @@ impl Runtime {
             let server = settings.server.as_ref().ok_or("Missing server")?;
             let public_key = server.public_key.ok_or("Legacy pairing has no cryptographic identity. Pair again using the server QR link.")?;
             let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
-            let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint };
+            let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint, public_tcp: server.public_tcp.clone() };
             let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::new(identity, selected, settings.token.clone()));
+            // Remembers the server's public address learned at home, for use away from it.
+            manager.use_endpoint_cache(directory.join("server-endpoints.json"));
             let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.map_err(|e| e.to_string())?;
             (Some(manager), Some(bridge))
         } else { (None, None) };
@@ -369,7 +373,7 @@ async fn pairing_target(address: &str) -> Result<ambra_net::pairing::PairingPayl
             let port = info["securePort"].as_u64().and_then(|p| u16::try_from(p).ok()).ok_or("Secure listener unavailable")?;
             let local_addresses = addresses.into_iter()
                 .map(|a| SocketAddr::new(a.ip(), port)).collect();
-            Ok::<_, String>(ambra_net::pairing::PairingPayload { version: 1, public_key, name: info["name"].as_str().unwrap_or("Ambra").into(), local_addresses, public_endpoint: None })
+            Ok::<_, String>(ambra_net::pairing::PairingPayload { version: 1, public_key, name: info["name"].as_str().unwrap_or("Ambra").into(), local_addresses, public_endpoint: None, public_tcp: vec![] })
         }).await.map_err(|e| e.to_string())??
     };
     Ok(payload)
@@ -380,8 +384,9 @@ pub async fn start_pairing(link: tauri::State<'_, ServerLink>, address: String) 
     let generation = { let _transition = link.transition.lock().await; link.cancel_pairing()? };
     let payload = pairing_target(&address).await?;
     let identity = ambra_net::Identity::load_or_create(&link.directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
-    let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint };
+    let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint, public_tcp: payload.public_tcp.clone() };
     let manager = ambra_net::ConnectionManager::new(identity, selected, None);
+    manager.use_endpoint_cache(link.directory.join("server-endpoints.json"));
     let mut session = PairingSession { address: address.clone(), request_id: String::new(), payload: payload.clone(), manager: Some(manager.clone()), approved: None };
     let started = manager.json("POST", "/api/pair/request", Some(json!({ "clientId": link.client_id(), "clientName": client_name() }))).await.map_err(|e| e.to_string())?;
     let request_id = started["requestId"].as_str().ok_or("Missing pairing handle")?.to_owned();
@@ -408,6 +413,7 @@ pub async fn poll_pairing(link: tauri::State<'_, ServerLink>, address: String, r
             id: reply["server"]["id"].as_str().unwrap_or_default().into(), name: payload.name,
             address: payload.local_addresses.first().map(|a| a.to_string()).unwrap_or_else(|| payload.public_key.to_string()),
             public_key: Some(payload.public_key), local_addresses: payload.local_addresses, public_endpoint: payload.public_endpoint,
+            public_tcp: payload.public_tcp,
         };
         let mut pending = link.pairing.lock().map_err(|_| "Pairing unavailable")?;
         if pending.generation != generation { return Err("Pairing cancelled".into()); }
@@ -471,7 +477,7 @@ mod tests {
         assert_eq!(manual.public_key, key);
         assert_eq!(manual.local_addresses, vec!["127.0.0.1:40000".parse::<SocketAddr>().unwrap()]);
         responder.join().unwrap();
-        let public_link = ambra_net::pairing::PairingPayload { version: 1, public_key: key, name: "Remote".into(), local_addresses: vec![], public_endpoint: None }.encode().unwrap();
+        let public_link = ambra_net::pairing::PairingPayload { version: 1, public_key: key, name: "Remote".into(), local_addresses: vec![], public_endpoint: None, public_tcp: vec![] }.encode().unwrap();
         let remote = pairing_target(&public_link).await.unwrap();
         assert_eq!(remote.public_key, key);
         assert!(remote.local_addresses.is_empty());
@@ -503,7 +509,7 @@ mod tests {
                 let mut next = initial.clone();
                 if index % 3 != 2 {
                     next.mode = Mode::Join;
-                    next.server = Some(JoinedServer { id: index.to_string(), name: "Independent".into(), address: "127.0.0.1:9".into(), public_key: Some(keys[index % 2]), local_addresses: vec![], public_endpoint: None });
+                    next.server = Some(JoinedServer { id: index.to_string(), name: "Independent".into(), address: "127.0.0.1:9".into(), public_key: Some(keys[index % 2]), local_addresses: vec![], public_endpoint: None, public_tcp: vec![] });
                     next.token = Some(format!("token-{index}"));
                 }
                 link.install(next, None, None).await.unwrap();
@@ -541,7 +547,7 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let mut next = initial.clone();
             next.mode = Mode::Join;
-            next.server = Some(JoinedServer { id: "bad".into(), name: "Legacy".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None });
+            next.server = Some(JoinedServer { id: "bad".into(), name: "Legacy".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None, public_tcp: vec![] });
             next.token = Some("secret".into());
             assert!(link.install(next.clone(), None, None).await.is_err());
             assert_eq!(link.connection().mode, Mode::Host);
@@ -581,7 +587,7 @@ mod tests {
         let mut settings = Settings::new();
         settings.mode = Mode::Join;
         settings.when_away = WhenAway::Fallback;
-        settings.server = Some(JoinedServer { id: "core".into(), name: "Music server".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None });
+        settings.server = Some(JoinedServer { id: "core".into(), name: "Music server".into(), address: "127.0.0.1:9".into(), public_key: None, local_addresses: vec![], public_endpoint: None, public_tcp: vec![] });
         settings.token = Some("paired-token".into());
         settings.save(&directory).unwrap();
         let connection = ServerLink::start(directory.clone()).unwrap().connection();
@@ -611,10 +617,10 @@ mod pairing_handoff_tests {
                 if request.headers().get("authorization").is_some_and(|v| v == "Bearer paired-token") { axum::http::StatusCode::OK } else { axum::http::StatusCode::UNAUTHORIZED }
             }));
             let task = tokio::spawn(ambra_net::lan::serve(listener, server.clone(), app, cancel.clone()));
-            let payload = ambra_net::pairing::PairingPayload { version: 1, public_key: server.public_key(), name: "Independent".into(), local_addresses: vec![address], public_endpoint: None };
-            let manager = ambra_net::ConnectionManager::new(ambra_net::Identity::generate().unwrap(), ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: vec![address], public_endpoint: None }, None);
+            let payload = ambra_net::pairing::PairingPayload { version: 1, public_key: server.public_key(), name: "Independent".into(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
+            let manager = ambra_net::ConnectionManager::new(ambra_net::Identity::generate().unwrap(), ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] }, None);
             let connection = manager.connect().await.unwrap();
-            let joined = JoinedServer { id: "independent".into(), name: payload.name.clone(), address: address.to_string(), public_key: Some(payload.public_key), local_addresses: vec![address], public_endpoint: None };
+            let joined = JoinedServer { id: "independent".into(), name: payload.name.clone(), address: address.to_string(), public_key: Some(payload.public_key), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
             link.pairing.lock().unwrap().session = Some(PairingSession { address: payload.encode().unwrap(), request_id: "approved".into(), payload, manager: Some(manager.clone()), approved: Some((joined, "paired-token".into())) });
             link.join("approved", None).await.unwrap();
             assert!(!manager.cancel.is_cancelled());

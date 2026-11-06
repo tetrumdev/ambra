@@ -274,8 +274,11 @@ const listeners = new Set<() => void>();
 export type LocalPlayback = { playing: boolean; buffering: boolean; positionSeconds: number; at: number };
 let local: LocalPlayback | null = null;
 let shown: SessionView | null = null;
-/** Plays, pauses or seeks on this phone's own player; false when it isn't the one to. */
-let localControl: ((action: string, details: Record<string, unknown>) => boolean) | null = null;
+/**
+ * Plays, pauses or seeks on this phone's own player; false when it isn't the one to. A function
+ * means the command still goes to the server, and is told the server's answer (null if none).
+ */
+let localControl: ((action: string, details: Record<string, unknown>) => boolean | ((answer: SessionView | null) => void)) | null = null;
 
 function show() {
   shown = view && local ? { ...view, playing: local.playing, buffering: local.buffering, positionSeconds: local.positionSeconds } : view;
@@ -369,7 +372,9 @@ function inOrder<T>(work: () => Promise<T>): Promise<T> {
 
 export function command(action: string, details: Record<string, unknown> = {}) {
   if (offline) return offline.command(action, details);
-  if (localControl?.(action, details)) return Promise.resolve();
+  const handled = localControl?.(action, details);
+  if (handled === true) return Promise.resolve();
+  const settle = typeof handled === "function" ? handled : null;
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
@@ -377,7 +382,7 @@ export function command(action: string, details: Record<string, unknown> = {}) {
       method: "POST",
       body: JSON.stringify({ action, ...details }),
     }));
-  });
+  }).then(() => { settle?.(view); }, reason => { settle?.(null); throw reason; });
 }
 
 export function endpoints(signal: AbortSignal) {

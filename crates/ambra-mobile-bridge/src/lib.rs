@@ -40,9 +40,12 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
                 public_key: payload.public_key,
                 local_addresses: payload.local_addresses,
                 public_endpoint: payload.public_endpoint,
+                public_tcp: payload.public_tcp.clone(),
             };
             let token = args["token"].as_str().map(str::to_owned);
             let manager = ConnectionManager::new(identity, selected, token);
+            // Remembers the server's public address learned at home, for use away from it.
+            manager.use_endpoint_cache(std::path::Path::new(directory).join("ambra-server-endpoints.json"));
             manager.enable_roaming();
             // Songs are downloaded ahead into the app's own storage so a network change
             // never interrupts what is playing.

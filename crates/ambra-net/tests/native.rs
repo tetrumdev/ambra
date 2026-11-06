@@ -111,6 +111,7 @@ fn manager(identity: &Identity, address: std::net::SocketAddr) -> Arc<Connection
             public_key: identity.public_key(),
             local_addresses: vec![address],
             public_endpoint: None,
+            public_tcp: vec![],
         },
         Some("fixture-token".into()),
     )
@@ -163,6 +164,7 @@ fn public_pairing_payload_is_versioned_bounded_and_has_no_credentials() {
         name: "Core".into(),
         local_addresses: vec!["[::1]:38149".parse().unwrap()],
         public_endpoint: None,
+        public_tcp: vec![],
     };
     let encoded = payload.encode().unwrap();
     assert_eq!(
@@ -347,6 +349,7 @@ async fn failed_authorization_never_reports_connected() {
             public_key: identity.public_key(),
             local_addresses: vec![address],
             public_endpoint: None,
+            public_tcp: vec![],
         },
         Some("revoked".into()),
         ambra_net::manager::Timing {
@@ -440,7 +443,7 @@ fn tailscale_pairing_hints_round_trip_but_never_become_public_traversal_endpoint
     for address in ["100.106.252.60:38149", "[fd7a:115c:a1e0::f537:fc3d]:38149", "[::ffff:100.117.211.104]:38149"] {
         let address: std::net::SocketAddr = address.parse().unwrap();
         assert!(!lan::is_local(address.ip()));
-        let mut payload = PairingPayload { version: 1, public_key: identity.public_key(), name: "Tailscale".into(), local_addresses: vec![address], public_endpoint: None };
+        let mut payload = PairingPayload { version: 1, public_key: identity.public_key(), name: "Tailscale".into(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
         let decoded = PairingPayload::decode(&payload.encode().unwrap()).unwrap();
         assert_eq!(decoded.local_addresses, vec![address]);
         assert_eq!(decoded.public_key, identity.public_key());
@@ -479,7 +482,7 @@ async fn tailscale_interfaces_carry_pinned_authenticated_http_and_audio_ranges()
                 (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, "bytes 100-199/1000")], vec![7_u8; 100]).into_response()
             }));
         let task = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
-        let selected = SelectedServer { public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None };
+        let selected = SelectedServer { public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
         // Disable public discovery: this must succeed even when bootstrap UDP is blocked.
         let timing = ambra_net::manager::Timing { hyperdht: Duration::ZERO, lan_grace: Duration::from_secs(3), ..Default::default() };
         let manager = ConnectionManager::with_timing(Identity::generate().unwrap(), selected.clone(), Some("fixture-token".into()), timing.clone());
@@ -507,7 +510,7 @@ async fn tailscale_interfaces_carry_pinned_authenticated_http_and_audio_ranges()
 async fn enrollment_authorizes_on_the_same_encrypted_connection() {
     let (identity, address, cancel, task, _) = harness().await;
     let manager = ConnectionManager::new(Identity::generate().unwrap(), SelectedServer {
-        public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None,
+        public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![],
     }, None);
     let enrollment = manager.connect().await.unwrap();
     assert_eq!(manager.status().state, ConnectionState::Authenticating);

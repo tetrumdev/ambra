@@ -206,6 +206,13 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     clock.set(positionSeconds);
     void control("seek", positionSeconds).catch(() => {});
   }, [clock, control]);
+  /**
+   * Silences the song being left on this device's engine while the core moves on, so a slow or
+   * lost skip can't leave it playing. The core's load of the next song plays as it asks.
+   */
+  const holdForSkip = useCallback(() => {
+    void invoke("shared_output_control", { action: "hold" }).catch(() => {});
+  }, []);
   const skip = useCallback((direction: "next" | "previous") => {
     if (direction === "previous" && clock.get() > RESTART_AFTER_SECONDS) {
       // Starting the song over. Only a seek: a "previous" sent after it would find the server
@@ -226,16 +233,20 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       void invoke<boolean>("shared_output_skip").catch(() => false).then(skipped => {
         if (skipping.current !== pending) return;
         if (coreView()?.loadedSource !== from) { skipping.current = null; return; }
+        // Not ready here: the old song stops while the core moves on.
+        if (!skipped) holdForSkip();
         if (!queue.next(!skipped)) skipping.current = null;
       });
       return;
     }
+    const local = followsEngine();
     const moved = direction === "next" ? queue.next() : queue.previous();
     if (!moved) return;
+    if (local) holdForSkip();
     skipping.current = { to: serverAudioSource(moved.track), outputId: coreView()?.output?.endpointId, at: performance.now() };
     clock.setRunning(false);
     clock.set(0);
-  }, [clock, followsEngine, queue, seekTo]);
+  }, [clock, followsEngine, holdForSkip, queue, seekTo]);
   const transport = useRef({ setPlaying, seekTo, skip });
   transport.current = { setPlaying, seekTo, skip };
   // App shortcuts control the shared transport; hardware controls only affect local playback.

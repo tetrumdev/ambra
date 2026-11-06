@@ -134,7 +134,8 @@ export function ServerSettings({ active }: { active: boolean }) {
   const connectionType = !server ? "Local" : !connected ? "Offline"
     : network.method === "Lan" ? "Local network"
     : network.method === "Pwnat" ? "pwnat"
-    : network.method === "HyperDHT" ? "HyperDHT" : "Unknown";
+    : network.method === "HyperDHT" ? "HyperDHT"
+    : network.method === "Public" ? "Internet (direct)" : "Unknown";
   const disconnect = async () => {
     if (changing) return;
     setChanging(true);
