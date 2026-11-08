@@ -80,7 +80,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNGNUE2MjREMEU2M0ExNjgKUldSb29XTU9UV0phUHk4ZnViZnUzWUdUSmhxd3dhTTF6djQ4b0Z3aGF2aWZ6eEtXbTB4d2lEa24K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3N0Y1QTExMTM5OEI1ODUKUldTRnRaZ1RFVnAvRndXcEw1WXVHajByd3NqTmYrNFc2NWh2TEhaaFFDL3RqUG9zMzBRU29zQlAK",
       "endpoints": [
         "https://github.com/tetrumdev/ambra/releases/latest/download/latest.json"
       ],
