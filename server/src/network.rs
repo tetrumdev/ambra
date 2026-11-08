@@ -56,6 +56,9 @@ pub struct Network {
     pub changed: tokio::sync::Notify,
     pub authenticated_sessions: RwLock<HashMap<String, (u64, std::sync::Weak<ambra_net::transport::Session>)>>,
     pending: Mutex<HashMap<String, PendingPairing>>,
+    /// While open, unpaired devices may reach the pairing routes over HyperDHT. Only the
+    /// server's owner opens it, by showing the pairing link; it closes on its own.
+    pairing_window: RwLock<Option<Instant>>,
     /// The address actually listened on, which an environment override may have changed.
     pub listening: RwLock<Option<SocketAddr>>,
 }
@@ -83,8 +86,35 @@ impl Network {
             changed: tokio::sync::Notify::new(),
             authenticated_sessions: RwLock::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
+            pairing_window: RwLock::new(None),
             listening: RwLock::new(None),
         })
+    }
+
+    /// Whether `key` belongs to a paired device. Devices paired before keys were recorded
+    /// have none and can only reach the server on the LAN.
+    pub fn is_paired_key(&self, key: &ambra_net::PublicKey) -> bool {
+        self.config.read().is_ok_and(|config| config.paired_clients.iter().any(|c| c.public_key.as_ref() == Some(key)))
+    }
+
+    fn pairing_open(&self) -> bool {
+        self.pairing_window.read().is_ok_and(|w| w.is_some_and(|until| Instant::now() < until))
+    }
+
+    fn open_pairing_window(&self) {
+        if let Ok(mut window) = self.pairing_window.write() { *window = Some(Instant::now() + PAIRING_EXPIRES); }
+    }
+
+    /// The router-forwarded TCP port answers paired devices only, and never pairs.
+    pub fn admit_public(self: &Arc<Self>) -> ambra_net::gate::Admit {
+        let network = Arc::downgrade(self);
+        Arc::new(move |key| network.upgrade().is_some_and(|n| n.is_paired_key(key)))
+    }
+
+    /// HyperDHT answers paired devices, plus new ones while the owner is pairing.
+    pub fn admit_remote(self: &Arc<Self>) -> ambra_net::gate::Admit {
+        let network = Arc::downgrade(self);
+        Arc::new(move |key| network.upgrade().is_some_and(|n| n.is_paired_key(key) || n.pairing_open()))
     }
 
     pub fn paired_client_id(&self, token: &str, peer_key: Option<ambra_net::PublicKey>) -> Option<String> {
@@ -492,6 +522,7 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
 async fn pairing_payload(State(network): State<SharedNetwork>) -> Response {
     let info = server_info(&network);
     if !info.on_network { return error(StatusCode::BAD_REQUEST, "Enable LAN sharing before pairing another device"); }
+    network.open_pairing_window();
     let config = network.config.read().unwrap_or_else(|p| p.into_inner());
     let payload = ambra_net::pairing::PairingPayload {
         version: 1, public_key: info.public_key, name: info.name,
@@ -512,6 +543,23 @@ fn error_response(message: String) -> Response { error(StatusCode::INTERNAL_SERV
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn internet_paths_admit_paired_keys_and_dht_pairing_only_while_open() {
+        let device = ambra_net::Identity::generate().unwrap().public_key();
+        let stranger = ambra_net::Identity::generate().unwrap().public_key();
+        let mut config = ServerConfig::load_default_for_tests();
+        config.paired_clients.push(PairedClient { id: "phone".into(), name: "Phone".into(), token_sha256: String::new(), paired_at_ms: 0, public_key: Some(device) });
+        config.paired_clients.push(PairedClient { id: "legacy".into(), name: "Legacy".into(), token_sha256: String::new(), paired_at_ms: 0, public_key: None });
+        let network = Network::new(config);
+        let (public, remote) = (network.admit_public(), network.admit_remote());
+        assert!(public(&device) && remote(&device));
+        assert!(!public(&stranger) && !remote(&stranger));
+        network.open_pairing_window();
+        assert!(remote(&stranger), "owner opened pairing");
+        assert!(!public(&stranger), "the forwarded port never pairs");
+        *network.pairing_window.write().unwrap() = Some(Instant::now() - Duration::from_secs(1));
+        assert!(!remote(&stranger), "window closed");
+    }
     #[test]
     fn endpoint_cli_field_and_optional_pwnat_are_deserialized() {
         let change: ConfigChange = serde_json::from_value(json!({ "publicEndpoint": "8.8.8.8:38149", "pwnat": true })).unwrap();

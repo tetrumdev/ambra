@@ -1,20 +1,20 @@
 import { useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import type { Track } from "../types/music";
-import { TrackCollectionMenu } from "./TrackCollectionMenu";
 import type { EntityAction } from "./EntityView";
+import { AlbumMenu } from "./AlbumMenu";
+import type { PlaylistMenuOptions } from "./TrackCollectionMenu";
 
 type AlbumActionsProps = {
   title: string;
   tracks: Track[];
-  /** The album's songs not yet in the library. */
-  unsaved: Track[];
+  savedTrackIds: ReadonlySet<string>;
   onAction: (action: EntityAction, tracks: Track[]) => void;
   onAddTracks: (tracks: Track[]) => void;
+  playlistOptions?: PlaylistMenuOptions;
 };
 
 /** An album's three-dots menu beside Play, like a playlist's. */
-export function AlbumActions({ title, tracks, unsaved, onAction, onAddTracks }: AlbumActionsProps) {
+export function AlbumActions({ title, tracks, savedTrackIds, onAction, onAddTracks, playlistOptions }: AlbumActionsProps) {
   const [menu, setMenu] = useState<{ x: number; y: number; flipY: number } | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const empty = !tracks.length;
@@ -35,26 +35,19 @@ export function AlbumActions({ title, tracks, unsaved, onAction, onAddTracks }: 
       >
         <img src="/menu.svg" alt="" aria-hidden="true" />
       </button>
-      {/* Portaled, so the header's clipped action row can't trap the fixed menu. */}
-      {menu && createPortal(
-        <TrackCollectionMenu
-          trackId=""
+      {menu && (
+        <AlbumMenu
+          title={title}
+          tracks={tracks}
+          savedTrackIds={savedTrackIds}
+          onAction={onAction}
+          onAddTracks={onAddTracks}
+          playlistOptions={playlistOptions}
           xPos={menu.x}
           yPos={menu.y}
           flipY={menu.flipY}
           onClose={() => { setMenu(null); trigger.current?.focus(); }}
-          actions={[
-            { label: "Add to Queue", icon: "/add-to-queue.svg", onSelect: () => onAction("queue", tracks) },
-            { label: "Play Next", icon: "/play-next.svg", onSelect: () => onAction("nextAll", tracks) },
-            {
-              label: unsaved.length ? "Add to Library" : "In Library",
-              icon: "/add.svg",
-              disabled: !unsaved.length,
-              onSelect: () => onAddTracks(unsaved),
-            },
-          ]}
-        />,
-        document.body,
+        />
       )}
     </>
   );

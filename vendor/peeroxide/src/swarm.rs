@@ -123,6 +123,9 @@ pub struct SwarmConfig {
     /// Tests that want to exercise the real network path (without leaning
     /// on same-host loopback) should set this to `false`.
     pub local_connection: bool,
+    /// Decides, from the initiator's static key in the first IK message, whether to
+    /// answer a server handshake at all. A rejected peer gets no reply. Default: all.
+    pub admit: Option<std::sync::Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync>>,
 }
 
 impl Default for SwarmConfig {
@@ -136,6 +139,7 @@ impl Default for SwarmConfig {
             relay_through: None,
             relay_address: None,
             local_connection: true,
+            admit: None,
         }
     }
 }
@@ -355,6 +359,7 @@ struct ActorConfig {
     relay_through: Option<[u8; 32]>,
     relay_address: Option<std::net::SocketAddr>,
     local_connection: bool,
+    admit: Option<std::sync::Arc<dyn Fn(&[u8; 32]) -> bool + Send + Sync>>,
 }
 
 struct SwarmActor {
@@ -516,6 +521,7 @@ pub async fn spawn(
             relay_through: config.relay_through,
             relay_address: config.relay_address,
             local_connection: config.local_connection,
+            admit: config.admit,
         },
         runtime_handle: runtime.handle(),
         local_port: primary_socket_port,
@@ -1060,6 +1066,14 @@ impl SwarmActor {
         if remote_payload.error != 0 {
             let _ = reply_tx.send(None);
             return;
+        }
+
+        if let Some(admit) = &self.config.admit {
+            if !nw.remote_public_key().is_some_and(|key| admit(key)) {
+                tracing::debug!("server handshake: peer not admitted; no reply");
+                let _ = reply_tx.send(None);
+                return;
+            }
         }
 
         let client_address = initial_client_address;

@@ -477,10 +477,13 @@ async fn connect_inner(
     Ok((io, pump.retain(Box::new((endpoint, Session(connection))))))
 }
 
+/// QUIC exposes its handshake before Noise can name the peer, so this opt-in path admits
+/// by key only after Noise; unadmitted peers are disconnected before any HTTP.
 pub async fn serve(
     address: SocketAddr,
     identity: Identity,
     app: axum::Router,
+    admit: crate::gate::Admit,
     cancel: CancellationToken,
     status: SharedStatus,
 ) -> Result<()> {
@@ -559,13 +562,14 @@ pub async fn serve(
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             Some(incoming) = endpoint.accept() => {
                 if validate_endpoint(incoming.remote_address()).is_err() || tasks.len() >= 64 { incoming.refuse(); continue; }
-                let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone();
+                let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone(); let admit = admit.clone();
                 tasks.spawn(async move {
                     let setup = async {
                         let connection = incoming.await?;
                         let address = connection.remote_address();
                         let (send, recv) = connection.accept_bi().await?;
                         let (io, mut peer, pump) = transport::secure(Bi { send, recv }, &identity, None).await?;
+                        if !admit(&peer.public_key) { connection.close(0u32.into(), b""); return Err("pwnat peer is not paired".into()); }
                         peer.address = address;
                         tracing::info!(peer = %peer.public_key, endpoint = %address, "pwnat accepted authenticated direct QUIC/Noise stream; device authorization still required");
                         Ok::<_, crate::Error>((io, peer, pump.retain(Box::new(connection))))

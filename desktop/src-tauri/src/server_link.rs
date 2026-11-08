@@ -256,7 +256,12 @@ impl Runtime {
             let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::new(identity, selected, settings.token.clone()));
             // Remembers the server's public address learned at home, for use away from it.
             manager.use_endpoint_cache(directory.join("server-endpoints.json"));
-            let bridge = ambra_net::bridge::Bridge::start(manager.clone()).await.map_err(|e| e.to_string())?;
+            // Like the phone: a warm Internet path beside the LAN, network changes noticed at
+            // once, and songs downloaded ahead, so moving between LAN and P2P never stops a song.
+            manager.enable_roaming();
+            manager.watch_network();
+            let cache = directory.join("network-media-cache");
+            let bridge = ambra_net::bridge::Bridge::start_with_cache(manager.clone(), Some(cache)).await.map_err(|e| e.to_string())?;
             (Some(manager), Some(bridge))
         } else { (None, None) };
         Ok(Self { connection: ServerLink::describe(settings, bridge.as_ref()), manager, bridge, network_error: None })
@@ -616,7 +621,7 @@ mod pairing_handoff_tests {
             let app = axum::Router::new().route("/api/network/session", axum::routing::get(|request: axum::extract::Request| async move {
                 if request.headers().get("authorization").is_some_and(|v| v == "Bearer paired-token") { axum::http::StatusCode::OK } else { axum::http::StatusCode::UNAUTHORIZED }
             }));
-            let task = tokio::spawn(ambra_net::lan::serve(listener, server.clone(), app, cancel.clone()));
+            let task = tokio::spawn(ambra_net::lan::serve(listener, server.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
             let payload = ambra_net::pairing::PairingPayload { version: 1, public_key: server.public_key(), name: "Independent".into(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
             let manager = ambra_net::ConnectionManager::new(ambra_net::Identity::generate().unwrap(), ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] }, None);
             let connection = manager.connect().await.unwrap();

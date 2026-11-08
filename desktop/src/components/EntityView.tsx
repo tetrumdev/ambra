@@ -213,9 +213,10 @@ function AlbumView({
         <AlbumActions
           title={album.title}
           tracks={tracks}
-          unsaved={tracks.filter((track) => !savedTrackIds.has(track.globalId) && track.provider !== "local")}
+          savedTrackIds={savedTrackIds}
           onAction={props.onAction}
           onAddTracks={props.onAddTracks}
+          playlistOptions={props.playlistOptions}
         />
       }
       playTrack={(id) => props.onAction("play", tracks, id)}

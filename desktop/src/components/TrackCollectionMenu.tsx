@@ -1,7 +1,7 @@
 import "./TrackMenus.css";
 import { ProviderIcon } from "./ProviderIcon";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { Playlist } from "../types/music";
+import type { Playlist, Track } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
@@ -14,6 +14,9 @@ export type PlaylistMenuOptions = {
   playlists: Playlist[];
   onAdd: (playlistId: string, trackId: string) => boolean | Promise<boolean>;
   onCreate: (name: string, trackId: string) => boolean | Promise<boolean>;
+  /** Adds several songs at once, in order, e.g. a whole album. */
+  onAddTracks: (playlistId: string, tracks: Track[]) => boolean | Promise<boolean>;
+  onCreateWithTracks: (name: string, tracks: Track[]) => boolean | Promise<boolean>;
 };
 
 export type TrackCollectionAction = {
@@ -36,11 +39,14 @@ type TrackCollectionMenuProps = {
   placement?: "below" | "above";
   /** Where a downward menu opens upward from instead, when it would run into the player bar. */
   flipY?: number;
+  /** Songs a collection menu (no single song) adds to a playlist; null while they load. */
+  tracks?: Track[] | null;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks }: TrackCollectionMenuProps) {
+  const collection = tracks !== undefined;
   const connected = useServiceAvailability();
-  const available = isTrackAvailable(trackId, connected);
+  const available = collection || isTrackAvailable(trackId, connected);
   if (!available) { actions = actions.filter(action => action.whenUnavailable); playlistOptions = undefined; }
   // Every song's edit menu offers a download; collection menus (no song) bring their own.
   if (available && trackId && isDownloadable(trackId)) {
@@ -112,9 +118,11 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
               return <details className="playlistMenuGroup playlistDropdown" key={provider ?? "ambra"} open>
                 <summary><DropdownChevron /><ProviderIcon provider={provider ?? "local"} label={provider ? undefined : "AMBRA"} /></summary>
                 {playlists.map(playlist => {
-              const added = playlist.trackIds.includes(trackId);
-              return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving} onClick={() => {
-                void save(() => playlistOptions.onAdd(playlist.id, trackId));
+              const added = collection
+                ? Boolean(tracks?.length) && tracks!.every(track => playlist.trackIds.includes(track.globalId))
+                : playlist.trackIds.includes(trackId);
+              return <button type="button" className="menuItem" key={playlist.id} disabled={added || saving || (collection && !tracks?.length)} onClick={() => {
+                void save(() => collection ? playlistOptions.onAddTracks(playlist.id, tracks ?? []) : playlistOptions.onAdd(playlist.id, trackId));
               }}>{playlist.name}{added ? " ✓" : ""}</button>;
                 })}
               </details>;
@@ -122,10 +130,10 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
           </div>
           <form className="playlistMenuCreate" onSubmit={event => {
             event.preventDefault();
-            void save(() => playlistOptions.onCreate(name, trackId));
+            void save(() => collection ? playlistOptions.onCreateWithTracks(name, tracks ?? []) : playlistOptions.onCreate(name, trackId));
           }}>
             <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New playlist" value={name} onChange={event => setName(event.target.value)} />
-            <button type="submit" disabled={!name.trim() || saving}>{saving ? "Saving…" : "Create"}</button>
+            <button type="submit" disabled={!name.trim() || saving || (collection && !tracks?.length)}>{saving ? "Saving…" : "Create"}</button>
             {error && <span role="alert">{error}</span>}
           </form>
         </> : <>
@@ -135,7 +143,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
             {action.label}
           </button>
         ))}
-        {playlistOptions && <button type="button" className="menuItem" onClick={() => setChoosingPlaylist(true)}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />Add to Playlist</button>}
+        {playlistOptions && <button type="button" className="menuItem" disabled={collection && !tracks?.length} onClick={() => setChoosingPlaylist(true)}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />Add to Playlist</button>}
         </>}
       </div>
     </div>

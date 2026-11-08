@@ -26,7 +26,7 @@ test("the album menu queues, plays next and saves the whole album", async () => 
   const saved: string[][] = [];
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
-  await act(async () => root.render(<AlbumActions title="Album" tracks={tracks} unsaved={tracks.slice(1)}
+  await act(async () => root.render(<AlbumActions title="Album" tracks={tracks} savedTrackIds={new Set([tracks[0].globalId])}
     onAction={(action, list) => actions.push([action, list.map(track => track.globalId)])}
     onAddTracks={list => saved.push(list.map(track => track.globalId))} />));
   const choose = async (label: string) => {
@@ -41,5 +41,25 @@ test("the album menu queues, plays next and saves the whole album", async () => 
   const ids = tracks.map(track => track.globalId);
   expect(actions).toEqual([["queue", ids], ["nextAll", ids]]);
   expect(saved).toEqual([ids.slice(1)]);
+  await act(async () => root.unmount());
+});
+
+test("the album menu adds the whole album to a playlist", async () => {
+  const tracks = [song("1"), song("2")];
+  const added: [string, string[]][] = [];
+  const host = document.createElement("div"); document.body.append(host);
+  const root = createRoot(host);
+  const playlistOptions = {
+    playlists: [{ id: "mix", name: "Mix", trackIds: [] }],
+    onAdd: () => false, onCreate: () => false, onCreateWithTracks: () => false,
+    onAddTracks: (id: string, list: Track[]) => { added.push([id, list.map(track => track.globalId)]); return true; },
+  };
+  await act(async () => root.render(<AlbumActions title="Album" tracks={tracks} savedTrackIds={new Set()}
+    onAction={() => {}} onAddTracks={() => {}} playlistOptions={playlistOptions} />));
+  await act(async () => host.querySelector<HTMLButtonElement>(".libraryMoreBtn")!.click());
+  const menuItem = (label: string) => [...document.querySelectorAll<HTMLButtonElement>(".menuItem")].find(button => button.textContent?.includes(label))!;
+  await act(async () => menuItem("Add to Playlist").click());
+  await act(async () => menuItem("Mix").click());
+  expect(added).toEqual([["mix", tracks.map(track => track.globalId)]]);
   await act(async () => root.unmount());
 });

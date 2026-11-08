@@ -154,14 +154,17 @@ pub struct Status {
 pub type SharedStatus = Arc<std::sync::RwLock<Status>>;
 
 /// Upstream acceptor handles passive NAT rounds. No client topic swarm is started.
+/// Peers `admit` rejects get no handshake reply at all.
 pub async fn serve(
     identity: Identity,
     app: axum::Router,
     status: SharedStatus,
+    admit: crate::gate::Admit,
     cancel: CancellationToken,
     pwnat_status: Option<pwnat::SharedStatus>,
 ) -> Result<()> {
     let mut config = peeroxide::SwarmConfig::with_public_bootstrap();
+    config.admit = Some(Arc::new(move |key: &[u8; 32]| admit(&PublicKey(*key))));
     config.key_pair = Some(identity.key_pair());
     config.max_peers = 64;
     config.max_parallel = 2;

@@ -682,12 +682,16 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
                 return Ok((false, Err(current)));
             }
             queue["revision"] = json!(current);
+            // Another song made current (a shuffle, a new list) starts like a skip.
+            let moved = saved["current"]["globalTrackId"] != queue["current"]["globalTrackId"];
             *saved = queue;
-            Ok((true, Ok(())))
+            Ok((true, Ok(moved)))
         })
         .await;
     match applied {
-        Ok(Ok(())) => {}
+        Ok(Ok(moved)) => {
+            if moved { core.transport().silence_skipped = true; }
+        }
         Ok(Err(current)) => {
             return (StatusCode::CONFLICT, Json(json!({ "error": "The queue changed meanwhile", "queueRevision": current, "session": view(&core, None).await }))).into_response();
         }
@@ -710,6 +714,7 @@ async fn play_track(core: &Core, track_id: &str) {
         transport.playing = true;
         transport.buffering = true;
         transport.error = None;
+        transport.silence_skipped = true;
     }
     drop(transport);
     core.changed();
@@ -1555,6 +1560,19 @@ mod driver_tests {
         h.wait_for_command_after("play_native_audio", before).await;
         let commands: Vec<String> = received_after(&h, before).into_iter().map(|(command, _)| command).collect();
         assert_eq!(commands, ["pause_native_audio", "seek_native_audio", "play_native_audio"]);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn playing_a_new_song_or_shuffling_pauses_the_song_being_left_first() {
+        let h = Harness::playing_output().await;
+        let before = h.received.lock().unwrap().len();
+        let base = h.http.get(format!("{}/api/session", h.base)).send().await.unwrap().json::<Value>().await.unwrap()["queueRevision"].clone();
+        h.post("/api/session/queue", json!({ "base": base, "playTrackId": "b", "queue": { "version": 1, "history": [], "current": item("b"), "upcoming": [item("a")], "tracks": [track("a"), track("b")] } })).await;
+        h.wait_for_command_after("load_native_audio", before).await;
+        let commands: Vec<String> = received_after(&h, before).into_iter().map(|(command, _)| command).collect();
+        let pause = commands.iter().position(|command| command == "pause_native_audio").expect("the old song is paused");
+        let load = commands.iter().position(|command| command == "load_native_audio").unwrap();
+        assert!(pause < load, "paused before the new song loads: {commands:?}");
     }
 
     #[tokio::test(flavor = "multi_thread")]

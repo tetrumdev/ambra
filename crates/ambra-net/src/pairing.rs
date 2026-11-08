@@ -19,10 +19,17 @@ pub struct PairingPayload {
 }
 impl PairingPayload {
     pub fn encode(&self) -> Result<String> {
-        self.validate()?;
+        // Only hints that every device reads the same way, so no device rejects the link.
+        let mut portable = self.clone();
+        portable.local_addresses.retain(|a| crate::lan::is_portable_direct(a.ip()) && a.port() != 0);
+        portable.public_tcp.retain(|a| valid_public_tcp(*a));
+        if portable.public_endpoint.is_some_and(|e| crate::pwnat::validate_endpoint(e).is_err()) {
+            portable.public_endpoint = None;
+        }
+        portable.validate()?;
         Ok(format!(
             "ambra://pair/{}",
-            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(self)?)
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&portable)?)
         ))
     }
     pub fn decode(value: &str) -> Result<Self> {
@@ -36,6 +43,17 @@ impl PairingPayload {
                     .ok_or("Expected an Ambra pairing link")?,
             )?,
         )?;
+        let mut payload: Self = payload;
+        if payload.local_addresses.len() > 16 || payload.public_tcp.len() > 8 {
+            return Err("Invalid or unsupported pairing payload".into());
+        }
+        // Hints only speed up finding the server; its pinned key authenticates every path. One
+        // this device can't use (another network's IPv6 prefix, say) is dropped, not fatal.
+        payload.local_addresses.retain(|a| crate::lan::is_direct(a.ip()) && a.port() != 0);
+        payload.public_tcp.retain(|a| valid_public_tcp(*a));
+        if payload.public_endpoint.is_some_and(|e| crate::pwnat::validate_endpoint(e).is_err()) {
+            payload.public_endpoint = None;
+        }
         payload.validate()?;
         Ok(payload)
     }
@@ -54,15 +72,17 @@ impl PairingPayload {
         {
             return Err("Invalid local endpoint hint".into());
         }
-        if self.public_tcp.len() > 8
-            || self.public_tcp.iter().any(|a| match a.ip() {
-                std::net::IpAddr::V4(ip) => !crate::portmap::is_public(ip) || a.port() == 0,
-                std::net::IpAddr::V6(_) => true,
-            })
-        {
+        if self.public_tcp.len() > 8 || self.public_tcp.iter().any(|a| !valid_public_tcp(*a)) {
             return Err("Invalid public endpoint hint".into());
         }
         if let Some(endpoint) = self.public_endpoint { crate::pwnat::validate_endpoint(endpoint)?; }
         Ok(())
+    }
+}
+
+fn valid_public_tcp(address: std::net::SocketAddr) -> bool {
+    match address.ip() {
+        std::net::IpAddr::V4(ip) => crate::portmap::is_public(ip) && address.port() != 0,
+        std::net::IpAddr::V6(_) => false,
     }
 }

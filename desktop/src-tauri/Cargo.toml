@@ -23,6 +23,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dirs = "7"
 ambra-net = { path = "../../crates/ambra-net" }
 ambra-vault = { path = "../../crates/ambra-vault" }
 tauri = { version = "2", features = ["protocol-asset"] }

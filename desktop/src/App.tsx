@@ -382,10 +382,32 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (!track || !isTrackAvailable(track)) return false;
     return track ? Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000)))) : false;
   });
+  // A whole album or other collection, in order; songs already in the playlist are skipped.
+  const addTracksToPlaylist = useStableCallback(async (playlistId: string, tracks: Track[]) => {
+    const playlist = playlists.find(playlist => playlist.id === playlistId);
+    const pending = tracks.filter(track => isTrackAvailable(track) && !playlist?.trackIds.includes(track.globalId));
+    if (!playlist || !pending.length) return false;
+    if (playlist.provider) {
+      for (const track of pending) if (!await servicePlaylistStore.addTrack(playlistId, track)) return false;
+      return true;
+    }
+    const resolved = await Promise.all(pending.map(track => resolveTrackPlayback(track, AbortSignal.timeout(8000))));
+    return resolved.every(track => playlistStore.addTrack(playlistId, track));
+  });
+  const createPlaylistWithTracks = useStableCallback(async (name: string, tracks: Track[]) => {
+    const pending = tracks.filter(track => isTrackAvailable(track));
+    if (!pending.length) return false;
+    const resolved = await Promise.all(pending.map(track => resolveTrackPlayback(track, AbortSignal.timeout(8000))));
+    return Boolean(playlistStore.duplicate(name, resolved));
+  });
   // Stable so playback-clock renders don't invalidate memoized track views.
   const playlistOptions = useMemo(
-    () => ({ playlists: playlists.filter(playlist => playlist.editable !== false), onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack }),
-    [playlists, addTrackToPlaylist, createPlaylistWithTrack],
+    () => ({
+      playlists: playlists.filter(playlist => playlist.editable !== false),
+      onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack,
+      onAddTracks: addTracksToPlaylist, onCreateWithTracks: createPlaylistWithTracks,
+    }),
+    [playlists, addTrackToPlaylist, createPlaylistWithTrack, addTracksToPlaylist, createPlaylistWithTracks],
   );
 
   const selectedPlaylist = playlists.find((playlist) => {
@@ -1480,6 +1502,9 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
                 void library.addTrack(track.provider, track.providerTrackId);
               }
             }}
+            onAlbumAction={onEntityAction}
+            addTracksToLibrary={tracks => void addEntityTracks(tracks)}
+            savedTrackIds={libraryTrackIds}
             registerScrollElement={registerScrollElement}
           />
         ) : isHomeView ? (
