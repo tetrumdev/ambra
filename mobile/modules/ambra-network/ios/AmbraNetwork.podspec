@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name = 'AmbraNetwork'
-  s.version = '0.1.0'
+  s.version = '0.3.0'
   s.summary = 'Ambra native direct-only Rust networking'
   s.description = 'Shares Ambra networking with the Expo application.'
   s.license = { :type => 'GPL-3.0-only' }

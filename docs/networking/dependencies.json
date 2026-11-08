@@ -15,7 +15,7 @@
   },
   {
     "name": "ambra-net",
-    "version": "0.1.0",
+    "version": "0.3.0",
     "license": "GPL-3.0-only",
     "repository": null,
     "rust_version": null

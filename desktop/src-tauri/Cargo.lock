@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "AMBRA"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "alsa",
  "ambra-net",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "ambra-net"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -146,7 +146,7 @@ dependencies = [
 
 [[package]]
 name = "ambra-vault"
-version = "0.1.0"
+version = "0.3.0"
 dependencies = [
  "chacha20poly1305",
  "getrandom 0.3.4",

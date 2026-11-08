@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.0.1",
+  "version": "0.3.0",
   "main": "index.ts",
   "dependencies": {
     "@react-native-masked-view/masked-view": "0.3.2",

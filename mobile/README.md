@@ -68,7 +68,7 @@ bun run --cwd mobile build:ios:sideload
 
 Sign in to Expo when prompted, or supply `EXPO_TOKEN` through your shell's secret manager. No Apple credentials are needed for this unsigned profile. The script pins EAS CLI 27.2.0 and uploads the repository root even without Git, preserving the shared desktop assets and Rust crates. Running EAS with only `mobile/` as its upload root is insufficient.
 
-This custom EAS build compiles a Release app for a real iPhone on a cloud Mac, skips Apple signing, and packages `Ambra.ipa`. Download the IPA from the build page and import it with SideStore's add-app button or your existing sideloading tool. The app includes its JavaScript bundle and works without Expo Go or Metro. Native background audio and the patched system playback controls are included. Version 1.0.1 uses iOS build number 10.
+This custom EAS build compiles a Release app for a real iPhone on a cloud Mac, skips Apple signing, and packages `Ambra.ipa`. Download the IPA from the build page and import it with SideStore's add-app button or your existing sideloading tool. The app includes its JavaScript bundle and works without Expo Go or Metro. Native background audio and the patched system playback controls are included. Version 0.3.0 uses iOS build number 10.
 
 Keep the existing Expo/React Native implementation for this build. Local iOS native compilation requires macOS with full Xcode; xtool is not a drop-in replacement for this app's CocoaPods, Expo and native audio dependencies. Linux can run the tests, typecheck and iOS JavaScript export, but that export is not an installable IPA.
 
