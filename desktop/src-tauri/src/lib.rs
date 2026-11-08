@@ -29,6 +29,7 @@ mod app_update;
 mod cover_thumbnails;
 mod display_wake;
 mod downloads;
+mod identifier_migration;
 mod keyboard;
 mod library_index;
 mod local_import;
@@ -1068,6 +1069,8 @@ pub fn run() {
     let _ = tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).with_ansi(false).try_init();
     let _ = PROCESS_STARTED.set(Instant::now());
     let context = tauri::generate_context!();
+    // Before the webview or anything else opens the app's folders.
+    identifier_migration::migrate(&context.config().identifier);
     #[cfg(debug_assertions)]
     let context = {
         let mut context = context;

@@ -56,6 +56,7 @@ async fn main() -> ambra_net::Result<()> {
             address,
             identity,
             app,
+            ambra_net::gate::admit_all(),
             cancel.clone(),
             status.clone(),
         ));
@@ -80,6 +81,7 @@ async fn main() -> ambra_net::Result<()> {
             listener,
             identity,
             app,
+            ambra_net::gate::admit_all(),
             cancel.clone(),
         ));
         tokio::select! { _ = tokio::time::sleep(Duration::from_secs(300)) => {}, _ = tokio::signal::ctrl_c() => {} }
@@ -92,6 +94,7 @@ async fn main() -> ambra_net::Result<()> {
         identity,
         app,
         status.clone(),
+        ambra_net::gate::admit_all(),
         cancel.clone(),
         None,
     ));

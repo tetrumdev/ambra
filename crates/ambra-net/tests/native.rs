@@ -101,7 +101,7 @@ async fn harness() -> (
                 next.run(request).await
             },
         ));
-    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, cancel.clone()));
+    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
     (identity, address, cancel, task, count)
 }
 fn manager(identity: &Identity, address: std::net::SocketAddr) -> Arc<ConnectionManager> {
@@ -178,7 +178,35 @@ fn public_pairing_payload_is_versioned_bounded_and_has_no_credentials() {
     assert!(PairingPayload::decode(&"x".repeat(9000)).is_err());
     invalid = payload;
     invalid.local_addresses = vec!["8.8.8.8:80".parse().unwrap()];
-    assert!(invalid.encode().is_err());
+    assert!(PairingPayload::decode(&invalid.encode().unwrap()).unwrap().local_addresses.is_empty());
+}
+#[test]
+fn a_pairing_link_drops_hints_this_device_cannot_use_instead_of_failing() {
+    use base64::Engine;
+    let key = Identity::generate().unwrap().public_key();
+    // As an older server wrote it: its global IPv6 address counted as local on its own prefix.
+    let raw = serde_json::json!({
+        "version": 1, "publicKey": key, "name": "Home",
+        "localAddresses": ["192.168.1.20:38149", "[2001:db8:1234::20]:38149", "[fd00::20]:38149", "100.101.102.103:38149"],
+        "publicEndpoint": null,
+    });
+    let link = format!("ambra://pair/{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw.to_string()));
+    let decoded = PairingPayload::decode(&link).unwrap();
+    assert_eq!(decoded.public_key, key);
+    let kept: Vec<String> = decoded.local_addresses.iter().map(ToString::to_string).collect();
+    assert!(kept.contains(&"192.168.1.20:38149".to_owned()));
+    assert!(kept.contains(&"[fd00::20]:38149".to_owned()));
+    assert!(kept.contains(&"100.101.102.103:38149".to_owned()));
+    // New links never carry such an address at all.
+    let mut fresh = decoded.clone();
+    fresh.local_addresses.push("[2001:db8:1234::20]:38149".parse().unwrap());
+    let encoded = fresh.encode().unwrap();
+    let reread = PairingPayload::decode(&encoded).unwrap();
+    assert!(reread.local_addresses.iter().all(|a| a.to_string() != "[2001:db8:1234::20]:38149"));
+    // Untrusted bounds still hold.
+    let too_many = serde_json::json!({ "version": 1, "publicKey": key, "name": "Home", "localAddresses": vec!["192.168.1.20:38149"; 17] });
+    let link = format!("ambra://pair/{}", base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(too_many.to_string()));
+    assert!(PairingPayload::decode(&link).is_err());
 }
 #[test]
 fn independent_icmp_packets_validate_and_reject_corruption_or_other_echoes() {
@@ -385,6 +413,7 @@ async fn ipv6_lan_authenticates_without_internet_when_available() {
         listener,
         identity.clone(),
         Router::new(),
+        ambra_net::gate::admit_all(),
         cancel.clone(),
     ));
     let (io, pump) = lan::connect(
@@ -419,7 +448,7 @@ async fn reconnect_preserves_selected_identity_and_stable_bridge() {
     let app = Router::new()
         .route("/api/network/session", get(|| async { "authorized" }))
         .route("/api/restored", get(|| async { "same server" }));
-    let restarted = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+    let restarted = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), stop.clone()));
     manager.connect().await.unwrap();
     assert_eq!(bridge.base_url, stable);
     assert_eq!(manager.status().server, identity.public_key());
@@ -449,7 +478,7 @@ fn tailscale_pairing_hints_round_trip_but_never_become_public_traversal_endpoint
         assert_eq!(decoded.public_key, identity.public_key());
         payload.local_addresses.clear();
         payload.public_endpoint = Some(address);
-        assert!(payload.encode().is_err());
+        assert_eq!(PairingPayload::decode(&payload.encode().unwrap()).unwrap().public_endpoint, None);
     }
     assert!(lan::local_addresses(38149).iter().all(|a| !peeroxide_dht::address_policy::is_overlay(a.ip())));
 }
@@ -481,7 +510,7 @@ async fn tailscale_interfaces_carry_pinned_authenticated_http_and_audio_ranges()
                 assert_eq!(request.headers().get(header::RANGE).unwrap(), "bytes=100-199");
                 (StatusCode::PARTIAL_CONTENT, [(header::CONTENT_RANGE, "bytes 100-199/1000")], vec![7_u8; 100]).into_response()
             }));
-        let task = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+        let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), stop.clone()));
         let selected = SelectedServer { public_key: identity.public_key(), local_addresses: vec![address], public_endpoint: None, public_tcp: vec![] };
         // Disable public discovery: this must succeed even when bootstrap UDP is blocked.
         let timing = ambra_net::manager::Timing { hyperdht: Duration::ZERO, lan_grace: Duration::from_secs(3), ..Default::default() };
@@ -555,7 +584,7 @@ async fn connection_waiters_share_authorization_when_first_waiter_is_cancelled()
             }
         }),
     );
-    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), stop.clone()));
     let manager = manager(&identity, address);
     let first = tokio::spawn({
         let manager = manager.clone();
@@ -604,7 +633,7 @@ async fn shutdown_cancels_shared_authorization_and_all_waiters() {
         }),
     );
     let stop = CancellationToken::new();
-    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, stop.clone()));
+    let server = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), stop.clone()));
     let manager = manager(&identity, address);
     let waiter = tokio::spawn({
         let manager = manager.clone();
@@ -667,7 +696,7 @@ async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
                 response
             }
         }));
-    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, cancel.clone()));
+    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
     let directory = std::env::temp_dir().join(format!("ambra-media-cache-test-{}", std::process::id()));
     let bridge = ambra_net::bridge::Bridge::start_with_cache(manager(&identity, address), Some(directory.clone())).await.unwrap();
     let client = reqwest::Client::new();

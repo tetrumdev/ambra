@@ -120,6 +120,12 @@ export function followPhoneOutput() {
         void player.local("seek", Math.max(0, Number(details.positionSeconds)));
         return true;
       }
+      if (action === "startTrack") {
+        // The core loads the new song next; only a lost request leaves this phone to pause.
+        const held = player;
+        if (!held.holdForSkip()) return false;
+        return answer => { if (!answer) held.endSkip(false); };
+      }
       if (action === "next" || action === "previous") {
         // Silence the old song until the core moves on, so a slow or lost skip can't let it
         // play on. The core then loads the next song, or seeks for a previous that restarts.

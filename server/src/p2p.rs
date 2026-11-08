@@ -110,9 +110,9 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
         Ok(listener) => {
             if let Ok(mut listening) = network.secure_listening.write() { *listening = listener.local_addr().ok(); }
             let identity = network.identity.clone(); let app = app.clone(); let cancel = cancel.clone();
-            let diagnostics = network.clone();
+            let diagnostics = network.clone(); let admit = network.admit_public();
             tasks.spawn(async move {
-                if let Err(error) = ambra_net::lan::serve(listener, identity, app, cancel).await {
+                if let Err(error) = ambra_net::lan::serve(listener, identity, app, admit, cancel).await {
                     *diagnostics.lan_error.write().unwrap_or_else(|p| p.into_inner()) = Some(error.to_string());
                     eprintln!("Secure LAN listener stopped: {error}");
                 }
@@ -141,9 +141,10 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
             if desired.0 {
                 let stop = cancel.child_token(); pwnat_cancel = Some(stop.clone());
                 let identity = network.identity.clone(); let app = app.clone(); let status = network.pwnat_status.clone();
+                let admit = network.admit_remote();
                 pwnat_tasks.spawn(async move {
                     supervise_listener(stop.clone(), || async {
-                        let result = ambra_net::pwnat::serve(secure, identity.clone(), app.clone(), stop.clone(), status.clone()).await;
+                        let result = ambra_net::pwnat::serve(secure, identity.clone(), app.clone(), admit.clone(), stop.clone(), status.clone()).await;
                         if !stop.is_cancelled() {
                             let message = result.err().map_or_else(|| "pwnat listener stopped unexpectedly".to_owned(), |e|e.to_string());
                             eprintln!("Optional pwnat unavailable; retrying: {message}");
@@ -157,11 +158,11 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
         if enabled && remote_cancel.is_none() {
             let stop = cancel.child_token(); remote_cancel = Some(stop.clone());
             let status = network.dht_status.clone(); let identity = network.identity.clone(); let dht_app = app.clone(); let stop_dht = stop.clone();
-            let pwnat_status = network.pwnat_status.clone();
+            let pwnat_status = network.pwnat_status.clone(); let admit = network.admit_remote();
             remote_tasks.spawn(forward_ports(network.clone(), port, stop.clone()));
             remote_tasks.spawn(async move {
                 supervise_listener(stop_dht.clone(), || async {
-                    let result = ambra_net::hyperdht::serve(identity.clone(), dht_app.clone(), status.clone(), stop_dht.clone(), Some(pwnat_status.clone())).await;
+                    let result = ambra_net::hyperdht::serve(identity.clone(), dht_app.clone(), status.clone(), admit.clone(), stop_dht.clone(), Some(pwnat_status.clone())).await;
                     if !stop_dht.is_cancelled() {
                         let message = result.err().map_or_else(|| "HyperDHT listener stopped unexpectedly".to_owned(), |e|e.to_string());
                         if let Ok(mut status) = status.write() { status.running = false; status.announced = false; status.error = Some(message); }

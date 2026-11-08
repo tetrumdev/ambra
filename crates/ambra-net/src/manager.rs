@@ -589,6 +589,28 @@ impl ConnectionManager {
         self.network.send_modify(|generation| *generation += 1);
     }
 
+    /// For devices whose OS doesn't report network changes to the app (desktops): notices a
+    /// changed set of addresses (Wi-Fi to Ethernet, joining a VPN, leaving home) within seconds.
+    pub fn watch_network(self: &Arc<Self>) {
+        let owner = Arc::downgrade(self);
+        let cancel = self.cancel.clone();
+        tokio::spawn(async move {
+            let mut last = tokio::task::spawn_blocking(network_signature).await.unwrap_or_default();
+            loop {
+                tokio::select! {
+                    () = cancel.cancelled() => return,
+                    () = tokio::time::sleep(Duration::from_secs(2)) => {}
+                }
+                let current = tokio::task::spawn_blocking(network_signature).await.unwrap_or_default();
+                if current == last { continue; }
+                last = current;
+                let Some(manager) = owner.upgrade() else { return };
+                tracing::info!("Network addresses changed");
+                manager.network_changed();
+            }
+        });
+    }
+
     pub async fn run(&self) {
         let mut immediate_retry = true;
         let mut network = self.network.subscribe();
@@ -722,13 +744,36 @@ impl ConnectionManager {
         };
         if tokio::time::timeout(Duration::from_secs(5), self.authenticate(&connection, method)).await.is_ok_and(|result| result.is_ok()) {
             tracing::info!(?method, "Moved to a better connection");
-            if let Some(old) = self.active.write().await.replace(connection) { old.close(); }
+            if let Some(old) = self.active.write().await.replace(connection) { retire(old); }
             true
         } else {
             connection.close();
             false
         }
     }
+}
+
+/// How long a replaced connection may finish the requests it already carries (a song
+/// downloading, a long poll). New requests go to its replacement at once.
+const RETIRE_AFTER: Duration = Duration::from_secs(30);
+
+fn retire(connection: Arc<HttpConnection>) {
+    tokio::spawn(async move {
+        tokio::select! {
+            () = connection.closed() => {}
+            () = tokio::time::sleep(RETIRE_AFTER) => connection.close(),
+        }
+    });
+}
+
+/// The addresses this device has, to notice a changed network without help from the OS.
+fn network_signature() -> Vec<(String, std::net::IpAddr)> {
+    let mut addresses: Vec<_> = if_addrs::get_if_addrs().unwrap_or_default().into_iter()
+        .filter(|interface| !interface.is_loopback())
+        .map(|interface| { let ip = interface.ip(); (interface.name, ip) })
+        .collect();
+    addresses.sort();
+    addresses
 }
 
 /// Whether a connection still carries requests. Public, so it works before authorization.
@@ -784,27 +829,42 @@ where
     let operation = async {
         let mut errors = Vec::new();
         {
+            // LAN and the forwarded public port are both a single TCP dial, so they start
+            // together: away from home the public path costs no head-start delay, and at
+            // home the LAN answers in milliseconds and wins. HyperDHT (heavier, UDP)
+            // waits for the LAN grace period.
             let lan = tokio::time::timeout(timing.lan, attempt(Method::Lan));
             tokio::pin!(lan);
-            let mut lan_done = false;
-            tokio::select! {
-                biased;
-                result = &mut lan => {
-                    lan_done = true;
-                    match result {
-                        Ok(Ok(connection)) => return Ok((Method::Lan, connection)),
-                        result => errors.push(attempt_error(Method::Lan, result, timing.lan)),
-                    }
-                }
-                _ = tokio::time::sleep(timing.lan_grace) => {}
-            }
-            // Off the LAN, the forwarded TCP port connects in one round trip when the
-            // network allows it; HyperDHT hole punching covers routers without forwarding.
             let public = tokio::time::timeout(timing.public, attempt(Method::Public));
             tokio::pin!(public);
+            let (mut lan_done, mut public_done) = (false, false);
+            let grace = tokio::time::sleep(timing.lan_grace);
+            tokio::pin!(grace);
+            loop {
+                tokio::select! {
+                    biased;
+                    result = &mut lan, if !lan_done => {
+                        lan_done = true;
+                        match result {
+                            Ok(Ok(connection)) => return Ok((Method::Lan, connection)),
+                            result => errors.push(attempt_error(Method::Lan, result, timing.lan)),
+                        }
+                    }
+                    result = &mut public, if !public_done => {
+                        public_done = true;
+                        match result {
+                            Ok(Ok(connection)) => return Ok((Method::Public, connection)),
+                            result => errors.push(attempt_error(Method::Public, result, timing.public)),
+                        }
+                    }
+                    _ = &mut grace => break,
+                }
+                if lan_done && public_done { break; }
+            }
+            // HyperDHT hole punching covers routers without forwarding.
             let dht = tokio::time::timeout(timing.hyperdht, attempt(Method::HyperDHT));
             tokio::pin!(dht);
-            let (mut public_done, mut dht_done) = (false, false);
+            let mut dht_done = false;
             while !lan_done || !public_done || !dht_done {
                 tokio::select! {
                     biased;
@@ -866,7 +926,7 @@ mod tests {
     use super::*;
 
     #[tokio::test(start_paused = true)]
-    async fn lan_grace_avoids_public_discovery_on_fast_lan() {
+    async fn lan_grace_avoids_dht_discovery_on_fast_lan() {
         let mut visited = Vec::new();
         let result = raced(
             &Timing::default(),
@@ -879,8 +939,9 @@ mod tests {
         )
         .await
         .unwrap();
+        // The public TCP dial starts alongside the LAN one; HyperDHT never starts.
         assert_eq!(result.0, Method::Lan);
-        assert_eq!(visited, [Method::Lan]);
+        assert_eq!(visited, [Method::Lan, Method::Public]);
     }
 
     #[tokio::test(start_paused = true)]

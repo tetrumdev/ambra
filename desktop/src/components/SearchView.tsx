@@ -1,4 +1,4 @@
-import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { albumForTrack, sortAlbumTracks, type BrowseEntity } from "../utils/browse";
 import { ArtistLinks } from "./ArtistLinks";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
@@ -7,7 +7,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { prefetchArtistPage } from "../utils/artistPage";
-import type { CatalogArtist, CatalogAlbum, SearchProvider } from "../api/server";
+import { loadAlbumTracks, type CatalogArtist, type CatalogAlbum, type SearchProvider } from "../api/server";
+import { AlbumMenu } from "./AlbumMenu";
+import type { EntityAction } from "./EntityView";
 import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
@@ -40,10 +42,20 @@ type SearchViewProps = {
   addToQueue: (trackId: GlobalTrackId) => void;
   playNext: (trackId: GlobalTrackId) => void;
   addToLibrary: (trackId: GlobalTrackId) => void;
+  /** An album's library menu: queue, save or add its songs to a playlist. */
+  onAlbumAction: (action: EntityAction, tracks: Track[]) => void;
+  addTracksToLibrary: (tracks: Track[]) => void;
+  savedTrackIds: ReadonlySet<string>;
   registerScrollElement: (element: HTMLDivElement | null) => void;
 };
 
 type OpenMenu = {
+  kind: "album";
+  album: CatalogAlbum;
+  x: number;
+  y: number;
+  flipY?: number;
+} | {
   kind: "playback" | "collection";
   trackId: GlobalTrackId;
   x: number;
@@ -60,7 +72,7 @@ type SearchResultProps = {
   playTrack: (trackId: GlobalTrackId) => void;
   openActions: (event: React.MouseEvent, trackId: GlobalTrackId) => void;
   openCollectionMenu: (
-    event: React.MouseEvent<HTMLButtonElement>,
+    event: React.MouseEvent<HTMLElement>,
     trackId: GlobalTrackId,
   ) => void;
 };
@@ -172,7 +184,7 @@ function SearchResult({
       data-track-id={track.globalId}
       data-glide={`track:${track.globalId}`}
       onClick={available ? (event) => openActions(event, track.globalId) : undefined}
-      onContextMenu={available ? (event) => openActions(event, track.globalId) : undefined}
+      onContextMenu={available ? (event) => openCollectionMenu(event, track.globalId) : undefined}
     >
       <div className="trackLeading searchResultLeading" inert={!available}>
         <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
@@ -239,6 +251,9 @@ export function SearchView({
   addToQueue,
   playNext,
   addToLibrary,
+  onAlbumAction,
+  addTracksToLibrary,
+  savedTrackIds,
   playlistOptions,
   registerScrollElement,
 }: SearchViewProps) {
@@ -295,24 +310,48 @@ export function SearchView({
     });
   }
 
+  /** The menu button opens below itself; a right-click opens at the pointer. */
+  function menuPosition(event: React.MouseEvent<HTMLElement>) {
+    if (event.type === "contextmenu") return { x: event.clientX, y: event.clientY, flipY: event.clientY };
+    const triggerRect = event.currentTarget.getBoundingClientRect();
+    const gap = 4;
+    return { x: triggerRect.right - MENU_WIDTH, y: triggerRect.bottom + gap, flipY: triggerRect.top - gap };
+  }
+
+  // Each album's songs, loaded when its menu first opens.
+  const albumTracks = useRef(new Map<string, Track[]>());
+  const [loadedAlbum, setLoadedAlbum] = useState<{ id: string; tracks: Track[] } | null>(null);
+  const openAlbum = openMenu?.kind === "album" ? openMenu.album : null;
+  useEffect(() => {
+    if (!openAlbum) return;
+    if (albumTracks.current.has(openAlbum.id)) return;
+    const controller = new AbortController();
+    void loadAlbumTracks(openAlbum, controller.signal)
+      .then(tracks => {
+        const sorted = sortAlbumTracks(tracks);
+        albumTracks.current.set(openAlbum.id, sorted);
+        if (!controller.signal.aborted) setLoadedAlbum({ id: openAlbum.id, tracks: sorted });
+      })
+      .catch(() => { if (!controller.signal.aborted) setLoadedAlbum({ id: openAlbum.id, tracks: [] }); });
+    return () => controller.abort();
+  }, [openAlbum]);
+  const openAlbumTracks = openAlbum
+    ? albumTracks.current.get(openAlbum.id) ?? (loadedAlbum?.id === openAlbum.id ? loadedAlbum.tracks : null)
+    : null;
+
+  function openAlbumMenu(event: React.MouseEvent<HTMLElement>, album: CatalogAlbum) {
+    event.preventDefault();
+    event.stopPropagation();
+    setOpenMenu({ kind: "album", album, ...menuPosition(event) });
+  }
+
   function openCollectionMenu(
-    event: React.MouseEvent<HTMLButtonElement>,
+    event: React.MouseEvent<HTMLElement>,
     trackId: GlobalTrackId,
   ) {
     event.preventDefault();
     event.stopPropagation();
-
-    const triggerRect = event.currentTarget.getBoundingClientRect();
-    const menuWidth = MENU_WIDTH;
-    const gap = 4;
-
-    setOpenMenu({
-      kind: "collection",
-      trackId,
-      x: triggerRect.right - menuWidth,
-      y: triggerRect.bottom + gap,
-      flipY: triggerRect.top - gap,
-    });
+    setOpenMenu({ kind: "collection", trackId, ...menuPosition(event) });
   }
 
   return (
@@ -327,6 +366,20 @@ export function SearchView({
           playStandalone={playStandalone}
           addToQueue={addToQueue}
           playNext={playNext}
+        />
+      )}
+      {openMenu?.kind === "album" && (
+        <AlbumMenu
+          title={openMenu.album.title}
+          tracks={openAlbumTracks}
+          savedTrackIds={savedTrackIds}
+          onAction={onAlbumAction}
+          onAddTracks={addTracksToLibrary}
+          playlistOptions={playlistOptions}
+          xPos={openMenu.x}
+          yPos={openMenu.y}
+          flipY={openMenu.flipY}
+          onClose={() => setOpenMenu(null)}
         />
       )}
       {openMenu?.kind === "collection" && (
@@ -418,13 +471,18 @@ export function SearchView({
             const quality = albumQuality(album);
             const open = () => onOpenEntity({ kind: "album", album });
             // A card rather than one button, so the artist names inside it can be links of their own.
-            return <div className="searchEntity searchAlbum" key={album.id} data-glide={`album:${album.id}`} onClick={open}>
+            return <div className="searchEntity searchAlbum" key={album.id} data-glide={`album:${album.id}`} onClick={open}
+              onContextMenu={album.provider === "local" ? undefined : event => openAlbumMenu(event, album)}>
               <div className="searchEntityImage"><ArtworkImage src={album.imageUrl} alt={`${album.title} album cover`} loading="lazy" /></div>
               <div className="searchEntityInfo">
                 <button type="button" className="searchEntityTitle" onClick={(event) => { event.stopPropagation(); open(); }}><strong>{title}</strong></button>
                 <span><AlbumArtistLinks album={album} onOpenEntity={onOpenEntity} /></span>
                 <small><ProviderIcon provider={album.provider} />{quality ? ` · ${quality}` : ""}{album.releaseDate ? ` · ${album.releaseDate.slice(0, 4)}` : ""}</small>
               </div>
+              {album.provider !== "local" && <button type="button" className="searchResultMenuButton" aria-label={`More options for ${title}`} aria-haspopup="menu"
+                onClick={event => openAlbumMenu(event, album)}>
+                <img src="/menu.svg" alt="" />
+              </button>}
             </div>;
           })}
         </section>

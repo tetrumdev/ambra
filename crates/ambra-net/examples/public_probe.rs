@@ -122,6 +122,24 @@ async fn main() -> ambra_net::Result<()> {
             println!("{:?} in {:.0} ms", manager.status(), started.elapsed().as_secs_f64() * 1000.0);
             manager.shutdown().await;
         }
+        "stranger" => {
+            // What a scanner or an unpaired device sees on the forwarded port.
+            let device = args.iter().position(|a| a == "--device").and_then(|i| args.get(i + 1)).cloned();
+            for endpoint in payload.public_tcp.clone() {
+                for (label, knock) in [("silent", None), ("unpaired knock", Some(ambra_net::gate::knock(&Identity::generate()?, payload.public_key))), ("garbage", Some([7u8; ambra_net::gate::KNOCK_LEN]))] {
+                    let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, Some(socket2::Protocol::TCP))?;
+                    #[cfg(target_os = "linux")]
+                    if let Some(device) = &device { socket.bind_device(Some(device.as_bytes()))?; }
+                    socket.set_nonblocking(true)?;
+                    let mut raw = tokio::net::TcpSocket::from_std_stream(socket.into()).connect(endpoint).await?;
+                    if let Some(knock) = knock { tokio::io::AsyncWriteExt::write_all(&mut raw, &knock).await?; }
+                    let started = Instant::now();
+                    let mut buffer = Vec::new();
+                    let result = tokio::time::timeout(Duration::from_secs(8), tokio::io::AsyncReadExt::read_to_end(&mut raw, &mut buffer)).await;
+                    println!("{endpoint} {label}: received {} bytes; {} after {:.1}s", buffer.len(), match result { Ok(Ok(_)) => "closed".to_owned(), Ok(Err(e)) => format!("error {e}"), Err(_) => "still open".to_owned() }, started.elapsed().as_secs_f64());
+                }
+            }
+        }
         _ => return Err("unknown mode".into()),
     }
     Ok(())
@@ -141,8 +159,9 @@ async fn dial(
     let _ = device;
     socket.set_nonblocking(true)?;
     let socket = tokio::net::TcpSocket::from_std_stream(socket.into());
-    let raw = socket.connect(endpoint).await?;
+    let mut raw = socket.connect(endpoint).await?;
     raw.set_nodelay(true)?;
+    tokio::io::AsyncWriteExt::write_all(&mut raw, &ambra_net::gate::knock(identity, payload.public_key)).await?;
     let (io, _, pump) = ambra_net::transport::secure(raw, identity, Some(payload.public_key)).await?;
     HttpConnection::new(io, pump).await
 }

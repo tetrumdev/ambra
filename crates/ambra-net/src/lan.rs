@@ -57,6 +57,16 @@ pub fn is_local(ip: IpAddr) -> bool {
     }
 }
 
+/// A LAN or Tailscale address that means the same on every device: private or link-local
+/// IPv4, IPv6 unique-local, or an overlay. A global IPv6 address is "local" only to devices on
+/// its own prefix, so it never goes into a pairing link other devices must accept.
+pub fn is_portable_direct(ip: IpAddr) -> bool {
+    is_overlay(ip) || ip.is_loopback() || match ip {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        IpAddr::V6(ip) => ip.is_unique_local() || ip.to_ipv4_mapped().is_some_and(|ip| ip.is_private()),
+    }
+}
+
 /// An already routed LAN or Tailscale address can use the pinned TCP transport.
 /// Overlay addresses remain excluded from native discovery and public NAT traversal.
 pub fn is_direct(ip: IpAddr) -> bool {
@@ -275,8 +285,9 @@ pub async fn connect(
     connect_tcp(address, key, identity).await
 }
 
-/// Dials the server's router-forwarded public TCP port. The same pinned Noise handshake
-/// as on the LAN authenticates the server, so the path itself need not be trusted.
+/// Dials the server's router-forwarded public TCP port. A signed knock proves this device
+/// is paired before the server answers at all; the pinned Noise handshake then
+/// authenticates the server, so the path itself need not be trusted.
 pub async fn connect_public(
     address: SocketAddr,
     key: PublicKey,
@@ -285,7 +296,12 @@ pub async fn connect_public(
     if is_direct(address.ip()) || address.port() == 0 || address.ip().is_unspecified() {
         return Err("Not a public endpoint".into());
     }
-    connect_tcp(address, key, identity).await
+    let mut raw = TcpStream::connect(address).await?;
+    raw.set_nodelay(true)?;
+    // Sent back to back with the first Noise message: no extra round trip.
+    tokio::io::AsyncWriteExt::write_all(&mut raw, &crate::gate::knock(identity, key)).await?;
+    let (io, _, pump) = transport::secure(raw, identity, Some(key)).await?;
+    Ok((io, pump))
 }
 
 async fn connect_tcp(
@@ -323,12 +339,17 @@ impl Drop for PerAddress {
     }
 }
 
+/// Serves LAN and Tailscale peers directly. Internet peers (a router-forwarded port) must
+/// first present a signed knock from a key `admit_public` accepts; everyone else is
+/// disconnected without receiving a byte.
 pub async fn serve(
     listener: TcpListener,
     identity: Identity,
     app: axum::Router,
+    admit_public: crate::gate::Admit,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let replay = std::sync::Arc::new(crate::gate::Replay::default());
     let limit = std::sync::Arc::new(tokio::sync::Semaphore::new(64));
     let per_address: PerAddressMap = Default::default();
     let mut tasks = tokio::task::JoinSet::new();
@@ -337,19 +358,42 @@ pub async fn serve(
             _ = cancel.cancelled() => break,
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             accepted = listener.accept() => {
-                let (raw, address) = accepted?;
-                // Internet peers arrive through a router-forwarded port. They get the same
-                // pinned Noise handshake and bearer authorization as HyperDHT peers, but one
-                // address may not hold more than a few of the shared connection slots.
+                let (mut raw, address) = accepted?;
+                // Internet peers arrive through a router-forwarded port. One address may
+                // not hold more than a few of the shared connection slots.
                 let public = !is_direct(address.ip());
                 let Some(per_address) = (!public).then_some(None).or_else(|| PerAddress::acquire(&per_address, address.ip()).map(Some)) else { continue; };
                 let Ok(permit) = limit.clone().try_acquire_owned() else { continue; };
                 let _ = raw.set_nodelay(true);
                 let identity = identity.clone(); let app = app.clone(); let cancel = cancel.clone();
+                let admit = admit_public.clone(); let replay = replay.clone();
                 tasks.spawn(async move {
                     let _permit = permit;
                     let _per_address = per_address;
+                    // A LAN peer may still knock: a device at home dialing the public
+                    // address through a router that loops it back arrives from a LAN address.
+                    let knocking = public || {
+                        let mut head = [0u8; 4];
+                        let peeked = tokio::time::timeout(Duration::from_secs(5), async {
+                            loop {
+                                match raw.peek(&mut head).await { Ok(n) if n >= 4 => break true, Ok(0) | Err(_) => break false, Ok(_) => tokio::time::sleep(Duration::from_millis(5)).await }
+                            }
+                        }).await;
+                        if !matches!(peeked, Ok(true)) { return; }
+                        head == crate::gate::MARKER
+                    };
+                    let knocked = if knocking {
+                        let mut knock = [0u8; crate::gate::KNOCK_LEN];
+                        let read = tokio::time::timeout(Duration::from_secs(3), tokio::io::AsyncReadExt::read_exact(&mut raw, &mut knock)).await;
+                        if !matches!(read, Ok(Ok(_))) { return; }
+                        match crate::gate::check_knock(&knock, identity.public_key(), &admit, &replay) {
+                            Some(key) => Some(key),
+                            None => return,
+                        }
+                    } else { None };
                     if let Ok(Ok((io, mut peer, pump))) = tokio::time::timeout(Duration::from_secs(5), transport::secure(raw, &identity, None)).await {
+                        // The Noise identity must be the key that knocked.
+                        if knocked.is_some_and(|key| key != peer.public_key) { return; }
                         peer.address = address;
                         let _ = transport::serve(io, pump, peer, app, cancel).await;
                     }
@@ -421,5 +465,58 @@ mod tests {
         responder.await.unwrap();
         assert_eq!(found.len(), 2);
         assert_ne!(found[0].info.public_key, found[1].info.public_key);
+    }
+
+    #[tokio::test]
+    async fn knock_admits_paired_devices_and_strangers_get_no_bytes() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let server = Identity::generate().unwrap();
+        let device = Identity::generate().unwrap();
+        let stranger = Identity::generate().unwrap();
+        let paired = device.public_key();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let cancel = CancellationToken::new();
+        let app = axum::Router::new().route("/ok", axum::routing::get(|| async { "ok" }));
+        let admit: crate::gate::Admit = std::sync::Arc::new(move |key| *key == paired);
+        let task = tokio::spawn(serve(listener, server.clone(), app, admit, cancel.clone()));
+
+        // A paired device's knock is accepted, even arriving from a LAN address.
+        let mut raw = TcpStream::connect(address).await.unwrap();
+        raw.write_all(&crate::gate::knock(&device, server.public_key())).await.unwrap();
+        let (io, _, pump) = transport::secure(raw, &device, Some(server.public_key())).await.unwrap();
+        let connection = transport::HttpConnection::new(io, pump).await.unwrap();
+        let response = connection.request(hyper::Request::get("/ok").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 200);
+        connection.close();
+
+        // An unpaired key: the server closes without sending one byte.
+        let mut raw = TcpStream::connect(address).await.unwrap();
+        raw.write_all(&crate::gate::knock(&stranger, server.public_key())).await.unwrap();
+        let mut buffer = Vec::new();
+        let read = tokio::time::timeout(Duration::from_secs(5), raw.read_to_end(&mut buffer)).await.unwrap();
+        assert!(read.is_err() || buffer.is_empty(), "stranger received {} bytes", buffer.len());
+
+        // Knocking with a paired key but completing Noise as someone else is refused.
+        let mut raw = TcpStream::connect(address).await.unwrap();
+        raw.write_all(&crate::gate::knock(&device, server.public_key())).await.unwrap();
+        let swapped = transport::secure(raw, &stranger, Some(server.public_key())).await;
+        if let Ok((io, _, pump)) = swapped {
+            let connection = transport::HttpConnection::new(io, pump).await;
+            if let Ok(connection) = connection {
+                let response = connection.request(hyper::Request::get("/ok").body(axum::body::Body::empty()).unwrap()).await;
+                assert!(response.is_err(), "swapped identity reached HTTP");
+            }
+        }
+
+        // LAN peers without a knock still connect directly.
+        let (io, pump) = connect(address, server.public_key(), &stranger).await.unwrap();
+        let connection = transport::HttpConnection::new(io, pump).await.unwrap();
+        let response = connection.request(hyper::Request::get("/ok").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), 200);
+        connection.close();
+
+        cancel.cancel();
+        task.await.unwrap().unwrap();
     }
 }

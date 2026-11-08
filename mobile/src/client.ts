@@ -441,6 +441,9 @@ export function phoneMediaUrl(source: string) {
 /** Apply against the latest queue; rebase on conflicts without losing another device's edits. */
 export function changeQueue(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play = false) {
   if (offline) return offline.change(change, play);
+  // A new song (or a shuffle) starts like a skip: the old one stops on this phone at once.
+  const held = play ? localControl?.("startTrack", {}) : false;
+  const settle = typeof held === "function" ? held : null;
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
@@ -463,7 +466,7 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
       }
     }
     throw new Error("The queue keeps changing on another device. Please try again.");
-  });
+  }).then(() => { settle?.(view); }, reason => { settle?.(null); throw reason; });
 }
 
 export type MobilePlaylist = { id: string; name: string; trackIds: string[]; packages?: string[][] };

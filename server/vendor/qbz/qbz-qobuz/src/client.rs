@@ -276,7 +276,15 @@ impl QobuzClient {
             .send()
             .await?;
 
-        Ok(response.status() != StatusCode::BAD_REQUEST)
+        // Only Qobuz's own verdict on the signature counts. A 403 from the CDN (a blocked
+        // VPN address), a 5xx or the like says nothing about the secret; treating it as
+        // valid would latch a wrong secret for the rest of the process.
+        match response.status() {
+            StatusCode::OK | StatusCode::UNAUTHORIZED => Ok(true),
+            StatusCode::BAD_REQUEST => Ok(false),
+            StatusCode::FORBIDDEN => Err(ApiError::Forbidden(body_preview(response).await)),
+            status => Err(ApiError::ApiResponse(format!("Secret check got unexpected status: {status}"))),
+        }
     }
 
     /// Login with email and password
@@ -2419,7 +2427,12 @@ impl QobuzClient {
                     restrictions,
                 })
             }
-            StatusCode::BAD_REQUEST => Err(ApiError::InvalidAppSecret),
+            StatusCode::BAD_REQUEST => {
+                // The secret this process settled on was rejected (for example after Qobuz
+                // rotated its bundle). Forget it so the next request picks again.
+                *self.validated_secret.write().await = None;
+                Err(ApiError::InvalidAppSecret)
+            }
             StatusCode::UNAUTHORIZED => Err(ApiError::AuthenticationError(
                 "stream URL 401 — user auth token invalid or expired".to_string(),
             )),

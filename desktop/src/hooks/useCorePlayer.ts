@@ -343,6 +343,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     audioDecks,
     // The queue change just before this carries it, so the server starts the song once.
     playTrack: (trackId: string) => {
+      // A new song (or a shuffle) starts like a skip: the old one stops here at once.
+      if (followsEngine()) holdForSkip();
       void coreCommand("playTrack", { trackId }).catch(() => {});
       ensureOutput();
     },

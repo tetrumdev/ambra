@@ -150,6 +150,11 @@ impl NoiseWrap {
         })
     }
 
+    /// The remote static key, known to a responder once the first message is received.
+    pub fn remote_public_key(&self) -> Option<&[u8; 32]> {
+        self.handshake.remote_static_key()
+    }
+
     /// Whether the handshake is complete (both messages exchanged).
     pub fn complete(&self) -> bool {
         self.handshake.complete()

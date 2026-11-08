@@ -198,7 +198,7 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         }
         if let Some((_, previous)) = sessions.insert(client_id.clone(), (generation, Arc::downgrade(&peer.session))) {
             if let Some(previous) = previous.upgrade() {
-                if !Arc::ptr_eq(&previous, &peer.session) { previous.close(); }
+                if !Arc::ptr_eq(&previous, &peer.session) { retire(previous); }
             }
         }
     }
@@ -209,6 +209,18 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         *request.uri_mut() = uri;
     }
     next.run(request).await
+}
+
+/// How long a superseded session may finish what it already carries: a song streaming, a
+/// long poll. It takes no new requests meanwhile (they get 409), so switching between the LAN
+/// and the Internet never cuts playback off mid-request.
+const SUPERSEDED_DRAIN: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn retire(session: Arc<ambra_net::transport::Session>) {
+    tokio::spawn(async move {
+        tokio::time::sleep(SUPERSEDED_DRAIN).await;
+        session.close();
+    });
 }
 
 #[cfg(test)]
@@ -384,9 +396,14 @@ mod session_reconnect_tests {
         assert_eq!(app.clone().oneshot(request(new.clone(), "valid", stranger)).await.unwrap().status(), StatusCode::UNAUTHORIZED);
         assert!(!old.is_closed());
         assert_eq!(app.clone().oneshot(request(new.clone(), "valid", key)).await.unwrap().status(), StatusCode::OK);
+        // The old session takes nothing new, but finishes what it carries before it closes.
+        assert_eq!(app.clone().oneshot(request(old.clone(), "valid", key)).await.unwrap().status(), StatusCode::CONFLICT);
+        assert!(!old.is_closed());
+        tokio::time::pause();
+        tokio::time::sleep(SUPERSEDED_DRAIN + std::time::Duration::from_millis(1)).await;
+        tokio::task::yield_now().await;
         assert!(old.is_closed());
         assert!(!new.is_closed());
-        assert_eq!(app.clone().oneshot(request(old.clone(), "valid", key)).await.unwrap().status(), StatusCode::CONFLICT);
         drop(old);
         assert_eq!(app.clone().oneshot(request(new.clone(), "valid", key)).await.unwrap().status(), StatusCode::OK);
         network.config.write().unwrap().paired_clients.clear();
