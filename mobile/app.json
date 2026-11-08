@@ -3,7 +3,7 @@
     "name": "Ambra",
     "slug": "ambra",
     "scheme": "ambra",
-    "version": "1.0.1",
+    "version": "0.3.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",

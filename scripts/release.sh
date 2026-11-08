@@ -3,7 +3,7 @@ set -euo pipefail
 
 version="${1:-}"
 if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-  echo "usage: $0 <version>   e.g. $0 0.1.3" >&2
+  echo "usage: $0 <version>   e.g. $0 0.3.0" >&2
   exit 2
 fi
 
