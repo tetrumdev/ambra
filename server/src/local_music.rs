@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Path, Request, State},
+    extract::{DefaultBodyLimit, Path, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -78,10 +78,38 @@ async fn read_index(library: &Library) -> Result<BTreeMap<String, Value>, String
     }
 }
 
-async fn list(State(library): State<Arc<Library>>) -> Response {
+/// Names the saved library as it is now: every save replaces the file, so its identity,
+/// size and time change with its contents.
+async fn index_tag(library: &Library) -> String {
+    let Ok(saved) = tokio::fs::metadata(library.root.join("library.json")).await else { return "none".into() };
+    let modified = saved.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |since| since.as_nanos());
+    #[cfg(unix)]
+    let file = { use std::os::unix::fs::MetadataExt; saved.ino() };
+    #[cfg(not(unix))]
+    let file = 0_u64;
+    format!("{modified:x}-{:x}-{file:x}", saved.len())
+}
+
+#[derive(serde::Deserialize)]
+struct ListQuery {
+    /// The tag of the list the app already has (empty if none). Apps that send it get the
+    /// list with its tag, or the tag alone while the library is still that one: they ask
+    /// every few seconds, and a library of thousands of songs is megabytes each time.
+    known: Option<String>,
+}
+
+async fn list(State(library): State<Arc<Library>>, Query(query): Query<ListQuery>) -> Response {
     let _guard = library.lock.lock().await;
+    let tag = index_tag(&library).await;
+    if query.known.as_deref() == Some(tag.as_str()) {
+        return ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "tag": tag }))).into_response();
+    }
     match read_index(&library).await {
-        Ok(index) => ([(header::CACHE_CONTROL, "no-store")], Json(index.into_values().collect::<Vec<_>>())).into_response(),
+        Ok(index) => {
+            let tracks = index.into_values().collect::<Vec<_>>();
+            let body = if query.known.is_some() { json!({ "tag": tag, "tracks": tracks }) } else { Value::Array(tracks) };
+            ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
+        }
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
@@ -289,7 +317,22 @@ mod tests {
         let (base, server) = harness(root.clone()).await;
         let other_device = paired_client();
         let tracks: Vec<Value> = other_device.get(format!("{base}/api/music/local/tracks")).send().await.unwrap().json().await.unwrap();
-        assert_eq!(tracks, vec![track]);
+        assert_eq!(tracks, vec![track.clone()]);
+        // An app that polls says which list it has, and is sent the list only when it changed.
+        let tagged = |known: String| { let (client, base) = (other_device.clone(), base.clone()); async move {
+            client.get(format!("{base}/api/music/local/tracks?known={known}")).send().await.unwrap().json::<Value>().await.unwrap()
+        } };
+        let first = tagged(String::new()).await;
+        assert_eq!(first["tracks"], json!([track]));
+        let tag = first["tag"].as_str().unwrap().to_owned();
+        assert_eq!(tagged(tag.clone()).await, json!({ "tag": tag }));
+        let mut second = metadata.clone();
+        second["name"] = json!("Renamed");
+        assert_eq!(other_device.post(format!("{base}/api/music/local/tracks")).json(&second).send().await.unwrap().status(), StatusCode::OK);
+        let changed = tagged(tag.clone()).await;
+        assert_ne!(changed["tag"], tag);
+        assert_eq!(changed["tracks"][0]["name"], "Renamed");
+        assert_eq!(other_device.post(format!("{base}/api/music/local/tracks")).json(&metadata).send().await.unwrap().status(), StatusCode::OK);
         let url = format!("{base}/api/music/local/files/{id}");
         let response = other_device.get(&url).send().await.unwrap();
         assert_eq!(response.bytes().await.unwrap().as_ref(), audio.as_slice());

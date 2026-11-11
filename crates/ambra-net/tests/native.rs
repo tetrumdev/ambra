@@ -726,3 +726,66 @@ async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
     task.await.unwrap().unwrap();
     let _ = std::fs::remove_dir_all(directory);
 }
+
+#[tokio::test]
+async fn a_cover_crosses_the_connection_once_and_a_failure_is_never_kept() {
+    let identity = Identity::generate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let cancel = CancellationToken::new();
+    let fetched = Arc::new(AtomicUsize::new(0));
+    let counted = fetched.clone();
+    let app = Router::new()
+        .route("/api/network/session", get(|| async { "authorized" }))
+        .route(
+            "/api/artwork/thumbnail",
+            get(move |request: Request| {
+                let counted = counted.clone();
+                async move {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    let query = request.uri().query().unwrap_or_default().to_owned();
+                    assert!(!query.contains("access_token"), "the bridge never forwards the app's token");
+                    if query.contains("url=missing") {
+                        return StatusCode::BAD_GATEWAY.into_response();
+                    }
+                    (
+                        [(header::CONTENT_TYPE, "image/jpeg"), (header::CACHE_CONTROL, "public, max-age=604800")],
+                        vec![query.len() as u8; 20_000],
+                    )
+                        .into_response()
+                }
+            }),
+        );
+    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
+    let bridge = ambra_net::bridge::Bridge::start(manager(&identity, address)).await.unwrap();
+    let client = reqwest::Client::new();
+    let cover = |query: &'static str| {
+        let (client, url) = (client.clone(), format!("{}/api/artwork/thumbnail?{query}", bridge.base_url));
+        async move { client.get(url).send().await.unwrap() }
+    };
+
+    let first = cover("provider=qobuz&url=a").await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert_eq!(first.headers()[header::CACHE_CONTROL], "no-store");
+    let first = first.bytes().await.unwrap();
+    assert_eq!(first.len(), 20_000);
+    // Asked for again (with or without the app's own token), it never leaves this device.
+    for query in ["provider=qobuz&url=a", "provider=qobuz&url=a&access_token=mine"] {
+        let again = cover(query).await;
+        assert_eq!(again.headers()[header::CONTENT_TYPE], "image/jpeg");
+        assert_eq!(again.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(again.bytes().await.unwrap(), first);
+    }
+    assert_eq!(fetched.load(Ordering::SeqCst), 1);
+    assert_ne!(cover("provider=qobuz&url=other").await.bytes().await.unwrap(), first);
+    assert_eq!(fetched.load(Ordering::SeqCst), 2);
+    // A cover the server couldn't get is asked for again the next time.
+    for _ in 0..2 {
+        assert_eq!(cover("provider=qobuz&url=missing").await.status(), StatusCode::BAD_GATEWAY);
+    }
+    assert_eq!(fetched.load(Ordering::SeqCst), 4);
+    drop(bridge);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+}

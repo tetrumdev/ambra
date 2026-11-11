@@ -4,6 +4,7 @@ import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyri
 import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { SessionClock } from "./sessionClock";
 import { artworkPalettePath, parseArtworkPalette } from "../../desktop/src/utils/artworkPalette";
+import { applyQueuePatch, queuePatchApplies, type QueuePatch } from "../../desktop/src/utils/queuePatch";
 
 /**
  * The remote's line to the Ambra server: pairing, following the core's session
@@ -62,7 +63,7 @@ export type SessionView = {
   queue: QueueSnapshot;
 };
 /** The queue is left out when the remote already has that revision. */
-type ArrivingView = Omit<SessionView, "queue"> & { queue?: SessionView["queue"] };
+type ArrivingView = Omit<SessionView, "queue"> & { queue?: SessionView["queue"]; queuePatch?: QueuePatch };
 
 export class Unpaired extends Error {}
 
@@ -320,10 +321,14 @@ export function subscribe(listener: () => void) {
 
 function accept(next: ArrivingView) {
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return true;
-  const { queue: arrived, ...rest } = next;
-  // Left out as unchanged; a different server or revision has to be asked for in full.
-  if (arrived === undefined && (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision)) return false;
-  const queue = arrived === undefined ? view!.queue : JSON.parse(rebased(JSON.stringify(arrived))) as SessionView["queue"];
+  const { queue: arrived, queuePatch: patch, ...rest } = next;
+  // Left out as unchanged, or sent as the step the server took through the queue this phone
+  // has; a different server or any other revision has to be asked for in full.
+  const known = view && view.instanceId === next.instanceId ? view : null;
+  const patched = arrived === undefined && known && queuePatchApplies(patch, known.queueRevision, next.queueRevision);
+  if (arrived === undefined && !patched && known?.queueRevision !== next.queueRevision) return false;
+  const queue = arrived !== undefined ? JSON.parse(rebased(JSON.stringify(arrived))) as SessionView["queue"]
+    : patched ? applyQueuePatch(known.queue, patch) : known!.queue;
   if (view?.instanceId !== next.instanceId) playbackClock.reset();
   view = { ...rest, queue };
   viewAt = Date.now();
@@ -338,7 +343,7 @@ export async function follow(signal: AbortSignal) {
   const subscription = AppState.addEventListener("change", state => { if (state === "active") { wake.abort(); void networkCall("resume").catch(() => {}); } });
   try {
     while (!signal.aborted) {
-      const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}` : "";
+      const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}&patches=1` : "";
       const stop = new AbortController();
       const abort = () => stop.abort();
       signal.addEventListener("abort", abort);
@@ -378,7 +383,7 @@ export function command(action: string, details: Record<string, unknown> = {}) {
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
-    accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}` : ""}`, {
+    accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}&patches=1` : ""}`, {
       method: "POST",
       body: JSON.stringify({ action, ...details }),
     }));
@@ -407,7 +412,7 @@ export async function refreshSession(signal: AbortSignal, options: { clock?: "re
       } catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
     }));
   }
-  const path = `/api/session${view ? `?queue=${view.queueRevision}` : ""}`;
+  const path = `/api/session${view ? `?queue=${view.queueRevision}&patches=1` : ""}`;
   if (!accept(await request<ArrivingView>(path, { signal, timeoutMs: 10_000 }))) {
     accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
   }

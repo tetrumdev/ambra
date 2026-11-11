@@ -94,6 +94,9 @@ type NativeAudioStatus = {
   audioQuality: AudioQuality | null;
 };
 
+/** How often a paused native engine is read while nothing has been asked of it. */
+const NATIVE_IDLE_READ_MS = 1000;
+
 export function useAudioPlayer(
   tracks: Track[],
   initialPlayback: InitialPlayback,
@@ -773,6 +776,8 @@ export function useAudioPlayer(
     let handledEnd = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let requestRevision = 0;
+    // The last read of an engine at rest: paused, with nothing loading and no play asked for.
+    let atRest: { generation: number; revision: number; at: number } | null = null;
 
     const poll = async (resumed = false) => {
       if (disposed || releasedRef.current) return;
@@ -782,6 +787,16 @@ export function useAudioPlayer(
       if (
         nativeCommandsRef.current.pending > 0 ||
         nativeReadyGenerationRef.current !== statusGeneration
+      ) {
+        timer = setTimeout(poll, 200);
+        return;
+      }
+      // A paused engine changes only when this player asks it to, and every such command
+      // (and load) is counted above. Until one is, it is read once a second rather than five
+      // times: each read is a round trip to the native side that wakes both ends for nothing.
+      if (
+        !resumed && atRest && atRest.generation === statusGeneration && atRest.revision === commandRevision
+        && !nativePlayIntentRef.current && performance.now() - atRest.at < NATIVE_IDLE_READ_MS
       ) {
         timer = setTimeout(poll, 200);
         return;
@@ -866,6 +881,8 @@ export function useAudioPlayer(
         if (resumed) flushSync(apply);
         else apply();
         if (playback.ended && handledEnd) return;
+        atRest = !playback.isPlaying && !playback.buffering && !playback.error && !nativePlayIntentRef.current
+          ? { generation: statusGeneration, revision: commandRevision, at: performance.now() } : null;
       } catch (error) {
         if (disposed || request !== requestRevision) return;
         clearTimeout(timer);

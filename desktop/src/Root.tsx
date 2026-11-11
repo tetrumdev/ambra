@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import App from "./App";
 import { AudioSettingsProvider } from "./hooks/AudioSettingsContext";
@@ -11,12 +11,22 @@ import { useStartupWindow } from "./hooks/useStartupWindow";
 
 const sharedPlaybackKey = "ambra.shared-playback.v1";
 
+/**
+ * The connection is read every few seconds and nearly always reads the same. Keeping the
+ * status it already had keeps the whole app from rendering again each time.
+ */
+function sameStatus(current: NetworkStatus, next: NetworkStatus) {
+  return current.state === next.state && (current.method ?? null) === (next.method ?? null) && (current.error ?? null) === (next.error ?? null)
+    ? current : next;
+}
+
 /** Local hydration and playback never wait for discovery, authentication, or server state. */
 export function Root() {
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
   const [networkServer, setNetworkServer] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  const [network, setNetwork] = useState<NetworkStatus>({ state: "Offline" });
+  const [network, setNetworkStatus] = useState<NetworkStatus>({ state: "Offline" });
+  const setNetwork = useCallback((next: NetworkStatus) => setNetworkStatus(current => sameStatus(current, next)), []);
   const [sharedPlayback, setShared] = useState(false);
   const [preferSharedPlayback, setPreferSharedPlayback] = useState(true);
   const [playerGeneration, setPlayerGeneration] = useState(0);
@@ -78,7 +88,7 @@ export function Root() {
       setNetworkServer(serverConnection?.baseUrl ?? null); setNetwork(status);
     }).catch(() => { if (base === serverBaseUrl) setNetwork({ state: "Offline" }); });
     void hydrateServerState().catch(() => {});
-  }, []);
+  }, [setNetwork]);
 
   useEffect(() => {
     let disposed = false;
@@ -111,14 +121,17 @@ export function Root() {
     };
     void check();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [ready, connection]);
+  }, [ready, connection, setNetwork]);
   useEffect(installServerStateLifecycle, []);
   useEffect(() => {
     if (ready) void applySharedPlayback((connected || recoveringSharedPlayback) && preferSharedPlayback).catch(() => {});
   }, [ready, connected, recoveringSharedPlayback, preferSharedPlayback, applySharedPlayback]);
 
+  const client = useMemo(() => ({ connected, network, sharedPlayback, setSharedPlayback, reconnect }),
+    [connected, network, sharedPlayback, setSharedPlayback, reconnect]);
+
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-tauri-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
-  return <ClientConnectionContext.Provider value={{ connected, network, sharedPlayback, setSharedPlayback, reconnect }}>
+  return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
       <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!connected} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>

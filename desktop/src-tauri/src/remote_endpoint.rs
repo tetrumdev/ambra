@@ -26,11 +26,17 @@ const DEVICES_EVERY: Duration = Duration::from_secs(5);
 const COMMANDS_WAIT_SECONDS: u64 = 25;
 /// How often the engine is looked at between reports, for a change the core must hear of at once.
 const WATCH_EVERY: Duration = Duration::from_millis(20);
+/// The same look at an engine that isn't playing. Nothing changes there by itself: what the
+/// listener or the core asks of it wakes the watch at once (`Agent::wake`).
+const WATCH_IDLE_EVERY: Duration = Duration::from_millis(250);
 /// Report round trips remembered; the quickest is the one least delayed by anything but the network.
 const ROUND_TRIPS_KEPT: usize = 8;
 
 /// How often this app's own screens hear the engine's position while it's the shared output.
 const LOCAL_STATUS_EVERY: Duration = Duration::from_millis(100);
+/// An unchanged status (paused, or nothing loaded) is repeated only this often: enough for a
+/// screen that just began listening, and for the screens to know the engine still reports.
+const LOCAL_STATUS_REPEAT: Duration = Duration::from_millis(400);
 
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
 fn monotonic_ms() -> f64 {
@@ -52,6 +58,9 @@ struct Agent {
     device_report: Mutex<Value>,
     /// The plays, pauses and seeks made here, which the core takes on from the reports.
     control: Mutex<Control>,
+    /// Signalled when something was asked of the engine, so its report doesn't wait for the
+    /// next look at it.
+    wake: tokio::sync::Notify,
 }
 
 /// This device's own latest play, pause or seek: `seq` counts them, `playing` is what it left.
@@ -134,12 +143,15 @@ pub async fn shared_output_control(app: AppHandle, action: String, position_seco
         control.seq += 1;
         control.playing = playing;
     }
-    match (action.as_str(), position_seconds) {
+    agent.wake.notify_one();
+    let result = match (action.as_str(), position_seconds) {
         ("play", _) => native_audio::play_native_audio(player).await,
         ("pause", _) => native_audio::pause_native_audio(player).await,
         (_, Some(position)) => native_audio::seek_native_audio(player, position).await,
         _ => Ok(()),
-    }
+    };
+    agent.wake.notify_one();
+    result
 }
 
 /// Skips to the next song at once when this device already has it ready, the core following
@@ -161,6 +173,7 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
     let agent = std::sync::Arc::new(Agent {
         app, client, base_url, token, id, name, instance_id,
         sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), control: Mutex::new(Control::default()),
+        wake: tokio::sync::Notify::new(),
     });
     let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone()))];
     Ok(Running { tasks, agent })
@@ -304,9 +317,16 @@ async fn refresh_devices(agent: std::sync::Arc<Agent>) {
 async fn show_local_status(agent: std::sync::Arc<Agent>) {
     let mut ticks = tokio::time::interval(LOCAL_STATUS_EVERY);
     ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut shown: Option<(Value, Instant)> = None;
     loop {
         ticks.tick().await;
-        agent.show_status(&agent.status().await);
+        let status = agent.status().await;
+        // A playing engine's position differs every time; a paused or empty one repeats itself.
+        if shown.as_ref().is_some_and(|(last, at)| *last == status && at.elapsed() < LOCAL_STATUS_REPEAT) {
+            continue;
+        }
+        agent.show_status(&status);
+        shown = Some((status, Instant::now()));
     }
 }
 
@@ -352,8 +372,12 @@ async fn report(agent: std::sync::Arc<Agent>) {
         // A gapless move to the next song, a pause or an error is reported as it happens, so
         // every screen changes with the sound rather than up to a beat later.
         let next_beat = Instant::now() + wait;
+        let watch = if playing { WATCH_EVERY } else { WATCH_IDLE_EVERY };
         while Instant::now() < next_beat {
-            tokio::time::sleep(WATCH_EVERY.min(next_beat.saturating_duration_since(Instant::now()))).await;
+            tokio::select! {
+                () = tokio::time::sleep(watch.min(next_beat.saturating_duration_since(Instant::now()))) => {}
+                () = agent.wake.notified() => {}
+            }
             let status = agent.status().await;
             if transitions(&status) != reported {
                 break;
@@ -382,6 +406,7 @@ async fn serve(agent: std::sync::Arc<Agent>) {
         };
         for command in commands {
             let outcome = run(&agent, command["command"].as_str().unwrap_or_default(), &command["args"]).await;
+            agent.wake.notify_one();
             let body = match outcome {
                 Ok(value) => json!({ "id": command["id"], "ok": true, "value": value }),
                 Err(error) => json!({ "id": command["id"], "ok": false, "error": error }),

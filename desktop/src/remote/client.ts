@@ -1,6 +1,7 @@
 import { connectFromBrowser, fromStorage, serverBaseUrl } from "../api/serverConnection";
 import type { CoreView } from "../api/core";
 import type { Track } from "../types/music";
+import { applyQueuePatch, queuePatchApplies, type QueuePatch } from "../utils/queuePatch";
 
 /**
  * The phone remote's line to the server it was served from: pairing, following the core's
@@ -11,7 +12,7 @@ const TOKEN_KEY = "ambra.remote.token";
 const CLIENT_KEY = "ambra.remote.client";
 
 export type RemoteView = Omit<CoreView, "queue"> & { queue: CoreView["queue"] };
-type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"] };
+type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"]; queuePatch?: QueuePatch };
 
 export class Unpaired extends Error {}
 
@@ -83,10 +84,14 @@ export function subscribe(listener: () => void) {
 
 function accept(next: ArrivingView) {
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return false;
-  const { queue: arrived, ...rest } = next;
-  // The queue is left out when unchanged; a different server or revision needs it asked for.
-  if (arrived === undefined && (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision)) return false;
-  const queue = arrived === undefined ? view!.queue : JSON.parse(fromStorage(JSON.stringify(arrived))) as CoreView["queue"];
+  const { queue: arrived, queuePatch: patch, ...rest } = next;
+  // The queue is left out when unchanged, or sent as the step the server took through the one
+  // this app has; a different server or any other revision needs it asked for.
+  const known = view && view.instanceId === next.instanceId ? view : null;
+  const patched = arrived === undefined && known && queuePatchApplies(patch, known.queueRevision, next.queueRevision);
+  if (arrived === undefined && !patched && known?.queueRevision !== next.queueRevision) return false;
+  const queue = arrived !== undefined ? JSON.parse(fromStorage(JSON.stringify(arrived))) as CoreView["queue"]
+    : patched ? applyQueuePatch(known.queue, patch) : known!.queue;
   view = { ...JSON.parse(fromStorage(JSON.stringify(rest))) as Omit<CoreView, "queue">, queue };
   viewAt = performance.now();
   for (const listener of listeners) listener();
@@ -101,7 +106,7 @@ export async function follow(signal: AbortSignal) {
   document.addEventListener("visibilitychange", visible);
   try {
     while (!signal.aborted) {
-      const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}` : "";
+      const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}&patches=1` : "";
       try {
         const next = await request<ArrivingView>(`/api/session${since}`, { signal: AbortSignal.any([signal, wake.signal, AbortSignal.timeout(35_000)]) });
         if (!accept(next)) accept(await request<ArrivingView>("/api/session", { signal }));
@@ -117,7 +122,7 @@ export async function follow(signal: AbortSignal) {
 }
 
 export async function command(action: string, details: Record<string, unknown> = {}) {
-  accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}` : ""}`, {
+  accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}&patches=1` : ""}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ action, ...details }),

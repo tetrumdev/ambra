@@ -14,6 +14,7 @@ mod loudness;
 mod local_music;
 mod lyrics;
 mod media_cache;
+mod metadata_store;
 mod models;
 mod network;
 mod p2p;
@@ -33,6 +34,27 @@ mod storage;
 mod tray;
 mod user_state;
 mod write_behind;
+
+/// The server runs for days with a worker thread per core. glibc keeps a separate pool of
+/// memory for each thread and returns freed memory only from the top of one: after a burst
+/// of large JSON bodies or decoded covers on many threads, the process went on holding
+/// around a gigabyte it no longer used. Asking glibc to give free pages back once a minute
+/// costs little and keeps what the server holds close to what it uses.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn return_unused_memory_periodically() {
+    tokio::spawn(async {
+        let mut ticks = tokio::time::interval(std::time::Duration::from_secs(60));
+        ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticks.tick().await;
+            // Takes each pool's lock in turn, like any allocation; off the async workers
+            // because a large pool takes a few milliseconds to walk.
+            let _ = tokio::task::spawn_blocking(|| unsafe { libc::malloc_trim(0) }).await;
+        }
+    });
+}
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn return_unused_memory_periodically() {}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -54,6 +76,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                 windows::Win32::Media::timeBeginPeriod(1);
             }
             storage::migrate_legacy();
+            return_unused_memory_periodically();
             if tray && cfg!(target_os = "windows") {
                 tokio::spawn(async move {
                     if let Err(error) = api::serve(bind).await {

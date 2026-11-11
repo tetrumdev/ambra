@@ -30,9 +30,45 @@ function bigscreenArtworkKey(track: Track) {
   ].join(":");
 }
 
+/** Ends once the image has loaded, without decoding it. */
+function whenLoaded(image: HTMLImageElement) {
+  return new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("Artwork failed to load"));
+  });
+}
+
+/**
+ * Has WebKit decode a loaded image on its own decoding threads. HTMLImageElement.decode() reads
+ * the image's color space first, and WebKitGTK decodes the whole image on the main thread to do
+ * so before decoding it again in the background: over 100 ms for a 4000px cover, a stall in the
+ * middle of the song change that asked for it. An image first painted in a new layer is decoded
+ * in the background instead, so the image is painted once, out of sight, in a layer of its own.
+ * It is drawn at least as large as the screen, as no cover is drawn larger, so that decoded copy
+ * serves every later paint of it.
+ */
+function decodeInBackground(image: HTMLImageElement) {
+  const stage = document.createElement("div");
+  stage.setAttribute("aria-hidden", "true");
+  stage.style.cssText = "position:fixed;left:0;top:0;width:1px;height:1px;overflow:hidden;"
+    + "opacity:0.001;pointer-events:none;contain:strict;will-change:transform";
+  const scale = Math.max(1, Math.max(screen.width, screen.height) / Math.max(1, image.naturalWidth, image.naturalHeight));
+  image.style.cssText = `display:block;max-width:none;width:${Math.ceil(image.naturalWidth * scale)}px;`
+    + `height:${Math.ceil(image.naturalHeight * scale)}px`;
+  stage.append(image);
+  document.body.append(stage);
+  // The decode is under way once the layer has been painted, and finishes without it.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    stage.remove();
+    image.removeAttribute("style");
+  }));
+}
+
 export function preloadArtwork(url: string, large = false, options: {
   fetchPriority?: HTMLImageElement["fetchPriority"];
   timeoutMs?: number;
+  /** For a cover shown later: ends once it has loaded, its decode left to run in the background. */
+  background?: boolean;
 } = {}) {
   const cache = large ? fullSize : thumbnails;
   const cached = cache.get(url);
@@ -44,9 +80,13 @@ export function preloadArtwork(url: string, large = false, options: {
   const image = new Image();
   image.decoding = "async";
   image.fetchPriority = options.fetchPriority ?? "auto";
+  // A hidden page paints nothing, so there the image is decoded as usual; nobody sees the wait.
+  const background = !!options.background && typeof requestAnimationFrame === "function"
+    && document.visibilityState === "visible";
+  const load = background ? whenLoaded(image) : null;
   image.src = url;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const decoded = image.decode();
+  const decoded = load ? load.then(() => decodeInBackground(image)) : image.decode();
   const ready = options.timeoutMs === undefined ? decoded : Promise.race([
     decoded,
     new Promise<never>((_resolve, reject) => {
@@ -83,11 +123,12 @@ export function settledBigscreenArtwork(track: Track) {
   return bigscreenSources.has(key) && !provisionalBigscreenSources.has(key);
 }
 
-export function preloadBigscreenArtwork(track: Track) {
+/** `background` is for a cover shown later, as {@link preloadArtwork} has it. */
+export function preloadBigscreenArtwork(track: Track, background = false) {
   const key = bigscreenArtworkKey(track);
   const source = bigscreenSources.get(key);
   if (source && !provisionalBigscreenSources.has(key))
-    return preloadArtwork(source, true, { timeoutMs: 10_000 }).then(() => source).catch(() => {
+    return preloadArtwork(source, true, { timeoutMs: 10_000, background }).then(() => source).catch(() => {
       provisionalBigscreenSources.add(key);
       return null;
     });
@@ -103,7 +144,7 @@ export function preloadBigscreenArtwork(track: Track) {
     let loaded: string | null = null;
     for (const candidate of candidates) {
       try {
-        await preloadArtwork(candidate, true, { timeoutMs: 10_000 });
+        await preloadArtwork(candidate, true, { timeoutMs: 10_000, background });
         loaded = candidate;
         break;
       } catch {
@@ -139,6 +180,6 @@ export async function preloadUpcomingBigscreenArtwork(
   await Promise.all(
     tracks
       .slice(0, UPCOMING_BIGSCREEN_ARTWORK_COUNT)
-      .map(preloadBigscreenArtwork),
+      .map((track) => preloadBigscreenArtwork(track, true)),
   );
 }

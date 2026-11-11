@@ -79,3 +79,13 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["r
 [dev-dependencies]
 axum = "0.8.9"
 tokio-util = { version = "0.7", features = ["rt"] }
+
+# Development builds are what gets run day to day. The app's own code stays unoptimized, so
+# it rebuilds quickly and debugs well; the libraries that do the heavy work (audio decoding
+# and DSP, TLS, images, the P2P stack) are compiled once, optimized.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

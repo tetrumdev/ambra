@@ -46,7 +46,7 @@ import {
   savePreferences,
   type AppScreen,
 } from "./utils/preferences";
-import type { GlobalTrackId, Playlist, Track } from "./types/music";
+import type { GlobalTrackId, Playlist, QueueContext, Track } from "./types/music";
 import { configuredSearchProviders, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
 import {
   collectionQueueContext,
@@ -104,7 +104,8 @@ function withoutSettings<T extends AppScreen>(screen: T): Exclude<T, "settings">
 }
 
 function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
-  const connectedServices = useServiceAvailability();
+  // Rerenders when a service connects or drops, so what the pages offer stays current.
+  useServiceAvailability();
   const [preferences, setPreferences] = useState(loadPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
@@ -175,10 +176,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     }
     return [...tracksById.values()].filter(track => !sharedPlayback || !isDeviceTrack(track));
   }, [sharedPlayback, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
-  const queueContext = useMemo(
-    () => libraryQueueContext(library.tracks),
-    [library.tracks, connectedServices],
-  );
   // Root restores the playback mode and remounts when its queue authority changes.
   const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
@@ -476,16 +473,19 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     ? `playlist:${selectedPlaylist.id}`
     : "library:tracks";
   const collectionSort = collectionSorts[collectionSortKey] ?? null;
-  const baseCollectionTracks = selectedPlaylist
-    ? playlistTracks(selectedPlaylist, availableTracks)
-    : library.tracks;
+  // Kept between renders: every list under it compares this array to skip its own work.
+  const baseCollectionTracks = useMemo(
+    () => selectedPlaylist ? playlistTracks(selectedPlaylist, availableTracks) : library.tracks,
+    [selectedPlaylist, availableTracks, library.tracks],
+  );
   const collectionPackages = selectedPlaylist?.packages;
   const collectionTracks = useMemo(
     // Packaged songs stay together, in their own order, however the playlist is sorted.
     () => groupPackagedTracks(sortCollectionTracks(baseCollectionTracks, collectionSort, listeningHistory.stats), collectionPackages ?? []),
     [baseCollectionTracks, collectionSort, collectionPackages, listeningHistory.stats],
   );
-  const activeCollectionContext = selectedPlaylist
+  // Built when a song is played or queued from the page, not on every render.
+  const activeCollectionContext = () => selectedPlaylist
     ? collectionQueueContext(collectionTracks, {
         kind: "playlist",
         id: selectedPlaylist.id,
@@ -997,12 +997,12 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   }, [openSearch]);
 
   const playFromCollection = (trackId: GlobalTrackId) => {
-    queue.playFromContext(activeCollectionContext, trackId);
+    queue.playFromContext(activeCollectionContext(), trackId);
     player.playTrack(trackId);
   };
 
   const shuffleCollection = () => {
-    const first = queue.shuffleContext(activeCollectionContext);
+    const first = queue.shuffleContext(activeCollectionContext());
     if (first) player.playTrack(first.track.globalId);
   };
 
@@ -1068,7 +1068,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   };
 
   const playStandalone = (
-    context: typeof queueContext,
+    context: QueueContext,
     trackId: GlobalTrackId,
   ) => {
     const entry = queueEntryForTrack(context, trackId);
@@ -1077,7 +1077,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     player.playTrack(trackId);
   };
 
-  const addToQueue = (context: typeof queueContext, trackId: GlobalTrackId) => {
+  const addToQueue = (context: QueueContext, trackId: GlobalTrackId) => {
     const entry = queueEntryForTrack(context, trackId);
     if (!entry) return;
     const shouldStartPlaying = queue.currentEntry === undefined;
@@ -1085,7 +1085,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (shouldStartPlaying) player.playTrack(trackId);
   };
 
-  const playNext = (context: typeof queueContext, trackId: GlobalTrackId) => {
+  const playNext = (context: QueueContext, trackId: GlobalTrackId) => {
     const entry = queueEntryForTrack(context, trackId);
     if (!entry) return;
     const shouldStartPlaying = queue.currentEntry === undefined;
@@ -1247,11 +1247,11 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     playlistOptions,
     playTrack: playFromCollection,
     playStandalone: (trackId: GlobalTrackId) =>
-      playStandalone(activeCollectionContext, trackId),
+      playStandalone(activeCollectionContext(), trackId),
     addToQueue: (trackId: GlobalTrackId) =>
-      addToQueue(activeCollectionContext, trackId),
+      addToQueue(activeCollectionContext(), trackId),
     playNext: (trackId: GlobalTrackId) =>
-      playNext(activeCollectionContext, trackId),
+      playNext(activeCollectionContext(), trackId),
     removeTracks: selectedPlaylist?.provider && (!selectedPlaylist.editable || servicePlaylistStore.busy.has(selectedPlaylist.id)) ? undefined : removeFromCollection,
     reorderTracks: selectedPlaylist?.provider ? undefined : reorderCollectionTracks,
     // Only AMBRA's own playlists can bind songs into packages; the library and service playlists can't hold them.
@@ -1344,7 +1344,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           ].map(({ track, leaving }) => <LyricsView key={track.globalId}
             track={track} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
             motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} globalOffsetMs={preferences.ui.lyricsOffsetMs}
-            shown={!leaving && lyricsShown} resting={!leaving && lyricsDrift} leaving={leaving} arriving={!leaving && leavingLyrics.length > 0} />)}
+            shown={!leaving && lyricsShown} resting={!leaving && lyricsDrift} leaving={leaving} covered={leaving && lyricsShown} arriving={!leaving && leavingLyrics.length > 0} />)}
         </div>
       )}
       {(player.currentTrack || isPlayerView) && (

@@ -60,8 +60,7 @@ pub struct SpotifyProvider {
     oauth_client_id: Arc<String>,
     quality: SpotifyQuality,
     tracks: Arc<Mutex<HashMap<String, Track>>>,
-    track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
-    track_metadata_cache_path: Arc<PathBuf>,
+    track_metadata: Arc<crate::metadata_store::MetadataStore>,
 }
 
 enum SpotifySearchAuth {
@@ -246,8 +245,11 @@ impl SpotifyProvider {
             .login5()
             .set_auth_token(librespot_token_for_search(&search_auth));
 
-        let track_metadata_cache_path = track_metadata_cache_path();
-        let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
+        let track_metadata = crate::metadata_store::MetadataStore::open(
+            &crate::storage::cache_path("spotify-metadata.sqlite"),
+            Some(&track_metadata_cache_path()),
+            "the Spotify song cache",
+        );
         println!("Spotify logged in as {}", session.username());
 
         Ok(Some(Self {
@@ -259,8 +261,7 @@ impl SpotifyProvider {
             oauth_client_id: Arc::new(oauth_client_id),
             quality: configured_quality(),
             tracks: Arc::new(Mutex::new(HashMap::new())),
-            track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
-            track_metadata_cache_path: Arc::new(track_metadata_cache_path),
+            track_metadata: Arc::new(track_metadata),
         }))
     }
 
@@ -541,11 +542,8 @@ impl SpotifyProvider {
     pub async fn track_metadata(&self, track_id: &str) -> ProviderResult<TrackMetadata> {
         validate_spotify_id("track", track_id)?;
 
-        {
-            let cache = self.track_metadata_cache.lock().await;
-            if let Some(cached) = cache.get(track_id) {
-                return Ok(cached.clone());
-            }
+        if let Some(cached) = self.track_metadata.get(track_id) {
+            return Ok(cached);
         }
 
         let track = self.track(track_id).await?;
@@ -606,16 +604,7 @@ impl SpotifyProvider {
             },
         };
 
-        self.track_metadata_cache
-            .lock()
-            .await
-            .insert(track_id.to_owned(), metadata.clone());
-        crate::write_behind::schedule(
-            self.track_metadata_cache.clone(),
-            self.track_metadata_cache_path.clone(),
-            "Spotify metadata cache",
-            save_track_metadata_cache,
-        );
+        self.track_metadata.insert(track_id, &metadata);
         Ok(metadata)
     }
 
@@ -1099,6 +1088,7 @@ fn spotify_oauth_refresh_path() -> PathBuf {
     crate::storage::config_path("spotify/oauth.json")
 }
 
+/// Where every song's details were kept, in one file, before `metadata_store`.
 fn track_metadata_cache_path() -> PathBuf {
     crate::storage::cache_path("spotify-metadata-cache.json")
 }
@@ -1141,40 +1131,6 @@ fn make_cache_private(_path: &Path) -> io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(_path, fs::Permissions::from_mode(0o700))?;
     }
-    Ok(())
-}
-
-fn load_track_metadata_cache(path: &Path) -> HashMap<String, TrackMetadata> {
-    let encoded = match fs::read(path) {
-        Ok(encoded) => encoded,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return HashMap::new(),
-        Err(error) => {
-            eprintln!("Could not read Spotify metadata cache: {error}");
-            return HashMap::new();
-        }
-    };
-    serde_json::from_slice(&encoded).unwrap_or_else(|error| {
-        eprintln!("Could not decode Spotify metadata cache: {error}");
-        HashMap::new()
-    })
-}
-
-fn save_track_metadata_cache(
-    path: &Path,
-    cache: &HashMap<String, TrackMetadata>,
-) -> ProviderResult<()> {
-    let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
-    let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary_path)?;
-    file.write_all(&serde_json::to_vec(cache)?)?;
-    drop(file);
-    fs::rename(temporary_path, path)?;
     Ok(())
 }
 
@@ -1227,8 +1183,7 @@ mod tests {
                 oauth_client_id: Arc::new("test-client".to_owned()),
                 quality: SpotifyQuality::Kbps320,
                 tracks: Arc::new(Mutex::new(HashMap::new())),
-                track_metadata_cache: Arc::new(Mutex::new(HashMap::new())),
-                track_metadata_cache_path: Arc::new(directory.join("metadata.json")),
+                track_metadata: Arc::new(crate::metadata_store::MetadataStore::in_memory()),
             })
         }
     }

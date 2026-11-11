@@ -37,6 +37,9 @@ const RESTART_AFTER_SECONDS: f64 = 3.0;
 const TICK: Duration = Duration::from_millis(250);
 const MAX_WAIT_SECONDS: u64 = 30;
 const TRANSPORT_FILE: &str = "transport.v1.json";
+/// A queue is saved in the shared state, so it may be as large as that allows. Axum's own
+/// limit (2 MiB) refused a queue of a couple of thousand songs.
+const MAX_QUEUE_BYTES: usize = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -135,7 +138,13 @@ pub struct Core {
     wake: Notify,
     /// One queue change at a time, so none is lost between reading and writing it.
     queue_lock: Mutex<()>,
-    queue: SyncMutex<Option<Arc<Value>>>,
+    /// The queue as saved and as parsed from that text. Kept while the saved text is the same,
+    /// so a change by the core isn't read back and parsed again.
+    queue: SyncMutex<Option<(Arc<str>, Arc<Value>)>>,
+    /// The core's own latest step through the queue, for apps that have the queue before it.
+    queue_patch: SyncMutex<Option<Arc<QueuePatch>>>,
+    /// What `transport.v1.json` holds, so an unchanged transport isn't written again.
+    saved_transport: SyncMutex<Option<Vec<u8>>>,
     /// Commands and output acknowledgements commit together: a slow load must never
     /// overwrite a pause, seek or output change that arrived while it was in flight.
     operation: Mutex<()>,
@@ -299,6 +308,39 @@ fn rewind(queue: &mut Value) -> bool {
     true
 }
 
+fn array_len(value: &Value) -> usize {
+    value.as_array().map_or(0, Vec::len)
+}
+
+/// How the core itself moves through the queue.
+#[derive(Clone, Copy, PartialEq)]
+enum QueueStep {
+    /// On to the next song; nothing happens when there is none.
+    Advance,
+    /// On to the next song, or the end of the queue after the last one.
+    AdvanceOrFinish,
+    /// Back to the song played before.
+    Rewind,
+}
+
+/// One step through the queue, as what it did to revision `base`. Moving on a song changes
+/// three entries of a queue that can hold thousands of songs; an app that has `base` applies
+/// this instead of being sent the whole queue again.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QueuePatch {
+    base: u64,
+    revision: u64,
+    /// Entries removed from the start and the end of the history, then those added at its end.
+    history_drop_front: usize,
+    history_drop_back: usize,
+    history_push: Vec<Value>,
+    current: Value,
+    /// Entries removed from the start of what's upcoming, then those put in front of it.
+    upcoming_drop_front: usize,
+    upcoming_unshift: Vec<Value>,
+}
+
 fn empty_queue() -> Value {
     json!({ "version": 1, "history": [], "current": null, "upcoming": [], "tracks": [] })
 }
@@ -330,6 +372,8 @@ impl Core {
             wake: Notify::new(),
             queue_lock: Mutex::new(()),
             queue: SyncMutex::new(None),
+            queue_patch: SyncMutex::new(None),
+            saved_transport: SyncMutex::new(None),
             operation: Mutex::new(()),
             commands: watch::channel(0).0,
             transport_path,
@@ -433,35 +477,49 @@ impl Core {
             let transport = self.transport();
             SavedTransport { output: transport.output.clone(), position: transport.position_now() }
         };
-        if let Ok(bytes) = serde_json::to_vec(&saved) {
-            let _ = crate::server_config::write_private(&self.transport_path, &bytes);
+        let Ok(bytes) = serde_json::to_vec(&saved) else { return };
+        // Asked for every few seconds: a paused or idle session has nothing new to write.
+        let mut written = self.saved_transport.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if written.as_deref() == Some(bytes.as_slice()) { return; }
+        if crate::server_config::write_private(&self.transport_path, &bytes).is_ok() {
+            *written = Some(bytes);
         }
     }
 
-    /// The queue as last read; read again whenever the shared state changes.
+    fn cached_queue(&self) -> Option<Arc<Value>> {
+        self.queue.lock().ok().and_then(|queue| queue.as_ref().map(|(_, parsed)| parsed.clone()))
+    }
+
+    fn parse_queue(saved: Option<&str>) -> Value {
+        saved
+            .and_then(|saved| serde_json::from_str::<Value>(saved).ok())
+            .filter(|queue| queue["version"] == 1)
+            .unwrap_or_else(empty_queue)
+    }
+
+    /// The queue as last read; read again when the shared state holds a different one.
     async fn queue(&self) -> Arc<Value> {
-        if let Some(queue) = self.queue.lock().ok().and_then(|queue| queue.clone()) {
+        if let Some(queue) = self.cached_queue() {
             return queue;
         }
         let _guard = self.queue_lock.lock().await;
-        if let Some(queue) = self.queue.lock().ok().and_then(|queue| queue.clone()) { return queue; }
-        let queue = Arc::new(self
-            .state
-            .value(QUEUE_KEY)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|value| serde_json::from_str::<Value>(&value).ok())
-            .filter(|queue| queue["version"] == 1)
-            .unwrap_or_else(empty_queue));
+        if let Some(queue) = self.cached_queue() { return queue; }
+        let saved = self.state.value(QUEUE_KEY).await.ok().flatten();
+        let queue = Arc::new(Self::parse_queue(saved.as_deref()));
         if let Ok(mut cached) = self.queue.lock() {
-            *cached = Some(queue.clone());
+            *cached = Some((saved.unwrap_or_default().into(), queue.clone()));
         }
         queue
     }
 
-    fn forget_queue(&self) {
-        if let Ok(mut cached) = self.queue.lock() {
+    /// The shared state changed: the queue is read again only if it isn't the one kept here.
+    /// Nearly every change is another key's, or the core's own queue change, already kept.
+    async fn refresh_queue(&self) {
+        let _guard = self.queue_lock.lock().await;
+        let saved = self.state.value(QUEUE_KEY).await.ok().flatten().unwrap_or_default();
+        if let Ok(mut cached) = self.queue.lock()
+            && cached.as_ref().is_some_and(|(text, _)| **text != *saved)
+        {
             *cached = None;
         }
     }
@@ -475,27 +533,77 @@ impl Core {
         let result = self
             .state
             .update(QUEUE_KEY, move |saved| {
-                let mut queue = saved
-                    .and_then(|saved| serde_json::from_str::<Value>(saved).ok())
-                    .filter(|queue| queue["version"] == 1)
-                    .unwrap_or_else(empty_queue);
+                let mut queue = Self::parse_queue(saved);
                 let (changed, result) = change(&mut queue)?;
                 if !changed {
-                    return Ok((saved.map(str::to_owned), result));
+                    return Ok((saved.map(str::to_owned), (None, result)));
                 }
                 queue["revision"] = json!(queue_revision(&queue) + 1);
-                Ok((Some(queue.to_string()), result))
+                let text = queue.to_string();
+                Ok((Some(text.clone()), (Some((Arc::<str>::from(text), Arc::new(queue))), result)))
             })
             .await;
-        self.forget_queue();
+        let result = match result {
+            Ok((changed, result)) => {
+                // Kept as written, rather than read back and parsed again for the next look.
+                if let (Some(changed), Ok(mut cached)) = (changed, self.queue.lock()) {
+                    *cached = Some(changed);
+                }
+                Ok(result)
+            }
+            Err(message) => Err(message),
+        };
         self.changed();
         result
+    }
+
+    /// Moves through the queue as the core itself does, and remembers the move as a patch.
+    /// `None` if the queue had nowhere to go.
+    async fn step_queue(&self, step: QueueStep) -> Result<Option<Arc<QueuePatch>>, String> {
+        let patch = self.change_queue(move |queue| {
+            let base = queue_revision(queue);
+            let (history_before, upcoming_before) = (array_len(&queue["history"]), array_len(&queue["upcoming"]));
+            let leaving = queue["current"].clone();
+            let moved = match step {
+                QueueStep::Advance => advance(queue),
+                QueueStep::AdvanceOrFinish => { if !advance(queue) { finish(queue); } true }
+                QueueStep::Rewind => rewind(queue),
+            };
+            if !moved { return Ok((false, None)); }
+            let history_after = array_len(&queue["history"]);
+            let patch = if step == QueueStep::Rewind {
+                QueuePatch {
+                    base, revision: base + 1,
+                    history_drop_front: 0, history_drop_back: 1, history_push: Vec::new(),
+                    current: queue["current"].clone(),
+                    upcoming_drop_front: 0,
+                    upcoming_unshift: if leaving.is_null() { Vec::new() } else { vec![leaving] },
+                }
+            } else {
+                // The song left joins the history, which keeps only its most recent entries.
+                let pushed = usize::from(!leaving.is_null());
+                let history_push = queue["history"].as_array().map_or_else(Vec::new, |history| history[history.len() - pushed.min(history.len())..].to_vec());
+                QueuePatch {
+                    base, revision: base + 1,
+                    history_drop_front: (history_before + pushed).saturating_sub(history_after), history_drop_back: 0, history_push,
+                    current: queue["current"].clone(),
+                    upcoming_drop_front: upcoming_before - array_len(&queue["upcoming"]),
+                    upcoming_unshift: Vec::new(),
+                }
+            };
+            Ok((true, Some(patch)))
+        }).await?;
+        let patch = patch.map(Arc::new);
+        if let (Some(patch), Ok(mut latest)) = (&patch, self.queue_patch.lock()) {
+            *latest = Some(patch.clone());
+        }
+        Ok(patch)
     }
 
     async fn record_play(&self, track: Value) {
         let recorded = self
             .state
-            .update(HISTORY_KEY, move |saved| {
+            .update_patched(HISTORY_KEY, move |saved| {
                 let mut history = saved
                     .and_then(|saved| serde_json::from_str::<Value>(saved).ok())
                     .filter(|history| history["version"] == 1 && history["entries"].is_array())
@@ -505,8 +613,11 @@ impl Core {
                 let previous = entries.iter().position(|entry| entry["track"]["globalId"] == id).map(|index| entries.remove(index));
                 // Entries from before play counts were kept count as one play.
                 let plays = previous.map_or(0, |entry| entry["playCount"].as_u64().unwrap_or(1)) + 1;
-                entries.insert(0, json!({ "track": track, "lastPlayedAt": now_ms(), "playCount": plays }));
-                Ok((Some(history.to_string()), ()))
+                let entry = json!({ "track": track, "lastPlayedAt": now_ms(), "playCount": plays });
+                entries.insert(0, entry.clone());
+                // Apps holding the history are sent this one entry, not every song ever played:
+                // it goes first, in place of any entry for the same song.
+                Ok((Some(history.to_string()), Some(json!({ "play": entry })), ()))
             })
             .await;
         if let Err(error) = recorded {
@@ -542,13 +653,48 @@ struct SessionView {
     /// Left out when the app already has this revision: a long queue is large, and play,
     /// pause and buffering change the view far more often than the queue changes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    queue: Option<Value>,
+    queue: Option<Kept<Value>>,
+    /// In place of `queue`, for an app that has the revision before this one and asked for
+    /// patches: what the core's step through the queue changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_patch: Option<Kept<QueuePatch>>,
+}
+
+/// The queue (or its patch) as it is kept, written out without copying it first.
+struct Kept<T>(Arc<T>);
+impl<T: Serialize> Serialize for Kept<T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.serialize(serializer)
+    }
+}
+
+/// How an app that doesn't have the current queue is told of it.
+#[derive(Clone, Copy, PartialEq)]
+enum QueueDetail {
+    /// The whole queue.
+    Whole,
+    /// A patch from the revision the app has, when the core's latest step is that; else the whole queue.
+    Patched,
+    /// A patch or nothing: the app asks for a queue it can't patch (`/api/session`, compressed),
+    /// so the stream never carries one. An app that changed the queue itself already has it
+    /// from the answer to that change.
+    PatchedOrLeftOut,
+}
+
+impl QueueDetail {
+    fn of(patches: Option<u8>) -> Self {
+        if patches.is_some_and(|patches| patches > 0) { Self::Patched } else { Self::Whole }
+    }
 }
 
 /// `known_queue`: the queue revision the app already has, if any.
-async fn view(core: &Core, known_queue: Option<u64>) -> SessionView {
+async fn view(core: &Core, known_queue: Option<u64>, detail: QueueDetail) -> SessionView {
     let queue = core.queue().await;
     let queue_revision = queue_revision(&queue);
+    let queue_patch = (detail != QueueDetail::Whole && known_queue != Some(queue_revision))
+        .then(|| core.queue_patch.lock().ok().and_then(|patch| patch.clone()))
+        .flatten()
+        .filter(|patch| Some(patch.base) == known_queue && patch.revision == queue_revision);
     let output_endpoint = core.transport().output.as_ref().map(|output| output.endpoint_id.clone());
     let output_online = match &output_endpoint {
         Some(endpoint) => core.endpoints.online(endpoint).await,
@@ -568,7 +714,8 @@ async fn view(core: &Core, known_queue: Option<u64>) -> SessionView {
         audio_quality: transport.audio_quality.clone(),
         output: transport.output.clone(),
         output_online,
-        queue: (known_queue != Some(queue_revision)).then(|| queue.as_ref().clone()),
+        queue: (known_queue != Some(queue_revision) && queue_patch.is_none() && detail != QueueDetail::PatchedOrLeftOut).then(|| Kept(queue.clone())),
+        queue_patch: queue_patch.map(Kept),
         queue_revision,
     }
 }
@@ -589,7 +736,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(core: Shared) -> Router<S> {
         .route("/api/session", get(read))
         .route("/api/session/stream", get(stream))
         .route("/api/session/clock", get(clock))
-        .route("/api/session/queue", post(set_queue))
+        .route("/api/session/queue", post(set_queue).layer(axum::extract::DefaultBodyLimit::max(MAX_QUEUE_BYTES)))
         .route("/api/session/command", post(command))
         .with_state(core)
 }
@@ -600,6 +747,8 @@ struct ReadQuery {
     wait: Option<u64>,
     /// The queue revision the app has; the queue is sent only when it's different.
     queue: Option<u64>,
+    /// Set by apps that take a `queuePatch` in place of the queue.
+    patches: Option<u8>,
 }
 
 async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Json<SessionView> {
@@ -607,13 +756,15 @@ async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Jso
         let mut revision = core.revision.subscribe();
         let _ = tokio::time::timeout(Duration::from_secs(wait.min(MAX_WAIT_SECONDS)), revision.wait_for(|current| *current != since)).await;
     }
-    Json(view(&core, query.queue).await)
+    Json(view(&core, query.queue, QueueDetail::of(query.patches)).await)
 }
 
 #[derive(Deserialize)]
 struct StreamQuery {
     /// The queue revision the app has; the queue is sent only when it's different.
     queue: Option<u64>,
+    /// Set by apps that take a `queuePatch` and ask for any queue they can't patch.
+    patches: Option<u8>,
 }
 
 /// Positions are sent at most this often; anything else that changes is sent at once.
@@ -624,8 +775,9 @@ const STREAM_HEARTBEAT: Duration = Duration::from_secs(10);
 /// The session as it changes, one view per line: at once for anything an app shows, and with
 /// each position the output reports. Apps following it don't wait on a poll to see either.
 async fn stream(State(core): State<Shared>, Query(query): Query<StreamQuery>) -> Response {
-    struct Follow { core: Shared, revision: watch::Receiver<u64>, positions: watch::Receiver<u64>, queue: Option<u64>, sent: Option<Instant> }
-    let follow = Follow { revision: core.revision.subscribe(), positions: core.positions.subscribe(), core, queue: query.queue, sent: None };
+    struct Follow { core: Shared, revision: watch::Receiver<u64>, positions: watch::Receiver<u64>, queue: Option<u64>, detail: QueueDetail, sent: Option<Instant> }
+    let detail = if QueueDetail::of(query.patches) == QueueDetail::Patched { QueueDetail::PatchedOrLeftOut } else { QueueDetail::Whole };
+    let follow = Follow { revision: core.revision.subscribe(), positions: core.positions.subscribe(), core, queue: query.queue, detail, sent: None };
     let lines = futures_util::stream::unfold(follow, |mut follow| async move {
         if let Some(sent) = follow.sent {
             tokio::select! {
@@ -643,7 +795,7 @@ async fn stream(State(core): State<Shared>, Query(query): Query<StreamQuery>) ->
         }
         follow.revision.mark_unchanged();
         follow.positions.mark_unchanged();
-        let view = view(&follow.core, follow.queue).await;
+        let view = view(&follow.core, follow.queue, follow.detail).await;
         follow.queue = Some(view.queue_revision);
         follow.sent = Some(Instant::now());
         let mut line = serde_json::to_vec(&view).unwrap_or_default();
@@ -693,14 +845,14 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
             if moved { core.transport().silence_skipped = true; }
         }
         Ok(Err(current)) => {
-            return (StatusCode::CONFLICT, Json(json!({ "error": "The queue changed meanwhile", "queueRevision": current, "session": view(&core, None).await }))).into_response();
+            return (StatusCode::CONFLICT, Json(json!({ "error": "The queue changed meanwhile", "queueRevision": current, "session": view(&core, None, QueueDetail::Whole).await }))).into_response();
         }
         Err(message) => return error(StatusCode::BAD_REQUEST, message),
     }
     if let Some(track_id) = change.play_track_id {
         play_track(&core, &track_id).await;
     }
-    Json(view(&core, None).await).into_response()
+    Json(view(&core, None, QueueDetail::Whole).await).into_response()
 }
 
 async fn play_track(core: &Core, track_id: &str) {
@@ -748,7 +900,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
     core.transport().failed_live_load = None;
     if retry_live && let Some(manager) = &core.spotify_playback {
         if operation.wait(manager.retry_playback()).await.is_err() {
-            return Json(view(&core, query.queue).await).into_response();
+            return Json(view(&core, query.queue, QueueDetail::of(query.patches)).await).into_response();
         }
     }
     let result: Result<(), String> = match command {
@@ -790,7 +942,7 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
             // Past the first few seconds it starts the song over; before that it goes back one,
             // or starts over when nothing played before it.
             let restart = core.transport().position_now() > RESTART_AFTER_SECONDS;
-            let rewound = !restart && core.change_queue(|queue| { let moved = rewind(queue); Ok((moved, moved)) }).await.unwrap_or(false);
+            let rewound = !restart && core.step_queue(QueueStep::Rewind).await.is_ok_and(|patch| patch.is_some());
             let mut transport = core.transport();
             transport.set_position(0.0);
             transport.buffering = transport.playing;
@@ -848,17 +1000,14 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
         }
     };
     match result {
-        Ok(()) => Json(view(&core, query.queue).await).into_response(),
+        Ok(()) => Json(view(&core, query.queue, QueueDetail::of(query.patches)).await).into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
 }
 
 /// Next: the queue moves on and the new song plays from its start.
 async fn skip(core: &Core, forward: bool) -> Result<(), String> {
-    let advanced = core.change_queue(move |queue| {
-        let moved = if forward { advance(queue) } else { rewind(queue) };
-        Ok((moved, moved))
-    }).await?;
+    let advanced = core.step_queue(if forward { QueueStep::Advance } else { QueueStep::Rewind }).await?.is_some();
     if advanced {
         let mut transport = core.transport();
         transport.generation += 1;
@@ -884,7 +1033,7 @@ async fn drive(core: Shared) {
             _ = core.endpoints.reported() => {}
             changed = state_changes.changed() => {
                 if changed.is_err() { return; }
-                core.forget_queue();
+                core.refresh_queue().await;
             }
             _ = tokio::time::sleep(TICK) => {}
         }
@@ -1184,7 +1333,7 @@ async fn step(core: &Core) -> Result<(), String> {
     let playing_source = status["currentSource"].as_str().map(str::to_owned);
     // The output moved on to the queued song by itself, without a gap.
     if playing_source.is_some() && playing_source == next && next.as_deref() != Some(source.as_str()) {
-        core.change_queue(|queue| Ok((advance(queue), ()))).await?;
+        core.step_queue(QueueStep::Advance).await?;
         let count = {
         let mut transport = core.transport();
         if let Some(loaded) = transport.loaded.as_mut() {
@@ -1261,13 +1410,8 @@ async fn step(core: &Core) -> Result<(), String> {
     }
     if ended && core.transport().playing {
         // The song finished with nothing queued behind it in the engine: move on, or stop.
-        let moved = core.change_queue(|queue| {
-            let moved = advance(queue);
-            if !moved {
-                finish(queue);
-            }
-            Ok((true, moved))
-        }).await?;
+        // Whether another song follows; otherwise the queue has ended.
+        let moved = core.step_queue(QueueStep::AdvanceOrFinish).await?.is_some_and(|patch| !patch.current.is_null());
         let mut transport = core.transport();
         transport.set_position(0.0);
         if !moved {
@@ -1914,6 +2058,145 @@ mod driver_tests {
         let conflict: Value = conflict.json().await.unwrap();
         assert_eq!(conflict["session"]["queue"], stale["queue"]);
     }
+    /// What an app does with a patch: the queue it had becomes the queue the server has.
+    fn patched(queue: &Value, patch: &Value) -> Value {
+        let count = |key: &str| patch[key].as_u64().unwrap() as usize;
+        let list = |key: &str| patch[key].as_array().unwrap().clone();
+        let history = queue["history"].as_array().unwrap();
+        let upcoming = queue["upcoming"].as_array().unwrap();
+        let mut next = queue.clone();
+        next["history"] = Value::Array([&history[count("historyDropFront")..history.len() - count("historyDropBack")], &list("historyPush")].concat());
+        next["upcoming"] = Value::Array([list("upcomingUnshift").as_slice(), &upcoming[count("upcomingDropFront")..]].concat());
+        next["current"] = patch["current"].clone();
+        next["revision"] = patch["revision"].clone();
+        next
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_step_through_the_queue_is_sent_as_a_patch_that_makes_the_same_queue() {
+        let h = Harness::start().await;
+        // A full history, so moving on also drops its oldest entry.
+        let played: Vec<Value> = (0..MAX_QUEUE_HISTORY).map(|index| {
+            let mut entry = item("a");
+            entry["historyId"] = json!(format!("h{index}"));
+            entry["playedAt"] = json!("2026-01-01T00:00:00.000Z");
+            entry
+        }).collect();
+        h.post("/api/session/queue", json!({ "base": 0, "queue": { "version": 1, "history": played, "current": item("a"), "upcoming": [item("b"), item("c")], "tracks": [track("a"), track("b"), track("c")] } })).await;
+        let get = |query: &'static str| { let (http, base) = (h.http.clone(), h.base.clone()); async move { http.get(format!("{base}/api/session{query}")).send().await.unwrap().json::<Value>().await.unwrap() } };
+        let mut known = get("").await["queue"].clone();
+
+        // Next, next (the last song), the end of the queue, then back twice.
+        for step in [QueueStep::Advance, QueueStep::Advance, QueueStep::AdvanceOrFinish, QueueStep::Rewind, QueueStep::Rewind] {
+            let revision = known["revision"].as_u64().unwrap();
+            assert!(h.core.step_queue(step).await.unwrap().is_some());
+            let view: Value = h.http.get(format!("{}/api/session?queue={revision}&patches=1", h.base)).send().await.unwrap().json().await.unwrap();
+            assert!(view.get("queue").is_none(), "a patch replaces the queue");
+            assert_eq!(view["queuePatch"]["base"], revision);
+            known = patched(&known, &view["queuePatch"]);
+            assert_eq!(known, get("").await["queue"], "the patched queue is the server's");
+            assert_eq!(known, h.queue().await, "and the one it saved");
+        }
+        assert_eq!(known["history"].as_array().unwrap().len(), MAX_QUEUE_HISTORY - 2);
+        assert_eq!(known["current"]["globalTrackId"], "b");
+        assert!(h.core.step_queue(QueueStep::Advance).await.unwrap().is_some());
+        assert!(h.core.step_queue(QueueStep::Advance).await.unwrap().is_none(), "nothing after the last song");
+
+        // An app further behind, or one that never asked for patches, gets the whole queue.
+        let behind: Value = h.http.get(format!("{}/api/session?queue=1&patches=1", h.base)).send().await.unwrap().json().await.unwrap();
+        assert!(behind.get("queuePatch").is_none());
+        assert_eq!(behind["queue"], h.queue().await);
+        let revision = queue_revision(&h.queue().await);
+        h.core.step_queue(QueueStep::Rewind).await.unwrap();
+        let plain: Value = h.http.get(format!("{}/api/session?queue={revision}", h.base)).send().await.unwrap().json().await.unwrap();
+        assert!(plain.get("queuePatch").is_none());
+        assert_eq!(plain["queue"], h.queue().await);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_stream_patches_a_step_and_leaves_any_other_queue_to_be_asked_for() {
+        use futures_util::StreamExt;
+        let h = Harness::start().await;
+        let queue = json!({ "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [track("a"), track("b")] });
+        h.post("/api/session/queue", json!({ "base": 0, "queue": queue })).await;
+        let mut lines = h.http.get(format!("{}/api/session/stream?patches=1", h.base)).send().await.unwrap().bytes_stream();
+        let mut buffered = Vec::new();
+        let mut next = async || -> Value {
+            loop {
+                if let Some(end) = buffered.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = buffered.drain(..=end).collect();
+                    return serde_json::from_slice(&line).unwrap();
+                }
+                let chunk = tokio::time::timeout(Duration::from_secs(5), lines.next()).await.unwrap().unwrap().unwrap();
+                buffered.extend_from_slice(&chunk);
+            }
+        };
+        // The app has no queue yet: it asks for it, compressed, rather than getting it here.
+        let first = next().await;
+        assert_eq!(first["queueRevision"], 1);
+        assert!(first.get("queue").is_none() && first.get("queuePatch").is_none());
+
+        h.core.step_queue(QueueStep::Advance).await.unwrap();
+        let stepped = loop { let line = next().await; if line["queueRevision"] == 2 { break line; } };
+        assert_eq!(stepped["queuePatch"]["base"], 1);
+        assert_eq!(stepped["queuePatch"]["current"]["globalTrackId"], "b");
+        assert!(stepped.get("queue").is_none());
+
+        // Another app replaces the queue: only the news of it travels on the stream.
+        let mut replaced = h.queue().await;
+        replaced["upcoming"] = json!([item("a")]);
+        h.post("/api/session/queue", json!({ "base": 2, "queue": replaced })).await;
+        let news = loop { let line = next().await; if line["queueRevision"] == 3 { break line; } };
+        assert!(news.get("queue").is_none() && news.get("queuePatch").is_none());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_queue_of_thousands_of_songs_is_accepted() {
+        let h = Harness::start().await;
+        let ids: Vec<String> = (0..6000).map(|index| format!("song-{index}")).collect();
+        let queue = json!({ "version": 1, "history": [], "current": item(&ids[0]), "upcoming": ids[1..].iter().map(|id| item(id)).collect::<Vec<_>>(), "tracks": ids.iter().map(|id| track(id)).collect::<Vec<_>>() });
+        assert!(queue.to_string().len() > 2 * 1024 * 1024, "larger than the framework's default body limit");
+        let response = h.http.post(format!("{}/api/session/queue", h.base)).json(&json!({ "base": 0, "queue": queue })).send().await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(h.queue().await["upcoming"].as_array().unwrap().len(), 5999);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_queue_changed_outside_the_core_is_read_again() {
+        let h = Harness::start().await;
+        h.core.change_queue(|queue| { queue["current"] = item("a"); Ok((true, ())) }).await.unwrap();
+        let kept = h.core.queue().await;
+        // Another key changing leaves the kept queue as it is.
+        h.state.update("ambra.library-order.v1", |_| Ok((Some(json!(["a"]).to_string()), ()))).await.unwrap();
+        h.core.refresh_queue().await;
+        assert!(Arc::ptr_eq(&kept, &h.core.queue().await));
+        // The queue itself replaced in the shared state (an imported local song, say) isn't.
+        h.state.update(QUEUE_KEY, |saved| {
+            let mut queue: Value = serde_json::from_str(saved.unwrap()).unwrap();
+            queue["current"] = item("b");
+            Ok((Some(queue.to_string()), ()))
+        }).await.unwrap();
+        eventually!("the replaced queue", h.core.queue().await["current"]["globalTrackId"] == "b");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_counted_play_is_described_by_the_one_entry_it_moves() {
+        let h = Harness::start().await;
+        for id in ["a", "b", "a"] {
+            let before: Value = h.history().await.map_or_else(|| json!({ "version": 1, "entries": [] }), |saved| serde_json::from_str(&saved).unwrap());
+            h.core.record_play(track(id)).await;
+            // What an app does with the patch: the entry goes first, replacing the song's old one.
+            let entry = h.state.latest_patch(HISTORY_KEY).unwrap()["play"].clone();
+            let mut entries = vec![entry.clone()];
+            entries.extend(before["entries"].as_array().unwrap().iter().filter(|other| other["track"]["globalId"] != entry["track"]["globalId"]).cloned());
+            let after: Value = serde_json::from_str(&h.history().await.unwrap()).unwrap();
+            assert_eq!(after, json!({ "version": 1, "entries": entries }));
+        }
+        let after: Value = serde_json::from_str(&h.history().await.unwrap()).unwrap();
+        assert_eq!(after["entries"][0]["playCount"], 2);
+        assert_eq!(after["entries"].as_array().unwrap().len(), 2);
+    }
+
     fn spotify_track(id: &str, spotify: &str) -> Value {
         let mut track = track(id);
         track["provider"] = json!("spotify"); track["providerTrackId"] = json!(spotify);

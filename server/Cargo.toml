@@ -72,3 +72,19 @@ librespot-core = { path = "vendor/librespot-core" }
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+# Development builds are what gets run day to day, often as the machine's own server. Left
+# unoptimized, one answered requests 5x slower (parsing and writing JSON, mostly). Light
+# optimization of the server's own code brings it close to a release build for about ten
+# seconds more per rebuild; the libraries it leans on (JSON, TLS, image and audio codecs,
+# the P2P stack) are compiled once, fully optimized. Delete `[profile.dev]` to get the
+# quickest rebuilds and unoptimized debugging back.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

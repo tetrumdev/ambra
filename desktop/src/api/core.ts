@@ -8,6 +8,7 @@ import { resetServerClock, serverNow, syncServerClock } from "./serverClock";
 import { invokeOn } from "../utils/playbackTarget";
 import { serverAudioSource, isDeviceTrack } from "../utils/nativeAudioSource";
 import { onWindowResume } from "../utils/windowResume";
+import { applyQueuePatch, queuePatchApplies, type QueuePatch } from "../utils/queuePatch";
 
 /**
  * The server's core decides what plays for every device (server/src/session.rs). This is
@@ -36,8 +37,11 @@ export type CoreView = {
   queueRevision: number;
   queue: PersistedQueue & { revision?: number };
 };
-/** A view as it arrives: the queue is left out when this app already has that revision. */
-type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"] };
+/**
+ * A view as it arrives: the queue is left out when this app already has that revision, can
+ * make it from `queuePatch`, or (on the stream) is to ask for it.
+ */
+type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"]; queuePatch?: QueuePatch };
 
 const QUEUE_KEY = "ambra.queue.v1";
 let view: CoreView | null = null;
@@ -48,7 +52,7 @@ let chain: Promise<unknown> = Promise.resolve();
 let following: AbortController | null = null;
 subscribeServerConnection(() => {
   following?.abort(); following = null;
-  view = null; unsentQueueChange = null;
+  view = null; unsentQueueChange = null; askingForQueue = null;
   for (const listener of listeners) listener();
 });
 
@@ -80,15 +84,14 @@ function accept(next: ArrivingView, signal = serverConnectionSignal()) {
   if (signal.aborted) return;
   if (view && next.instanceId === view.instanceId && next.revision < view.revision) return;
   if (view && next.instanceId !== view.instanceId) resetServerClock();
-  const { queue: arrived, ...rest } = next;
+  const { queue: arrived, queuePatch: patch, ...rest } = next;
   let queue: CoreView["queue"];
   if (arrived === undefined) {
     // Left out as already known; a restarted or different server's queue can't be assumed to match.
-    if (!view || view.instanceId !== next.instanceId || view.queueRevision !== next.queueRevision) {
-      void request<ArrivingView>("/api/session", undefined, signal).then(next => accept(next, signal)).catch(() => {});
-      return;
-    }
-    queue = view.queue;
+    const known = view && view.instanceId === next.instanceId ? view : null;
+    if (known && known.queueRevision === next.queueRevision) queue = known.queue;
+    else if (known && queuePatchApplies(patch, known.queueRevision, next.queueRevision)) queue = applyQueuePatch(known.queue, patch);
+    else { askForQueue(signal); return; }
   } else {
     queue = JSON.parse(fromStorage(JSON.stringify(arrived))) as CoreView["queue"];
     if (queue.tracks) queue.tracks = queue.tracks.map(track => track.provider === "local" ? localMusicTrack(track) : track);
@@ -108,6 +111,20 @@ function accept(next: ArrivingView, signal = serverConnectionSignal()) {
   for (const listener of listeners) listener();
 }
 
+/** The connection a whole view is being asked for on, so the views arriving meanwhile don't each ask again. */
+let askingForQueue: AbortSignal | null = null;
+
+/** Asks for the session with its whole queue: this app has none, or one it can't patch. */
+function askForQueue(signal: AbortSignal) {
+  if (askingForQueue === signal) return;
+  askingForQueue = signal;
+  void request<ArrivingView>("/api/session", undefined, signal)
+    .then(next => accept(next, signal))
+    .catch(() => {})
+    // A failed request is made again by the next view to arrive.
+    .finally(() => { if (askingForQueue === signal) askingForQueue = null; });
+}
+
 const POSITION_FIELDS = new Set(["revision", "positionSeconds", "serverTimeMs", "queue"]);
 function sameApartFromPosition(current: CoreView, next: Omit<CoreView, "queue">) {
   const keys = new Set([...Object.keys(current), ...Object.keys(next)]);
@@ -120,8 +137,11 @@ function sameApartFromPosition(current: CoreView, next: Omit<CoreView, "queue">)
   return true;
 }
 
-/** Tells the server which queue this app has, so an unchanged one isn't sent again. */
-const knownQueue = () => view ? `queue=${view.queueRevision}` : "";
+/**
+ * Tells the server which queue this app has, so an unchanged one isn't sent again, and that
+ * a step through it can come as a patch. Older servers ignore `patches` and send the queue.
+ */
+const knownQueue = () => view ? `queue=${view.queueRevision}&patches=1` : "patches=1";
 
 async function request<T>(path: string, body?: unknown, signal = serverConnectionSignal()): Promise<T> {
   const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {

@@ -98,26 +98,30 @@ export function ArtistView({ artist, ...props }: EntityViewProps & { artist: Cat
   const releaseSections = useMemo(() => artistReleaseSections(artist.provider === "local" ? libraryAlbums(saved).map(album => ({ id: album.id, provider: entityProvider(album.id), title: album.name, artist: album.artist, imageUrl: album.cover, releaseDate: album.releaseYear })) : albums), [artist.provider, saved, albums]);
   // Undefined while the services that might have one are still being checked.
   const [about, setAbout] = useState<(ArtistBiography & { provider: CatalogArtist["provider"] }) | null | undefined>(undefined);
-  const biographySources = useMemo(() => !sourcesFound || releasesLoading ? null
-    : biographyProviders.flatMap(provider => trustedArtistSources(artist, sources, releases).filter(source => source.provider === provider)),
-  [artist, sources, sourcesFound, releases, releasesLoading]);
-  const biographyKey = biographySources?.map(source => source.id).join("|");
+  const biographySources = useMemo(() => {
+    // The current artist needs no cross-service release match to supply its own biography.
+    const trusted = [...new Map([artist, ...trustedArtistSources(artist, sources, releases)].map(source => [source.id, source])).values()];
+    return biographyProviders.flatMap(provider => trusted.filter(source => source.provider === provider));
+  }, [artist, sources, releases]);
+  const biographyKey = biographySources.map(source => source.id).join("|");
+  const biographyPending = !sourcesFound || releasesLoading;
   useEffect(() => {
-    if (!biographySources) return;
     const controller = new AbortController();
-    void (async () => {
-      for (const source of biographySources) {
-        try {
-          const found = await loadArtistBiography(source, controller.signal);
-          if (found.biography?.trim()) return { ...found, provider: source.provider };
-        } catch {
-          if (controller.signal.aborted) return undefined;
+    let bestSource = Infinity;
+    // Show any available biography while richer catalogs are still being checked.
+    void Promise.all(biographySources.map(async (source, index) => {
+      try {
+        const found = await loadArtistBiography(source, controller.signal);
+        if (!controller.signal.aborted && found.biography?.trim() && index < bestSource) {
+          bestSource = index;
+          setAbout({ ...found, provider: source.provider });
         }
-      }
-      return null;
-    })().then(found => { if (!controller.signal.aborted) setAbout(found); });
+      } catch { /* Other catalogs may still have a biography. */ }
+    })).then(() => {
+      if (!controller.signal.aborted && bestSource === Infinity && !biographyPending) setAbout(null);
+    });
     return () => controller.abort();
-  }, [biographyKey]);
+  }, [biographyKey, biographyPending]);
   const biography = useMemo(() => artistBiography(about?.biography), [about?.biography]);
   const listProps = { playlistOptions: props.playlistOptions, onOpenEntity: props.onOpenEntity, savedTrackIds: savedIds, addToLibrary: (id: string) => { const track = [...popular, ...saved].find(track => track.globalId === id); if (track) props.onAddTrack(track); } };
   const trackList = (tracks: typeof saved, ranked = false) => <TrackList {...listProps} tracks={tracks} showRank={ranked}
