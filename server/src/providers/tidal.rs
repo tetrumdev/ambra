@@ -1123,6 +1123,8 @@ fn parse_dash_manifest(xml: &str) -> ProviderResult<(DashManifest, Option<f64>, 
     let mut media_url_template = None;
     let mut timescale = None;
     let mut duration = None;
+    let mut timeline_duration = None;
+    let mut in_segment_timeline = false;
     let mut start_number = None;
     let mut sampling_rate_hz = None;
     let mut bit_depth = None;
@@ -1171,6 +1173,19 @@ fn parse_dash_manifest(xml: &str) -> ProviderResult<(DashManifest, Option<f64>, 
                             }
                         }
                     }
+                    b"SegmentTimeline" => in_segment_timeline = true,
+                    b"S" if in_segment_timeline && timeline_duration.is_none() => {
+                        // A one-segment track has no second fragment to probe for timing.
+                        // Use the first timeline duration; the final entry can be shorter.
+                        timeline_duration = element
+                            .attributes()
+                            .flatten()
+                            .find(|attribute| attribute.key.as_ref() == b"d")
+                            .and_then(|attribute| {
+                                String::from_utf8_lossy(&attribute.value).parse::<u32>().ok()
+                            })
+                            .filter(|duration| *duration > 0);
+                    }
                     b"BaseURL" => {
                         if let Ok(Event::Text(text)) = reader.read_event_into(&mut buffer) {
                             let url = String::from_utf8_lossy(text.as_ref()).to_string();
@@ -1181,6 +1196,9 @@ fn parse_dash_manifest(xml: &str) -> ProviderResult<(DashManifest, Option<f64>, 
                     }
                     _ => {}
                 }
+            }
+            Ok(Event::End(element)) if element.name().as_ref() == b"SegmentTimeline" => {
+                in_segment_timeline = false;
             }
             Ok(Event::Eof) => break,
             Err(error) => {
@@ -1214,7 +1232,7 @@ fn parse_dash_manifest(xml: &str) -> ProviderResult<(DashManifest, Option<f64>, 
             initialization_url,
             media_url_template,
             timescale,
-            duration,
+            duration: duration.filter(|duration| *duration > 0).or(timeline_duration),
             start_number,
         },
         sampling_rate_khz,
@@ -1911,6 +1929,89 @@ mod tests {
             ),
             "FLAC 24-bit/192 kHz"
         );
+    }
+
+    #[tokio::test]
+    async fn single_segment_timeline_resolves_without_probing_another_segment() {
+        use crate::media_cache::MediaCache;
+        use axum::{
+            Router,
+            http::{StatusCode, Uri},
+        };
+        use std::sync::{Arc, Mutex};
+        use tokio::sync::RwLock;
+
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+            bytes.extend_from_slice(kind);
+            bytes.extend_from_slice(payload);
+            bytes
+        }
+        let mut mvhd = vec![0; 12];
+        mvhd.extend_from_slice(&44_100u32.to_be_bytes());
+        let mut mehd = vec![0; 4];
+        mehd.extend_from_slice(&43_928u32.to_be_bytes());
+        let mut moov = atom(b"mvhd", &mvhd);
+        moov.extend(atom(b"mvex", &atom(b"mehd", &mehd)));
+        let initialization = atom(b"moov", &moov);
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new().fallback({
+            let requests = requests.clone();
+            move |uri: Uri| {
+                let initialization = initialization.clone();
+                let requests = requests.clone();
+                async move {
+                    requests.lock().unwrap().push(uri.path().to_owned());
+                    if uri.path() == "/init" {
+                        (StatusCode::OK, initialization)
+                    } else {
+                        (StatusCode::BAD_REQUEST, Vec::new())
+                    }
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let xml = format!(
+            r#"<MPD><Period><AdaptationSet mimeType="audio/mp4"><Representation codecs="flac"><SegmentTemplate timescale="44100" startNumber="1" initialization="{base}/init" media="{base}/$Number$"><SegmentTimeline><S d="43928" /></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#
+        );
+        let (manifest, _, _) = parse_dash_manifest(&xml).unwrap();
+        let result = super::playback_source_from_dash(
+            &reqwest::Client::new(),
+            &RwLock::new(MediaCache::default()),
+            manifest,
+            1,
+        )
+        .await;
+        server.abort();
+        match result.unwrap() {
+            super::PlaybackSource::Dash {
+                segment_duration, segment_count, track_duration_seconds, ..
+            } => {
+                assert_eq!(segment_duration, 43_928);
+                assert_eq!(segment_count, Some(1));
+                assert_eq!(track_duration_seconds, 43_928.0 / 44_100.0);
+            }
+            _ => panic!("expected segmented playback"),
+        }
+        assert_eq!(*requests.lock().unwrap(), ["/init"]);
+    }
+
+    #[test]
+    fn timeline_timing_keeps_the_first_duration_and_preserves_explicit_timing() {
+        for (attributes, expected_duration) in [
+            ("", 176_128),
+            (r#"duration="0""#, 176_128),
+            (r#"duration="192000""#, 192_000),
+        ] {
+            let xml = format!(
+                r#"<MPD><Period><AdaptationSet><Representation><SegmentTemplate {attributes} timescale="44100" initialization="https://audio.example/init" media="https://audio.example/$Number$"><SegmentTimeline><S t="0" d="176128" r="57"></S><S d="113972" /></SegmentTimeline></SegmentTemplate></Representation></AdaptationSet></Period></MPD>"#
+            );
+            let (manifest, _, _) = parse_dash_manifest(&xml).unwrap();
+            assert_eq!(manifest.duration, Some(expected_duration));
+            assert_eq!(manifest.timescale, Some(44_100));
+        }
     }
 
     #[test]

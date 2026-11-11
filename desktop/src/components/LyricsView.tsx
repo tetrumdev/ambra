@@ -58,6 +58,8 @@ type LyricsViewProps = {
   resting?: boolean;
   /** The previous song's lyrics, drifting away as the next song's arrive. */
   leaving?: boolean;
+  /** Leaving with the next song's lyrics shown over it, which take the pointer in its place. */
+  covered?: boolean;
   /** This song's lyrics are replacing another's on screen. */
   arriving?: boolean;
 };
@@ -114,6 +116,13 @@ function lyricRows(lyrics: TrackLyrics): Row[][] {
 type Block =
   | { kind: "lines"; id: string; line: number; rows: Row[] }
   | { kind: "pause"; id: string; startMs: number; endMs: number };
+
+/** Lyric lists a renderer has already styled; see where the renderer starts. */
+const drawnLyrics = new WeakSet<Element>();
+/** How far the sweep is across a letter, as the stylesheet reads it. */
+const headValue = (head: number) => `${(head * 100).toFixed(1)}%`;
+/** A letter the sweep hasn't reached. Synced letters start here in LyricsView.css, so only sung ones are written. */
+const UNSUNG_HEAD = headValue(-1);
 
 // Gaps at least this long show breathing dots instead of holding the last line.
 const PAUSE_MIN_MS = 4000;
@@ -438,17 +447,33 @@ function SyncedLyrics({
     const container = viewport.current;
     if (!container) return;
     const linesElement = container.querySelector<HTMLElement>(".lyricsLines")!;
+    // Run again over lyrics already on screen (a timing nudge, a motion setting), this starts
+    // from the styles their letters and groups still carry, so none is left behind by a value
+    // that happens to match a fresh start. A new song's elements carry none, and aren't read.
+    const redrawn = drawnLyrics.has(linesElement);
+    drawnLyrics.add(linesElement);
+    const creditsElement = linesElement.querySelector<HTMLElement>(".lyricsCredits");
     const credits = {
-      element: linesElement.querySelector<HTMLElement>(".lyricsCredits"),
-      transform: "",
+      element: creditsElement,
+      transform: redrawn ? creditsElement?.style.transform ?? "" : "",
     };
-    const layout = blocks.map((block) => {
+    const startScroll = container.scrollTop;
+    // The groups are the list's children, in the blocks' order, and each one's lines are in its
+    // rows' order: read straight off the tree, where a search per line would walk the whole
+    // song's letters for each of them.
+    const groups = linesElement.children;
+    const layout = blocks.map((block, blockIndex) => {
+      const listed = groups[blockIndex] as HTMLElement | undefined;
+      const blockElement = listed?.dataset.block === block.id
+        ? listed
+        : container.querySelector<HTMLElement>(`[data-block="${block.id}"]`)!;
+      const lines = block.kind === "lines" ? blockElement.querySelectorAll<HTMLElement>("[data-row]") : null;
       const rows =
         block.kind === "lines"
-          ? block.rows.map((row) => {
-              const element = container.querySelector<HTMLElement>(
-                `[data-row="${row.id}"]`,
-              )!;
+          ? block.rows.map((row, rowIndex) => {
+              const element = lines![rowIndex]?.dataset.row === row.id
+                ? lines![rowIndex]
+                : container.querySelector<HTMLElement>(`[data-row="${row.id}"]`)!;
               const segments = sweepSegments(row.line);
               return {
                 ...row,
@@ -456,15 +481,23 @@ function SyncedLyrics({
                 detailed: detailedLine(row.line),
                 letters: Array.from(
                   element.querySelectorAll<HTMLElement>(".lyricChar"),
-                  (letter) => ({
-                    element: letter,
-                    motion: letterMotion(
+                  (letter) => {
+                    const motion = letterMotion(
                       segments[Number(letter.dataset.segment)],
                       Number(letter.dataset.index),
                       Number(letter.dataset.count),
-                    ),
-                    head: "",
-                  }),
+                    );
+                    if (redrawn) {
+                      motion.transform = letter.style.transform;
+                      motion.filter = letter.style.filter;
+                    }
+                    return {
+                      element: letter,
+                      motion,
+                      // Where the stylesheet starts every letter (LyricsView.css): not yet sung.
+                      head: (redrawn && letter.style.getPropertyValue("--lyric-head")) || UNSUNG_HEAD,
+                    };
+                  },
                 ),
                 active: false,
                 animating: false,
@@ -472,15 +505,19 @@ function SyncedLyrics({
               };
             })
           : [];
-      const dots = Array.from(
-        container.querySelectorAll<HTMLElement>(`[data-block="${block.id}"] .lyricPauseDot`),
-        (element) => ({ element, motion: dotMotion() }),
-      );
+      const dots = block.kind === "pause"
+        ? Array.from(
+            blockElement.querySelectorAll<HTMLElement>(".lyricPauseDot"),
+            (element) => {
+              const motion = dotMotion();
+              if (redrawn) motion.shadow = element.style.boxShadow;
+              return { element, motion };
+            },
+          )
+        : [];
       return {
         block,
-        element: container.querySelector<HTMLElement>(
-          `[data-block="${block.id}"]`,
-        )!,
+        element: blockElement,
         rows,
         dots,
         dotsAnimating: false,
@@ -495,11 +532,11 @@ function SyncedLyrics({
         /** Where each later visual line of a wrapped lead line starts being sung, and how far below the first it sits. */
         wraps: [] as { startMs: number; offset: number }[],
         // The scroll position this block is drawn at; it trails the real scroll during a ripple.
-        ripple: { value: container.scrollTop, velocity: 0 },
-        goal: container.scrollTop,
-        pending: container.scrollTop,
+        ripple: { value: startScroll, velocity: 0 },
+        goal: startScroll,
+        pending: startScroll,
         releaseAt: 0,
-        transform: "",
+        transform: redrawn ? blockElement.style.transform : "",
         active: false,
         ending: false,
         opacity: "",
@@ -530,9 +567,9 @@ function SyncedLyrics({
     let focus = -1;
     /** How far the focused block's sung visual line sits below its first. */
     let wrapOffset = 0;
-    let target = container.scrollTop;
+    let target = startScroll;
     // The scroll the WebView last applied while following, kept to avoid reading it back every frame.
-    const scroll = { value: container.scrollTop };
+    const scroll = { value: startScroll };
     const viewportStyle = { height: "" };
     let maximumScroll = 0;
     let viewportWidth = container.clientWidth;
@@ -609,7 +646,7 @@ function SyncedLyrics({
       if (layoutDirty) {
         const previousAnchor = layout[focus]?.anchor;
         setStyle(
-          container,
+          linesElement,
           viewportStyle,
           "height",
           "--lyrics-viewport-height",
@@ -674,7 +711,7 @@ function SyncedLyrics({
           if (row.detailed && (active || changed || discontinuity)) {
             for (const letter of row.letters) {
               const head = Math.min(2, Math.max(-1, letterHead(letter.motion, time)));
-              setStyle(letter.element, letter, "head", "--lyric-head", `${(head * 100).toFixed(1)}%`);
+              setStyle(letter.element, letter, "head", "--lyric-head", headValue(head));
             }
             row.animating = true;
             if (discontinuity) row.snap = true;
@@ -1104,6 +1141,7 @@ export function LyricsView({
   shown = true,
   resting = false,
   leaving = false,
+  covered = false,
   arriving = false,
 }: LyricsViewProps) {
   const [lyrics, setLyrics] = useState<TrackLyrics | null>(
@@ -1292,6 +1330,7 @@ export function LyricsView({
       data-shown={shown}
       data-resting={resting}
       data-leaving={leaving}
+      data-covered={covered}
       data-arriving={arriving}
       data-loaded-late={loadedLate.current}
       data-reduced-motion={reducedMotion}

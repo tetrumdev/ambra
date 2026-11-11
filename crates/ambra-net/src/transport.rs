@@ -178,6 +178,18 @@ impl Drop for Pump {
     }
 }
 
+/// Both ends ping a connection that has been quiet this long, and close it if no answer
+/// comes within `KEEP_ALIVE_TIMEOUT`: at most 20 seconds to notice a peer that is gone.
+///
+/// The timeout decides how long a break in the path a healthy connection survives. A ping
+/// lost to the break is sent again by the transport below, each time after twice as long:
+/// by UDX 1, 3 and 7 seconds after the first (its shortest retransmission timeout is one
+/// second), by TCP a little sooner. A timeout of 5 seconds fell between the second and
+/// third attempt, so any break longer than 3 seconds (a Wi-Fi roam, a phone changing cells)
+/// ended the session and cost a full reconnect; 8 seconds waits for the attempt at 7.
+pub const KEEP_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(12);
+pub const KEEP_ALIVE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
+
 pub struct HttpConnection {
     sender: hyper::client::conn::http2::SendRequest<Body>,
     closed: CancellationToken,
@@ -189,8 +201,8 @@ impl HttpConnection {
         let started = std::time::Instant::now();
         let (sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
             .timer(TokioTimer::new())
-            .keep_alive_interval(std::time::Duration::from_secs(15))
-            .keep_alive_timeout(std::time::Duration::from_secs(5))
+            .keep_alive_interval(KEEP_ALIVE_INTERVAL)
+            .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
             .keep_alive_while_idle(true)
             .handshake(TokioIo::new(io))
             .await?;
@@ -265,8 +277,8 @@ pub async fn serve(
     });
     let connection = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
         .timer(TokioTimer::new())
-        .keep_alive_interval(std::time::Duration::from_secs(15))
-        .keep_alive_timeout(std::time::Duration::from_secs(5))
+        .keep_alive_interval(KEEP_ALIVE_INTERVAL)
+        .keep_alive_timeout(KEEP_ALIVE_TIMEOUT)
         .max_concurrent_streams(64)
         .max_header_list_size(32 * 1024)
         .serve_connection(TokioIo::new(io), service);
@@ -360,5 +372,80 @@ mod batching_tests {
         );
         result.unwrap().unwrap();
         assert_eq!(received, payload);
+    }
+}
+
+#[cfg(test)]
+mod keep_alive_tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::sync::watch;
+
+    /// A path between the two ends that can stop carrying bytes, and then deliver all it held:
+    /// what a reliable transport does across a break (it sends again once the path is back).
+    fn path(broken: watch::Receiver<bool>) -> (DuplexStream, DuplexStream, JoinHandle<()>) {
+        let (client, near) = tokio::io::duplex(64 * 1024);
+        let (far, server) = tokio::io::duplex(64 * 1024);
+        let (mut near_read, mut near_write) = tokio::io::split(near);
+        let (mut far_read, mut far_write) = tokio::io::split(far);
+        async fn carry(mut from: impl AsyncRead + Unpin, mut to: impl AsyncWrite + Unpin, mut broken: watch::Receiver<bool>) {
+            let mut buffer = [0; 16 * 1024];
+            loop {
+                let Ok(length) = from.read(&mut buffer).await else { return };
+                if length == 0 { return; }
+                if broken.wait_for(|broken| !broken).await.is_err() { return; }
+                if to.write_all(&buffer[..length]).await.is_err() { return; }
+            }
+        }
+        let other = broken.clone();
+        let task = tokio::spawn(async move {
+            tokio::join!(carry(&mut near_read, &mut far_write, broken), carry(&mut far_read, &mut near_write, other));
+        });
+        (client, server, task)
+    }
+
+    fn pump() -> Pump {
+        Pump { cancel: CancellationToken::new(), task: tokio::spawn(async {}), retained: Vec::new() }
+    }
+
+    async fn connected(broken: watch::Receiver<bool>) -> (Arc<HttpConnection>, JoinHandle<Result<()>>, JoinHandle<()>) {
+        let (client, server, path) = path(broken);
+        let app = Router::new().route("/api/ok", axum::routing::get(|| async { "ok" }));
+        let peer = RemotePeer { public_key: Identity::generate().unwrap().public_key(), address: "192.0.2.1:0".parse().unwrap(), session: Arc::new(Session::default()) };
+        let serving = tokio::spawn(serve(server, pump(), peer, app, CancellationToken::new()));
+        (HttpConnection::new(client, pump()).await.unwrap(), serving, path)
+    }
+
+    async fn answers(connection: &HttpConnection) -> bool {
+        let request = Request::builder().uri("/api/ok").body(Body::empty()).unwrap();
+        matches!(tokio::time::timeout(Duration::from_secs(2), connection.request(request)).await, Ok(Ok(response)) if response.status().is_success())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_break_the_transport_recovers_from_does_not_end_the_session() {
+        let (breaking, broken) = watch::channel(false);
+        let (connection, serving, _path) = connected(broken).await;
+        assert!(answers(&connection).await);
+        // The path breaks just before a ping is due and comes back after 7 seconds: when the
+        // transport's third attempt at that ping gets through.
+        tokio::time::sleep(KEEP_ALIVE_INTERVAL - Duration::from_millis(100)).await;
+        breaking.send_replace(true);
+        tokio::time::sleep(Duration::from_millis(7_200)).await;
+        breaking.send_replace(false);
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        assert!(!connection.is_closed(), "a recovered break ended the session");
+        assert!(!serving.is_finished());
+        assert!(answers(&connection).await);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_peer_that_is_gone_is_noticed_by_both_ends_within_the_bound() {
+        let (breaking, broken) = watch::channel(false);
+        let (connection, serving, _path) = connected(broken).await;
+        assert!(answers(&connection).await);
+        breaking.send_replace(true);
+        tokio::time::sleep(KEEP_ALIVE_INTERVAL + KEEP_ALIVE_TIMEOUT + Duration::from_secs(1)).await;
+        assert!(connection.is_closed());
+        assert!(serving.is_finished());
     }
 }

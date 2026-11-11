@@ -116,11 +116,39 @@ async function load(): Promise<Snapshot> {
   return { revision: saved.revision, values: Object.fromEntries(Object.entries(saved.values).filter(([key]) => serverStateKeys.has(key))) };
 }
 
-/** Takes other devices' changes, except to keys this device is about to overwrite anyway. */
-function applyChanges(changes: unknown, atRevision: unknown) {
-  if (!changes || typeof changes !== "object" || !validRevision(atRevision)) return;
+/**
+ * How the server's own change to a key is made from the value this app has, sent in place of
+ * the whole value (server/src/user_state.rs `KeyPatch`). `null` when it can't be made here.
+ */
+export function patchedValue(key: string, current: string | undefined, patch: unknown): string | null {
+  try {
+    // A play: its entry goes first in the history, in place of any entry for the same song.
+    const entry = (patch as { play?: { track?: { globalId?: unknown } } } | null)?.play;
+    if (key !== "ambra.listening-history.v1" || !entry || typeof entry.track?.globalId !== "string" || current === undefined) return null;
+    const history = JSON.parse(current) as { version?: unknown; entries?: { track?: { globalId?: unknown } }[] };
+    if (history.version !== 1 || !Array.isArray(history.entries)) return null;
+    const id = entry.track.globalId;
+    return JSON.stringify({ ...history, entries: [entry, ...history.entries.filter(other => other?.track?.globalId !== id)] });
+  } catch { return null; }
+}
+
+/**
+ * Takes other devices' changes, except to keys this device is about to overwrite anyway.
+ * False when a patch couldn't be applied: nothing was taken, and the values are asked for.
+ */
+function applyChanges(changes: unknown, atRevision: unknown, patches?: unknown) {
+  if (!changes || typeof changes !== "object" || !validRevision(atRevision)) return true;
+  const whole = { ...(changes as Changes) };
+  if (patches && typeof patches === "object") {
+    for (const [key, patch] of Object.entries(patches as Record<string, unknown>)) {
+      if (!serverStateKeys.has(key) || pending.has(key) || (attempt && key in attempt.changes)) continue;
+      const value = patchedValue(key, values.get(key), patch);
+      if (value === null) return false;
+      whole[key] = value;
+    }
+  }
   const changed = new Set<string>();
-  for (const [key, value] of Object.entries(changes as Changes)) {
+  for (const [key, value] of Object.entries(whole)) {
     if (!serverStateKeys.has(key) || pending.has(key) || (attempt && key in attempt.changes)) continue;
     if (value !== null && typeof value !== "string") continue;
     if ((values.get(key) ?? null) === value) continue;
@@ -133,6 +161,7 @@ function applyChanges(changes: unknown, atRevision: unknown) {
     publish({});
     for (const listener of remoteListeners) listener(changed);
   }
+  return true;
 }
 
 // Shared state is loaded only after optional connection succeeds. Never upload device state.
@@ -179,12 +208,22 @@ function followServerState() {
   void (async () => {
     while (!session.aborted && !discarding && !status.conflict) {
       try {
-        const response = await request({ query: `?since=${revision}&wait=25`, timeoutMs: 35_000 });
-        const news = await response.json() as { revision?: unknown; changes?: unknown };
+        // The queue changes with every song and reaches this app with the session (api/core.ts),
+        // patched rather than whole; newer servers leave it out of this channel when asked.
+        // A play changes one entry of a history of every song ever played: newer servers
+        // send that entry (`patches`) rather than the history.
+        const since = revision;
+        const response = await request({ query: `?since=${since}&wait=25&without=ambra.queue.v1&patches=1`, timeoutMs: 35_000 });
+        const news = await response.json() as { revision?: unknown; changes?: unknown; patches?: unknown };
         if (session.aborted) break;
         // An older server answers with the whole state at once and can't be followed.
         if (news.changes === undefined) break;
-        applyChanges(news.changes, news.revision);
+        if (!applyChanges(news.changes, news.revision, news.patches)) {
+          // A patch for a value this app doesn't hold as the server had it: take the values whole.
+          const whole = await (await request({ query: `?since=${since}&without=ambra.queue.v1` })).json() as { revision?: unknown; changes?: unknown };
+          if (session.aborted) break;
+          applyChanges(whole.changes, whole.revision);
+        }
       } catch (error) {
         if (session.aborted) break;
         if (error instanceof StateRequestError && error.conflict) {

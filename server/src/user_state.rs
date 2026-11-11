@@ -4,6 +4,10 @@
 //! freely. Clients follow other clients' changes by asking for what changed since their
 //! revision, waiting briefly for news. Disk replacement completes before a write is
 //! acknowledged.
+//!
+//! The file is read and checked once; after that every read answers from the copy kept in
+//! memory, and a write replaces that copy only once the file has been replaced. Only this
+//! process writes the file (`server_process::lock`).
 
 use std::{collections::BTreeMap, fs, io::Write, path::PathBuf};
 
@@ -92,10 +96,26 @@ struct Patch {
 
 pub struct UserState {
     path: PathBuf,
-    lock: Mutex<()>,
+    /// The saved state, once read: one reader or writer at a time. `None` until the file has
+    /// been read successfully, so an unreadable file keeps being reported rather than replaced.
+    saved: std::sync::Arc<Mutex<Option<Snapshot>>>,
     /// The latest revision, for clients waiting to hear of a change.
     revision: watch::Sender<u64>,
+    /// How the server's own latest change to a key can be made from the value before it,
+    /// for apps that have that value: a play moves one entry of a history of thousands.
+    patches: std::sync::Mutex<BTreeMap<String, KeyPatch>>,
 }
+
+/// One key's latest change as a patch: what an app with the value as of any revision from
+/// `base` up to (not including) `revision` does to get the value at `revision`.
+#[derive(Clone)]
+struct KeyPatch {
+    base: u64,
+    revision: u64,
+    patch: Value,
+}
+
+type Saved = tokio::sync::OwnedMutexGuard<Option<Snapshot>>;
 
 impl UserState {
     pub(crate) fn directory(&self) -> &std::path::Path {
@@ -157,13 +177,56 @@ impl UserState {
     pub(crate) fn at(path: PathBuf) -> Self {
         let state = Self {
             path,
-            lock: Mutex::new(()),
+            saved: Default::default(),
             revision: watch::channel(0).0,
+            patches: Default::default(),
         };
         if let Ok(saved) = state.load() {
             state.revision.send_replace(saved.revision);
+            if let Ok(mut slot) = state.saved.try_lock() {
+                *slot = Some(saved);
+            }
         }
         state
+    }
+
+    /// The state in memory, reading the file first if that hasn't succeeded yet. Blocks on
+    /// the file the first time, so call it from a blocking worker.
+    fn loaded<'a>(&self, slot: &'a mut Option<Snapshot>) -> Result<&'a mut Snapshot, String> {
+        if slot.is_none() {
+            *slot = Some(self.load()?);
+        }
+        Ok(slot.as_mut().expect("loaded above"))
+    }
+
+    /// Runs `work` on the state with nothing else reading or writing it. `work` may replace
+    /// the file, so it runs on a blocking worker.
+    async fn with<T: Send + 'static>(
+        self: &std::sync::Arc<Self>,
+        work: impl FnOnce(&Self, &mut Snapshot) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let mut saved: Saved = self.saved.clone().lock_owned().await;
+        let state = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let snapshot = state.loaded(&mut saved)?;
+            work(&state, snapshot)
+        })
+        .await
+        .map_err(|error| error.to_string())?
+    }
+
+    /// Reads from the copy in memory, without a worker thread once the file has been read.
+    async fn peek<T: Send + 'static>(
+        self: &std::sync::Arc<Self>,
+        read: impl FnOnce(&Snapshot) -> T + Send + 'static,
+    ) -> Result<T, String> {
+        {
+            let saved = self.saved.lock().await;
+            if let Some(snapshot) = saved.as_ref() {
+                return Ok(read(snapshot));
+            }
+        }
+        self.with(move |_, snapshot| Ok(read(snapshot))).await
     }
 
     fn load(&self) -> Result<Snapshot, String> {
@@ -221,6 +284,11 @@ impl UserState {
         result.map_err(|error| format!("Could not save listening state: {error}"))
     }
 
+    #[cfg(test)]
+    pub(crate) fn latest_patch(&self, key: &str) -> Option<Value> {
+        self.patches.lock().unwrap().get(key).map(|patch| patch.patch.clone())
+    }
+
     /// Hears every change to the state, the server's own included.
     pub fn subscribe(&self) -> watch::Receiver<u64> {
         self.revision.subscribe()
@@ -228,29 +296,21 @@ impl UserState {
 
     /// The current value of `key`.
     pub async fn value(self: &std::sync::Arc<Self>, key: &str) -> Result<Option<String>, String> {
-        let _guard = self.lock.lock().await;
-        let state = self.clone();
         let key = key.to_owned();
-        tokio::task::spawn_blocking(move || state.load().map(|saved| saved.values.get(&key).cloned()))
-            .await
-            .map_err(|error| error.to_string())?
+        self.peek(move |saved| saved.values.get(&key).cloned()).await
     }
 
     /// Atomic recommendation inputs from the same synchronized snapshot.
     pub async fn recommendation_inputs(
         self: &std::sync::Arc<Self>,
     ) -> Result<(Option<String>, Option<String>), String> {
-        let _guard = self.lock.lock().await;
-        let state = self.clone();
-        tokio::task::spawn_blocking(move || {
-            let saved = state.load()?;
-            Ok((
+        self.peek(|saved| {
+            (
                 saved.values.get("ambra.listening-history.v1").cloned(),
                 saved.values.get("ambra.playlists.v1").cloned(),
-            ))
+            )
         })
         .await
-        .map_err(|error| error.to_string())?
     }
 
     /// Changes `key` as the server itself: validated, saved and announced like a client's write.
@@ -261,12 +321,19 @@ impl UserState {
         key: &str,
         change: impl FnOnce(Option<&str>) -> Result<(Option<String>, T), String> + Send + 'static,
     ) -> Result<T, String> {
-        let _guard = self.lock.lock().await;
-        let state = self.clone();
+        self.update_patched(key, move |saved| change(saved).map(|(value, result)| (value, None, result))).await
+    }
+
+    /// Like `update`, where `change` can also say how an app holding the old value makes the
+    /// new one (see `KeyPatch`); apps that ask for patches are sent that instead of the value.
+    pub async fn update_patched<T: Send + 'static>(
+        self: &std::sync::Arc<Self>,
+        key: &str,
+        change: impl FnOnce(Option<&str>) -> Result<(Option<String>, Option<Value>, T), String> + Send + 'static,
+    ) -> Result<T, String> {
         let key = key.to_owned();
-        tokio::task::spawn_blocking(move || {
-            let mut saved = state.load()?;
-            let (value, result) = change(saved.values.get(&key).map(String::as_str))?;
+        self.with(move |state, saved| {
+            let (value, patch, result) = change(saved.values.get(&key).map(String::as_str))?;
             if saved.values.get(&key) == value.as_ref() {
                 return Ok(result);
             }
@@ -274,19 +341,38 @@ impl UserState {
                 validate(&key, value)?;
             }
             let next = saved.revision.checked_add(1).ok_or("Listening-state revision overflow")?;
-            match value {
+            // The copy in memory changes only once the file has: a failed save leaves both as
+            // they were.
+            let previous = match value {
                 Some(value) => saved.values.insert(key.clone(), value),
                 None => saved.values.remove(&key),
             };
-            saved.key_revisions.insert(key, next);
+            let previous_revision = saved.key_revisions.insert(key.clone(), next);
+            let (revision, write_id) = (saved.revision, saved.last_write_id.take());
             saved.revision = next;
-            saved.last_write_id = None;
-            state.save(&saved)?;
+            if let Err(message) = state.save(saved) {
+                match previous {
+                    Some(value) => saved.values.insert(key.clone(), value),
+                    None => saved.values.remove(&key),
+                };
+                match previous_revision {
+                    Some(changed) => saved.key_revisions.insert(key.clone(), changed),
+                    None => saved.key_revisions.remove(&key),
+                };
+                saved.revision = revision;
+                saved.last_write_id = write_id;
+                return Err(message);
+            }
+            let mut patches = state.patches.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match patch {
+                Some(patch) => patches.insert(key, KeyPatch { base: previous_revision.unwrap_or(0), revision: next, patch }),
+                None => patches.remove(&key),
+            };
+            drop(patches);
             state.revision.send_replace(next);
             Ok(result)
         })
         .await
-        .map_err(|error| error.to_string())?
     }
 }
 
@@ -436,32 +522,62 @@ struct ReadQuery {
     since: Option<u64>,
     /// With `since`, wait up to this many seconds for a change before answering.
     wait: Option<u64>,
+    /// Keys (comma-separated) the app follows another way and doesn't want here: the queue,
+    /// which changes with every song and which apps following the session already have.
+    /// Changes to them alone neither end the wait nor come back in `changes`.
+    without: Option<String>,
+    /// Set by apps that take a key's change as a patch to the value they have (`patches` in
+    /// the answer) where the server has one, in place of the whole value in `changes`.
+    patches: Option<u8>,
 }
 
 async fn read(State(state): State<std::sync::Arc<UserState>>, Query(query): Query<ReadQuery>) -> Response {
+    let without: Changes = query.without.as_deref().unwrap_or_default().split(',').filter(|key| !key.is_empty()).map(|key| (key.to_owned(), None)).collect();
     if let (Some(since), Some(wait)) = (query.since, query.wait.filter(|wait| *wait > 0)) {
         let mut revision = state.revision.subscribe();
-        let _ = tokio::time::timeout(
-            std::time::Duration::from_secs(wait.min(MAX_WAIT_SECONDS)),
-            revision.wait_for(|current| *current != since),
-        )
-        .await;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait.min(MAX_WAIT_SECONDS));
+        let mut seen = since;
+        loop {
+            let Ok(Ok(current)) = tokio::time::timeout_at(deadline, revision.wait_for(|current| *current != seen)).await.map(|changed| changed.map(|current| *current)) else { break };
+            seen = current;
+            if without.is_empty() { break; }
+            // Only the keys this app left out changed: it keeps waiting for one it follows.
+            let wanted = { let without = without.clone(); state.peek(move |saved| since > saved.revision || saved.key_revisions.iter().any(|(key, changed)| *changed > since && !without.contains_key(key))).await };
+            if wanted.unwrap_or(true) { break; }
+        }
     }
-    let _guard = state.lock.lock().await;
-    let state = state.clone();
-    match tokio::task::spawn_blocking(move || state.load()).await {
-        Ok(Ok(saved)) => match query.since {
-            Some(since) if since <= saved.revision => (
-                [(CACHE_CONTROL, "no-store")],
-                Json(json!({ "revision": saved.revision, "changes": saved.changes_since(since, &Changes::new()) })),
-            )
-                .into_response(),
+    // Only what the answer holds is copied, and nothing is read from disk.
+    let patched = if query.patches.is_some_and(|patches| patches > 0) {
+        state.patches.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()
+    } else {
+        BTreeMap::new()
+    };
+    let answer = state
+        .peek(move |saved| match query.since {
+            Some(since) if since <= saved.revision => {
+                // A key whose only change since the app's revision is one the server can
+                // describe travels as that description.
+                let mut except = without;
+                let mut patches = serde_json::Map::new();
+                for (key, patch) in patched {
+                    if patch.base <= since && since < patch.revision && saved.key_revisions.get(&key) == Some(&patch.revision) && !except.contains_key(&key) {
+                        except.insert(key.clone(), None);
+                        patches.insert(key, patch.patch);
+                    }
+                }
+                let mut body = json!({ "revision": saved.revision, "changes": saved.changes_since(since, &except) });
+                if !patches.is_empty() { body["patches"] = Value::Object(patches); }
+                Ok(body)
+            }
             // A revision the server never reached means its state was replaced; start over.
-            Some(_) => error(StatusCode::CONFLICT, "The server's listening state was replaced; reload it."),
-            None => ([(CACHE_CONTROL, "no-store")], Json(json!({ "revision": saved.revision, "values": saved.values }))).into_response(),
-        },
-        Ok(Err(message)) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
-        Err(error_message) => error(StatusCode::INTERNAL_SERVER_ERROR, error_message),
+            Some(_) => Err(()),
+            None => Ok(json!({ "revision": saved.revision, "values": saved.values })),
+        })
+        .await;
+    match answer {
+        Ok(Ok(body)) => ([(CACHE_CONTROL, "no-store")], Json(body)).into_response(),
+        Ok(Err(())) => error(StatusCode::CONFLICT, "The server's listening state was replaced; reload it."),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
 }
 
@@ -485,77 +601,12 @@ async fn write(
             }
         }
     }
-    let _guard = state.lock.lock().await;
-    let state = state.clone();
-    match tokio::task::spawn_blocking(move || {
-        let mut saved = state
-            .load()
-            .map_err(|message| Refused::Status(StatusCode::INTERNAL_SERVER_ERROR, message))?;
-        let identical = patch
-            .changes
-            .iter()
-            .all(|(key, value)| saved.values.get(key) == value.as_ref());
-        // A lost HTTP acknowledgement can be retried without writing twice.
-        if saved.last_write_id.as_deref() == Some(&patch.write_id) {
-            return if identical {
-                Ok((saved, patch))
-            } else {
-                Err(Refused::Status(StatusCode::BAD_REQUEST, "Write ID was reused for a different change".into()))
-            };
-        }
-        if patch.revision > saved.revision {
-            return Err(Refused::Replaced);
-        }
-        let conflicts = patch
-            .changes
-            .keys()
-            .filter(|key| saved.changed_since(key, patch.bases.get(*key).copied().unwrap_or(patch.revision).min(patch.revision)))
-            .cloned()
-            .collect::<Vec<_>>();
-        if !conflicts.is_empty() {
-            // Everything since the oldest edit, so the writer can adopt what it missed.
-            let oldest = patch.bases.values().copied().chain([patch.revision]).min().unwrap_or(patch.revision);
-            let changes = saved.changes_since(oldest, &Changes::new());
-            return Err(Refused::Conflict(conflicts, changes, saved.revision));
-        }
-        // Revision zero is uninitialized. Even an empty migration claims it,
-        // preventing another device's old local state from being imported later.
-        if identical && saved.revision != 0 {
-            return Ok((saved, patch));
-        }
-        if saved.revision != 0 && patch.changes.contains_key("ambra.queue.v1") {
-            return Err(Refused::Status(StatusCode::BAD_REQUEST, "Change the queue through /api/session/queue".into()));
-        }
-        let next = saved.revision.checked_add(1).ok_or_else(|| {
-            Refused::Status(StatusCode::INTERNAL_SERVER_ERROR, "Listening-state revision overflow".into())
-        })?;
-        for (key, value) in patch.changes.clone() {
-            saved.key_revisions.insert(key.clone(), next);
-            match value {
-                Some(value) => {
-                    saved.values.insert(key, value);
-                }
-                None => {
-                    saved.values.remove(&key);
-                }
-            }
-        }
-        saved.revision = next;
-        saved.last_write_id = Some(patch.write_id.clone());
-        state
-            .save(&saved)
-            .map_err(|message| Refused::Status(StatusCode::INTERNAL_SERVER_ERROR, message))?;
-        state.revision.send_replace(saved.revision);
-        Ok::<_, Refused>((saved, patch))
-    })
-    .await
-    {
+    let outcome = state
+        .with(move |state, saved| Ok(apply(state, saved, patch)))
+        .await;
+    match outcome {
         // What other clients changed since this one's revision comes back with the receipt.
-        Ok(Ok((saved, patch))) => (
-            [(CACHE_CONTROL, "no-store")],
-            Json(json!({ "revision": saved.revision, "changes": saved.changes_since(patch.revision, &patch.changes) })),
-        )
-            .into_response(),
+        Ok(Ok(receipt)) => ([(CACHE_CONTROL, "no-store")], Json(receipt)).into_response(),
         Ok(Err(Refused::Conflict(keys, changes, revision))) => (
             StatusCode::CONFLICT,
             Json(json!({
@@ -566,8 +617,74 @@ async fn write(
             .into_response(),
         Ok(Err(Refused::Replaced)) => error(StatusCode::CONFLICT, "The server's listening state was replaced; reload it."),
         Ok(Err(Refused::Status(status, message))) => error(status, message),
-        Err(error_message) => error(StatusCode::INTERNAL_SERVER_ERROR, error_message),
+        Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
+}
+
+/// Applies a client's write to the state, replacing the file before the copy in memory.
+/// Returns the receipt: the new revision and what other clients changed meanwhile.
+fn apply(state: &UserState, saved: &mut Snapshot, patch: Patch) -> Result<Value, Refused> {
+    let receipt = |saved: &Snapshot| json!({ "revision": saved.revision, "changes": saved.changes_since(patch.revision, &patch.changes) });
+    let identical = patch
+        .changes
+        .iter()
+        .all(|(key, value)| saved.values.get(key) == value.as_ref());
+    // A lost HTTP acknowledgement can be retried without writing twice.
+    if saved.last_write_id.as_deref() == Some(&patch.write_id) {
+        return if identical {
+            Ok(receipt(saved))
+        } else {
+            Err(Refused::Status(StatusCode::BAD_REQUEST, "Write ID was reused for a different change".into()))
+        };
+    }
+    if patch.revision > saved.revision {
+        return Err(Refused::Replaced);
+    }
+    let conflicts = patch
+        .changes
+        .keys()
+        .filter(|key| saved.changed_since(key, patch.bases.get(*key).copied().unwrap_or(patch.revision).min(patch.revision)))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !conflicts.is_empty() {
+        // Everything since the oldest edit, so the writer can adopt what it missed.
+        let oldest = patch.bases.values().copied().chain([patch.revision]).min().unwrap_or(patch.revision);
+        let changes = saved.changes_since(oldest, &Changes::new());
+        return Err(Refused::Conflict(conflicts, changes, saved.revision));
+    }
+    // Revision zero is uninitialized. Even an empty migration claims it,
+    // preventing another device's old local state from being imported later.
+    if identical && saved.revision != 0 {
+        return Ok(receipt(saved));
+    }
+    if saved.revision != 0 && patch.changes.contains_key("ambra.queue.v1") {
+        return Err(Refused::Status(StatusCode::BAD_REQUEST, "Change the queue through /api/session/queue".into()));
+    }
+    let next_revision = saved.revision.checked_add(1).ok_or_else(|| {
+        Refused::Status(StatusCode::INTERNAL_SERVER_ERROR, "Listening-state revision overflow".into())
+    })?;
+    // Built beside the current state and swapped in only once the file has been replaced,
+    // so a failed save leaves memory and disk agreeing.
+    let mut next = saved.clone();
+    for (key, value) in patch.changes.clone() {
+        next.key_revisions.insert(key.clone(), next_revision);
+        match value {
+            Some(value) => {
+                next.values.insert(key, value);
+            }
+            None => {
+                next.values.remove(&key);
+            }
+        }
+    }
+    next.revision = next_revision;
+    next.last_write_id = Some(patch.write_id.clone());
+    state
+        .save(&next)
+        .map_err(|message| Refused::Status(StatusCode::INTERNAL_SERVER_ERROR, message))?;
+    *saved = next;
+    state.revision.send_replace(next_revision);
+    Ok(receipt(saved))
 }
 
 enum Refused {
@@ -606,7 +723,7 @@ mod tests {
     }
 
     async fn since(state: &Arc<UserState>, revision: u64) -> Value {
-        body(read(State(state.clone()), Query(ReadQuery { since: Some(revision), wait: None })).await).await.1
+        body(read(State(state.clone()), Query(ReadQuery { since: Some(revision), wait: None, without: None, patches: None })).await).await.1
     }
 
     const PLAYBACK: &str = "ambra.playback.v1";
@@ -652,7 +769,7 @@ mod tests {
 
         let waiting = tokio::spawn({
             let state = state.clone();
-            async move { body(read(State(state), Query(ReadQuery { since: Some(2), wait: Some(5) })).await).await.1 }
+            async move { body(read(State(state), Query(ReadQuery { since: Some(2), wait: Some(5), without: None, patches: None })).await).await.1 }
         });
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         save(&state, 2, ORDER, json!(["b"])).await;
@@ -686,7 +803,7 @@ mod tests {
         let state = state();
         save(&state, 0, ORDER, json!(["a"])).await;
         assert_eq!(save(&state, 9, ORDER, json!(["b"])).await.0, StatusCode::CONFLICT);
-        let response = read(State(state.clone()), Query(ReadQuery { since: Some(9), wait: None })).await;
+        let response = read(State(state.clone()), Query(ReadQuery { since: Some(9), wait: None, without: None, patches: None })).await;
         assert_eq!(response.status(), StatusCode::CONFLICT);
     }
 
@@ -723,6 +840,98 @@ mod tests {
         let history: Value = serde_json::from_str(&state.value("ambra.listening-history.v1").await.unwrap().unwrap()).unwrap();
         assert_eq!(history["entries"][0]["playCount"], 2);
         assert_eq!(history["entries"][0]["track"]["globalId"], "local:content-hash");
+    }
+
+    #[tokio::test]
+    async fn every_acknowledged_write_is_on_disk_for_the_next_start() {
+        let state = state();
+        save(&state, 0, ORDER, json!(["a"])).await;
+        state.update(PLAYBACK, |_| Ok((Some(json!({ "trackId": "x", "positionSeconds": 1 }).to_string()), ()))).await.unwrap();
+        // An unchanged value writes nothing and keeps the revision.
+        state.update(PLAYBACK, |saved| Ok((saved.map(str::to_owned), ()))).await.unwrap();
+        assert_eq!(*state.revision.borrow(), 2);
+        // A change that fails validation leaves the state as it was, in memory and on disk.
+        assert!(state.update(PLAYBACK, |_| Ok((Some("[]".into()), ()))).await.is_err());
+        assert!(state.update(ORDER, |_| Err::<(Option<String>, ()), _>("refused".into())).await.is_err());
+        assert_eq!(*state.revision.borrow(), 2);
+
+        let restarted = Arc::new(UserState::at(state.path.clone()));
+        assert_eq!(*restarted.revision.borrow(), 2);
+        assert_eq!(restarted.value(ORDER).await.unwrap().unwrap(), json!(["a"]).to_string());
+        assert!(restarted.value(PLAYBACK).await.unwrap().unwrap().contains("\"x\""));
+        // What the running server answers is what the file holds.
+        let on_disk: Snapshot = serde_json::from_slice(&fs::read(&state.path).unwrap()).unwrap();
+        assert_eq!(on_disk.values, since(&state, 0).await["changes"].as_object().unwrap().iter().map(|(key, value)| (key.clone(), value.as_str().unwrap().to_owned())).collect());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_file_is_reported_and_never_replaced() {
+        let state = state();
+        fs::write(&state.path, b"not json").unwrap();
+        let state = Arc::new(UserState::at(state.path.clone()));
+        assert!(state.value(ORDER).await.is_err());
+        assert_eq!(save(&state, 0, ORDER, json!(["a"])).await.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(fs::read(&state.path).unwrap(), b"not json");
+        // Repaired by hand, it is read on the next request.
+        fs::remove_file(&state.path).unwrap();
+        assert_eq!(save(&state, 0, ORDER, json!(["a"])).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn keys_an_app_leaves_out_neither_wake_it_nor_reach_it() {
+        let state = state();
+        save(&state, 0, ORDER, json!(["a"])).await;
+        let waiting = tokio::spawn({
+            let state = state.clone();
+            async move { body(read(State(state), Query(ReadQuery { since: Some(1), wait: Some(5), without: Some(format!("{PLAYBACK},ambra.queue.v1")), patches: None })).await).await.1 }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // A key it left out changes twice: it goes on waiting.
+        for position in [1, 2] {
+            state.update(PLAYBACK, move |_| Ok((Some(json!({ "trackId": "x", "positionSeconds": position }).to_string()), ()))).await.unwrap();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(!waiting.is_finished());
+        // A key it follows changes: it hears of that one alone, at the newest revision.
+        save(&state, 3, ORDER, json!(["b"])).await;
+        let woken = tokio::time::timeout(std::time::Duration::from_secs(2), waiting).await.unwrap().unwrap();
+        assert_eq!(woken["revision"], 4);
+        assert_eq!(woken["changes"], json!({ ORDER: json!(["b"]).to_string() }));
+        // With nothing it follows changed, the wait ends on time with no changes.
+        state.update(PLAYBACK, |_| Ok((Some(json!({ "trackId": "y", "positionSeconds": 0 }).to_string()), ()))).await.unwrap();
+        let quiet = body(read(State(state.clone()), Query(ReadQuery { since: Some(4), wait: Some(1), without: Some(PLAYBACK.into()), patches: None })).await).await.1;
+        assert_eq!(quiet, json!({ "revision": 5, "changes": {} }));
+    }
+
+    #[tokio::test]
+    async fn a_change_the_server_can_describe_reaches_apps_that_ask_as_a_patch() {
+        let state = state();
+        let read = |since: u64, patches: Option<u8>| { let state = state.clone(); async move {
+            body(read(State(state), Query(ReadQuery { since: Some(since), wait: None, without: None, patches })).await).await.1
+        } };
+        save(&state, 0, ORDER, json!(["a"])).await;
+        state.update_patched(ORDER, |_| Ok((Some(json!(["b", "a"]).to_string()), Some(json!({ "unshift": "b" })), ()))).await.unwrap();
+        // An app with the value before it gets the patch; one that didn't ask, the value.
+        assert_eq!(read(1, Some(1)).await, json!({ "revision": 2, "changes": {}, "patches": { ORDER: { "unshift": "b" } } }));
+        assert_eq!(read(1, None).await, json!({ "revision": 2, "changes": { ORDER: json!(["b", "a"]).to_string() } }));
+        // Other keys changing since doesn't stop it; the app has the patched key's old value.
+        save(&state, 2, PLAYBACK, json!({ "trackId": null, "positionSeconds": 0 })).await;
+        let news = read(1, Some(1)).await;
+        assert_eq!(news["patches"], json!({ ORDER: { "unshift": "b" } }));
+        assert_eq!(news["changes"].as_object().unwrap().keys().collect::<Vec<_>>(), vec![PLAYBACK]);
+        // An app from before the key's previous change missed more than the patch covers.
+        assert_eq!(read(0, Some(1)).await["changes"][ORDER], json!(["b", "a"]).to_string());
+        assert!(read(0, Some(1)).await.get("patches").is_none());
+        // A change without a description, or by a client, travels whole again.
+        state.update(ORDER, |_| Ok((Some(json!(["c"]).to_string()), ()))).await.unwrap();
+        let whole = read(3, Some(1)).await;
+        assert!(whole.get("patches").is_none());
+        assert_eq!(whole["changes"][ORDER], json!(["c"]).to_string());
+        state.update_patched(ORDER, |_| Ok((Some(json!(["d", "c"]).to_string()), Some(json!({ "unshift": "d" })), ()))).await.unwrap();
+        save(&state, 5, ORDER, json!(["client"])).await;
+        let whole = read(4, Some(1)).await;
+        assert!(whole.get("patches").is_none());
+        assert_eq!(whole["changes"][ORDER], json!(["client"]).to_string());
     }
 
     #[tokio::test]

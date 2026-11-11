@@ -7,7 +7,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::any,
 };
-use std::sync::Arc;
+use bytes::Bytes;
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{Arc, Mutex},
+};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -17,6 +21,81 @@ struct BridgeState {
     capability: String,
     host: String,
     cache: Option<Arc<MediaCache>>,
+    covers: Arc<Mutex<CoverCache>>,
+}
+
+const COVER_PATH: &str = "/api/artwork/thumbnail?";
+const COVER_CACHE_BYTES: usize = 32 * 1024 * 1024;
+/// A thumbnail is a few tens of kilobytes; anything much larger isn't one.
+const COVER_MAX_BYTES: usize = 512 * 1024;
+
+/// Cover thumbnails already fetched from the selected server, for this run only and only in
+/// memory. Every response leaves the bridge as `no-store` (its URLs hold the capability), so
+/// the app asks again each time a cover scrolls back into view; a thumbnail's URL names its
+/// source image, so the answer is the same every time. Answering from here spares the
+/// connection a round trip per cover, which matters most on a slow path away from home.
+#[derive(Default)]
+struct CoverCache {
+    entries: HashMap<String, (Option<header::HeaderValue>, Bytes)>,
+    /// Least recently used first.
+    order: VecDeque<String>,
+    bytes: usize,
+}
+impl CoverCache {
+    fn get(&mut self, key: &str) -> Option<(Option<header::HeaderValue>, Bytes)> {
+        let found = self.entries.get(key)?.clone();
+        if let Some(index) = self.order.iter().position(|entry| entry == key) {
+            let key = self.order.remove(index).expect("found above");
+            self.order.push_back(key);
+        }
+        Some(found)
+    }
+    fn insert(&mut self, key: String, content_type: Option<header::HeaderValue>, body: Bytes) {
+        if body.is_empty() || body.len() > COVER_MAX_BYTES || self.entries.contains_key(&key) {
+            return;
+        }
+        while self.bytes + body.len() > COVER_CACHE_BYTES {
+            let Some(oldest) = self.order.pop_front() else { break };
+            if let Some((_, removed)) = self.entries.remove(&oldest) {
+                self.bytes -= removed.len();
+            }
+        }
+        self.bytes += body.len();
+        self.order.push_back(key.clone());
+        self.entries.insert(key, (content_type, body));
+    }
+}
+
+fn cover_response(content_type: Option<header::HeaderValue>, body: Bytes) -> Response {
+    let mut response = Response::new(Body::from(body));
+    if let Some(content_type) = content_type {
+        response.headers_mut().insert(header::CONTENT_TYPE, content_type);
+    }
+    response
+}
+
+/// A cover from the server: its whole body is read, kept, and passed on. Anything that
+/// isn't a complete, successful image goes to the app as it came.
+async fn fetch_cover(state: &BridgeState, path: &str, request: Request) -> Response {
+    use http_body_util::BodyExt;
+    let response = match state.manager.request(request).await {
+        Ok(response) => response,
+        Err(_) => return (StatusCode::SERVICE_UNAVAILABLE, "Selected Ambra server is offline").into_response(),
+    };
+    if response.status() != StatusCode::OK {
+        return response.map(Body::new);
+    }
+    let (parts, body) = response.into_parts();
+    match http_body_util::Limited::new(body, COVER_MAX_BYTES).collect().await {
+        Ok(collected) => {
+            let body = collected.to_bytes();
+            let content_type = parts.headers.get(header::CONTENT_TYPE).cloned();
+            state.covers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).insert(path.to_owned(), content_type.clone(), body.clone());
+            cover_response(content_type, body)
+        }
+        // Cut off on the way, or not a thumbnail after all: the app retries as it would have.
+        Err(_) => StatusCode::BAD_GATEWAY.into_response(),
+    }
 }
 /// The capability is per process and grants access only to this selected server.
 pub struct Bridge {
@@ -43,6 +122,7 @@ impl Bridge {
             capability: capability.clone(),
             host: address.to_string(),
             cache: cache.clone(),
+            covers: Default::default(),
         };
         let app = Router::new().fallback(any(forward)).with_state(state);
         let cancel = manager.cancel.clone();
@@ -155,7 +235,13 @@ async fn forward(State(state): State<BridgeState>, mut request: Request) -> Resp
     let cached = state.cache.as_ref().filter(|_| {
         matches!(*request.method(), hyper::Method::GET | hyper::Method::HEAD) && media_cache::cacheable(&path)
     });
-    let mut response = if let Some(cache) = cached {
+    let cover = *request.method() == hyper::Method::GET && path.starts_with(COVER_PATH) && !request.headers().contains_key(header::RANGE);
+    let kept = if cover { state.covers.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).get(&path) } else { None };
+    let mut response = if let Some((content_type, body)) = kept {
+        cover_response(content_type, body)
+    } else if cover {
+        fetch_cover(&state, &path, request).await
+    } else if let Some(cache) = cached {
         cache.serve(&path, request.method(), request.headers()).await
     } else { match state.manager.request(request).await {
         Ok(response) => response.map(Body::new),
@@ -205,5 +291,33 @@ fn cors(response: &mut Response, origin: Option<hyper::header::HeaderValue>) {
             "access-control-allow-private-network",
             "true".parse().expect("valid header"),
         );
+    }
+}
+
+#[cfg(test)]
+mod cover_cache_tests {
+    use super::*;
+
+    #[test]
+    fn covers_are_kept_up_to_the_budget_and_the_least_recently_used_leave_first() {
+        let mut covers = CoverCache::default();
+        let cover = Bytes::from(vec![7; COVER_MAX_BYTES]);
+        let fits = COVER_CACHE_BYTES / COVER_MAX_BYTES;
+        for index in 0..fits {
+            covers.insert(format!("cover-{index}"), None, cover.clone());
+        }
+        assert_eq!(covers.bytes, COVER_CACHE_BYTES);
+        // Looked at again, the first cover outlives the second when room is needed.
+        assert!(covers.get("cover-0").is_some());
+        covers.insert("one-more".into(), Some(header::HeaderValue::from_static("image/jpeg")), cover.clone());
+        assert!(covers.get("cover-0").is_some());
+        assert!(covers.get("cover-1").is_none());
+        assert_eq!(covers.get("one-more").unwrap().0.unwrap(), "image/jpeg");
+        assert_eq!(covers.bytes, COVER_CACHE_BYTES);
+        assert_eq!(covers.entries.len(), covers.order.len());
+        // Not thumbnails: nothing, or far too much.
+        covers.insert("empty".into(), None, Bytes::new());
+        covers.insert("huge".into(), None, Bytes::from(vec![0; COVER_MAX_BYTES + 1]));
+        assert!(covers.get("empty").is_none() && covers.get("huge").is_none());
     }
 }

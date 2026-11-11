@@ -115,6 +115,36 @@ test("only singing and settling rows animate, including after seeking backward",
   }
 });
 
+test("a song's first paint leaves unsung letters and the viewport's own style alone", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const clock = clockAt(0.5);
+  try {
+    await act(async () => root.render(<LyricsView track={track} clock={clock} playing autoSync={false} />));
+    await paint(clock, 0.5);
+    await paint(clock, 0.516);
+    // The measured height goes on the list that uses it. On the viewport it would be inherited
+    // by every letter under it, and each would be styled again.
+    const viewport = container.querySelector<HTMLElement>(".lyricsViewport")!;
+    const lines = container.querySelector<HTMLElement>(".lyricsLines")!;
+    expect(viewport.style.getPropertyValue("--lyrics-viewport-height")).toBe("");
+    expect(lines.style.getPropertyValue("--lyrics-viewport-height")).toEndWith("px");
+    // Letters the sweep hasn't reached are drawn by the stylesheet alone.
+    const sung = [...container.querySelectorAll<HTMLElement>('[data-row="0"] .lyricChar')];
+    const unsung = [...container.querySelectorAll<HTMLElement>('[data-row="50"] .lyricChar')];
+    expect(sung.some(letter => letter.style.getPropertyValue("--lyric-head") !== "")).toBe(true);
+    expect(unsung.length).toBeGreaterThan(0);
+    expect(unsung.every(letter => letter.style.getPropertyValue("--lyric-head") === "")).toBe(true);
+    const styles = await Bun.file(new URL("../src/components/LyricsView.css", import.meta.url)).text();
+    expect(styles).toMatch(/@property --lyrics-viewport-height \{[^}]*inherits: false/);
+    expect(styles).toMatch(/\.lyricsViewport:not\(\.lyricsPlain\) \.lyricChar \{\s*--lyric-head: -100%;/);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
 test("unrelated player updates do not split every lyric into letters again", async () => {
   const container = document.createElement("div");
   document.body.append(container);

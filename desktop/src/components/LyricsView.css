@@ -9,6 +9,12 @@
     inherits: false;
     initial-value: 0px;
 }
+/* Set on the list when its viewport is measured, and for the same reason kept from its letters.
+   No initial value, so the list falls back to its own guess until then. */
+@property --lyrics-viewport-height {
+    syntax: "*";
+    inherits: false;
+}
 
 :root {
     /* Shared with the player cover, which moves into the lyrics layout (BigscreenArtwork.css). */
@@ -46,7 +52,9 @@
 }
 /* Leaving: the backdrop fades and the lyrics drift left, under the cover moving out to centre. */
 #lyricsPage[data-shown="false"] {
-    opacity: 0;
+    /* Short of nothing: WebKit goes back over every element under a fade that reaches exactly 0
+       or sets off from it, and a song's lyrics are thousands. Nothing this faint reaches the screen. */
+    opacity: 0.001;
     visibility: hidden;
     pointer-events: none;
     transition:
@@ -225,6 +233,11 @@ button.lyricLine:hover {
     -webkit-text-fill-color: transparent;
     /* Lift and swell are spring-driven from utils/lyricsMotion.ts. */
     transform-origin: 50% 80%;
+}
+/* Synced lyrics start unsung (UNSUNG_HEAD in LyricsView.tsx), so a song's letters need no
+   style of their own until the sweep reaches them. */
+.lyricsViewport:not(.lyricsPlain) .lyricChar {
+    --lyric-head: -100%;
 }
 .lyricLine:dir(rtl) .lyricChar {
     background-image: linear-gradient(
@@ -614,6 +627,14 @@ button.lyricLine:hover {
         opacity 450ms ease,
         visibility 0s linear var(--player-view-duration);
 }
+/* Under the next song's lyrics nothing reaches the old ones, and they are gone within the second.
+   Staying as they are spares their every letter the two inherited changes above, which fell at
+   the click and in the middle of the new lyrics' rise. */
+#lyricsPage[data-leaving="true"][data-covered="true"] {
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 450ms ease;
+}
 #lyricsPage[data-leaving="true"] .lyricsStage {
     transform: translateY(-5%);
     transition: transform var(--player-view-duration) var(--player-view-ease);
@@ -623,7 +644,8 @@ button.lyricLine:hover {
 }
 @keyframes lyricsArrive {
     from {
-        opacity: 0;
+        /* Short of nothing, as where the page fades to. */
+        opacity: 0.001;
         transform: translateY(6%);
     }
 }

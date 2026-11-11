@@ -249,6 +249,50 @@ test("legacy pairing requires explicit key migration and never sends credentials
   } finally { legacyPairing = false; }
 });
 
+test("the server's step through the queue arrives as a patch, and any other change is asked for whole", async () => {
+  const other = { ...item, globalTrackId: "b" };
+  const played = { ...item, historyId: "h", playedAt: "2026-01-01T00:00:00.000Z" };
+  const whole = (queueRevision: number, queue: QueueSnapshot) => session(queueRevision + 500, queueRevision, { ...queue, revision: queueRevision } as QueueSnapshot);
+  const requested: string[] = [];
+  let answer: (url: URL) => unknown = () => whole(40, { history: [], current: item, upcoming: [other], tracks: [track] });
+  globalThis.fetch = mock(async (input: string | URL | Request) => {
+    const url = new URL(String(input), "http://phone-server:38147");
+    requested.push(url.pathname + url.search);
+    return response(answer(url));
+  }) as typeof fetch;
+  await refreshSession(new AbortController().signal);
+  expect(sessionView()?.queueRevision).toBe(40);
+  const songs = sessionView()!.queue.tracks;
+
+  // Next on the server: the phone says which queue it has, and is sent only what changed.
+  requested.length = 0;
+  answer = url => {
+    expect(url.searchParams.get("queue")).toBe("40");
+    expect(url.searchParams.get("patches")).toBe("1");
+    const { queue: _queue, ...view } = whole(41, { current: null, upcoming: [] });
+    return { ...view, queuePatch: { base: 40, revision: 41, historyDropFront: 0, historyDropBack: 0, historyPush: [played], current: other, upcomingDropFront: 1, upcomingUnshift: [] } };
+  };
+  await refreshSession(new AbortController().signal);
+  expect(requested).toHaveLength(1);
+  expect(sessionView()?.queueRevision).toBe(41);
+  expect(sessionView()?.queue.current?.globalTrackId).toBe("b");
+  expect(sessionView()?.queue.upcoming).toEqual([]);
+  expect(sessionView()?.queue.history).toEqual([played]);
+  expect(sessionView()?.queue.tracks).toBe(songs);
+
+  // A patch for a queue this phone doesn't have can't be used: it asks for the queue itself.
+  requested.length = 0;
+  answer = url => {
+    if (!url.search) return whole(43, { history: [], current: item, upcoming: [], tracks: [track] });
+    const { queue: _queue, ...view } = whole(43, { current: null, upcoming: [] });
+    return { ...view, queuePatch: { base: 42, revision: 43, historyDropFront: 0, historyDropBack: 0, historyPush: [], current: item, upcomingDropFront: 0, upcomingUnshift: [] } };
+  };
+  await refreshSession(new AbortController().signal);
+  expect(requested).toEqual(["/api/session?queue=41&patches=1", "/api/session"]);
+  expect(sessionView()?.queueRevision).toBe(43);
+  expect(sessionView()?.queue.current?.globalTrackId).toBe("a");
+});
+
 test("a new P2P bridge clears the old song and ignores a late response body from the previous connection", async () => {
   const previous: QueueSnapshot = { version: 1, history: [], current: item, upcoming: [], tracks: [track] };
   globalThis.fetch = mock(async () => response(session(100, 50, previous))) as typeof fetch;

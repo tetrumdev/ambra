@@ -3,7 +3,10 @@ import { needsLyricsRetry, type TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { SearchCache } from "./searchCache";
 
-const lyricsCache = new SearchCache<TrackLyrics>(30 * 60_000, 12);
+// One song's lyrics are one object for as long as they are cached. The lyrics view builds a
+// song's every letter from them and compares them by identity, so a copy per read would have it
+// rebuild all of them each time it asks. Nothing changes lyrics in place.
+const lyricsCache = new SearchCache<TrackLyrics>(30 * 60_000, 12, lyrics => lyrics);
 const requests = new Map<string, Promise<TrackLyrics>>();
 const listeners = new Set<() => void>();
 let revision = 0;
