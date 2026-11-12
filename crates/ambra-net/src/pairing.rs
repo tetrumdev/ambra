@@ -36,14 +36,13 @@ impl PairingPayload {
         if value.len() > 8192 {
             return Err("Pairing payload is too large".into());
         }
-        let payload: Self = serde_json::from_slice(
+        let mut payload: Self = serde_json::from_slice(
             &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(
                 value
                     .strip_prefix("ambra://pair/")
                     .ok_or("Expected an Ambra pairing link")?,
             )?,
         )?;
-        let mut payload: Self = payload;
         if payload.local_addresses.len() > 16 || payload.public_tcp.len() > 8 {
             return Err("Invalid or unsupported pairing payload".into());
         }

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react";
 import { serviceAuthStatus, type ServiceAuthStatus, type StreamingProvider } from "../api/server";
 import { isDeviceTrack } from "../utils/nativeAudioSource";
 import { isDownloadedOnServer, offlineSource, useDownloads } from "../utils/offlineDownloads";
-import { serverConnection, serverOnline, subscribeServerConnection } from "../api/serverConnection";
+import { hasServerConnection, serverConnection, serverOnline, subscribeServerConnection } from "../api/serverConnection";
 import type { Track } from "../types/music";
 
 let status: ServiceAuthStatus | null = null;
@@ -18,7 +18,7 @@ export function updateServiceAvailability(value: ServiceAuthStatus) {
 }
 
 export async function refreshServiceAvailability() {
-  if (serverConnection && !serverConnection.server) return;
+  if (!hasServerConnection()) return;
   const current = ++request;
   try {
     const value = await serviceAuthStatus();
