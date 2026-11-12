@@ -54,6 +54,16 @@ fn build_macos_capture() {
     );
     println!("cargo:rustc-link-search=native={}", out.display());
     println!("cargo:rustc-link-lib=static=ambra_soloist_macos");
+    // Objective-C @available checks call Clang's runtime, which rustc does not add.
+    let resource = Command::new("xcrun")
+        .args(["clang", "--print-resource-dir"])
+        .output()
+        .expect("could not locate the Clang runtime");
+    assert!(resource.status.success(), "could not locate the Clang runtime");
+    let runtime = PathBuf::from(String::from_utf8(resource.stdout).unwrap().trim())
+        .join("lib/darwin/libclang_rt.osx.a");
+    assert!(runtime.is_file(), "missing Clang runtime: {}", runtime.display());
+    println!("cargo:rustc-link-arg={}", runtime.display());
     println!("cargo:rustc-link-lib=framework=CoreAudio");
     println!("cargo:rustc-link-lib=framework=Foundation");
     println!(
