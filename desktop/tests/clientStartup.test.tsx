@@ -23,6 +23,7 @@ mock.module("@tauri-apps/api/core", () => ({ ...tauriCore, isTauri: () => true, 
   if (command === "poll_pairing") return pairingStatus;
   if (command === "join_server") { paired = true; bridge = targetBridge; identity = targetIdentity; }
   if (command === "leave_server") { paired = false; bridge = "http://127.0.0.1:9"; }
+  if (command === "saved_servers") return [];
   if (command === "discover_servers") return [{ id: "independent", name: "Independent server", address: "music.local", version: "1" }];
   if (command === "start_pairing") return { address: "ambra://pair/key", requestId: "pending", code: "123456", serverName: "Independent server" };
   return null;
@@ -62,7 +63,7 @@ for (const configured of [false, true]) test(`normal UI opens with ${configured 
   await act(async () => { root.render(<Root />); await new Promise(resolve => setTimeout(resolve, 10)); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); });
   expect(container.textContent).toContain("Normal local player true");
-  expect(container.textContent).not.toContain("Connect to Ambra Server");
+  expect(container.textContent).not.toContain("Add a server");
   if (configured) expect(container.textContent).toContain("Home disconnected");
   expect(calls.some(command => command.includes("start_local") || command === "import_local_music" || command === "set_shared_output")).toBe(false);
   await act(async () => root.unmount());
@@ -76,7 +77,7 @@ test("Server settings opens optional setup, discovers external servers and accep
   const connectionType = container.querySelector<HTMLInputElement>('input[aria-label="Connection type"]')!;
   expect(connectionType.value).toBe("Local");
   expect(connectionType.readOnly).toBe(true);
-  const connect = [...container.querySelectorAll("button")].find(button => button.textContent === "Connect to Ambra Server")!;
+  const connect = [...container.querySelectorAll("button")].find(button => button.textContent === "Add a server")!;
   expect(connect).toBeDefined();
   await act(async () => connect.click());
   expect(container.textContent).toContain("Independent server");
@@ -114,7 +115,7 @@ test("Server tab updates its read-only connection type and keeps client connecti
     expect(connectionType.disabled).toBe(false);
   }
   expect(container.textContent).toContain("Disconnect");
-  expect(container.textContent).toContain("Choose another server");
+  expect(container.textContent).toContain("Add a server");
   expect(container.textContent).not.toContain("Stop server");
   await act(async () => root.unmount());
 });
@@ -136,6 +137,7 @@ test("cached metadata rebases only onto its verified server while device files r
 
 
 test("runtime pairing, server switching, disconnect and failure keep the same application mounted", async () => {
+  localStorage.setItem("ambra.shared-playback.v1", "false");
   paired = false; bridge = "http://127.0.0.1:9"; showSettings = true;
   pairingStatus = "approved"; networkState = "ConnectedLocal";
   const previousFetch = globalThis.fetch;
@@ -156,7 +158,7 @@ test("runtime pairing, server switching, disconnect and failure keep the same ap
     input.value = "keep open settings and navigation";
     const initialMounts = mounts;
     const callStart = calls.length;
-    for (const [index, action] of ["Connect to Ambra Server", "Choose another server", "Connect to Ambra Server"].entries()) {
+    for (const [index, action] of ["Add a server", "Add a server", "Add a server"].entries()) {
       targetIdentity = String(index + 1).repeat(64); targetBridge = `http://127.0.0.1:${46000 + index}`;
       await click(action);
       await click("Connect");
@@ -181,7 +183,7 @@ test("runtime pairing, server switching, disconnect and failure keep the same ap
       }
     }
     commandFailure = "start_pairing";
-    await click("Connect to Ambra Server"); await click("Connect");
+    await click("Add a server"); await click("Connect");
     expect(container.textContent).toContain("Connection failed safely");
     expect(container.querySelector("main") === main).toBe(true);
     const changes = calls.slice(callStart);
@@ -292,6 +294,7 @@ test("old shared commands and queued controls cannot affect a newly selected ser
 });
 
 test("switching servers from shared playback commits pairing before releasing the shared UI", async () => {
+  localStorage.setItem("ambra.shared-playback.v1", "false");
   const previousFetch = globalThis.fetch;
   paired = true; identity = "f".repeat(64); bridge = "http://127.0.0.1:52000";
   targetIdentity = "9".repeat(64); targetBridge = "http://127.0.0.1:53000";
@@ -304,7 +307,7 @@ test("switching servers from shared playback commits pairing before releasing th
     await act(async () => container.querySelector<HTMLInputElement>('input[aria-label="Shared playback session"]')!.click());
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Shared playback session"]')!.checked).toBe(true);
     const started = calls.length;
-    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Choose another server")!.click());
+    await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Add a server")!.click());
     await act(async () => [...container.querySelectorAll("button")].find(button => button.textContent === "Connect")!.click());
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 1550)); });
     const switched = calls.slice(started);

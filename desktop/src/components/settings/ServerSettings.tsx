@@ -8,9 +8,11 @@ import { SettingRow, Toggle } from "./SettingsControls";
 
 type Discovered = { id: string; name: string; version: string; address: string };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
+type SavedServer = { id: string; name: string; address: string; publicKey: string | null; selected: boolean };
+type ConnectionCommand = "join_server" | "leave_server" | "connect_saved_server" | "forget_saved_server";
 
 /** Save both owners before changing the optional server; leave the local player mounted. */
-async function applyConnection(command: "join_server" | "leave_server", setSharedPlayback: (shared: boolean, remember?: boolean) => Promise<void>, args?: Record<string, unknown>) {
+async function applyConnection(command: ConnectionCommand, setSharedPlayback: (shared: boolean, remember?: boolean) => Promise<void>, args?: Record<string, unknown>) {
   window.dispatchEvent(new Event("ambra:save-session"));
   await flushPersistentState();
   await withServerStateTransition(async () => {
@@ -124,6 +126,27 @@ export function ServerSetup({ onBack }: { onBack: () => void }) {
   </div>;
 }
 
+/** Servers paired earlier: connect to one without pairing again, or forget its pairing. */
+function SavedServers({ saved, changing, onChange }: {
+  saved: SavedServer[];
+  changing: boolean;
+  onChange: (command: ConnectionCommand, args: Record<string, unknown>) => void;
+}) {
+  const others = saved.filter(server => !server.selected);
+  if (!others.length) return null;
+  return <>
+    <h2>Saved servers</h2>
+    {others.map(server => <SettingRow key={server.publicKey ?? server.id} label={server.name} hint={server.address}>
+      <span className="serverJoinActions">
+        <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+          onClick={() => onChange("connect_saved_server", { publicKey: server.publicKey })}>Connect</button>
+        <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+          onClick={() => onChange("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
+      </span>
+    </SettingRow>)}
+  </>;
+}
+
 export function ServerSettings({ active }: { active: boolean }) {
   const { connected, network, sharedPlayback, setSharedPlayback, reconnect } = useClientConnection();
   const [setup, setSetup] = useState(false);
@@ -131,19 +154,30 @@ export function ServerSettings({ active }: { active: boolean }) {
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
   const server = connection?.server;
   const [changing, setChanging] = useState(false);
+  const [saved, setSaved] = useState<SavedServer[]>([]);
+  useEffect(() => {
+    if (!isTauri() || !active || setup) return;
+    let disposed = false;
+    void invoke<SavedServer[]>("saved_servers").then(list => { if (!disposed) setSaved(list); })
+      .catch(reason => { if (!disposed) setError(String(reason)); });
+    return () => { disposed = true; };
+  }, [active, setup, connection]);
+  const change = async (command: ConnectionCommand, args?: Record<string, unknown>) => {
+    if (changing) return;
+    setChanging(true);
+    setError(null);
+    try {
+      await applyConnection(command, setSharedPlayback, args);
+      setSaved(await invoke<SavedServer[]>("saved_servers"));
+    }
+    catch (reason) { setError(String(reason)); }
+    finally { setChanging(false); }
+  };
   const connectionType = !server ? "Local" : !connected ? "Offline"
     : network.method === "Lan" ? "Local network"
     : network.method === "Pwnat" ? "pwnat"
     : network.method === "HyperDHT" ? "HyperDHT"
     : network.method === "Public" ? "Internet (direct)" : "Unknown";
-  const disconnect = async () => {
-    if (changing) return;
-    setChanging(true);
-    setError(null);
-    try { await applyConnection("leave_server", setSharedPlayback); }
-    catch (reason) { setError(String(reason)); }
-    finally { setChanging(false); }
-  };
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
     {error && <p className="settingsError" role="alert">{error}</p>}
@@ -161,15 +195,18 @@ export function ServerSettings({ active }: { active: boolean }) {
         </SettingRow>
         <div className="serverJoinActions">
           <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
-          <button type="button" className="settingsPill" disabled={changing} onClick={() => void disconnect()}>Disconnect</button>
+          <button type="button" className="settingsPill" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
+          <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+            onClick={() => void change("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
           <button type="button" className="settingsPill" onClick={() => {
             void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
-          }}>Choose another server</button>
+          }}>Add a server</button>
         </div>
       </> : <>
         <p className="settingsMuted">No server connected. Local music, playlists, queues, and settings stay on this device.</p>
-        <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Connect to Ambra Server</button>
+        <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
       </>}
+      <SavedServers saved={saved} changing={changing} onChange={(command, args) => void change(command, args)} />
     </div>}
   </>;
 }

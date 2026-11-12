@@ -95,7 +95,7 @@ test("a late callback after switching servers cannot authorize the newly selecte
   expect(requests.some(request => request.url.includes("second") && request.url.endsWith("/cancel"))).toBe(false);
 });
 
-test("Services restores sign-in buttons and refreshes service availability without callback pasting", async () => {
+test("Services completes automatic sign-in with optional callback entry available", async () => {
   const container = document.createElement("div");
   const root = createRoot(container);
   const onConnected = mock();
@@ -107,7 +107,7 @@ test("Services restores sign-in buttons and refreshes service availability witho
     const button = container.querySelector<HTMLButtonElement>('[aria-label="Sign in to Tidal"]')!;
     await act(async () => { button.click(); });
     expect(container.textContent).toContain("Waiting for sign-in");
-    expect(container.querySelector("input")).toBeNull();
+    expect(container.querySelector('[aria-label="Tidal callback URL"]')).not.toBeNull();
     const callbacks = onConnected.mock.calls.length;
     await act(async () => { finish("https://tidal.com/android/login/auth?code=test-code"); });
     expect(button.textContent).toBe("Connected");

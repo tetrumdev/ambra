@@ -33,6 +33,7 @@ import { useTrackSearch } from "./hooks/useTrackSearch";
 import { queueEntryForTrack, useQueue } from "./hooks/useQueue";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { pageNeedsFocusOnActivation } from "./utils/windowChrome";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getServerConnection, subscribeServerConnection } from "./api/serverConnection";
@@ -570,7 +571,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     // without giving it to the page. The page is the window's only content, so it always takes it.
     let stopFocus: (() => void) | undefined;
     void appWindow.onFocusChanged(({ payload: focused }) => {
-      if (focused) void getCurrentWebview().setFocus().catch(() => {});
+      if (focused && pageNeedsFocusOnActivation()) void getCurrentWebview().setFocus().catch(() => {});
     }).then((unlisten) => {
       if (disposed) unlisten();
       else stopFocus = unlisten;

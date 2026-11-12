@@ -11,6 +11,8 @@ import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from ".
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 import { desktopPlatform } from "./utils/windowChrome";
 import { startDownloads } from "./utils/offlineDownloads";
+import { detectGraphicsTier } from "./utils/graphicsTier";
+import "./lowGraphics.css";
 
 mark("js-start");
 startPerfTracing();
@@ -25,6 +27,7 @@ document.documentElement.dataset.platform = desktopPlatform();
 
 installTooltips();
 startDownloads();
+detectGraphicsTier();
 window.addEventListener("keydown", (event) => {
   if (isBrowserFindShortcut(event)) blockBrowserDefault(event);
 }, true);

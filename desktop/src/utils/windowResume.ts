@@ -1,6 +1,7 @@
 import { isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { pageNeedsFocusOnActivation } from "./windowChrome";
 
 /** Resume from both browser visibility and the native window's activation. */
 export function onWindowResume(refresh: () => void) {
@@ -16,12 +17,14 @@ export function onWindowResume(refresh: () => void) {
       // Activating the GTK window does not necessarily focus its WebKit view.
       // Restore that view's activity as we read and paint fresh state. Recovery
       // must not wait for a focus IPC reply that may itself have been suspended.
-      try {
-        void getCurrentWebview().setFocus().catch(error => {
+      if (pageNeedsFocusOnActivation()) {
+        try {
+          void getCurrentWebview().setFocus().catch(error => {
+            console.warn("Could not restore playback view focus:", error);
+          });
+        } catch (error) {
           console.warn("Could not restore playback view focus:", error);
-        });
-      } catch (error) {
-        console.warn("Could not restore playback view focus:", error);
+        }
       }
       if (!disposed) refresh();
     }, { target: { kind: "Window", label: "main" } }).then(stop => {

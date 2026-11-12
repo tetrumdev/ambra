@@ -19,7 +19,7 @@ function formatTime(time: number) {
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = String(Math.ceil(totalSeconds % 60)).padStart(2, "0");
   if (hours > 0) {
-    return `${hours}:${String(minutes).padStart(2, "0")}:${seconds}}`;
+    return `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`;
   } else {
     return `${minutes}:${seconds}`;
   }

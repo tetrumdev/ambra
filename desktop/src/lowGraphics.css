@@ -1,0 +1,55 @@
+/* The low graphics tier (utils/graphicsTier.ts): set only on a device that can't keep up.
+   Blurring what lies behind a surface, or a whole line of lyrics, is the most expensive
+   thing the app asks of a GPU, so here the glass turns to plain dark surfaces, opaque
+   enough to stay readable over whatever scrolls beneath, and the lyrics stay sharp. */
+:root[data-graphics="low"] *,
+:root[data-graphics="low"] *::before,
+:root[data-graphics="low"] *::after {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+}
+
+/* The player's glass pills. */
+:root[data-graphics="low"] .bigscreenViewPicker,
+:root[data-graphics="low"] .bigscreenClose,
+:root[data-graphics="low"] .lyricsControls::before,
+:root[data-graphics="low"] .pageFilter,
+:root[data-graphics="low"] .queueResume,
+:root[data-graphics="low"] .queueClose,
+:root[data-graphics="low"] #searchBar {
+    background: rgba(22, 22, 22, 0.86);
+}
+
+:root[data-graphics="low"] .settingsSaveBar,
+:root[data-graphics="low"] .shortcutToastBody,
+:root[data-graphics="low"] .lyricsNotice {
+    background: rgba(22, 22, 22, 0.92);
+}
+
+:root[data-graphics="low"] .playlistEditDialog,
+:root[data-graphics="low"] .devAudioControls,
+:root[data-graphics="low"] .selectionActionMenu,
+:root[data-graphics="low"] .ambraTooltip {
+    background: rgba(26, 26, 26, 0.96);
+}
+
+/* Menus keep their translucent rows (TrackMenus.css); a solid sheet behind stands in for the blur. */
+:root[data-graphics="low"] #trackPlaybackMenu,
+:root[data-graphics="low"] #trackCollectionMenu,
+:root[data-graphics="low"] .lyricsSyncPanel {
+    background: #141414;
+}
+
+/* The now-playing bar: about the tone its glass has over the app's dark pages. With no
+   blur there is no kernel to feed, so the layer shrinks to the bar and needs no mask. */
+:root[data-graphics="low"] .bottomInfoBarSurface::before {
+    inset: 0;
+    background-color: rgba(38, 38, 38, 0.97);
+    mask-image: none;
+    -webkit-mask-image: none;
+}
+
+/* Lines away from the current one still recede by fading; only their blur goes. */
+:root[data-graphics="low"] .lyricGroup {
+    filter: none;
+}

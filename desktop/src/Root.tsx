@@ -74,9 +74,9 @@ export function Root() {
 
   const setSharedPlayback = useCallback(async (shared: boolean, remember = true) => {
     await applySharedPlayback(shared);
+    setPreferSharedPlayback(shared);
     if (!remember) return;
     setPersistentItem(sharedPlaybackKey, String(shared));
-    setPreferSharedPlayback(shared);
     await flushPersistentState();
   }, [applySharedPlayback]);
 

@@ -67,6 +67,28 @@ struct Settings {
     client_id: String,
     #[serde(default)]
     when_away: WhenAway,
+    /// Every server this device has paired with, so the listener can move between them
+    /// (home, a friend's) without pairing again. `server` and `token` are the selected one.
+    #[serde(default)]
+    saved: Vec<SavedServer>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SavedServer {
+    server: JoinedServer,
+    token: String,
+}
+
+/// A paired server as the app's screens see it; its token never leaves this process.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedServerSummary {
+    pub id: String,
+    pub name: String,
+    pub address: String,
+    pub public_key: Option<ambra_net::PublicKey>,
+    pub selected: bool,
 }
 
 impl Settings {
@@ -80,6 +102,18 @@ impl Settings {
             token: None,
             client_id: id.iter().map(|byte| format!("{byte:02x}")).collect(),
             when_away: WhenAway::Wait,
+            saved: Vec::new(),
+        }
+    }
+
+    /// Keeps the selected server in the saved list, replacing an older pairing with the same server.
+    fn remember_selected(&mut self) {
+        let (Some(server), Some(token)) = (self.server.clone(), self.token.clone()) else { return };
+        let Some(key) = server.public_key else { return };
+        let entry = SavedServer { server, token };
+        match self.saved.iter_mut().find(|saved| saved.server.public_key == Some(key)) {
+            Some(saved) => *saved = entry,
+            None => self.saved.push(entry),
         }
     }
 
@@ -89,6 +123,11 @@ impl Settings {
             .and_then(|bytes| serde_json::from_slice::<Self>(&bytes).ok())
             // A joined link without its server or token is unusable; start over as a host.
             .filter(|settings| settings.mode == Mode::Host || (settings.server.is_some() && settings.token.is_some()))
+            .map(|mut settings| {
+                // Settings written before servers were saved hold only the selected one.
+                settings.remember_selected();
+                settings
+            })
             .unwrap_or_else(Self::new)
     }
 
@@ -213,6 +252,7 @@ impl ServerLink {
         manager.authorize(token.clone()).await.map_err(|e| e.to_string())?;
         let mut next = self.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
         next.mode = Mode::Join; next.decided = true; next.server = Some(server); next.token = Some(token);
+        next.remember_selected();
         self.install(next, app, Some(manager)).await?;
         // Ownership moved into the joined runtime; dropping enrollment must not close it.
         if let Some(session) = self.pairing.lock().map_err(|_| "Pairing unavailable")?.session.as_mut() { session.manager.take(); }
@@ -255,7 +295,7 @@ impl Runtime {
             let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint, public_tcp: server.public_tcp.clone() };
             let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::new(identity, selected, settings.token.clone()));
             // Remembers the server's public address learned at home, for use away from it.
-            manager.use_endpoint_cache(directory.join("server-endpoints.json"));
+            manager.use_endpoint_cache(endpoint_cache(directory, &public_key));
             // Like the phone: a warm Internet path beside the LAN, network changes noticed at
             // once, and songs downloaded ahead, so moving between LAN and P2P never stops a song.
             manager.enable_roaming();
@@ -266,6 +306,19 @@ impl Runtime {
         } else { (None, None) };
         Ok(Self { connection: ServerLink::describe(settings, bridge.as_ref()), manager, bridge, network_error: None })
     }
+}
+
+/// Each saved server remembers its own public addresses, so switching between them loses neither.
+fn endpoint_cache(directory: &Path, public_key: &ambra_net::PublicKey) -> PathBuf {
+    let path = directory.join("server-endpoints").join(format!("{public_key}.json"));
+    if !path.exists() {
+        // The single cache of earlier versions; it names its server, so a mismatch is ignored.
+        let legacy = directory.join("server-endpoints.json");
+        if legacy.exists() && std::fs::create_dir_all(path.parent().expect("has a parent")).is_ok() {
+            let _ = std::fs::copy(legacy, &path);
+        }
+    }
+    path
 }
 
 #[tauri::command]
@@ -391,7 +444,7 @@ pub async fn start_pairing(link: tauri::State<'_, ServerLink>, address: String) 
     let identity = ambra_net::Identity::load_or_create(&link.directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
     let selected = ambra_net::SelectedServer { public_key: payload.public_key, local_addresses: payload.local_addresses.clone(), public_endpoint: payload.public_endpoint, public_tcp: payload.public_tcp.clone() };
     let manager = ambra_net::ConnectionManager::new(identity, selected, None);
-    manager.use_endpoint_cache(link.directory.join("server-endpoints.json"));
+    manager.use_endpoint_cache(endpoint_cache(&link.directory, &payload.public_key));
     let mut session = PairingSession { address: address.clone(), request_id: String::new(), payload: payload.clone(), manager: Some(manager.clone()), approved: None };
     let started = manager.json("POST", "/api/pair/request", Some(json!({ "clientId": link.client_id(), "clientName": client_name() }))).await.map_err(|e| e.to_string())?;
     let request_id = started["requestId"].as_str().ok_or("Missing pairing handle")?.to_owned();
@@ -444,7 +497,7 @@ pub async fn join_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLin
     link.join(&request_id, Some(&app)).await
 }
 
-/// Disconnect the client without touching any device or server data.
+/// Disconnect the client without touching any device or server data. The server stays saved.
 #[tauri::command]
 pub async fn leave_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>) -> Result<(), String> {
     let _transition = link.transition.lock().await;
@@ -459,6 +512,47 @@ pub async fn leave_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLi
 pub async fn set_server_link_decided(link: tauri::State<'_, ServerLink>) -> Result<(), String> {
     let _transition = link.transition.lock().await;
     link.change(|settings| settings.decided = true)
+}
+
+#[tauri::command]
+pub fn saved_servers(link: tauri::State<'_, ServerLink>) -> Result<Vec<SavedServerSummary>, String> {
+    let settings = link.settings.lock().map_err(|_| "Server settings are unavailable")?;
+    let selected = settings.server.as_ref().filter(|_| settings.mode == Mode::Join).and_then(|server| server.public_key);
+    Ok(settings.saved.iter().map(|saved| SavedServerSummary {
+        id: saved.server.id.clone(),
+        name: saved.server.name.clone(),
+        address: saved.server.address.clone(),
+        public_key: saved.server.public_key,
+        selected: saved.server.public_key.is_some() && saved.server.public_key == selected,
+    }).collect())
+}
+
+/// Connects to a server paired earlier, using the token it gave this device then.
+#[tauri::command]
+pub async fn connect_saved_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>, public_key: ambra_net::PublicKey) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    link.cancel_pairing()?;
+    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+    let saved = next.saved.iter().find(|saved| saved.server.public_key == Some(public_key)).cloned()
+        .ok_or("That server is no longer saved")?;
+    next.mode = Mode::Join; next.decided = true; next.server = Some(saved.server); next.token = Some(saved.token);
+    link.install(next, Some(&app), None).await
+}
+
+/// Forgets a saved server's pairing on this device, disconnecting first if it is the selected one.
+#[tauri::command]
+pub async fn forget_saved_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>, public_key: ambra_net::PublicKey) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+    next.saved.retain(|saved| saved.server.public_key != Some(public_key));
+    let selected = next.server.as_ref().is_some_and(|server| server.public_key == Some(public_key));
+    if selected {
+        link.cancel_pairing()?;
+        next.mode = Mode::Host; next.server = None; next.token = None;
+        link.install(next, Some(&app), None).await
+    } else {
+        link.change(|settings| settings.saved = next.saved)
+    }
 }
 
 #[cfg(test)]
@@ -487,6 +581,33 @@ mod tests {
         assert_eq!(remote.public_key, key);
         assert!(remote.local_addresses.is_empty());
         assert!(remote.public_endpoint.is_none());
+    }
+
+    #[test]
+    fn paired_servers_stay_saved_across_upgrades_repairs_and_disconnects() {
+        let directory = std::env::temp_dir().join(format!("ambra-saved-servers-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let key = ambra_net::Identity::generate().unwrap().public_key();
+        let server = |name: &str| JoinedServer { id: name.into(), name: name.into(), address: "127.0.0.1:9".into(), public_key: Some(key), local_addresses: vec![], public_endpoint: None, public_tcp: vec![] };
+        // Written before servers were saved: only the selected one, with no list.
+        let mut legacy = serde_json::to_value(Settings::new()).unwrap();
+        legacy["mode"] = json!("join");
+        legacy["server"] = serde_json::to_value(server("Home")).unwrap();
+        legacy["token"] = json!("old-token");
+        legacy.as_object_mut().unwrap().remove("saved");
+        std::fs::write(directory.join(FILE_NAME), serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let mut settings = Settings::load(&directory);
+        assert_eq!(settings.saved, vec![SavedServer { server: server("Home"), token: "old-token".into() }]);
+        // Pairing with the same server again replaces its entry rather than adding another.
+        settings.server = Some(server("Home renamed"));
+        settings.token = Some("new-token".into());
+        settings.remember_selected();
+        assert_eq!(settings.saved, vec![SavedServer { server: server("Home renamed"), token: "new-token".into() }]);
+        // Disconnecting clears the selection only.
+        settings.mode = Mode::Host; settings.server = None; settings.token = None;
+        settings.save(&directory).unwrap();
+        assert_eq!(Settings::load(&directory).saved.len(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

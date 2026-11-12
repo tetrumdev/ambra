@@ -15,6 +15,7 @@ import {
 } from "../utils/swirlShader";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
 import { reducedMotion, subscribeReducedMotion } from "../utils/reducedMotion";
+import { createSwirlPacing, swirlCanvasLimit } from "../utils/graphicsTier";
 
 type FluidGradientBackgroundProps = {
   /** The cover's colors (swirlPalette). */
@@ -185,11 +186,15 @@ export function FluidGradientBackground({
       scheduleDraw();
     };
     let lastDrawnAt = -Infinity;
+    // A device that can't draw the field in time gets a smaller canvas (utils/graphicsTier).
+    const pacing = createSwirlPacing();
+    let canvasLimit = swirlCanvasLimit();
     const draw = (now: number) => {
       animationFrameRef.current = 0;
       if (document.hidden || gl.isContextLost()) return;
       const swirlTarget = animateRef.current && playingRef.current ? 1 : 0;
       const moving = journey.speed > 0 || swirlTarget > 0;
+      if (canvasLimit !== swirlCanvasLimit()) layoutDirty = true;
       if (
         now - lastDrawnAt < Math.max(MIN_FRAME_INTERVAL_MS, animationFrameInterval() - 0.5)
         && !layoutDirty
@@ -200,10 +205,13 @@ export function FluidGradientBackground({
         return;
       }
       lastDrawnAt = now;
+      if (!moving || !activeRef.current) pacing.restart();
+      else if (pacing.frame(now, Math.max(1000 / 60, animationFrameInterval()))) layoutDirty = true;
       if (layoutDirty) {
         const cssWidth = canvas.clientWidth;
         const cssHeight = canvas.clientHeight;
-        const scale = Math.min(1, 960 / Math.max(1, cssWidth, cssHeight));
+        canvasLimit = swirlCanvasLimit();
+        const scale = Math.min(1, canvasLimit / Math.max(1, cssWidth, cssHeight));
         width = Math.max(1, Math.round(cssWidth * scale));
         height = Math.max(1, Math.round(cssHeight * scale));
         // Resizing clears WebGL's buffer. Redraw in this callback so a blank

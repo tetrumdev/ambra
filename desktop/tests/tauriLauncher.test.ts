@@ -33,7 +33,7 @@ test("NVIDIA Wayland startup disables explicit sync without disabling GPU render
   const inherited = { PATH: "/usr/bin", WAYLAND_DISPLAY: "wayland-1", CARGO_HOME: "/custom/rust" };
   const environment = tauriEnvironment(inherited, "linux", true);
   expect(environment.__NV_DISABLE_EXPLICIT_SYNC).toBe("1");
-  expect(environment.PATH).toBe(["/usr/bin", "/custom/rust/bin"].join(delimiter));
+  expect(environment.PATH).toBe(["/usr/bin", join("/custom/rust", "bin")].join(delimiter));
   expect(environment.WAYLAND_DISPLAY).toBe("wayland-1");
   expect(environment.GDK_BACKEND).toBeUndefined();
   expect(environment.WEBKIT_DISABLE_DMABUF_RENDERER).toBeUndefined();

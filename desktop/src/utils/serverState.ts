@@ -399,21 +399,30 @@ export function installServerStateLifecycle() {
 
   let disposed = false;
   let closing = false;
+  let saveFailed = false;
   let unlisten: (() => void) | undefined;
   void (async () => {
     if (!isTauri() || disposed) return;
     const appWindow = getCurrentWindow();
     const stop = await appWindow.onCloseRequested(async event => {
       event.preventDefault();
-      if (closing) return;
+      // Closing again while the save is stuck, or after it failed, closes regardless: a save
+      // that can't finish must never trap the window. The keepalive write still goes out.
+      if (closing || saveFailed) {
+        void flushServerState(true).catch(() => {});
+        await appWindow.destroy();
+        return;
+      }
       closing = true;
       saveLatest();
       try {
         await flushPersistentState();
         await flushServerState();
         await appWindow.destroy();
-      } catch { /* Leave the window open with the save error visible. */ }
-      finally { closing = false; }
+      } catch {
+        // Leave the window open with the save error visible; the next close request closes it.
+        saveFailed = true;
+      } finally { closing = false; }
     });
     if (disposed) stop();
     else unlisten = stop;
