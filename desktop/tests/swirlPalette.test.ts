@@ -62,7 +62,7 @@ try {
   const texture = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, texture);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, 1, 1, 0, gl.LUMINANCE, gl.UNSIGNED_BYTE, new Uint8Array([128]));
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([128, 128, 128, 128]));
   const components = ${JSON.stringify(components)};
   gl.uniform3fv(gl.getUniformLocation(p, 'u_colors[0]'), components.slice(0, 12));
   gl.uniform4fv(gl.getUniformLocation(p, 'u_bias'), components.slice(12, 16));

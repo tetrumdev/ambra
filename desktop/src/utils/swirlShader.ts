@@ -53,11 +53,13 @@ float noise(vec2 point) {
   // Shared lattice values stay identical across cell boundaries and GPU backends.
   // Fetch texel centres and interpolate in high precision: hardware filtering can
   // quantize slow movement, which repeated domain warps amplify into contour jumps.
+  // Each texel carries its cell's four corners (createNoiseTexture), so one fetch
+  // replaces four: the swirl samples this noise 55 times per pixel.
   vec2 uv = (mod(cell, ${NOISE_TEXTURE_SIZE}.0) + 0.5) / ${NOISE_TEXTURE_SIZE}.0;
-  vec2 texel = vec2(1.0 / ${NOISE_TEXTURE_SIZE}.0, 0.0);
+  vec4 corners = texture2D(u_noise, uv);
   return mix(
-    mix(texture2D(u_noise, uv).r, texture2D(u_noise, uv + texel.xy).r, smoothLocal.x),
-    mix(texture2D(u_noise, uv + texel.yx).r, texture2D(u_noise, uv + texel.xx).r, smoothLocal.x),
+    mix(corners.r, corners.g, smoothLocal.x),
+    mix(corners.b, corners.a, smoothLocal.x),
     smoothLocal.y
   );
 }
@@ -130,11 +132,26 @@ export function createShader(
 export function createNoiseTexture(gl: SwirlGL, seed: number) {
   const texture = gl.createTexture();
   if (!texture) return null;
-  const pixels = new Uint8Array(NOISE_TEXTURE_SIZE * NOISE_TEXTURE_SIZE);
+  const size = NOISE_TEXTURE_SIZE;
+  const lattice = new Uint8Array(size * size);
   let state = Math.floor(seed * 0x4000000) >>> 0;
-  for (let index = 0; index < pixels.length; index++) {
+  for (let index = 0; index < lattice.length; index++) {
     state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
-    pixels[index] = state >>> 24;
+    lattice[index] = state >>> 24;
+  }
+  // A texel holds its lattice value and the three neighbours the shader interpolates
+  // towards (right, above, diagonal), wrapping at the edges as the lattice repeats.
+  const pixels = new Uint8Array(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    const above = ((y + 1) % size) * size;
+    for (let x = 0; x < size; x++) {
+      const right = (x + 1) % size;
+      const index = (y * size + x) * 4;
+      pixels[index] = lattice[y * size + x];
+      pixels[index + 1] = lattice[y * size + right];
+      pixels[index + 2] = lattice[above + x];
+      pixels[index + 3] = lattice[above + right];
+    }
   }
   gl.activeTexture(gl.TEXTURE0);
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -144,8 +161,8 @@ export function createNoiseTexture(gl: SwirlGL, seed: number) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
   gl.texImage2D(
-    gl.TEXTURE_2D, 0, gl.LUMINANCE, NOISE_TEXTURE_SIZE, NOISE_TEXTURE_SIZE,
-    0, gl.LUMINANCE, gl.UNSIGNED_BYTE, pixels,
+    gl.TEXTURE_2D, 0, gl.RGBA, NOISE_TEXTURE_SIZE, NOISE_TEXTURE_SIZE,
+    0, gl.RGBA, gl.UNSIGNED_BYTE, pixels,
   );
   return texture;
 }
