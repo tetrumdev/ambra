@@ -516,18 +516,19 @@ async fn source(
     Ok(response)
 }
 
-/// The server's copy, decrypted, with byte ranges for seeking.
+/// The server's copy, decrypted, with byte ranges for seeking. Apps save this URL with the
+/// song (queues, playlists, caches), so once the copy is removed or lost the song plays from
+/// its service instead, as it would have if it had never been downloaded.
 async fn play(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
     let id = format!("{}:{track_id}", provider_slug(parse_provider(&provider)?));
-    let entry = state
-        .downloads
-        .server_entry(&id)
-        .ok_or_else(|| ApiError::not_found(format!("{id} isn't downloaded to the server")))?;
-    decrypted_response(&state, entry.file, false, Some(&headers), &entry.mime_type)
+    match state.downloads.server_entry(&id) {
+        Some(entry) => decrypted_response(&state, entry.file, false, Some(&headers), &entry.mime_type),
+        None => stream_track(State(state), Path((provider, track_id)), headers).await,
+    }
 }
 
 fn decrypted_response(
@@ -956,8 +957,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
         assert_eq!(response.headers()[CONTENT_RANGE], "bytes 100-199/2000");
         assert_eq!(response.into_body().collect().await.unwrap().to_bytes().as_ref(), &audio[100..200]);
+        // Without a copy the song plays from its service, which isn't signed in here.
         let (status, _) = send(&app, request("GET", "/api/downloads/play/tidal/3", None)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 
         let (status, _) = send(&app, request("POST", "/api/downloads/remove", Some(serde_json::json!({ "ids": ["tidal:2"] })))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);

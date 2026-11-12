@@ -7,8 +7,11 @@ import "./DownloadActivity.css";
 const jobKey = (job: DownloadJob) => `${job.createdAt}:${job.id}:${job.target}:${job.clientId ?? ""}`;
 const processed = (job: DownloadJob) => Math.min(job.total, job.done + job.failed);
 
-/** Download work stays on the server; this nonmodal panel follows it across pages. */
-export function DownloadActivity({ tracks = [] }: { tracks?: Pick<Track, "globalId" | "name" | "artist">[] }) {
+/**
+ * Download work stays on the server; this nonmodal panel follows it across pages. `hidden`
+ * keeps it mounted out of sight (the big screen and lyrics), so it returns as it was left.
+ */
+export function DownloadActivity({ tracks = [], hidden = false }: { tracks?: Pick<Track, "globalId" | "name" | "artist">[]; hidden?: boolean }) {
   const { jobs } = useDownloads();
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -20,7 +23,7 @@ export function DownloadActivity({ tracks = [] }: { tracks?: Pick<Track, "global
   }, [jobs]);
   const trackNames = useMemo(() => new Map(tracks.map(track => [track.globalId, `${track.name} · ${track.artist}`])), [tracks]);
   const visible = jobs.filter(job => !dismissed.has(jobKey(job)) && (!job.finished || observedActive.current.has(jobKey(job))));
-  if (!visible.length) return null;
+  if (hidden || !visible.length) return null;
 
   const active = visible.filter(job => !job.finished);
   const progressJobs = active.length ? active : visible;

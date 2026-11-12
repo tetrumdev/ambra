@@ -271,6 +271,7 @@ pub fn direct_addresses(port: u16) -> Vec<SocketAddr> {
     let mut addresses = local_addresses(port);
     addresses.truncate(16 - overlays.len());
     addresses.extend(overlays);
+    addresses.retain(|address| is_direct(address.ip()) && address.port() != 0);
     addresses
 }
 

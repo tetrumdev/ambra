@@ -1556,7 +1556,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       </TrackColumnsContext.Provider>
       {!isPlayerView && <UpdateNotice />}
       <DownloadDialog />
-      <DownloadActivity tracks={availableTracks} />
+      <DownloadActivity tracks={availableTracks} hidden={isPlayerView} />
       {!isPlayerView && !isQueueView && !isSettingsView && servicePlaylistError && !playlistErrorDismissed && (
         <div className="playlistSyncError" role="alert" data-playback-error={!!player.playbackError}>
           <span data-tooltip={servicePlaylistError} data-tooltip-overflow="">{servicePlaylistError}</span>

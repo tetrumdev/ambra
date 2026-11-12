@@ -26,10 +26,14 @@ export type ServerConnection = {
 };
 
 const builtInBaseUrl = (import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:9").replace(/\/$/, "");
+const hasConfiguredServerUrl = Boolean(import.meta.env.VITE_AMBRA_SERVER_URL);
 export let serverBaseUrl = builtInBaseUrl;
 export let serverOnline = false;
 export function setServerOnline(online: boolean) { serverOnline = online; }
 export let serverConnection: ServerConnection | null = null;
+export function hasServerConnection() {
+  return serverConnection ? Boolean(serverConnection.server) : hasConfiguredServerUrl || serverBaseUrl !== builtInBaseUrl;
+}
 let token: string | null = null;
 let reading = 0;
 let requests = new AbortController();
