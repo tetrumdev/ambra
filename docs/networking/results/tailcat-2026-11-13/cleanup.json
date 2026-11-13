@@ -1,0 +1,22 @@
+{
+  "remote": {
+    "isolated_server_stopped": true,
+    "production_server_preserved": true,
+    "private_test_profile_removed": true,
+    "temporary_audio_and_credentials_removed": true,
+    "task_build_cache_removed": true,
+    "validated_server_binary_retained": true,
+    "go_build_toolchain_preserved": true,
+    "administrative_ssh_reachable": true
+  },
+  "local": {
+    "private_test_profile_removed": true,
+    "temporary_audio_credentials_and_raw_logs_removed": true,
+    "private_relay_fixture_and_intermediate_build_caches_removed": true,
+    "validated_macos_binaries_retained": true,
+    "packaged_android_libraries_retained": true,
+    "go_ndk_and_cargo_ndk_build_dependencies_preserved": true,
+    "warp_disconnected": true,
+    "tailscale_backend": "Running"
+  }
+}

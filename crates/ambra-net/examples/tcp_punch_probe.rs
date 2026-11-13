@@ -227,6 +227,12 @@ async fn main() -> ambra_net::Result<()> {
                 latencies.extend(samples);
             }
             metric(serde_json::json!({"stage":"transfer","round":round,"bytes":bytes,"seconds":started.elapsed().as_secs_f64(),"mib_per_second":bytes as f64/1048576./started.elapsed().as_secs_f64(),"concurrent_requests":requests,"api_latency_under_load_ms":latencies,"exact_audio":true,"tailcat_path_after_load":manager.status().tailcat_path}));
+            let middle = audio.len() / 2;
+            for (range, expected) in [(format!("bytes={}-{}", middle, middle+511), &audio[middle..middle+512]), ("bytes=-1024".to_owned(), &audio[audio.len()-1024..])] {
+                let response = manager.request(hyper::Request::builder().uri(&path).header("range", range).body(Body::empty())?).await?;
+                if response.status() != 206 || response.into_body().collect().await?.to_bytes().as_ref() != expected { return Err("Middle or suffix seek bytes differ".into()); }
+            }
+            metric(serde_json::json!({"stage":"seek", "round":round, "middle_bytes":512, "suffix_bytes":1024, "exact_audio":true}));
             if mode == "roam" {
                 let started = Instant::now();
                 // Keep an actual response on Tailcat while maintenance authenticates TCP.

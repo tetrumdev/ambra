@@ -1,0 +1,163 @@
+{
+  "physical_cross_network": true,
+  "client_network": "school Wi-Fi, macOS en0",
+  "server_network": "home Wi-Fi, Kubuntu wlo1",
+  "warp": "disconnected throughout",
+  "tailscale": "Administrative SSH and separate management-only enrollment sessions; enrollment excluded from measurements. All measured application/API/audio traffic uses native TCP or Tailcat DERP; no exit node or overlay hints in benchmark selection.",
+  "results": [
+    {
+      "report": "native.json",
+      "method": "native TCP",
+      "connections": 2,
+      "connection_ms": [
+        3540.025,
+        6512.430083
+      ],
+      "throughput_mib_s": [
+        4.859286270817763,
+        5.312381394283123
+      ],
+      "api_under_load_ms_median": 100.93220799999999,
+      "api_under_load_ms_max": 424.315125,
+      "api_under_load_samples": 97,
+      "exact_audio": true,
+      "downloaded_bytes": 164839470
+    },
+    {
+      "report": "native-idle-host.json",
+      "method": "native TCP",
+      "connections": 1,
+      "connection_ms": [
+        3753.5012500000003
+      ],
+      "throughput_mib_s": [
+        4.662886283762386
+      ],
+      "api_under_load_ms_median": 152.217666,
+      "api_under_load_ms_max": 476.367916,
+      "api_under_load_samples": 47,
+      "exact_audio": true,
+      "downloaded_bytes": 76925086
+    },
+    {
+      "report": "tailcat-fresh-discovery.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        1526.992958
+      ],
+      "throughput_mib_s": [
+        1.473878648008635
+      ],
+      "api_under_load_ms_median": 519.956792,
+      "api_under_load_ms_max": 949.431542,
+      "api_under_load_samples": 5,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "tailcat-forced-derp.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        758.9399169999999
+      ],
+      "throughput_mib_s": [
+        1.0257210108418762
+      ],
+      "api_under_load_ms_median": 532.2306875,
+      "api_under_load_ms_max": 1249.0493330000002,
+      "api_under_load_samples": 6,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "tailcat-path-observation.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        719.6476250000001
+      ],
+      "throughput_mib_s": [
+        0.41462263278183653
+      ],
+      "api_under_load_ms_median": 1022.076521,
+      "api_under_load_ms_max": 9747.359916000001,
+      "api_under_load_samples": 4,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "restart-and-native-upgrade.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        2607.5737500000005
+      ],
+      "throughput_mib_s": [
+        1.0920147319202482
+      ],
+      "api_under_load_ms_median": 763.7245419999999,
+      "api_under_load_ms_max": 1179.6648750000002,
+      "api_under_load_samples": 5,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "in-flight-native-upgrade.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        650.481166
+      ],
+      "throughput_mib_s": [
+        0.9054413125482275
+      ],
+      "api_under_load_ms_median": 660.2725625,
+      "api_under_load_ms_max": 1717.4899169999999,
+      "api_under_load_samples": 6,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "final-source-smoke.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        1022.5623749999999
+      ],
+      "throughput_mib_s": [
+        2.4087008102920784
+      ],
+      "api_under_load_ms_median": 239.0515,
+      "api_under_load_ms_max": 486.736708,
+      "api_under_load_samples": 5,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    },
+    {
+      "report": "middle-and-suffix-seeks.json",
+      "method": "Tailcat DERP",
+      "connections": 1,
+      "connection_ms": [
+        1063.648167
+      ],
+      "throughput_mib_s": [
+        1.101365333687411
+      ],
+      "api_under_load_ms_median": 540.0388335,
+      "api_under_load_ms_max": 1114.4822080000001,
+      "api_under_load_samples": 6,
+      "exact_audio": true,
+      "downloaded_bytes": 5494649
+    }
+  ],
+  "unsupported_or_unmeasured": {
+    "Tailcat direct": "No UDP upgrade observed in 45 seconds; direct throughput not measured",
+    "HyperDHT": "Fresh school bootstrap fails (516 bytes sent, zero received); no authenticated connection or throughput available",
+    "Pwnat": "Fresh Mac capability reports raw ICMP unavailable; skipped",
+    "sustained_private_derp": "not measured; no reachable private cross-network relay provisioned",
+    "audible_playback": "not tested",
+    "physical_network_handoff": "not tested"
+  }
+}

@@ -1,0 +1,143 @@
+{
+  "ndk": "27.2.12479018 (r27c)",
+  "api_level": 24,
+  "cargo_ndk": "4.1.2",
+  "physical_device_tested": false,
+  "abis": {
+    "arm64-v8a": {
+      "libambra_mobile.so": {
+        "bytes": 22553432,
+        "machine": "AArch64",
+        "needed": [
+          "libambra_tailcat.so",
+          "libdl.so",
+          "libm.so",
+          "libc.so"
+        ],
+        "soname": [],
+        "load_alignment_bytes": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "tailcat_abi_exported": false,
+        "tailcat_client_dial_exported": false,
+        "tailcat_abi_imported": true,
+        "tailcat_client_dial_imported": true
+      },
+      "libambra_tailcat.so": {
+        "bytes": 23163192,
+        "machine": "AArch64",
+        "needed": [
+          "liblog.so",
+          "libdl.so",
+          "libc.so"
+        ],
+        "soname": [
+          "libambra_tailcat.so"
+        ],
+        "load_alignment_bytes": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "tailcat_abi_exported": true,
+        "tailcat_client_dial_exported": true,
+        "tailcat_abi_imported": false,
+        "tailcat_client_dial_imported": false
+      }
+    },
+    "armeabi-v7a": {
+      "libambra_mobile.so": {
+        "bytes": 16552960,
+        "machine": "ARM",
+        "needed": [
+          "libambra_tailcat.so",
+          "libdl.so",
+          "libm.so",
+          "libc.so"
+        ],
+        "soname": [],
+        "load_alignment_bytes": [
+          4096,
+          4096,
+          4096,
+          4096
+        ],
+        "tailcat_abi_exported": false,
+        "tailcat_client_dial_exported": false,
+        "tailcat_abi_imported": true,
+        "tailcat_client_dial_imported": true
+      },
+      "libambra_tailcat.so": {
+        "bytes": 22138228,
+        "machine": "ARM",
+        "needed": [
+          "liblog.so",
+          "libdl.so",
+          "libc.so"
+        ],
+        "soname": [
+          "libambra_tailcat.so"
+        ],
+        "load_alignment_bytes": [
+          4096,
+          4096,
+          4096,
+          4096
+        ],
+        "tailcat_abi_exported": true,
+        "tailcat_client_dial_exported": true,
+        "tailcat_abi_imported": false,
+        "tailcat_client_dial_imported": false
+      }
+    },
+    "x86_64": {
+      "libambra_mobile.so": {
+        "bytes": 22130392,
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "libambra_tailcat.so",
+          "libdl.so",
+          "libm.so",
+          "libc.so"
+        ],
+        "soname": [],
+        "load_alignment_bytes": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "tailcat_abi_exported": false,
+        "tailcat_client_dial_exported": false,
+        "tailcat_abi_imported": true,
+        "tailcat_client_dial_imported": true
+      },
+      "libambra_tailcat.so": {
+        "bytes": 24729976,
+        "machine": "Advanced Micro Devices X86-64",
+        "needed": [
+          "liblog.so",
+          "libdl.so",
+          "libc.so"
+        ],
+        "soname": [
+          "libambra_tailcat.so"
+        ],
+        "load_alignment_bytes": [
+          16384,
+          16384,
+          16384,
+          16384
+        ],
+        "tailcat_abi_exported": true,
+        "tailcat_client_dial_exported": true,
+        "tailcat_abi_imported": false,
+        "tailcat_client_dial_imported": false
+      }
+    }
+  }
+}

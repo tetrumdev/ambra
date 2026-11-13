@@ -1,0 +1,88 @@
+{
+  "mode": "roam",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 40.39954466699419,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 2607.5737500000005,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      },
+      "tailcat_rtt_ms": 78.603208
+    },
+    {
+      "latency_ms": 46.181958,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        106.408625,
+        694.684584,
+        763.7245419999999,
+        1043.326916,
+        1179.6648750000002
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 7,
+      "exact_audio": true,
+      "mib_per_second": 1.0920147319202482,
+      "round": 0,
+      "seconds": 4.798565584,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "elapsed_ms": 24302.059083,
+      "method": "TcpPunch",
+      "stage": "upgrade"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": true,
+    "client_native_interface_logged": true,
+    "home_tcp443_socket_samples": 2,
+    "sample_count": 9,
+    "tcp_rtt_ms_samples": [
+      112.183,
+      17.887
+    ]
+  },
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch",
+    "Public",
+    "Lan"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": false,
+    "requests_only": false
+  }
+}

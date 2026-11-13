@@ -1,0 +1,76 @@
+{
+  "mode": "tailcat",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 12.731208665994927,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 1526.992958,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "latency_ms": 73.406583,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        100.12899999999999,
+        949.431542,
+        727.074084,
+        519.956792,
+        252.05133400000003
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 7,
+      "exact_audio": true,
+      "mib_per_second": 1.473878648008635,
+      "round": 0,
+      "seconds": 3.555315875,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": false,
+    "client_native_interface_logged": false,
+    "home_tcp443_socket_samples": 0,
+    "sample_count": 3
+  },
+  "tailcat_started": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch"
+  ],
+  "pwnat_skipped": true,
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": false,
+    "requests_only": false
+  }
+}

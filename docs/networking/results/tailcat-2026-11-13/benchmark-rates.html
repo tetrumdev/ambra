@@ -1,0 +1,27 @@
+<section id="ambra-benchmark-rates" aria-label="Physical school-to-home download measurements">
+  <style>
+    #ambra-benchmark-rates { font-family: var(--font-sans); color: var(--foreground); }
+    #ambra-benchmark-rates .measurement { margin-top: calc(var(--font-size-base, 14px) * 1.2); }
+    #ambra-benchmark-rates .labels { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5em; }
+    #ambra-benchmark-rates .range { position: relative; height: 32px; margin-top: .5em; }
+    #ambra-benchmark-rates .track { position: absolute; inset: 15px 0 auto; border-top: 1px solid var(--border); }
+    #ambra-benchmark-rates .band { position: absolute; top: 11px; height: 8px; background: var(--series); }
+    #ambra-benchmark-rates .end { position: absolute; top: 9px; width: 12px; height: 12px; margin-left: -6px; border: 2px solid var(--series); border-radius: 50%; box-sizing: border-box; background: var(--background); }
+    #ambra-benchmark-rates .derp .end { border-radius: 0; transform: rotate(45deg); }
+    #ambra-benchmark-rates .ticks { display: flex; justify-content: space-between; }
+    #ambra-benchmark-rates .axis { text-align: center; margin-top: .5em; }
+    #ambra-benchmark-rates .note { margin-top: 1em; color: var(--muted-foreground); }
+  </style>
+  <h3>Measured download rate</h3>
+  <div class="measurement" style="--series:var(--chart-1)" role="img" aria-label="Native TCP: three physical runs, observed range 4.663 to 5.312 MiB per second.">
+    <div class="labels"><span>Native TCP · 3 runs</span><span class="tabular-nums">4.663–5.312 MiB/s</span></div>
+    <div class="range" aria-hidden="true"><span class="track"></span><span class="band" style="left:77.7148%;width:10.8249%"></span><span class="end" style="left:77.7148%"></span><span class="end" style="left:88.5397%"></span></div>
+  </div>
+  <div class="measurement derp" style="--series:var(--chart-2)" role="img" aria-label="Tailcat DERP: seven bounded physical transfers, observed range 0.415 to 2.409 MiB per second.">
+    <div class="labels"><span>Tailcat DERP · 7 transfers</span><span class="tabular-nums">0.415–2.409 MiB/s</span></div>
+    <div class="range" aria-hidden="true"><span class="track"></span><span class="band" style="left:6.9104%;width:33.2346%"></span><span class="end" style="left:6.9104%"></span><span class="end" style="left:40.1450%"></span></div>
+  </div>
+  <div class="ticks text-small tabular-nums" aria-hidden="true"><span>0</span><span>2</span><span>4</span><span>6</span></div>
+  <div class="axis text-small">Download throughput (MiB/s)</div>
+  <p class="note text-small">Exact FLAC bytes verified. Native runs repeat transfers for 15 seconds; shared-DERP runs are bounded functional transfers. Observed ranges do not establish sustained relay capacity.</p>
+</section>

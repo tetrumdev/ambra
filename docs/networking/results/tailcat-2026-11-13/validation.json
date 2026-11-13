@@ -1,0 +1,56 @@
+{
+  "source_commit": "c74115f",
+  "rust_macos_network": {
+    "passed": 81,
+    "ignored": 1,
+    "composition": "59 library, 4 bridge, 18 native integration"
+  },
+  "rust_linux_network": {
+    "passed": 59,
+    "ignored": 0
+  },
+  "macos_server": {
+    "passed": 241,
+    "ignored": 1
+  },
+  "macos_desktop": {
+    "passed": 69,
+    "ignored": 1
+  },
+  "mobile_host": {
+    "passed": 6
+  },
+  "go": {
+    "module_verification": "passed",
+    "packages": [
+      "github.com/tailscale/tailcat",
+      "github.com/tailscale/tailcat/internal/capi",
+      "github.com/tailscale/tailcat/cmd/libtailcat"
+    ],
+    "tests": "passed"
+  },
+  "macos_builds": {
+    "desktop": "passed, ARM64",
+    "server": "passed, ARM64",
+    "frontend": "passed"
+  },
+  "linux_server_build": "passed, x86-64; real physical server tested",
+  "linux_server_full_suite": {
+    "passed": 238,
+    "failed": 1,
+    "ignored": 2,
+    "failure": "write_behind::tests::write_behind_benchmark; reproduced from unchanged baseline source without Ambra networking or Go",
+    "initial_fixture_permission_failures": "resolved by process umask 077; no checks weakened"
+  },
+  "windows_gnu_network_probe": "final-source executable cross-build passed; runtime and MSVC app/server unverified",
+  "android_native": {
+    "arm64-v8a": "release build and packaging passed",
+    "armeabi-v7a": "release build and packaging passed",
+    "x86_64": "release build and packaging passed",
+    "device_runtime": "unverified"
+  },
+  "ios_native": "blocked: full Xcode/SDK unavailable",
+  "formatting_and_whitespace": "passed",
+  "public_derp_testing": "bounded functional transfers; no sustained saturation benchmark",
+  "audible_playback": "unverified"
+}

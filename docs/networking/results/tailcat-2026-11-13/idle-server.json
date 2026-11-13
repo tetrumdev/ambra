@@ -1,0 +1,16 @@
+{
+  "tailcat_enabled": {
+    "window_seconds": 5.00029974989593,
+    "cpu_percent_one_core": 0.0,
+    "rss_kib": 74268,
+    "open_fds": 26
+  },
+  "tailcat_disabled": {
+    "window_seconds": 5.000454362947494,
+    "cpu_percent_one_core": 0.19998182713351567,
+    "rss_kib": 73392,
+    "open_fds": 20
+  },
+  "scope": "whole isolated server; native listeners remain enabled; no active application transfers",
+  "physical_server": true
+}

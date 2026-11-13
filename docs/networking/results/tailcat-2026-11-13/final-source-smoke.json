@@ -1,0 +1,72 @@
+{
+  "mode": "tailcat",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 15.324417958006961,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 1022.5623749999999,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "endpoint": "[endpoint removed]",
+        "kind": "direct"
+      },
+      "tailcat_rtt_ms": 139.32025000000002
+    },
+    {
+      "latency_ms": 56.568915999999994,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        43.0725,
+        342.440708,
+        486.736708,
+        239.0515,
+        55.295583
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 7,
+      "exact_audio": true,
+      "mib_per_second": 2.4087008102920784,
+      "round": 0,
+      "seconds": 2.17548975,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "endpoint": "[endpoint removed]",
+        "kind": "direct"
+      }
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": false,
+    "client_native_interface_logged": false,
+    "home_tcp443_socket_samples": 0,
+    "sample_count": 3,
+    "tcp_rtt_ms_samples": []
+  },
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "source_commit": "c74115f",
+  "eligible_native_attempts_finished_before_tailcat": true,
+  "pwnat_eligibility": "unavailable on Mac; skipped"
+}

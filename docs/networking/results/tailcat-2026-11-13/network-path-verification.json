@@ -1,0 +1,15 @@
+{
+  "physical_cross_network": true,
+  "client": {
+    "default_public_interface": "en0",
+    "warp_disconnected": true,
+    "exit_node_selected": false
+  },
+  "server": {
+    "default_public_interface": "wlo1",
+    "exit_node_selected": false
+  },
+  "management_ssh_reachable": true,
+  "application_transport_verification": "Native TCP uses public peer sockets and native interface binding; Tailcat reports DERP region 1; client process has no LAN/Tailscale hints during benchmark.",
+  "enrollment_transport": "Separate management-overlay Noise/TCP sessions for isolated credential setup; excluded from benchmark measurements"
+}

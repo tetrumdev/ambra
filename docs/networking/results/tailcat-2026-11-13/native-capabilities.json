@@ -1,0 +1,183 @@
+{
+  "physical_network": "school Wi-Fi, macOS en0; WARP disconnected",
+  "test_level": "production bootstrap/capability diagnostics; not an authenticated HyperDHT transfer",
+  "records": [
+    {
+      "data": {
+        "addresses_redacted": true,
+        "interfaces": [
+          {
+            "address": null,
+            "family": 4,
+            "kind": "loopback",
+            "name": "lo0"
+          },
+          {
+            "address": null,
+            "family": 6,
+            "kind": "loopback",
+            "name": "lo0"
+          },
+          {
+            "address": null,
+            "family": 4,
+            "kind": "native",
+            "name": "en0"
+          },
+          {
+            "address": null,
+            "family": 4,
+            "kind": "overlay_or_tunnel",
+            "name": "utun9"
+          },
+          {
+            "address": null,
+            "family": 6,
+            "kind": "overlay_or_tunnel",
+            "name": "utun9"
+          }
+        ]
+      },
+      "elapsed_ms": 1.8851250000000002,
+      "schema": 1,
+      "stage": "interfaces",
+      "unix_ms": 1794600183905
+    },
+    {
+      "data": {
+        "available": false,
+        "reason": "Raw ICMP unavailable; launch through the installed one-shot icmp-launch helper using sudo (see docs/networking/pwnat.md): Operation not permitted (os error 1)"
+      },
+      "elapsed_ms": 2.715334,
+      "schema": 1,
+      "stage": "pwnat_capability",
+      "unix_ms": 1794600183906
+    },
+    {
+      "data": {
+        "mapping": null,
+        "mapping_redacted": true,
+        "received": 3,
+        "rtt_ms": [
+          29.979125,
+          18.399874999999998,
+          18.195290999999997
+        ],
+        "sent": 3,
+        "successive_rtt_jitter_ms": 5.891917000000001,
+        "target": "stun.l.google.com:19302"
+      },
+      "elapsed_ms": 69.711417,
+      "schema": 1,
+      "stage": "stun",
+      "unix_ms": 1794600183973
+    },
+    {
+      "data": {
+        "mapping": null,
+        "mapping_redacted": true,
+        "received": 3,
+        "rtt_ms": [
+          32.407959,
+          19.080833,
+          19.33625
+        ],
+        "sent": 3,
+        "successive_rtt_jitter_ms": 6.791271500000001,
+        "target": "stun1.l.google.com:19302"
+      },
+      "elapsed_ms": 140.788292,
+      "schema": 1,
+      "stage": "stun",
+      "unix_ms": 1794600184044
+    },
+    {
+      "data": {
+        "mapping": null,
+        "mapping_redacted": true,
+        "received": 3,
+        "rtt_ms": [
+          119.732125,
+          106.41416600000001,
+          105.2855
+        ],
+        "sent": 3,
+        "successive_rtt_jitter_ms": 7.223312499999999,
+        "target": "stun.nextcloud.com:443"
+      },
+      "elapsed_ms": 472.557292,
+      "schema": 1,
+      "stage": "stun",
+      "unix_ms": 1794600184376
+    },
+    {
+      "data": {
+        "destination_dependent_mapping_observed": true,
+        "limitation": "STUN success does not establish peer UDP or ICMP reachability; timeouts do not prove packet loss",
+        "samples": 9
+      },
+      "elapsed_ms": 472.624167,
+      "schema": 1,
+      "stage": "nat_observation",
+      "unix_ms": 1794600184376
+    },
+    {
+      "data": {
+        "ok": false,
+        "result": "Ok(Err(Dht(BootstrapFailed)))",
+        "wire_bytes": [
+          516,
+          0
+        ]
+      },
+      "elapsed_ms": 4007.4696249999997,
+      "schema": 1,
+      "stage": "dht_bootstrap",
+      "unix_ms": 1794600188385
+    },
+    {
+      "data": {
+        "ok": false,
+        "rtt_ms": null,
+        "target": "[endpoint removed]@node1.hyperdht.org:49737"
+      },
+      "elapsed_ms": 3002.845917,
+      "schema": 1,
+      "stage": "dht_ping",
+      "unix_ms": 1794600191388
+    },
+    {
+      "data": {
+        "ok": false,
+        "rtt_ms": null,
+        "target": "[endpoint removed]@node2.hyperdht.org:49737"
+      },
+      "elapsed_ms": 3003.1081670000003,
+      "schema": 1,
+      "stage": "dht_ping",
+      "unix_ms": 1794600194392
+    },
+    {
+      "data": {
+        "ok": false,
+        "rtt_ms": null,
+        "target": "[endpoint removed]@node3.hyperdht.org:49737"
+      },
+      "elapsed_ms": 3002.808125,
+      "schema": 1,
+      "stage": "dht_ping",
+      "unix_ms": 1794600197395
+    },
+    {
+      "data": {
+        "bootstrap_ok": false,
+        "diagnostic_completed": true
+      },
+      "elapsed_ms": 13492.293167,
+      "schema": 1,
+      "stage": "complete",
+      "unix_ms": 1794600197395
+    }
+  ],
+  "hyperdht_bootstrap_usable": false
+}

@@ -1,0 +1,96 @@
+{
+  "mode": "roam",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 59.99923720899824,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 650.481166,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      },
+      "tailcat_rtt_ms": 52.487958
+    },
+    {
+      "latency_ms": 93.09762500000001,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        89.816125,
+        1717.4899169999999,
+        888.039084,
+        718.877667,
+        601.667458,
+        511.262459
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 8,
+      "exact_audio": true,
+      "mib_per_second": 0.9054413125482275,
+      "round": 0,
+      "seconds": 5.787348167,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "elapsed_ms": 45638.538583,
+      "in_flight_audio_bytes": 5494649,
+      "in_flight_audio_preserved": true,
+      "method": "TcpPunch",
+      "paced_bytes_per_second": 131072,
+      "stage": "upgrade"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": true,
+    "client_native_interface_logged": true,
+    "home_tcp443_socket_samples": 7,
+    "sample_count": 14,
+    "tcp_rtt_ms_samples": [
+      15.374,
+      15.374,
+      15.374,
+      25.517,
+      25.517,
+      47.728
+    ]
+  },
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch",
+    "Lan",
+    "Public"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": false,
+    "requests_only": false
+  }
+}

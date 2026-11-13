@@ -1,0 +1,26 @@
+{
+  "physical_cross_network": true,
+  "server_intentionally_offline": true,
+  "records": [
+    {
+      "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: connection timed out after 0.0s; Tailcat: deadline has elapsed",
+      "round": 0,
+      "seconds": 25.715301583,
+      "stage": "failure"
+    },
+    {
+      "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: connection timed out after 0.0s; Tailcat: deadline has elapsed",
+      "round": 1,
+      "seconds": 25.731425084,
+      "stage": "failure"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 0,
+      "rounds": 2
+    }
+  ],
+  "expected_failure": true,
+  "bounded_attempts": true,
+  "client_process_finished": true
+}

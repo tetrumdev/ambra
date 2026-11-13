@@ -1,0 +1,107 @@
+{
+  "mode": "tailcat",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 66.26201529100217,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 719.6476250000001,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "seconds_after_authentication": 1,
+      "stage": "path",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "seconds_after_authentication": 16,
+      "stage": "path",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "seconds_after_authentication": 31,
+      "stage": "path",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "seconds_after_authentication": 45,
+      "stage": "path",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "latency_ms": 208.79845799999998,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        89.67462499999999,
+        9747.359916000001,
+        1322.861625,
+        721.291417
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 6,
+      "exact_audio": true,
+      "mib_per_second": 0.41462263278183653,
+      "round": 0,
+      "seconds": 12.638251958,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": false,
+    "client_native_interface_logged": false,
+    "home_tcp443_socket_samples": 0,
+    "sample_count": 15
+  },
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": false,
+    "requests_only": false
+  }
+}

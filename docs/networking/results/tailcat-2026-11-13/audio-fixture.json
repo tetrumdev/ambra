@@ -1,0 +1,16 @@
+{
+  "programs": [],
+  "stream_groups": [],
+  "streams": [
+    {
+      "codec_name": "flac",
+      "sample_rate": "44100",
+      "channels": 2,
+      "bits_per_raw_sample": "24"
+    }
+  ],
+  "excerpt_seconds": 10,
+  "excerpt_bytes": 5494649,
+  "fixture_removed_after_testing": true,
+  "source_music_file_unchanged": true
+}

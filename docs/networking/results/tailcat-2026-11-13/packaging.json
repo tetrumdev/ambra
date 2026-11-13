@@ -1,0 +1,20 @@
+{
+  "AMBRA": {
+    "source_commit": "c74115fc4bb671e3794a0145d403a5f60dcc839a",
+    "format": "Mach-O 64-bit executable arm64",
+    "tailcat_client_symbol_present": true,
+    "tailcat_server_symbol_present": false,
+    "external_tailcat_library_required": false,
+    "bytes": 138768160,
+    "profile": "debug, optimization 0, debug info disabled; build and packaging proof"
+  },
+  "ambra-server": {
+    "source_commit": "c74115fc4bb671e3794a0145d403a5f60dcc839a",
+    "format": "Mach-O 64-bit executable arm64",
+    "tailcat_client_symbol_present": false,
+    "tailcat_server_symbol_present": true,
+    "external_tailcat_library_required": false,
+    "bytes": 147020592,
+    "profile": "debug, optimization 0, debug info disabled; build and packaging proof"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "mode": "tailcat",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 14.127187499994761,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 758.9399169999999,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "latency_ms": 104.579833,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        32.446334,
+        572.2989160000001,
+        1249.0493330000002,
+        1032.467791,
+        492.162459,
+        461.24145799999997
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 8,
+      "exact_audio": true,
+      "mib_per_second": 1.0257210108418762,
+      "round": 0,
+      "seconds": 5.108703292,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "kind": "derp",
+        "region": 1
+      }
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": false,
+    "client_native_interface_logged": false,
+    "home_tcp443_socket_samples": 0,
+    "sample_count": 3
+  },
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": true,
+    "requests_only": false
+  }
+}

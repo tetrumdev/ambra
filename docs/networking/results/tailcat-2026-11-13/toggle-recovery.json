@@ -1,0 +1,37 @@
+{
+  "physical_cross_network": true,
+  "test": "Tailcat disabled then restored; same client manager retries",
+  "records": [
+    {
+      "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: connection timed out after 0.0s; Tailcat: deadline has elapsed",
+      "round": 0,
+      "seconds": 27.057700167,
+      "stage": "failure"
+    },
+    {
+      "connection_ms": 774.222042,
+      "method": "Tailcat",
+      "round": 1,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "kind": "derp",
+        "region": 1
+      },
+      "tailcat_rtt_ms": 92.23329199999999
+    },
+    {
+      "latency_ms": 90.304583,
+      "round": 1,
+      "stage": "api"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 2
+    }
+  ],
+  "tailcat_restored_after_first_failure": true,
+  "recovered": true,
+  "exit_code": 0,
+  "application_data": "authenticated session and API only"
+}

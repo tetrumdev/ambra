@@ -1,0 +1,6 @@
+{
+  "physical_cross_network": true,
+  "rotation_changed_wireguard_identity": true,
+  "identity_permissions": "0o600",
+  "server_restart_preserved_identity": true
+}

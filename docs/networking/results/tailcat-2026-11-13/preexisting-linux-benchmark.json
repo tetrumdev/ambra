@@ -1,0 +1,13 @@
+{
+  "source_reference": "cf5ea19:server/src/write_behind.rs",
+  "current_source_unchanged": true,
+  "standalone_dependencies": [
+    "serde",
+    "serde_json",
+    "tokio"
+  ],
+  "ambra_networking_linked": false,
+  "tailcat_or_go_linked": false,
+  "result": "same fixed-400-ms benchmark fails when background JSON write has not completed on Kubuntu",
+  "validation": "reproduced separately with original source and no networking dependency; no assertion or authorization checks weakened"
+}

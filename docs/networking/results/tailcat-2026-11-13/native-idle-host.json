@@ -1,0 +1,119 @@
+{
+  "mode": "native",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 29.206156749998627,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 3753.5012500000003,
+      "method": "TcpPunch",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": null,
+      "tailcat_rtt_ms": null
+    },
+    {
+      "latency_ms": 154.562375,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        18.255750000000003,
+        235.572041,
+        138.70316599999998,
+        111.890291,
+        15.945791000000002,
+        178.17416699999998,
+        161.723792,
+        19.779875,
+        11.524750000000001,
+        152.217666,
+        271.060166,
+        15.621416,
+        26.533917,
+        265.799917,
+        290.391166,
+        18.678208,
+        26.316417,
+        386.328459,
+        199.85775,
+        31.354708000000002,
+        270.364125,
+        292.70295899999996,
+        18.797083,
+        22.297083999999998,
+        336.68350000000004,
+        277.510583,
+        16.552167,
+        408.035875,
+        177.507375,
+        30.947458,
+        258.98587499999996,
+        204.46445899999998,
+        16.987708,
+        177.736375,
+        101.448542,
+        26.35175,
+        209.519791,
+        69.659125,
+        18.502000000000002,
+        150.202375,
+        476.367916,
+        44.724582999999996,
+        388.014625,
+        245.891625,
+        22.311709,
+        404.35333299999996,
+        162.060292
+      ],
+      "bytes": 76925086,
+      "concurrent_requests": 75,
+      "exact_audio": true,
+      "mib_per_second": 4.662886283762386,
+      "round": 0,
+      "seconds": 15.733061416,
+      "stage": "transfer",
+      "tailcat_path_after_load": null
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": true,
+    "client_native_interface_logged": true,
+    "home_tcp443_socket_samples": 5,
+    "sample_count": 6,
+    "tcp_rtt_ms_samples": [
+      9.673,
+      18.503,
+      15.675,
+      49.913,
+      32.932
+    ]
+  },
+  "tailcat_started": false,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": false,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests.",
+  "cached_address_rediscovery_logged": false,
+  "audio_payload": "10-second lossless excerpt from existing FLAC music; no audible playback test",
+  "controlled_configuration": {
+    "native_mode": "TCP punching 65 s; other native diagnostic budgets zero",
+    "tailcat_mode": "all native diagnostic budgets zero",
+    "roam_mode": "initial native budgets zero; production maintenance probes restored native budgets",
+    "forced_derp": false,
+    "requests_only": false
+  }
+}

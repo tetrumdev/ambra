@@ -1,0 +1,83 @@
+{
+  "mode": "tailcat",
+  "physical_cross_network": true,
+  "exit_code": 0,
+  "elapsed_seconds": 12.385746500003734,
+  "audio_bytes": 5494649,
+  "records": [
+    {
+      "connection_ms": 1063.648167,
+      "method": "Tailcat",
+      "round": 0,
+      "stage": "authenticated",
+      "tailcat_path": {
+        "endpoint": "[endpoint removed]",
+        "kind": "direct"
+      },
+      "tailcat_rtt_ms": 39.023916
+    },
+    {
+      "latency_ms": 59.087083,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "api_latency_under_load_ms": [
+        44.77925,
+        1114.4822080000001,
+        778.777667,
+        521.4332499999999,
+        558.644417,
+        475.750667
+      ],
+      "bytes": 5494649,
+      "concurrent_requests": 8,
+      "exact_audio": true,
+      "mib_per_second": 1.101365333687411,
+      "round": 0,
+      "seconds": 4.7578249580000005,
+      "stage": "transfer",
+      "tailcat_path_after_load": {
+        "endpoint": "[endpoint removed]",
+        "kind": "direct"
+      }
+    },
+    {
+      "exact_audio": true,
+      "middle_bytes": 512,
+      "round": 0,
+      "stage": "seek",
+      "suffix_bytes": 1024
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "native_path_evidence": {
+    "public_peer_in_authenticated_socket_log": false,
+    "client_native_interface_logged": false,
+    "home_tcp443_socket_samples": 0,
+    "sample_count": 3,
+    "tcp_rtt_ms_samples": []
+  },
+  "diagnostic_failures": [
+    {
+      "tool": "local sockets",
+      "exit_code": 1
+    }
+  ],
+  "tailcat_started": true,
+  "failed_native_methods": [
+    "Lan",
+    "Public",
+    "HyperDHT",
+    "TcpPunch"
+  ],
+  "pwnat_skipped": true,
+  "native_exhaustion_logged": true,
+  "hardware_playback": false,
+  "management_transport": "Tailscale SSH; application requests originate in Rust probe",
+  "qualification": "API latency includes server work; it is not a raw network RTT. Public DERP runs are bounded functional tests, not saturation tests."
+}
