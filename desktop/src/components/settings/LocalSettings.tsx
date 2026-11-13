@@ -1,5 +1,4 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
 import { SettingRow } from "./SettingsControls";
 
@@ -18,8 +17,7 @@ export function LocalSettings({ onRescanLocalMusic }: Props) {
     setMessage(null);
     try {
       if (!isTauri()) throw new Error("Local imports are available in the desktop app.");
-      const directory = await invoke<string>("local_music_directory");
-      await openPath(directory);
+      await invoke("open_local_music_directory");
       setMessage("Add audio files to the Ambra folder, then choose Scan now.");
     } catch (reason) {
       setError(String(reason));
