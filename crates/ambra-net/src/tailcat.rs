@@ -102,7 +102,31 @@ impl PeerPath {
 
 /// Exclusive creation and protected atomic replacement. Never follows existing symlinks.
 pub(crate) fn read_private(path: &Path) -> Result<Vec<u8>> {
-    let metadata = std::fs::symlink_metadata(path)?;
+    use std::io::Read;
+    if !std::fs::symlink_metadata(path)?.is_file() {
+        return Err("Secret storage must be a regular file".into());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(0x0020_0000);
+    }
+    let file = options.open(path)?;
+    let metadata = file.metadata()?;
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        if metadata.file_attributes() & 0x400 != 0 {
+            return Err("Secret storage cannot be a reparse point".into());
+        }
+    }
     if !metadata.is_file() || metadata.len() > 16 * 1024 {
         return Err("Secret storage must be a small regular file".into());
     }
@@ -113,7 +137,12 @@ pub(crate) fn read_private(path: &Path) -> Result<Vec<u8>> {
             return Err("Secret storage permissions must be 0600".into());
         }
     }
-    Ok(std::fs::read(path)?)
+    let mut bytes = Vec::new();
+    file.take(16 * 1024 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > 16 * 1024 {
+        return Err("Secret storage exceeds its size limit".into());
+    }
+    Ok(bytes)
 }
 pub(crate) fn write_private(path: &Path, bytes: &[u8], replace: bool) -> Result<()> {
     use std::io::Write;
@@ -467,6 +496,22 @@ pub(crate) mod tests {
         );
     }
     #[tokio::test]
+    async fn malformed_address_fails_before_network_and_never_echoes_secret() {
+        let identity = Identity::generate().unwrap();
+        let result = connect(
+            Address::try_from("tcINVALIDSECRET".to_owned()).unwrap(),
+            &identity,
+            Identity::generate().unwrap().public_key(),
+        )
+        .await;
+        let error = match result {
+            Err(error) => error,
+            Ok(_) => panic!("invalid address connected"),
+        };
+        assert!(error.is::<DialFailure>());
+        assert!(!error.to_string().contains("INVALIDSECRET"));
+    }
+    #[tokio::test]
     async fn identity_persists_and_corruption_never_rotates() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("identity");
@@ -489,7 +534,7 @@ pub(crate) mod tests {
     async fn private_derp_carries_noise_http2_exact_streams_ranges_and_denies_revocation() {
         use axum::{Router, body::Body, routing::get};
         use http_body_util::BodyExt;
-        let (_relay, url) = relay().await;
+        let (mut relay, url) = relay().await;
         let directory = tempfile::tempdir().unwrap();
         let server_identity = Identity::generate().unwrap();
         let server_key = server_identity.public_key();
@@ -627,13 +672,26 @@ pub(crate) mod tests {
         assert!(
             tokio::time::timeout(
                 Duration::from_secs(12),
-                connect(address, &client_identity, server_key)
+                connect(address.clone(), &client_identity, server_key)
             )
             .await
             .unwrap()
             .is_err()
         );
         connection.close();
+        // A new WireGuard identity cannot bootstrap when its private relay is gone.
+        // Cancel the real native dial, then prove listener shutdown still completes.
+        relay.0.kill().unwrap();
+        relay.0.wait().unwrap();
+        revoked.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(250),
+                connect(address, &client_identity, server_key)
+            )
+            .await
+            .is_err()
+        );
         cancel.cancel();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

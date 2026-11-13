@@ -335,7 +335,7 @@ impl Endpoint {
                 _ = &mut deadline => return Err(format!("Direct TCP punching failed: {last_error}").into()),
                 Some(joined) = tasks.join_next(), if !tasks.is_empty() => match joined {
                     Ok(Ok(value)) => return Ok(value),
-                    Ok(Err(error)) if error.is::<transport::PeerAuthenticationError>() => return Err(error),
+                    Ok(Err(error)) if transport::authentication_failed(&error) => return Err(error),
                     Ok(Err(error)) => { last_error = error.to_string(); tracing::debug!(%last_error, "TCP candidate authentication failed"); }
                     Err(_) => {}
                 },

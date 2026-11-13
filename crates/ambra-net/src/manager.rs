@@ -283,10 +283,14 @@ impl ConnectionManager {
         };
         let (io, pump) = match method {
             Method::Tailcat => {
-                state(ConnectionState::ConnectingTailcat, Some(method));
                 if self.token.read().await.is_none() {
                     return Err("Tailcat requires an already paired device".into());
                 }
+                // A timed-out discovery future may leave its shared bootstrap actor alive.
+                // Retire failed native engines before starting the final client transport.
+                self.dht.shutdown().await;
+                self.pwnat.shutdown();
+                state(ConnectionState::ConnectingTailcat, Some(method));
                 let cached = self
                     .tailcat_address
                     .lock()
@@ -346,7 +350,7 @@ impl ConnectionManager {
                         Some(result) = attempts.join_next(), if !attempts.is_empty() => {
                             match result {
                                 Ok(Ok(connected)) => break connected,
-                                Ok(Err(error)) if error.is::<crate::transport::PeerAuthenticationError>() => return Err(error),
+                                Ok(Err(error)) if crate::transport::authentication_failed(&error) => return Err(error),
                                 _ => {},
                             }
                         },
@@ -601,7 +605,7 @@ impl ConnectionManager {
                     tracing::info!(%address, "Public TCP endpoint answered");
                     return Ok((address, connected));
                 }
-                Ok((_, Err(error))) if error.is::<crate::transport::PeerAuthenticationError>() => {
+                Ok((_, Err(error))) if crate::transport::authentication_failed(&error) => {
                     return Err(error);
                 }
                 Ok((address, Err(error))) => errors.push(format!("{address}: {error}")),
@@ -990,7 +994,7 @@ impl ConnectionManager {
             }
             Ok(Err(error))
                 if error.is::<AuthorizationError>()
-                    || error.is::<crate::transport::PeerAuthenticationError>() =>
+                    || crate::transport::authentication_failed(&error) =>
             {
                 standby.close();
                 Err(error)
@@ -1100,7 +1104,7 @@ impl ConnectionManager {
 }
 
 fn authentication_failure(error: &crate::Error) -> bool {
-    error.is::<AuthorizationError>() || error.is::<crate::transport::PeerAuthenticationError>()
+    error.is::<AuthorizationError>() || crate::transport::authentication_failed(error)
 }
 
 /// How long a replaced connection may finish the requests it already carries (a song
@@ -1296,7 +1300,7 @@ fn attempt_error<T>(
     timeout: Duration,
 ) -> Result<String> {
     let error = match result {
-        Ok(Err(error)) if error.is::<crate::transport::PeerAuthenticationError>() => {
+        Ok(Err(error)) if crate::transport::authentication_failed(&error) => {
             return Err(error);
         }
         Ok(Err(error)) => error.to_string(),
@@ -1310,6 +1314,35 @@ fn attempt_error<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn cryptographic_rejection_is_terminal_but_io_loss_allows_fallback() {
+        use peeroxide_dht::{noise::NoiseError, secret_stream::SecretStreamError};
+        for cryptographic in [true, false] {
+            let mut visited = Vec::new();
+            let result: Result<(Method, ())> = raced(
+                &Timing::default(),
+                &CancellationToken::new(),
+                true,
+                |method| {
+                    visited.push(method);
+                    std::future::ready(if method == Method::Tailcat {
+                        Ok(())
+                    } else {
+                        Err(if cryptographic {
+                            SecretStreamError::Noise(NoiseError::DecryptionFailed)
+                        } else {
+                            SecretStreamError::Io(std::io::ErrorKind::UnexpectedEof.into())
+                        }
+                        .into())
+                    })
+                },
+            )
+            .await;
+            assert_eq!(result.is_err(), cryptographic);
+            assert_eq!(visited.contains(&Method::Tailcat), !cryptographic);
+        }
+    }
 
     #[tokio::test]
     async fn rejected_standby_authorization_does_not_restart_transport_selection() {
