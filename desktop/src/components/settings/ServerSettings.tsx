@@ -175,6 +175,7 @@ export function ServerSettings({ active }: { active: boolean }) {
   };
   const connectionType = !server ? "Local" : !connected ? "Offline"
     : network.method === "Lan" ? "Local network"
+    : network.method === "TcpPunch" ? "Direct TCP (Nostr)"
     : network.method === "Pwnat" ? "pwnat"
     : network.method === "HyperDHT" ? "HyperDHT"
     : network.method === "Public" ? "Internet (direct)" : "Unknown";

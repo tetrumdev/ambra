@@ -12,6 +12,11 @@ bytes = "1"
 futures-util = "0.3"
 getrandom = "0.3"
 hex = "0.4"
+hkdf = "0.12"
+sha2 = "0.10"
+url = "2"
+nostr-sdk = "0.45.6"
+nostr = { version = "0.45.7", features = ["nip44"] }
 http-body-util = "0.1"
 hyper = { version = "1", features = ["client", "server", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "service"] }
@@ -34,6 +39,7 @@ zeroize = "1"
 libc = "0.2"
 
 [dev-dependencies]
+nostr-sdk = { version = "0.45.6", features = ["local-relay"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream"] }

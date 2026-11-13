@@ -1,4 +1,4 @@
-use crate::{Identity, PublicKey, Result, hyperdht, lan, pwnat, transport::HttpConnection};
+use crate::{Identity, PublicKey, Result, hyperdht, lan, pwnat, tcp_punch, transport::HttpConnection};
 use axum::body::Body;
 use hyper::{Request, Response, body::Incoming};
 use serde::{Deserialize, Serialize};
@@ -18,11 +18,13 @@ pub enum ConnectionState {
     ConnectingPwnat,
     ConnectingHyperDHT,
     ConnectingPublic,
+    ConnectingTcpPunch,
     Authenticating,
     ConnectedLocal,
     ConnectedPwnat,
     ConnectedHyperDHT,
     ConnectedPublic,
+    ConnectedTcpPunch,
     Reconnecting,
     Failed,
 }
@@ -33,9 +35,11 @@ pub enum Method {
     HyperDHT,
     /// The server's router-forwarded TCP port, dialed directly over the Internet.
     Public,
+    /// Nostr-signaled simultaneous TCP open, without router forwarding.
+    TcpPunch,
 }
-/// The complete policy, in fallback order. Public and HyperDHT race each other.
-pub const METHODS: [Method; 4] = [Method::Lan, Method::Public, Method::HyperDHT, Method::Pwnat];
+/// LAN/public start together; HyperDHT/TCP punching race after the LAN grace.
+pub const METHODS: [Method; 5] = [Method::Lan, Method::Public, Method::HyperDHT, Method::TcpPunch, Method::Pwnat];
 impl Method {
     fn connected(self) -> ConnectionState {
         match self {
@@ -43,11 +47,12 @@ impl Method {
             Method::Pwnat => ConnectionState::ConnectedPwnat,
             Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
             Method::Public => ConnectionState::ConnectedPublic,
+            Method::TcpPunch => ConnectionState::ConnectedTcpPunch,
         }
     }
     /// Away from home: worth checking periodically whether the LAN is back.
     fn away(self) -> bool {
-        matches!(self, Method::HyperDHT | Method::Public | Method::Pwnat)
+        matches!(self, Method::HyperDHT | Method::Public | Method::Pwnat | Method::TcpPunch)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -69,6 +74,7 @@ pub struct Timing {
     pub hyperdht: Duration,
     /// A whole public TCP race: every candidate's connect plus the Noise handshake.
     pub public: Duration,
+    pub tcp_punch: Duration,
     pub retry: Duration,
     /// Prefer LAN for this long before starting public discovery.
     pub lan_grace: Duration,
@@ -81,6 +87,7 @@ impl Default for Timing {
             // Preserve the full signaling and restrictive-NAT retry window.
             hyperdht: Duration::from_secs(75),
             public: Duration::from_secs(8),
+            tcp_punch: Duration::from_secs(65),
             retry: Duration::from_secs(5),
             lan_grace: Duration::from_millis(250),
         }
@@ -266,6 +273,13 @@ impl ConnectionManager {
             Method::HyperDHT => {
                 state(ConnectionState::ConnectingHyperDHT, Some(method));
                 self.dht.connect(self.selected.public_key).await?
+            }
+            Method::TcpPunch => {
+                state(ConnectionState::ConnectingTcpPunch, Some(method));
+                if self.token.read().await.is_none() {
+                    return Err("TCP punching admits already paired devices only".into());
+                }
+                tcp_punch::connect(self.identity.clone(), self.selected.public_key, self.cancel.clone()).await?
             }
             Method::Public => {
                 state(ConnectionState::ConnectingPublic, Some(method));
@@ -864,8 +878,10 @@ where
             // HyperDHT hole punching covers routers without forwarding.
             let dht = tokio::time::timeout(timing.hyperdht, attempt(Method::HyperDHT));
             tokio::pin!(dht);
-            let mut dht_done = false;
-            while !lan_done || !public_done || !dht_done {
+            let punch = tokio::time::timeout(timing.tcp_punch, attempt(Method::TcpPunch));
+            tokio::pin!(punch);
+            let (mut dht_done, mut punch_done) = (false, false);
+            while !lan_done || !public_done || !dht_done || !punch_done {
                 tokio::select! {
                     biased;
                     result = &mut lan, if !lan_done => {
@@ -880,6 +896,13 @@ where
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Public, connection)),
                             result => errors.push(attempt_error(Method::Public, result, timing.public)),
+                        }
+                    }
+                    result = &mut punch, if !punch_done => {
+                        punch_done = true;
+                        match result {
+                            Ok(Ok(connection)) => return Ok((Method::TcpPunch, connection)),
+                            result => errors.push(attempt_error(Method::TcpPunch, result, timing.tcp_punch)),
                         }
                     }
                     result = &mut dht, if !dht_done => {
@@ -967,7 +990,7 @@ mod tests {
                             std::future::pending::<Result<()>>().await
                         }
                         Method::HyperDHT => Ok(()),
-                        Method::Public => std::future::pending::<Result<()>>().await,
+                        Method::Public | Method::TcpPunch => std::future::pending::<Result<()>>().await,
                         Method::Pwnat => panic!("pwnat must remain fallback"),
                     }
                 }
@@ -1004,7 +1027,7 @@ mod tests {
                 if available {
                     METHODS.to_vec()
                 } else {
-                    METHODS[..3].to_vec()
+                    METHODS[..4].to_vec()
                 }
             );
         }
@@ -1020,6 +1043,7 @@ mod tests {
                 match method {
                     Method::Lan => Err("LAN down".into()),
                     Method::Public => Err("no forwarded port".into()),
+                    Method::TcpPunch => Err("no signaling".into()),
                     Method::HyperDHT => {
                         // A slow handshake followed by a successful late punch must not
                         // be cancelled by the manager's shorter, outer timeout.
@@ -1062,11 +1086,26 @@ mod tests {
                 Method::Lan => Err("away".into()),
                 Method::Public => { tokio::time::sleep(Duration::from_millis(80)).await; Ok(()) }
                 Method::HyperDHT => { tokio::time::sleep(Duration::from_secs(3)).await; Ok(()) }
-                Method::Pwnat => panic!("not needed"),
+                Method::TcpPunch | Method::Pwnat => panic!("not needed"),
             }
         }).await.unwrap();
         assert_eq!(result.0, Method::Public);
         assert!(started.elapsed() < Duration::from_millis(200));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tcp_punch_races_dht_without_waiting_for_its_discovery_timeout() {
+        let started = tokio::time::Instant::now();
+        let result = raced(&Timing::default(), &CancellationToken::new(), false, |method| async move {
+            match method {
+                Method::Lan | Method::Public => Err("away".into()),
+                Method::HyperDHT => std::future::pending::<Result<()>>().await,
+                Method::TcpPunch => { tokio::time::sleep(Duration::from_millis(400)).await; Ok(()) }
+                Method::Pwnat => panic!("not needed"),
+            }
+        }).await.unwrap();
+        assert_eq!(result.0, Method::TcpPunch);
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[tokio::test]

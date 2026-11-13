@@ -49,6 +49,7 @@ pub struct Network {
     pub secure_listening: RwLock<Option<SocketAddr>>,
     pub dht_status: ambra_net::hyperdht::SharedStatus,
     pub pwnat_status: ambra_net::pwnat::SharedStatus,
+    pub tcp_punch_status: ambra_net::tcp_punch::SharedStatus,
     /// Router-forwarded public TCP endpoints of the secure listener.
     pub port_mapping: RwLock<ambra_net::portmap::Status>,
     pub lan_error: RwLock<Option<String>>,
@@ -80,6 +81,7 @@ impl Network {
             secure_listening: RwLock::new(None),
             dht_status: Arc::new(RwLock::new(Default::default())),
             pwnat_status: Arc::new(RwLock::new(Default::default())),
+            tcp_punch_status: Arc::new(RwLock::new(Default::default())),
             port_mapping: RwLock::new(Default::default()),
             lan_error: RwLock::new(None),
             discovery_error: RwLock::new(None),
@@ -509,6 +511,7 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
         "listening": *network.listening.read().unwrap_or_else(|p| p.into_inner()),
         "secureListening": *network.secure_listening.read().unwrap_or_else(|p| p.into_inner()),
         "hyperdht": dht, "portMapping": *network.port_mapping.read().unwrap_or_else(|p| p.into_inner()), "pwnat": ambra_net::pwnat::capability(),
+        "tcpPunch": *network.tcp_punch_status.read().unwrap_or_else(|p| p.into_inner()),
         "pwnatStatus": pwnat,
         "pwnatError": pwnat.error,
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),

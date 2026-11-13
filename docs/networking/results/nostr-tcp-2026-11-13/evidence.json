@@ -1,0 +1,450 @@
+{
+  "schema": 1,
+  "date": "2026-11-13",
+  "baseline_commit": "d94258887c840b2a1941332a28293e080528c91f",
+  "implementation": "feat/nostr-tcp-p2p implementation; see accompanying report",
+  "environment": {
+    "client": "macOS school Wi-Fi",
+    "server": "Kubuntu home Wi-Fi",
+    "interfaces": [
+      "en0",
+      "wlo1"
+    ],
+    "server_uid": 1000,
+    "warp": "Disconnected throughout",
+    "tailscale": "Running for administrative SSH and initial owner-approved enrollment only",
+    "router_mapping_in_test_server": false,
+    "public_endpoints_in_client_record": [],
+    "enrollment": "Existing approval flow over pinned encrypted management route; token and test keys excluded",
+    "packet_capture": "No new captures; matching socket tuples, source/interface binding, peer Noise proofs, routes, byte-exact responses and TCP counters collected"
+  },
+  "relays": [
+    {
+      "url": "wss://relay.primal.net",
+      "encrypted_roundtrips_ms": [
+        484.235291,
+        365.273083,
+        606.398542
+      ],
+      "received_on_home": 3,
+      "school_ready_ms": 580.8859170000001,
+      "home_ready_ms": 1116.38468,
+      "qualified": true,
+      "failure": null
+    },
+    {
+      "url": "wss://nos.lol",
+      "encrypted_roundtrips_ms": [],
+      "received_on_home": 0,
+      "school_ready_ms": null,
+      "home_ready_ms": null,
+      "qualified": false,
+      "failure": "No publication acknowledgment; not qualified"
+    },
+    {
+      "url": "wss://relay.damus.io",
+      "encrypted_roundtrips_ms": [],
+      "received_on_home": 0,
+      "school_ready_ms": null,
+      "home_ready_ms": null,
+      "qualified": false,
+      "failure": "No publication acknowledgment; not qualified"
+    },
+    {
+      "url": "wss://relay.nostr.band",
+      "encrypted_roundtrips_ms": [],
+      "received_on_home": 0,
+      "school_ready_ms": null,
+      "home_ready_ms": null,
+      "qualified": false,
+      "failure": "No publication acknowledgment; not qualified"
+    },
+    {
+      "url": "wss://nostr.mom",
+      "encrypted_roundtrips_ms": [],
+      "received_on_home": 0,
+      "school_ready_ms": null,
+      "home_ready_ms": null,
+      "qualified": false,
+      "failure": "No publication acknowledgment; not qualified"
+    },
+    {
+      "url": "wss://relay.nostr.bg",
+      "encrypted_roundtrips_ms": [],
+      "received_on_home": 0,
+      "school_ready_ms": null,
+      "home_ready_ms": null,
+      "qualified": false,
+      "failure": "No publication acknowledgment; not qualified"
+    },
+    {
+      "url": "wss://relay.nostr.net",
+      "encrypted_roundtrips_ms": [
+        611.403917,
+        602.172916,
+        634.584584
+      ],
+      "received_on_home": 3,
+      "school_ready_ms": 955.0232910000001,
+      "home_ready_ms": 942.128727,
+      "qualified": true,
+      "failure": null
+    },
+    {
+      "url": "wss://nostr.oxtr.dev",
+      "encrypted_roundtrips_ms": [
+        618.7301659999999,
+        413.094,
+        403.070041
+      ],
+      "received_on_home": 3,
+      "school_ready_ms": 779.3495839999999,
+      "home_ready_ms": 1378.156002,
+      "qualified": true,
+      "failure": null
+    }
+  ],
+  "tcp443_initial": [
+    {
+      "connection_ms": 9567.90375,
+      "method": "TcpPunch",
+      "round": 0,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 21.203709,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "bytes": 58720256,
+      "concurrent_requests": 21,
+      "exact_audio": true,
+      "mib_per_second": 3.465913579348057,
+      "round": 0,
+      "seconds": 16.157355083,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 9444.886459,
+      "method": "TcpPunch",
+      "round": 1,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 87.193792,
+      "round": 1,
+      "stage": "api"
+    },
+    {
+      "bytes": 58720256,
+      "concurrent_requests": 21,
+      "exact_audio": true,
+      "mib_per_second": 3.4199597257688996,
+      "round": 1,
+      "seconds": 16.37446075,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 8589.413917,
+      "method": "TcpPunch",
+      "round": 2,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 46.807834,
+      "round": 2,
+      "stage": "api"
+    },
+    {
+      "bytes": 58720256,
+      "concurrent_requests": 21,
+      "exact_audio": true,
+      "mib_per_second": 3.3663546930016395,
+      "round": 2,
+      "seconds": 16.635203792,
+      "stage": "transfer"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 3,
+      "rounds": 3
+    }
+  ],
+  "tcp443_final": [
+    {
+      "connection_ms": 3509.2461249999997,
+      "method": "TcpPunch",
+      "round": 0,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 33.176416,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "bytes": 50331648,
+      "concurrent_requests": 18,
+      "exact_audio": true,
+      "mib_per_second": 3.1725326616574963,
+      "round": 0,
+      "seconds": 15.129866,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 3747.3561250000002,
+      "method": "TcpPunch",
+      "round": 1,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 33.39225,
+      "round": 1,
+      "stage": "api"
+    },
+    {
+      "bytes": 58720256,
+      "concurrent_requests": 21,
+      "exact_audio": true,
+      "mib_per_second": 3.3592210554236157,
+      "round": 1,
+      "seconds": 16.670530042,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 3653.091834,
+      "method": "TcpPunch",
+      "round": 2,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 22.671875,
+      "round": 2,
+      "stage": "api"
+    },
+    {
+      "bytes": 58720256,
+      "concurrent_requests": 21,
+      "exact_audio": true,
+      "mib_per_second": 3.134574986627384,
+      "round": 2,
+      "seconds": 17.865259584,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 4057.4806670000003,
+      "method": "TcpPunch",
+      "round": 3,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 19.900375,
+      "round": 3,
+      "stage": "api"
+    },
+    {
+      "bytes": 33554432,
+      "concurrent_requests": 12,
+      "exact_audio": true,
+      "mib_per_second": 1.712535617563289,
+      "round": 3,
+      "seconds": 18.685741375,
+      "stage": "transfer"
+    },
+    {
+      "connection_ms": 4305.108792,
+      "method": "TcpPunch",
+      "round": 4,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 20.026208,
+      "round": 4,
+      "stage": "api"
+    },
+    {
+      "bytes": 41943040,
+      "concurrent_requests": 15,
+      "exact_audio": true,
+      "mib_per_second": 2.657865182968995,
+      "round": 4,
+      "seconds": 15.049671042,
+      "stage": "transfer"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 5,
+      "rounds": 5
+    }
+  ],
+  "noise_handshake_ms_final": [
+    116.219125,
+    192.015959,
+    390.54841600000003,
+    402.983292,
+    309.577208
+  ],
+  "ephemeral_home_ports": {
+    "ports": [
+      42253,
+      35955,
+      42445
+    ],
+    "result": [
+      {
+        "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: Direct TCP punching failed: No peer socket answered",
+        "round": 0,
+        "seconds": 27.159677333,
+        "stage": "failure"
+      },
+      {
+        "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: Direct TCP punching failed: No peer socket answered",
+        "round": 1,
+        "seconds": 24.331899583,
+        "stage": "failure"
+      },
+      {
+        "hardware_playback": false,
+        "passed": 0,
+        "rounds": 2
+      }
+    ],
+    "additional_attempt": "The earlier probe started one extra connection during failure cleanup; cancelled, not a completed trial. Final probe no longer does this."
+  },
+  "unauthorized_client": [
+    {
+      "error": "Lan: connection timed out after 0.0s; Public: No public endpoint known yet; connect once at home to learn it; HyperDHT: connection timed out after 0.0s; TcpPunch: Nostr candidate exchange timed out; no authenticated answer",
+      "round": 0,
+      "seconds": 19.068504334,
+      "stage": "failure"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 0,
+      "rounds": 1
+    }
+  ],
+  "unknown_server": [
+    {
+      "error": "Public: No public endpoint known yet; connect once at home to learn it; Lan: connection timed out after 0.0s; HyperDHT: connection timed out after 0.0s; TcpPunch: No verified Nostr binding for paired server; server must be online with TCP punching enabled",
+      "round": 0,
+      "seconds": 0.642347333,
+      "stage": "failure"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 0,
+      "rounds": 1
+    }
+  ],
+  "physical_socket_sample": {
+    "client_local_port": 60026,
+    "server_local_port": 443,
+    "client_interface": "en0",
+    "server_bound_interface": "wlo1",
+    "server_process": "ambra-server",
+    "server_uid": 1000,
+    "server_bytes_sent_at_sample": 2167562,
+    "server_bytes_acked_at_sample": 2123290,
+    "server_bytes_received_at_sample": 1063,
+    "public_addresses": "redacted; matching tuples observed on both endpoints"
+  },
+  "summary": {
+    "tcp443_successes": 9,
+    "tcp443_attempts": 9,
+    "tcp443_audio_bytes": 469762048,
+    "final_connection_ms_median": 3747.3561250000002,
+    "throughput_mib_s_min": 1.712535617563289,
+    "throughput_mib_s_max": 3.465913579348057,
+    "general_nat_success_rate": null,
+    "hardware_playback": false,
+    "physical_network_roaming": false,
+    "production_readiness": false
+  },
+  "audit": {
+    "vulnerabilities": 0,
+    "preexisting_warnings": [
+      {
+        "kind": "unmaintained",
+        "package": "xsalsa20poly1305",
+        "version": "0.9.1",
+        "advisory": "RUSTSEC-2023-0037"
+      },
+      {
+        "kind": "unsound",
+        "package": "rustix",
+        "version": "1.1.5",
+        "advisory": "RUSTSEC-2026-0486"
+      }
+    ]
+  },
+  "tcp443_instrumented": [
+    {
+      "connection_ms": 3543.700292,
+      "method": "TcpPunch",
+      "round": 0,
+      "stage": "authenticated"
+    },
+    {
+      "latency_ms": 37.010542,
+      "round": 0,
+      "stage": "api"
+    },
+    {
+      "bytes": 50331648,
+      "concurrent_requests": 18,
+      "exact_audio": true,
+      "mib_per_second": 2.7744975192251813,
+      "round": 0,
+      "seconds": 17.300429208,
+      "stage": "transfer"
+    },
+    {
+      "hardware_playback": false,
+      "passed": 1,
+      "rounds": 1
+    }
+  ],
+  "candidate_exchange_instrumented": {
+    "offer_publish_to_receive_observed_ms": 242.49505996704102,
+    "answer_publish_to_receive_observed_ms": 194.05102729797363,
+    "server_minus_client_clock_estimate_ms": -27.037620544433594,
+    "clock_uncertainty_bound_ms": 20.23303508758545,
+    "clock_probe": "Eight timestamp samples over one established administrative SSH channel; no candidates exchanged",
+    "offer_estimate_corrected_ms": 269.5326805114746,
+    "answer_estimate_corrected_ms": 167.01340675354004,
+    "offer_to_answer_same_client_clock_ms": 952.3301124572754,
+    "qualification": "Cross-host one-way estimates include local queueing/verification; clock probe preceded transfer. Round-trip value uses one clock."
+  },
+  "noise_handshake_ms_instrumented": [
+    81.159042
+  ],
+  "automated_checks": {
+    "network_macos": {
+      "passed": 71,
+      "ignored": 1
+    },
+    "network_linux_lib": {
+      "passed": 49
+    },
+    "server_full": {
+      "passed": 241,
+      "ignored": 1
+    },
+    "desktop_full": {
+      "passed": 69,
+      "ignored": 1
+    },
+    "mobile_host": {
+      "passed": 6
+    },
+    "desktop_frontend_build": "passed",
+    "desktop_rust_check": "passed",
+    "windows_gnu_network_check": "passed; TCP punching explicitly unsupported at runtime",
+    "ios_build": "blocked: Full Xcode is required",
+    "android_build": "blocked: Install cargo-ndk and Android NDK first",
+    "real_server_network_script": "passed; router mapping explicitly disabled",
+    "diff_whitespace": "passed"
+  }
+}

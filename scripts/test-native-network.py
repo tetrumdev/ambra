@@ -16,6 +16,8 @@ probe = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / "crates/amb
 with tempfile.TemporaryDirectory(prefix="ambra-network-integration-") as directory:
     environment = os.environ.copy()
     environment.pop("AMBRA_SERVER_ADDRESS", None)
+    # Network integration must never configure the operator's physical router.
+    environment["AMBRA_DISABLE_PORT_MAPPING"] = "1"
     for kind in ("CONFIG", "DATA", "CACHE"):
         path = Path(directory) / kind.lower()
         path.mkdir()

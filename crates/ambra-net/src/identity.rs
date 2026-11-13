@@ -51,6 +51,15 @@ impl Identity {
     pub fn public_key(&self) -> PublicKey {
         PublicKey(self.key_pair().public_key)
     }
+    /// Separate, stable application key. The existing protected seed persists it across
+    /// upgrades; neither the Ed25519 secret nor this key is published or serialized.
+    pub(crate) fn signaling_keys(&self) -> Result<nostr::key::Keys> {
+        let mut secret = Zeroizing::new([0; 32]);
+        hkdf::Hkdf::<sha2::Sha256>::new(Some(b"ambra/nostr/signaling/v1"), self.seed.as_ref())
+            .expand(b"secp256k1", secret.as_mut())
+            .map_err(|_| "Signaling key derivation failed")?;
+        Ok(nostr::key::Keys::new(nostr::key::SecretKey::from_slice(secret.as_ref())?))
+    }
     /// Create once, exclusively. Corrupt or unreadable identities never rotate silently.
     /// The enclosing application data directory must be private to the user (Windows ACLs).
     pub fn load_or_create(path: &Path) -> Result<Self> {
