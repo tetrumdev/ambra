@@ -158,14 +158,25 @@ async fn main() -> ambra_net::Result<()> {
                 let route = String::from_utf8_lossy(&route.stdout);
                 if !route.contains("interface: en0") { return Err("Tailcat direct path does not use school Wi-Fi".into()); }
             }
-            metric(serde_json::json!({"stage":"authenticated","round":round,"connection_ms":started.elapsed().as_secs_f64()*1000.,"method":manager.status().method,"tailcat_path":manager.status().tailcat_path}));
+            metric(serde_json::json!({"stage":"authenticated","round":round,"connection_ms":started.elapsed().as_secs_f64()*1000.,"method":manager.status().method,"tailcat_path":manager.status().tailcat_path,"tailcat_rtt_ms":manager.status().tailcat_rtt_ms}));
             if mode == "roam" && maintenance.is_none() {
                 let manager = manager.clone();
                 maintenance = Some(tokio::spawn(async move {manager.run().await}));
             }
+            let idle: u64 = std::env::var("AMBRA_BENCH_IDLE_SECONDS").ok().and_then(|s| s.parse().ok()).unwrap_or(0).min(60);
+            for second in 0..idle {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                if second % 15 == 0 || second + 1 == idle {
+                    metric(serde_json::json!({"stage":"path", "seconds_after_authentication":second+1, "tailcat_path":manager.status().tailcat_path,"tailcat_rtt_ms":manager.status().tailcat_rtt_ms}));
+                }
+            }
+            if let Some(ambra_net::tailcat::PeerPath::Direct {endpoint}) = manager.status().tailcat_path {
+                if ambra_net::lan::is_direct(endpoint.ip()) { return Err("Tailcat benchmark rejected non-public direct endpoint".into()); }
+            }
             let api = Instant::now();
             manager.json("GET", "/api/session", None).await?;
             metric(serde_json::json!({"stage":"api","round":round,"latency_ms":api.elapsed().as_secs_f64()*1000.}));
+            if std::env::var_os("AMBRA_BENCH_REQUESTS_ONLY").is_some() { return Ok::<_, ambra_net::Error>(()); }
             if round == 0 {
                 let response = manager.request(hyper::Request::builder().method("POST").uri(&path).body(Body::from(audio.clone()))?).await?;
                 if !response.status().is_success() { return Err(format!("Audio upload: {}", response.status()).into()); }
@@ -218,13 +229,26 @@ async fn main() -> ambra_net::Result<()> {
             metric(serde_json::json!({"stage":"transfer","round":round,"bytes":bytes,"seconds":started.elapsed().as_secs_f64(),"mib_per_second":bytes as f64/1048576./started.elapsed().as_secs_f64(),"concurrent_requests":requests,"api_latency_under_load_ms":latencies,"exact_audio":true,"tailcat_path_after_load":manager.status().tailcat_path}));
             if mode == "roam" {
                 let started = Instant::now();
-                tokio::time::timeout(Duration::from_secs(100), async {
+                // Keep an actual response on Tailcat while maintenance authenticates TCP.
+                // Consumption is deliberately paced; this is a drain test, not a relay throughput test.
+                let response = manager.request(hyper::Request::builder().uri(&path).body(Body::empty())?).await?;
+                let mut body = response.into_body();
+                let mut offset = 0;
+                while let Some(frame) = body.frame().await {
+                    if let Ok(data) = frame?.into_data() {
+                        if audio.get(offset..offset+data.len()) != Some(data.as_ref()) { return Err("In-flight audio changed during native upgrade".into()); }
+                        offset += data.len();
+                        tokio::time::sleep(Duration::from_secs_f64(data.len() as f64 / (128. * 1024.))).await;
+                    }
+                }
+                if offset != audio.len() { return Err("In-flight audio truncated during native upgrade".into()); }
+                tokio::time::timeout(Duration::from_secs(60), async {
                     while manager.status().method == Some(Method::Tailcat) || manager.status().state == ambra_net::ConnectionState::Authenticating {
                         tokio::time::sleep(Duration::from_millis(100)).await;
                     }
                 }).await?;
                 manager.json("GET", "/api/session", None).await?;
-                metric(serde_json::json!({"stage":"upgrade", "method":manager.status().method,"elapsed_ms":started.elapsed().as_secs_f64()*1000.}));
+                metric(serde_json::json!({"stage":"upgrade", "method":manager.status().method,"elapsed_ms":started.elapsed().as_secs_f64()*1000.,"in_flight_audio_bytes":offset,"in_flight_audio_preserved":true,"paced_bytes_per_second":128*1024}));
             }
             Ok::<_, ambra_net::Error>(())
         }.await;

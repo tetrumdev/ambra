@@ -69,15 +69,23 @@ pub enum PeerPath {
     Derp { region: u64 },
 }
 pub struct Diagnostics {
-    latest: Arc<RwLock<PeerPath>>,
+    latest: Arc<RwLock<(PeerPath, Option<f64>)>>,
+    client: std::sync::Weak<native::Resource>,
     _monitor: tokio_util::task::AbortOnDropHandle<()>,
 }
 impl Diagnostics {
+    pub fn is_retired(&self) -> bool {
+        self.client.strong_count() == 0
+    }
     pub fn path(&self) -> PeerPath {
         self.latest
             .read()
             .unwrap_or_else(|p| p.into_inner())
+            .0
             .clone()
+    }
+    pub fn rtt_ms(&self) -> Option<f64> {
+        self.latest.read().unwrap_or_else(|p| p.into_inner()).1
     }
 }
 impl PeerPath {
@@ -170,6 +178,9 @@ async fn server_config(path: &Path, derp_map_url: Option<String>) -> Result<Stri
     let psk = keys["preshared_key"]
         .as_str()
         .ok_or("Missing Tailcat pre-shared key")?;
+    if key.is_empty() || psk.is_empty() {
+        return Err("Empty Tailcat identity; restore its backup".into());
+    }
     Ok(serde_json::json!({"key":key,"preshared_key":psk,"derp_map_url":derp_map_url.unwrap_or_default()}).to_string())
 }
 
@@ -197,23 +208,39 @@ pub async fn connect(
     let path = client
         .path()
         .await
-        .map(|value| PeerPath::from_ping(&value))
-        .unwrap_or(PeerPath::Unknown);
+        .map(|value| {
+            (
+                PeerPath::from_ping(&value),
+                value["latency"].as_f64().map(|seconds| seconds * 1000.),
+            )
+        })
+        .unwrap_or((PeerPath::Unknown, None));
     let latest = Arc::new(RwLock::new(path));
     let observed = latest.clone();
+    let client = Arc::downgrade(&client);
+    let owner = client.clone();
     let monitor = tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(15)).await;
+            let Some(client) = client.upgrade() else {
+                break;
+            };
             let path = client
                 .path()
                 .await
-                .map(|value| PeerPath::from_ping(&value))
-                .unwrap_or(PeerPath::Unknown);
+                .map(|value| {
+                    (
+                        PeerPath::from_ping(&value),
+                        value["latency"].as_f64().map(|seconds| seconds * 1000.),
+                    )
+                })
+                .unwrap_or((PeerPath::Unknown, None));
             *observed.write().unwrap_or_else(|p| p.into_inner()) = path;
         }
     });
     let diagnostics = Arc::new(Diagnostics {
         latest,
+        client: owner,
         _monitor: tokio_util::task::AbortOnDropHandle::new(monitor),
     });
     Ok((io, pump.retain(Box::new(diagnostics.clone())), diagnostics))
@@ -448,6 +475,14 @@ pub(crate) mod tests {
         std::fs::write(&path, b"broken").unwrap();
         assert!(server_config(&path, None).await.is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"broken");
+        std::fs::write(&path, br#"{"private_key":"","preshared_key":""}"#).unwrap();
+        assert!(server_config(&path, None).await.is_err());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            assert!(read_private(&path).is_err());
+        }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

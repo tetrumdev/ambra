@@ -69,7 +69,7 @@ def main():
                     if time.monotonic() - started > 360:
                         raise TimeoutError("Bounded benchmark exceeded 360 seconds")
                     local = subprocess.run(["lsof", "-a", "-p", str(process.pid), "-iTCP", "-sTCP:ESTABLISHED", "-nP"], capture_output=True, text=True, timeout=10)
-                    remote = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", args.host, "ss -tnpH 'sport = :443'"], capture_output=True, text=True, timeout=15)
+                    remote = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", args.host, "ss -tinpH 'sport = :443'"], capture_output=True, text=True, timeout=15)
                     samples.append({"local": local.stdout, "remote": remote.stdout})
         finally:
             if process.poll() is None:
@@ -105,8 +105,11 @@ def main():
             "client_native_interface_logged": "interface=en0" in raw,
             "home_tcp443_socket_samples": sum(bool(sample["remote"].strip()) for sample in samples),
             "sample_count": len(samples),
+            "tcp_rtt_ms_samples": [float(rtt) for sample in samples for rtt in re.findall(r"\brtt:([0-9.]+)/", sample["remote"])],
         },
         "tailcat_started": "ConnectingTailcat" in raw,
+        "failed_native_methods": re.findall(r"Transport attempt failed.*?method=(Lan|Public|TcpPunch|HyperDHT|Pwnat)\b", raw),
+        "pwnat_skipped": "ConnectingPwnat" not in raw,
         "native_exhaustion_logged": "All eligible native transports exhausted" in raw,
         "hardware_playback": False,
         "management_transport": "Tailscale SSH; application requests originate in Rust probe",

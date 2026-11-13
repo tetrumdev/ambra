@@ -1,5 +1,11 @@
 # Native networking: implementation and validation report
 
+**November 13, 2026:** [Tailcat final fallback](tailcat.md) adds a bundled native
+library after every eligible native attempt, including optional pwnat, has failed.
+It preserves Noise and device authorization and can carry data through DERP.
+This supersedes the historical no-relay policy below. Physical school-to-home
+reports distinguish native TCP, DERP, and unobserved direct Tailcat paths.
+
 **November 6, 2026:** remote connections now use a router-forwarded public TCP port (UPnP/NAT-PMP), raced with HyperDHT. This supersedes the "no port-mapping strategy" policy below. See [router-forwarded public TCP](public-tcp-2026-11-06.md).
 
 October 29 implementation and physical benchmark results: [autonomous P2P overnight optimization](autonomous-p2p-overnight-2026-10-29.md).
