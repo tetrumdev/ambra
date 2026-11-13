@@ -52,5 +52,15 @@
   "ios_native": "blocked: full Xcode/SDK unavailable",
   "formatting_and_whitespace": "passed",
   "public_derp_testing": "bounded functional transfers; no sustained saturation benchmark",
-  "audible_playback": "unverified"
+  "audible_playback": "unverified",
+  "merged_main_checks": {
+    "source_commit": "9c2c5b5",
+    "upstream_main": "dad44fe",
+    "server": "cargo check --locked --tests passed on macOS",
+    "desktop": "cargo check --locked --tests passed on macOS",
+    "frontend": "npm run build passed",
+    "sensitive_guard_regressions": "7 passed",
+    "sensitive_guard": "staged tree and full history passed",
+    "qualification": "These compile checks supplement the earlier tests; physical benchmarks were not repeated after merging upstream firewall and UI changes."
+  }
 }

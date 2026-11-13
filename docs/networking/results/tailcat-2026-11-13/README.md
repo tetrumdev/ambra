@@ -154,4 +154,6 @@ mapping. Original production server, identities, repositories, SSH arrangement,
 and network settings remain intact. Temporary credentials, audio excerpts, raw
 logs, test profiles, private relay processes, and task-owned intermediate build
 caches are removed after evidence collection. Necessary Go/NDK/cargo-ndk build
-dependencies and packaged Android libraries remain available.
+dependencies remain available. At the user's request, final test binaries,
+packaged Android libraries, frontend output, Go caches, and remote build logs
+were subsequently removed. See [cleanup evidence](cleanup.json).
