@@ -9,7 +9,7 @@ import "./scrollbars.css";
 import { installTooltips } from "./utils/tooltips";
 import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
-import { desktopPlatform } from "./utils/windowChrome";
+import { desktopPlatform, installWindowDragRegions } from "./utils/windowChrome";
 import { startDownloads } from "./utils/offlineDownloads";
 import { detectGraphicsTier } from "./utils/graphicsTier";
 import "./lowGraphics.css";
@@ -24,6 +24,7 @@ if (perfEnabled()) {
 }
 
 document.documentElement.dataset.platform = desktopPlatform();
+installWindowDragRegions();
 
 installTooltips();
 startDownloads();

@@ -130,7 +130,7 @@ export function Root() {
   const client = useMemo(() => ({ connected, network, sharedPlayback, setSharedPlayback, reconnect }),
     [connected, network, sharedPlayback, setSharedPlayback, reconnect]);
 
-  if (!ready) return <main className="stateStartup" aria-busy="true"><div data-tauri-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
+  if (!ready) return <main className="stateStartup" aria-busy="true"><div data-window-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
       <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!connected} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />

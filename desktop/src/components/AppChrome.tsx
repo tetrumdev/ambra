@@ -46,14 +46,14 @@ export function AppChrome({
           <div
             className="libraryTitlebar"
             data-content-layout="library"
-            data-tauri-drag-region
+            data-window-drag-region
           />
         )}
 
       {isPlayerScreen && (
         <>
           {canDragWindow && (
-            <div className="bigscreenTitlebar" data-tauri-drag-region />
+            <div className="bigscreenTitlebar" data-window-drag-region />
           )}
           <div className="bigscreenCtrls">
             <button
@@ -98,7 +98,7 @@ export function AppChrome({
         <div
           className="libraryTitlebar"
           data-content-layout="queue"
-          data-tauri-drag-region
+          data-window-drag-region
         />
       )}
     </>
