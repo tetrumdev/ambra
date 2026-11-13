@@ -15,10 +15,12 @@ export function useStartupWindow(ready: boolean) {
       if (cancelled) return;
       // Yield after React's startup effects. Hidden WebViews can suspend animation
       // frames, so revealing the window must not depend on requestAnimationFrame.
-      timer = setTimeout(() => {
+      timer = setTimeout(async () => {
         if (cancelled) return;
         shown.current = true;
         const appWindow = getCurrentWindow();
+        // A development reload or remount must not activate an existing window.
+        if (await appWindow.isVisible().catch(() => false) || cancelled) return;
         void appWindow.show().then(() => {
           if (!cancelled) {
             void appWindow.setFocus().catch((error) => {
