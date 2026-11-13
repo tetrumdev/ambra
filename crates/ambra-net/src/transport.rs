@@ -55,6 +55,15 @@ pub trait Io: AsyncRead + AsyncWrite + Unpin + Send {}
 impl<T: AsyncRead + AsyncWrite + Unpin + Send> Io for T {}
 pub type BoxIo = Box<dyn Io>;
 
+#[derive(Debug)]
+pub struct PeerAuthenticationError;
+impl std::fmt::Display for PeerAuthenticationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Server identity changed; explicit re-pairing is required")
+    }
+}
+impl std::error::Error for PeerAuthenticationError {}
+
 pub async fn secure<T: Io + 'static>(
     raw: T,
     identity: &Identity,
@@ -72,7 +81,7 @@ pub async fn secure<T: Io + 'static>(
     .await?;
     let key = PublicKey(*stream.remote_public_key());
     if expected.is_some_and(|expected| expected != key) {
-        return Err("Server identity changed; explicit re-pairing is required".into());
+        return Err(PeerAuthenticationError.into());
     }
     let (io, pump) = adapt(stream, None);
     Ok((

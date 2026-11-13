@@ -49,6 +49,7 @@ pub struct Network {
     pub secure_listening: RwLock<Option<SocketAddr>>,
     pub dht_status: ambra_net::hyperdht::SharedStatus,
     pub pwnat_status: ambra_net::pwnat::SharedStatus,
+    pub tailcat_state: ambra_net::tailcat::SharedState,
     pub tcp_punch_status: ambra_net::tcp_punch::SharedStatus,
     /// Router-forwarded public TCP endpoints of the secure listener.
     pub port_mapping: RwLock<ambra_net::portmap::Status>,
@@ -81,6 +82,7 @@ impl Network {
             secure_listening: RwLock::new(None),
             dht_status: Arc::new(RwLock::new(Default::default())),
             pwnat_status: Arc::new(RwLock::new(Default::default())),
+            tailcat_state: Arc::new(RwLock::new(Default::default())),
             tcp_punch_status: Arc::new(RwLock::new(Default::default())),
             port_mapping: RwLock::new(Default::default()),
             lan_error: RwLock::new(None),
@@ -432,6 +434,8 @@ struct ConfigView {
     discovery: bool,
     p2p: bool,
     pwnat: bool,
+    tailcat: bool,
+    tailcat_derp_map_url: Option<String>,
     public_endpoint: Option<SocketAddr>,
     paired_clients: usize,
     path: String,
@@ -447,6 +451,8 @@ fn config_view(network: &Network) -> ConfigView {
         discovery: config.discovery,
         p2p: config.p2p,
         pwnat: config.pwnat,
+        tailcat: config.tailcat,
+        tailcat_derp_map_url: config.tailcat_derp_map_url,
         public_endpoint: config.public_endpoint,
         paired_clients: config.paired_clients.len(),
         path: ServerConfig::path().display().to_string(),
@@ -465,6 +471,8 @@ struct ConfigChange {
     discovery: Option<bool>,
     p2p: Option<bool>,
     pwnat: Option<bool>,
+    tailcat: Option<bool>,
+    tailcat_derp_map_url: Option<String>,
     #[serde(default, alias = "public_endpoint", deserialize_with = "endpoint_change")]
     public_endpoint: Option<Option<SocketAddr>>,
 }
@@ -484,6 +492,12 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
         }
         if let Some(p2p) = change.p2p { config.p2p = p2p; }
         if let Some(pwnat) = change.pwnat { config.pwnat = pwnat; }
+        if let Some(tailcat) = change.tailcat { config.tailcat = tailcat; }
+        if let Some(url) = &change.tailcat_derp_map_url {
+            let parsed: reqwest::Url = url.parse().map_err(|_| "Invalid DERP map URL")?;
+            if parsed.scheme() != "https" || parsed.host_str().is_none() { return Err("DERP map requires HTTPS".into()); }
+            config.tailcat_derp_map_url = Some(url.clone());
+        }
         if let Some(endpoint) = change.public_endpoint { config.public_endpoint = endpoint; }
         if let Some(discovery) = change.discovery {
             config.discovery = discovery;
@@ -498,7 +512,8 @@ async fn change_config(State(network): State<SharedNetwork>, Json(change): Json<
 
 async fn authenticated_session(State(network): State<SharedNetwork>, caller: axum::Extension<crate::access::Caller>) -> Json<serde_json::Value> {
     // Paired devices learn where to reach the server from outside its network.
-    Json(json!({ "clientId": caller.0.client_id, "publicEndpoints": network.public_endpoints() }))
+    let address = caller.0.client_id.as_ref().and_then(|_| network.tailcat_state.read().ok().and_then(|state| state.address.clone()));
+    Json(json!({ "clientId": caller.0.client_id, "publicEndpoints": network.public_endpoints(), "tailcatAddress": address }))
 }
 
 async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json::Value> {
@@ -512,13 +527,16 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
         "secureListening": *network.secure_listening.read().unwrap_or_else(|p| p.into_inner()),
         "hyperdht": dht, "portMapping": *network.port_mapping.read().unwrap_or_else(|p| p.into_inner()), "pwnat": ambra_net::pwnat::capability(),
         "tcpPunch": *network.tcp_punch_status.read().unwrap_or_else(|p| p.into_inner()),
+        "tailcatEnabled": config.tailcat,
+        "tailcat": network.tailcat_state.read().unwrap_or_else(|p| p.into_inner()).status,
         "pwnatStatus": pwnat,
         "pwnatError": pwnat.error,
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
         "discoveryError": *network.discovery_error.read().unwrap_or_else(|p| p.into_inner()),
         "pairedDevices": config.paired_clients.len(),
         "authenticatedConnectedDevices": network.authenticated_sessions.read().map(|sessions| sessions.iter().filter(|(id, sessions)| config.paired_clients.iter().any(|c| &c.id == *id) && sessions.1.upgrade().is_some_and(|session| !session.is_closed())).count()).unwrap_or(0),
-        "dataRelay": false,
+        "nativeDataRelay": false,
+        "tailcatRelayCapable": true,
     }))
 }
 

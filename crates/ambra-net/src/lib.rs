@@ -12,6 +12,7 @@ pub mod pwnat;
 pub mod transport;
 pub mod signaling;
 pub mod tcp_punch;
+pub mod tailcat;
 pub use identity::{Identity, PublicKey};
 pub use manager::{ConnectionManager, ConnectionState, SelectedServer};
 pub type Error = Box<dyn std::error::Error + Send + Sync>;

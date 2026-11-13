@@ -36,6 +36,10 @@ pub struct ServerConfig {
     /// Raw ICMP is optional and never enables privileges automatically.
     #[serde(default)]
     pub pwnat: bool,
+    #[serde(default = "enabled")]
+    pub tailcat: bool,
+    #[serde(default)]
+    pub tailcat_derp_map_url: Option<String>,
     #[serde(default = "secure_port")]
     pub secure_port: u16,
     #[serde(default)]
@@ -59,6 +63,8 @@ impl ServerConfig {
             discovery: true,
             p2p: true,
             pwnat: false,
+            tailcat: true,
+            tailcat_derp_map_url: None,
             secure_port: secure_port(),
             public_endpoint: None,
             paired_clients: Vec::new(),

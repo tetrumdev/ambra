@@ -91,6 +91,8 @@ pub enum Message {
     },
     Connected {},
     Failed {},
+    TailcatRequest {},
+    TailcatAddress { address: crate::tailcat::Address },
 }
 impl Message {
     fn phase(&self) -> &'static str {
@@ -101,6 +103,8 @@ impl Message {
             Self::Start { .. } => "start",
             Self::Connected {} => "connected",
             Self::Failed {} => "failed",
+            Self::TailcatRequest {} => "tailcat-request",
+            Self::TailcatAddress { .. } => "tailcat-address",
         }
     }
     fn validate(&self) -> Result<()> {
