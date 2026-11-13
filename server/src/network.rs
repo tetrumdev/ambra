@@ -516,6 +516,7 @@ async fn network_status(State(network): State<SharedNetwork>) -> Json<serde_json
         "pwnatError": pwnat.error,
         "lanError": *network.lan_error.read().unwrap_or_else(|p| p.into_inner()),
         "discoveryError": *network.discovery_error.read().unwrap_or_else(|p| p.into_inner()),
+        "firewall": crate::firewall::status(),
         "pairedDevices": config.paired_clients.len(),
         "authenticatedConnectedDevices": network.authenticated_sessions.read().map(|sessions| sessions.iter().filter(|(id, sessions)| config.paired_clients.iter().any(|c| &c.id == *id) && sessions.1.upgrade().is_some_and(|session| !session.is_closed())).count()).unwrap_or(0),
         "dataRelay": false,
