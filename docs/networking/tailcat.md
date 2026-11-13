@@ -32,6 +32,9 @@ operations, and the existing 15 s device-authorization budget. A restrictive
 network can therefore wait through the full native discovery window before
 Tailcat starts. Failure returns through the existing offline/retry machinery.
 Concurrent requests share the existing connection flight and HTTP/2 session.
+Failed shared HyperDHT bootstrap actors and pwnat engines are retired before the
+Tailcat client starts. Cryptographic Noise rejections are terminal; ordinary I/O
+loss remains eligible for fallback.
 
 ## Native integration and lifetime
 
@@ -40,7 +43,10 @@ Concurrent requests share the existing connection flight and HTTP/2 session.
 (commit `e00cdde6ff787f801361ff85ed085775c775d4c5`). `go.sum` locks the
 module graph. The upstream ABI is version 1. Ambra builds `cmd/libtailcat` with
 the upstream omission tags, `-trimpath`, and `-mod=readonly`, then statically
-links the Go archive into Rust. Dependency license is retained beside the module.
+links the Go archive into Rust on desktop/server and iOS. Android uses Go
+`c-shared` because Go does not support `c-archive` there; the mobile build script
+bundles `libambra_tailcat.so` beside the Rust bridge for each ABI. Android
+loads that library through the Rust bridge's normal native dependency. Dependency license is retained beside the module.
 
 `tailcat/native.rs` owns opaque ABI handles, allocation/free rules, deadlines,
 and cancellation. Network calls and closure run on Tokio blocking workers.

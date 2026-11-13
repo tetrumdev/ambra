@@ -66,6 +66,26 @@ impl std::fmt::Display for PeerAuthenticationError {
 }
 impl std::error::Error for PeerAuthenticationError {}
 
+/// Preserve typed cryptographic rejection through dependency wrappers. I/O loss
+/// remains eligible for fallback; it does not prove an authentication rejection.
+pub(crate) fn authentication_failed(error: &crate::Error) -> bool {
+    let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(error.as_ref());
+    while let Some(error) = cause {
+        if error.is::<PeerAuthenticationError>()
+            || error.is::<peeroxide_dht::noise::NoiseError>()
+            || error.is::<peeroxide_dht::secretstream::SecretstreamError>()
+            || matches!(
+                error.downcast_ref::<peeroxide_dht::secret_stream::SecretStreamError>(),
+                Some(peeroxide_dht::secret_stream::SecretStreamError::StreamIdMismatch)
+            )
+        {
+            return true;
+        }
+        cause = error.source();
+    }
+    false
+}
+
 pub async fn secure<T: Io + 'static>(
     raw: T,
     identity: &Identity,

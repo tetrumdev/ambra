@@ -18,7 +18,10 @@ fn main() {
         other => panic!("Tailcat OS: {other}"),
     };
     let out = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let archive = out.join(if target.ends_with("msvc") {
+    let shared = os == "android";
+    let archive = out.join(if shared {
+        "libambra_tailcat.so"
+    } else if target.ends_with("msvc") {
         "ambra_tailcat.lib"
     } else {
         "libambra_tailcat.a"
@@ -40,12 +43,41 @@ fn main() {
         .env("CGO_ENABLED", "1")
         .env("GOOS", goos)
         .env("GOARCH", arch);
-    for key in [format!("CC_{}", target.replace('-', "_")), "CC".into()] {
+    for key in [
+        format!("CC_{target}"),
+        format!("CC_{}", target.replace('-', "_")),
+        "TARGET_CC".into(),
+        "CC".into(),
+    ] {
         println!("cargo:rerun-if-env-changed={key}");
         if let Some(cc) = env::var_os(&key) {
             build.env("CC", cc);
             break;
         }
+    }
+    if shared {
+        let flags = [
+            format!("CFLAGS_{target}"),
+            format!("CFLAGS_{}", target.replace('-', "_")),
+            "TARGET_CFLAGS".into(),
+            "CFLAGS".into(),
+        ]
+        .into_iter()
+        .find_map(|key| {
+            println!("cargo:rerun-if-env-changed={key}");
+            env::var(key).ok()
+        })
+        .unwrap_or_default();
+        build.env("CGO_CFLAGS", &flags);
+        let pages = if arch == "arm" {
+            ""
+        } else {
+            " -Wl,-z,max-page-size=16384"
+        };
+        build.env(
+            "CGO_LDFLAGS",
+            format!("{flags} -Wl,-soname,libambra_tailcat.so{pages}"),
+        );
     }
     if os == "ios" {
         let sdk = if target.ends_with("-sim") || arch == "amd64" {
@@ -79,7 +111,11 @@ fn main() {
             "build",
             "-mod=readonly",
             "-trimpath",
-            "-buildmode=c-archive",
+            if shared {
+                "-buildmode=c-shared"
+            } else {
+                "-buildmode=c-archive"
+            },
             "-tags",
             tags.trim(),
             "-o",
@@ -93,7 +129,20 @@ fn main() {
         "Tailcat native library build failed for {target}"
     );
     println!("cargo:rustc-link-search=native={}", out.display());
-    println!("cargo:rustc-link-lib=static=ambra_tailcat");
+    println!(
+        "cargo:rustc-link-lib={}={}",
+        if shared { "dylib" } else { "static" },
+        "ambra_tailcat"
+    );
+    if shared {
+        // Publish the dependent library beside the Rust cdylib for Android packaging.
+        let profile = out
+            .ancestors()
+            .nth(3)
+            .expect("Cargo target/profile/build/package/out");
+        std::fs::copy(&archive, profile.join("libambra_tailcat.so"))
+            .expect("publish Android Tailcat library");
+    }
     match os.as_str() {
         "macos" | "ios" => {
             for framework in [
