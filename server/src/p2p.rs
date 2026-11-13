@@ -102,6 +102,7 @@ async fn forward_ports(network: SharedNetwork, internal: u16, cancel: Cancellati
 }
 
 pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr, cancel: CancellationToken) {
+    let punch_config = ambra_net::tcp_punch::Config::from_env().map_err(|error| eprintln!("Native TCP punching unavailable: {error}")).ok();
     let port = network.config.read().unwrap_or_else(|p| p.into_inner()).secure_port;
     let secure = SocketAddr::new(address.ip(), port);
     let mut tasks = tokio::task::JoinSet::new();
@@ -159,7 +160,25 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
             let stop = cancel.child_token(); remote_cancel = Some(stop.clone());
             let status = network.dht_status.clone(); let identity = network.identity.clone(); let dht_app = app.clone(); let stop_dht = stop.clone();
             let pwnat_status = network.pwnat_status.clone(); let admit = network.admit_remote();
-            remote_tasks.spawn(forward_ports(network.clone(), port, stop.clone()));
+            // Explicit operator policy; native TCP punching never invokes router mapping.
+            if std::env::var_os("AMBRA_DISABLE_PORT_MAPPING").is_none() {
+                remote_tasks.spawn(forward_ports(network.clone(), port, stop.clone()));
+            }
+            if let Some(config) = punch_config.clone() {
+                let identity = network.identity.clone(); let app = app.clone();
+                let admit = network.admit_public(); let status = network.tcp_punch_status.clone();
+                let cancel = stop.clone();
+                remote_tasks.spawn(async move {
+                    supervise_listener(cancel.clone(), || async {
+                        let result = ambra_net::tcp_punch::serve(identity.clone(), app.clone(), admit.clone(), config.clone(), ambra_net::signaling::Signaling::defaults(), status.clone(), cancel.clone()).await;
+                        if !cancel.is_cancelled() {
+                            let mut status = status.write().unwrap_or_else(|p| p.into_inner());
+                            status.running = false;
+                            status.error = Some(result.err().map_or_else(|| "TCP punching listener stopped".into(), |e| e.to_string()));
+                        }
+                    }).await;
+                });
+            }
             remote_tasks.spawn(async move {
                 supervise_listener(stop_dht.clone(), || async {
                     let result = ambra_net::hyperdht::serve(identity.clone(), dht_app.clone(), status.clone(), admit.clone(), stop_dht.clone(), Some(pwnat_status.clone())).await;
