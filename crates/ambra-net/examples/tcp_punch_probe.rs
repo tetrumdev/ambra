@@ -82,7 +82,7 @@ async fn main() -> ambra_net::Result<()> {
         manager.shutdown().await;
         return Ok(());
     }
-    if !["run", "tailcat"].contains(&mode.as_str()) {
+    if !["run", "tailcat", "roam"].contains(&mode.as_str()) {
         return Err("Expected enroll, run, or tailcat".into());
     }
     let rounds: usize = args
@@ -102,7 +102,7 @@ async fn main() -> ambra_net::Result<()> {
             hyperdht: Duration::ZERO,
             pwnat: Duration::ZERO,
             lan_grace: Duration::ZERO,
-            tcp_punch: if mode == "tailcat" {
+            tcp_punch: if mode != "run" {
                 Duration::ZERO
             } else {
                 Timing::default().tcp_punch
@@ -143,36 +143,90 @@ async fn main() -> ambra_net::Result<()> {
         Sha256::digest(&audio)
     );
     let mut passed = 0;
+    let mut maintenance = None;
     for round in 0..rounds {
         let started = Instant::now();
         let mut active = None;
-        let result=async {
+        let result = async {
             manager.network_changed();
             active = Some(manager.connect().await?);
-            if manager.status().method!=Some(if mode == "tailcat" {Method::Tailcat} else {Method::TcpPunch}) {return Err("Non-native fallback selected; test rejected".into());}
+            let expected = if mode != "run" {Method::Tailcat} else {Method::TcpPunch};
+            if manager.status().method != Some(expected) { return Err("Unexpected transport; test rejected".into()); }
+            if let Some(ambra_net::tailcat::PeerPath::Direct {endpoint}) = manager.status().tailcat_path {
+                if ambra_net::lan::is_direct(endpoint.ip()) { return Err("Tailcat benchmark rejected non-public direct endpoint".into()); }
+                let route = std::process::Command::new("route").args(["-n", "get", &endpoint.ip().to_string()]).output()?;
+                let route = String::from_utf8_lossy(&route.stdout);
+                if !route.contains("interface: en0") { return Err("Tailcat direct path does not use school Wi-Fi".into()); }
+            }
             metric(serde_json::json!({"stage":"authenticated","round":round,"connection_ms":started.elapsed().as_secs_f64()*1000.,"method":manager.status().method,"tailcat_path":manager.status().tailcat_path}));
-            let api=Instant::now();manager.json("GET","/api/session",None).await?;
+            if mode == "roam" && maintenance.is_none() {
+                let manager = manager.clone();
+                maintenance = Some(tokio::spawn(async move {manager.run().await}));
+            }
+            let api = Instant::now();
+            manager.json("GET", "/api/session", None).await?;
             metric(serde_json::json!({"stage":"api","round":round,"latency_ms":api.elapsed().as_secs_f64()*1000.}));
-            if round==0 {
-                let response=manager.request(hyper::Request::builder().method("POST").uri(&path).body(Body::from(audio.clone()))?).await?;
-                if !response.status().is_success() {return Err(format!("Audio upload: {}",response.status()).into());}
+            if round == 0 {
+                let response = manager.request(hyper::Request::builder().method("POST").uri(&path).body(Body::from(audio.clone()))?).await?;
+                if !response.status().is_success() { return Err(format!("Audio upload: {}", response.status()).into()); }
                 response.into_body().collect().await?;
             }
-            let started=Instant::now();let mut bytes=0usize;let mut requests=0;
-            while started.elapsed()<Duration::from_secs(if mode == "tailcat" {1} else {15}) {
-                let (stream,range,api)=tokio::join!(
-                    manager.request(hyper::Request::builder().uri(&path).body(Body::empty())?),
-                    manager.request(hyper::Request::builder().uri(&path).header("range","bytes=100-199").body(Body::empty())?),
-                    manager.json("GET","/api/session",None)
-                );
-                api?;let range=range?;if range.status()!=206 {return Err("Audio range status is not 206".into());}
-                if range.into_body().collect().await?.to_bytes().as_ref()!=&audio[100..200] {return Err("Audio range mismatch".into());}
-                let body=stream?.into_body().collect().await?.to_bytes();
-                if body.as_ref()!=audio.as_slice() {return Err("Audio stream mismatch".into());}
-                bytes+=body.len();requests+=3;
+            let started = Instant::now();
+            let mut bytes = 0usize;
+            let mut requests = 0;
+            let mut latencies = Vec::new();
+            while started.elapsed() < Duration::from_secs(if mode != "run" {1} else {15}) {
+                let finished = std::sync::atomic::AtomicBool::new(false);
+                let download = async {
+                    let response = manager.request(hyper::Request::builder().uri(&path).body(Body::empty())?).await?;
+                    if !response.status().is_success() { return Err("Audio download failed".into()); }
+                    let mut body = response.into_body();
+                    let mut offset = 0;
+                    while let Some(frame) = body.frame().await {
+                        if let Ok(data) = frame?.into_data() {
+                            if audio.get(offset..offset+data.len()) != Some(data.as_ref()) { return Err("Audio bytes differ".into()); }
+                            offset += data.len();
+                        }
+                    }
+                    if offset != audio.len() { return Err("Audio truncated".into()); }
+                    finished.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok::<_, ambra_net::Error>(offset)
+                };
+                let controls = async {
+                    let mut samples = Vec::new();
+                    loop {
+                        let api = Instant::now();
+                        manager.json("GET", "/api/session", None).await?;
+                        samples.push(api.elapsed().as_secs_f64()*1000.);
+                        if finished.load(std::sync::atomic::Ordering::SeqCst) || samples.len() >= 100 { break; }
+                        tokio::time::sleep(Duration::from_millis(250)).await;
+                    }
+                    Ok::<_, ambra_net::Error>(samples)
+                };
+                let range = async {
+                    let response = manager.request(hyper::Request::builder().uri(&path).header("range", "bytes=100-199").body(Body::empty())?).await?;
+                    if response.status() != 206 || response.into_body().collect().await?.to_bytes().as_ref() != &audio[100..200] { return Err("Audio range mismatch".into()); }
+                    Ok::<_, ambra_net::Error>(())
+                };
+                let (download, controls, range) = tokio::join!(download, controls, range);
+                range?;
+                bytes += download?;
+                let samples = controls?;
+                requests += samples.len() + 2;
+                latencies.extend(samples);
             }
-            metric(serde_json::json!({"stage":"transfer","round":round,"bytes":bytes,"seconds":started.elapsed().as_secs_f64(),"mib_per_second":bytes as f64/1048576./started.elapsed().as_secs_f64(),"concurrent_requests":requests,"exact_audio":true}));
-            Ok::<_,ambra_net::Error>(())
+            metric(serde_json::json!({"stage":"transfer","round":round,"bytes":bytes,"seconds":started.elapsed().as_secs_f64(),"mib_per_second":bytes as f64/1048576./started.elapsed().as_secs_f64(),"concurrent_requests":requests,"api_latency_under_load_ms":latencies,"exact_audio":true,"tailcat_path_after_load":manager.status().tailcat_path}));
+            if mode == "roam" {
+                let started = Instant::now();
+                tokio::time::timeout(Duration::from_secs(100), async {
+                    while manager.status().method == Some(Method::Tailcat) || manager.status().state == ambra_net::ConnectionState::Authenticating {
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }).await?;
+                manager.json("GET", "/api/session", None).await?;
+                metric(serde_json::json!({"stage":"upgrade", "method":manager.status().method,"elapsed_ms":started.elapsed().as_secs_f64()*1000.}));
+            }
+            Ok::<_, ambra_net::Error>(())
         }.await;
         match result {
             Ok(()) => {
@@ -188,9 +242,12 @@ async fn main() -> ambra_net::Result<()> {
         tokio::time::sleep(Duration::from_secs(3)).await;
     }
     manager.shutdown().await;
+    if let Some(maintenance) = maintenance {
+        let _ = maintenance.await;
+    }
     metric(serde_json::json!({"passed":passed,"rounds":rounds,"hardware_playback":false}));
     if passed == 0 {
-        return Err("No native TCP round passed".into());
+        return Err("No benchmark round passed".into());
     }
     Ok(())
 }

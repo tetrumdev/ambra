@@ -11,7 +11,7 @@ import time
 import urllib.request
 
 root = Path(__file__).resolve().parents[1]
-server = root / "server/target/debug/ambra-server"
+server = Path(os.environ.get("AMBRA_TEST_SERVER_BINARY", root / "server/target/debug/ambra-server"))
 probe = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / "crates/ambra-net/target/debug/examples/pairing_probe"
 with tempfile.TemporaryDirectory(prefix="ambra-network-integration-") as directory:
     environment = os.environ.copy()

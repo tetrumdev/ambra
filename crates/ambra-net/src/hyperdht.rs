@@ -68,8 +68,7 @@ impl Client {
         if node.is_none() {
             let started = std::time::Instant::now();
             let runtime = UdxRuntime::new()?;
-            let (task, handle, _events) =
-                hyperdht::spawn(&runtime, self.config.clone()).await?;
+            let (task, handle, _events) = hyperdht::spawn(&runtime, self.config.clone()).await?;
             *node = Some(Node {
                 runtime,
                 handle,
@@ -82,7 +81,8 @@ impl Client {
             );
         }
         let started = std::time::Instant::now();
-        let result = node.as_ref()
+        let result = node
+            .as_ref()
             .ok_or("DHT failed to initialize")?
             .handle
             .bootstrapped()
@@ -129,8 +129,11 @@ impl Client {
                 options,
             )
             .await?;
-        if connection.remote_public_key != key.0 || connection.remote_addr.is_none() {
-            return Err("DHT identity or direct endpoint missing".into());
+        if connection.remote_public_key != key.0 {
+            return Err(transport::PeerAuthenticationError.into());
+        }
+        if connection.remote_addr.is_none() {
+            return Err("DHT direct endpoint missing".into());
         }
         tracing::info!(peer = %key, endpoint = ?connection.remote_addr, elapsed_ms = started.elapsed().as_millis(), "HyperDHT authenticated direct encrypted stream; data relay disabled");
         // Vendored connect rejects relay_through before it can open a data stream.
@@ -171,7 +174,7 @@ pub async fn serve(
     config.local_connection = false;
     config.relay_through = None;
     config.relay_address = None;
-    serve_with_config(identity,app,status,cancel,pwnat_status,config).await
+    serve_with_config(identity, app, status, cancel, pwnat_status, config).await
 }
 
 async fn serve_with_config(
@@ -197,7 +200,7 @@ async fn serve_with_config(
         _ = cancel.cancelled() => None,
         result = tokio::time::timeout(Duration::from_secs(30),swarm.dht().bootstrapped()) => Some(result),
     };
-    if !matches!(bootstrap,Some(Ok(Ok(())))) {
+    if !matches!(bootstrap, Some(Ok(Ok(())))) {
         let error = match bootstrap {
             Some(Ok(Err(error))) => Some(error.to_string()),
             Some(Err(_)) => Some("HyperDHT bootstrap timed out".to_owned()),
@@ -207,10 +210,10 @@ async fn serve_with_config(
             status.running = false;
             status.error = error.clone();
         }
-        let _ = tokio::time::timeout(Duration::from_secs(2),swarm.destroy()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), swarm.destroy()).await;
         task.abort();
         let _ = (&mut task).await;
-        return error.map_or(Ok(()),|error|Err(error.into()));
+        return error.map_or(Ok(()), |error| Err(error.into()));
     }
     let target = peeroxide_dht::crypto::hash(&identity.public_key().0);
     swarm.dht().register_server(&target);
@@ -359,13 +362,28 @@ mod client_tests {
         config.key_pair = Some(identity.key_pair());
         config.dht.dht.bootstrap = vec![address.to_string()];
         let status = Arc::new(std::sync::RwLock::new(Status::default()));
-        let result = tokio::time::timeout(Duration::from_secs(8),serve_with_config(
-            identity, axum::Router::new(), status.clone(), CancellationToken::new(), None, config,
-        )).await.expect("failed bootstrap must return to the listener supervisor");
+        let result = tokio::time::timeout(
+            Duration::from_secs(8),
+            serve_with_config(
+                identity,
+                axum::Router::new(),
+                status.clone(),
+                CancellationToken::new(),
+                None,
+                config,
+            ),
+        )
+        .await
+        .expect("failed bootstrap must return to the listener supervisor");
         assert!(result.is_err());
         let status = status.read().unwrap();
         assert!(!status.running && !status.announced);
-        assert!(status.error.as_ref().is_some_and(|e|e.contains("bootstrap")));
+        assert!(
+            status
+                .error
+                .as_ref()
+                .is_some_and(|e| e.contains("bootstrap"))
+        );
     }
 
     fn isolated_client() -> Client {
