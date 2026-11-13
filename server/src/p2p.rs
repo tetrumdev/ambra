@@ -127,9 +127,32 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
     let mut pwnat_cancel: Option<CancellationToken> = None;
     let mut pwnat_tasks = tokio::task::JoinSet::new();
     let mut pwnat_config = None;
+    let mut tailcat_config = None;
+    let mut tailcat_cancel: Option<CancellationToken> = None;
+    let mut tailcat_tasks = tokio::task::JoinSet::new();
     loop {
         let (enabled, pwnat_enabled, public_endpoint) = network.config.read()
             .map(|c| (c.p2p && !address.ip().is_loopback(), c.pwnat, c.public_endpoint)).unwrap_or_default();
+        let tailcat_desired = network.config.read().map(|c| (enabled && c.tailcat, c.tailcat_derp_map_url.clone())).unwrap_or_default();
+        if tailcat_config.as_ref() != Some(&tailcat_desired) {
+            if let Some(stop) = tailcat_cancel.take() { stop.cancel(); }
+            let _ = tokio::time::timeout(Duration::from_secs(3), async { while tailcat_tasks.join_next().await.is_some() {} }).await;
+            tailcat_tasks.shutdown().await;
+            *network.tailcat_state.write().unwrap_or_else(|p| p.into_inner()) = Default::default();
+            tailcat_config = Some(tailcat_desired.clone());
+            if tailcat_desired.0 {
+                let stop = cancel.child_token(); tailcat_cancel = Some(stop.clone());
+                let network = network.clone(); let app = app.clone();
+                tailcat_tasks.spawn(async move {
+                    supervise_listener(stop.clone(), || async {
+                        let result = ambra_net::tailcat::serve(network.identity.clone(), crate::storage::data_path("tailcat-identity.json"), app.clone(), network.admit_public(), network.tailcat_state.clone(), tailcat_desired.1.clone(), stop.clone()).await;
+                        let mut state = network.tailcat_state.write().unwrap_or_else(|p| p.into_inner());
+                        state.address = None; state.status.running = false;
+                        if !stop.is_cancelled() { state.status.error = Some(result.err().map_or_else(|| "Tailcat listener stopped".into(), |e| e.to_string())); }
+                    }).await;
+                });
+            }
+        }
         let desired = (enabled && pwnat_enabled, public_endpoint);
         if pwnat_config != Some(desired) {
             if let Some(stop) = pwnat_cancel.take() { stop.cancel(); }
@@ -196,11 +219,15 @@ pub async fn run(network: SharedNetwork, app: axum::Router, address: SocketAddr,
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = network.changed.notified() => {},
+            Some(_) = tailcat_tasks.join_next(), if !tailcat_tasks.is_empty() => {},
             Some(_) = tasks.join_next(), if !tasks.is_empty() => {},
             Some(_) = remote_tasks.join_next(), if !remote_tasks.is_empty() => {},
             Some(_) = pwnat_tasks.join_next(), if !pwnat_tasks.is_empty() => {},
         }
     }
+    if let Some(stop) = tailcat_cancel { stop.cancel(); }
+    let _ = tokio::time::timeout(Duration::from_secs(3), async { while tailcat_tasks.join_next().await.is_some() {} }).await;
+    tailcat_tasks.shutdown().await;
     if let Some(stop) = remote_cancel { stop.cancel(); }
     if let Some(stop) = pwnat_cancel { stop.cancel(); }
     let _ = tokio::time::timeout(Duration::from_secs(3), async { while pwnat_tasks.join_next().await.is_some() {} }).await;

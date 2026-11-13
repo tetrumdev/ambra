@@ -1,4 +1,4 @@
-use crate::{Identity, PublicKey, Result, hyperdht, lan, pwnat, tcp_punch, transport::HttpConnection};
+use crate::{Identity, PublicKey, Result, hyperdht, lan, pwnat, tcp_punch, transport::HttpConnection, tailcat};
 use axum::body::Body;
 use hyper::{Request, Response, body::Incoming};
 use serde::{Deserialize, Serialize};
@@ -19,12 +19,14 @@ pub enum ConnectionState {
     ConnectingHyperDHT,
     ConnectingPublic,
     ConnectingTcpPunch,
+    ConnectingTailcat,
     Authenticating,
     ConnectedLocal,
     ConnectedPwnat,
     ConnectedHyperDHT,
     ConnectedPublic,
     ConnectedTcpPunch,
+    ConnectedTailcat,
     Reconnecting,
     Failed,
 }
@@ -37,9 +39,10 @@ pub enum Method {
     Public,
     /// Nostr-signaled simultaneous TCP open, without router forwarding.
     TcpPunch,
+    Tailcat,
 }
 /// LAN/public start together; HyperDHT/TCP punching race after the LAN grace.
-pub const METHODS: [Method; 5] = [Method::Lan, Method::Public, Method::HyperDHT, Method::TcpPunch, Method::Pwnat];
+pub const METHODS: [Method; 6] = [Method::Lan, Method::Public, Method::HyperDHT, Method::TcpPunch, Method::Pwnat, Method::Tailcat];
 impl Method {
     fn connected(self) -> ConnectionState {
         match self {
@@ -48,11 +51,12 @@ impl Method {
             Method::HyperDHT => ConnectionState::ConnectedHyperDHT,
             Method::Public => ConnectionState::ConnectedPublic,
             Method::TcpPunch => ConnectionState::ConnectedTcpPunch,
+            Method::Tailcat => ConnectionState::ConnectedTailcat,
         }
     }
     /// Away from home: worth checking periodically whether the LAN is back.
     fn away(self) -> bool {
-        matches!(self, Method::HyperDHT | Method::Public | Method::Pwnat | Method::TcpPunch)
+        matches!(self, Method::HyperDHT | Method::Public | Method::Pwnat | Method::TcpPunch | Method::Tailcat)
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -100,6 +104,7 @@ pub struct Status {
     pub method: Option<Method>,
     pub server: PublicKey,
     pub error: Option<String>,
+    pub tailcat_path: Option<tailcat::PeerPath>,
 }
 
 const MAX_PUBLIC: usize = 8;
@@ -111,11 +116,19 @@ struct EndpointCache {
     server: PublicKey,
     public_tcp: Vec<SocketAddr>,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TailcatCache {
+    server: PublicKey,
+    address: tailcat::Address,
+}
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionReply {
     #[serde(default)]
     public_endpoints: Vec<SocketAddr>,
+    #[serde(default)]
+    tailcat_address: Option<tailcat::Address>,
 }
 
 pub struct ConnectionManager {
@@ -127,6 +140,8 @@ pub struct ConnectionManager {
     /// Public TCP candidates, best first: pairing hints, the cache, and what the server reports.
     public_tcp: std::sync::Mutex<Vec<SocketAddr>>,
     endpoint_cache: std::sync::Mutex<Option<std::path::PathBuf>>,
+    tailcat_address: std::sync::Mutex<Option<tailcat::Address>>,
+    tailcat_path: std::sync::Mutex<Option<tailcat::PeerPath>>,
     active: RwLock<Option<Arc<HttpConnection>>>,
     /// An encrypted HyperDHT session held open, unauthenticated, while another method is
     /// active. Authorizing it takes one request, so losing the LAN never waits for discovery.
@@ -169,12 +184,15 @@ impl ConnectionManager {
             method: None,
             server: selected.public_key,
             error: None,
+            tailcat_path: None,
         });
         Arc::new_cyclic(|owner| Self {
             dht: hyperdht::Client::new(identity.clone()),
             pwnat: pwnat::Client::default(),
             public_tcp: std::sync::Mutex::new(selected.public_tcp.clone()),
             endpoint_cache: Default::default(),
+            tailcat_address: Default::default(),
+            tailcat_path: Default::default(),
             identity,
             selected,
             token: RwLock::new(token),
@@ -202,6 +220,7 @@ impl ConnectionManager {
             method,
             server: self.selected.public_key,
             error,
+            tailcat_path: if method == Some(Method::Tailcat) { self.tailcat_path.lock().unwrap_or_else(|p| p.into_inner()).clone() } else { None },
         });
     }
     async fn attempt(&self, method: Method) -> Result<Arc<HttpConnection>> {
@@ -211,6 +230,29 @@ impl ConnectionManager {
     async fn attempt_reporting(&self, method: Method, report: bool) -> Result<Arc<HttpConnection>> {
         let state = |state, method| if report { self.state(state, method, None) };
         let (io, pump) = match method {
+            Method::Tailcat => {
+                state(ConnectionState::ConnectingTailcat, Some(method));
+                if self.token.read().await.is_none() { return Err("Tailcat requires an already paired device".into()); }
+                let cached = self.tailcat_address.lock().unwrap_or_else(|p| p.into_inner()).clone();
+                let connected = if let Some(address) = cached {
+                    match tailcat::connect(address, &self.identity, self.selected.public_key).await {
+                        Ok(connected) => Some(connected),
+                        Err(error) if error.is::<tailcat::DialFailure>() => None,
+                        Err(error) => return Err(error),
+                    }
+                } else { None };
+                let (io, pump, path) = match connected {
+                    Some(connected) => connected,
+                    None => {
+                        let address = tailcat::discover(self.identity.clone(), self.selected.public_key).await?;
+                        let connected = tailcat::connect(address.clone(), &self.identity, self.selected.public_key).await?;
+                        self.remember_tailcat(address);
+                        connected
+                    }
+                };
+                *self.tailcat_path.lock().unwrap_or_else(|p| p.into_inner()) = Some(path);
+                (io, pump)
+            }
             Method::Lan => {
                 state(ConnectionState::DiscoveringLocal, None);
                 let mut addresses = self.selected.local_addresses.clone();
@@ -227,7 +269,13 @@ impl ConnectionManager {
                 state(ConnectionState::ConnectingLocal, Some(method));
                 loop {
                     tokio::select! {
-                        Some(result) = attempts.join_next(), if !attempts.is_empty() => { if let Ok(Ok(connected)) = result { break connected; } },
+                        Some(result) = attempts.join_next(), if !attempts.is_empty() => {
+                            match result {
+                                Ok(Ok(connected)) => break connected,
+                                Ok(Err(error)) if error.is::<crate::transport::PeerAuthenticationError>() => return Err(error),
+                                _ => {},
+                            }
+                        },
                         result = &mut discovery, if !discovered => {
                             discovered = true;
                             for server in result.unwrap_or_default() {
@@ -306,7 +354,21 @@ impl ConnectionManager {
                 }
             }
         }
+        if let Ok(bytes) = tailcat::read_private(&path.with_extension("tailcat.json")) {
+            if let Ok(cache) = serde_json::from_slice::<TailcatCache>(&bytes) {
+                if cache.server == self.selected.public_key { *self.tailcat_address.lock().unwrap_or_else(|p| p.into_inner()) = Some(cache.address); }
+            }
+        }
         *self.endpoint_cache.lock().unwrap_or_else(|p| p.into_inner()) = Some(path);
+    }
+
+    fn remember_tailcat(&self, address: tailcat::Address) {
+        *self.tailcat_address.lock().unwrap_or_else(|p| p.into_inner()) = Some(address.clone());
+        let path = self.endpoint_cache.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(path) = path {
+            let cache = TailcatCache { server: self.selected.public_key, address };
+            if let Ok(bytes) = serde_json::to_vec(&cache) { let _ = tailcat::write_private(&path.with_extension("tailcat.json"), &bytes, true); }
+        }
     }
 
     /// Known public TCP endpoints, best first.
@@ -351,6 +413,7 @@ impl ConnectionManager {
         use http_body_util::BodyExt;
         let Ok(Ok(body)) = tokio::time::timeout(Duration::from_secs(5), http_body_util::Limited::new(response.into_body(), 16 * 1024).collect()).await else { return };
         let Ok(session) = serde_json::from_slice::<SessionReply>(&body.to_bytes()) else { return };
+        if let Some(address) = session.tailcat_address { self.remember_tailcat(address); }
         if session.public_endpoints.is_empty() { return; }
         let current = self.public_endpoints();
         let winner = current.first().copied().filter(|a| session.public_endpoints.contains(a)).unwrap_or(session.public_endpoints[0]);
@@ -387,6 +450,7 @@ impl ConnectionManager {
                     tracing::info!(%address, "Public TCP endpoint answered");
                     return Ok((address, connected));
                 }
+                Ok((_, Err(error))) if error.is::<crate::transport::PeerAuthenticationError>() => return Err(error),
                 Ok((address, Err(error))) => errors.push(format!("{address}: {error}")),
                 Err(_) => {}
             }
@@ -746,6 +810,20 @@ impl ConnectionManager {
     /// forwarded TCP port. The new session is newer, so the server closes the old one once
     /// it is authorized.
     async fn upgrade(&self, current: Option<Method>) -> bool {
+        if current == Some(Method::Tailcat) {
+            let candidate = raced(&self.timing, &self.cancel, pwnat::capability().available, |method| async move {
+                if method == Method::Tailcat { return Err("Native upgrade unavailable".into()); }
+                self.attempt_reporting(method, false).await
+            }).await;
+            if let Ok((method, connection)) = candidate {
+                if tokio::time::timeout(Duration::from_secs(5), self.authenticate(&connection, method)).await.is_ok_and(|r| r.is_ok()) {
+                    if let Some(old) = self.active.write().await.replace(connection) { retire(old); }
+                    return true;
+                }
+                connection.close();
+            }
+            return false;
+        }
         if self.upgrade_to(Method::Lan, self.timing.lan).await { return true; }
         current == Some(Method::HyperDHT)
             && !self.public_endpoints().is_empty()
@@ -861,14 +939,14 @@ where
                         lan_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Lan, connection)),
-                            result => errors.push(attempt_error(Method::Lan, result, timing.lan)),
+                            result => errors.push(attempt_error(Method::Lan, result, timing.lan)?),
                         }
                     }
                     result = &mut public, if !public_done => {
                         public_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Public, connection)),
-                            result => errors.push(attempt_error(Method::Public, result, timing.public)),
+                            result => errors.push(attempt_error(Method::Public, result, timing.public)?),
                         }
                     }
                     _ = &mut grace => break,
@@ -888,28 +966,28 @@ where
                         lan_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Lan, connection)),
-                            result => errors.push(attempt_error(Method::Lan, result, timing.lan)),
+                            result => errors.push(attempt_error(Method::Lan, result, timing.lan)?),
                         }
                     }
                     result = &mut public, if !public_done => {
                         public_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::Public, connection)),
-                            result => errors.push(attempt_error(Method::Public, result, timing.public)),
+                            result => errors.push(attempt_error(Method::Public, result, timing.public)?),
                         }
                     }
                     result = &mut punch, if !punch_done => {
                         punch_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::TcpPunch, connection)),
-                            result => errors.push(attempt_error(Method::TcpPunch, result, timing.tcp_punch)),
+                            result => errors.push(attempt_error(Method::TcpPunch, result, timing.tcp_punch)?),
                         }
                     }
                     result = &mut dht, if !dht_done => {
                         dht_done = true;
                         match result {
                             Ok(Ok(connection)) => return Ok((Method::HyperDHT, connection)),
-                            result => errors.push(attempt_error(Method::HyperDHT, result, timing.hyperdht)),
+                            result => errors.push(attempt_error(Method::HyperDHT, result, timing.hyperdht)?),
                         }
                     }
                 }
@@ -918,8 +996,13 @@ where
         if pwnat_available {
             match tokio::time::timeout(timing.pwnat, attempt(Method::Pwnat)).await {
                 Ok(Ok(connection)) => return Ok((Method::Pwnat, connection)),
-                result => errors.push(attempt_error(Method::Pwnat, result, timing.pwnat)),
+                result => errors.push(attempt_error(Method::Pwnat, result, timing.pwnat)?),
             }
+        }
+        tracing::info!("All eligible native transports exhausted; starting Tailcat");
+        match tokio::time::timeout(Duration::from_secs(90), attempt(Method::Tailcat)).await {
+            Ok(Ok(connection)) => return Ok((Method::Tailcat, connection)),
+            result => errors.push(attempt_error(Method::Tailcat, result, Duration::from_secs(90))?),
         }
         Err(errors.join("; ").into())
     };
@@ -934,19 +1017,73 @@ fn attempt_error<T>(
     method: Method,
     result: std::result::Result<Result<T>, tokio::time::error::Elapsed>,
     timeout: Duration,
-) -> String {
+) -> Result<String> {
     let error = match result {
+        Ok(Err(error)) if error.is::<crate::transport::PeerAuthenticationError>() => return Err(error),
         Ok(Err(error)) => error.to_string(),
         Err(_) => format!("connection timed out after {:.1}s", timeout.as_secs_f64()),
         Ok(Ok(_)) => unreachable!(),
     };
     tracing::debug!(?method, timeout_seconds = timeout.as_secs_f64(), %error, "Transport attempt failed");
-    format!("{method:?}: {error}")
+    Ok(format!("{method:?}: {error}"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn identity_rejection_never_starts_fallback() {
+        let mut visits = Vec::new();
+        let result: Result<(Method, ())> = raced(&Timing::default(), &CancellationToken::new(), true, |method| {
+            visits.push(method);
+            std::future::ready(Err(crate::transport::PeerAuthenticationError.into()))
+        }).await;
+        assert!(result.unwrap_err().is::<crate::transport::PeerAuthenticationError>());
+        assert!(!visits.contains(&Method::Tailcat));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_native_winner_prevents_tailcat_and_tailcat_waits_for_all_losers() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        for winner in METHODS {
+            let running = Arc::new(AtomicUsize::new(0));
+            let visits = Arc::new(std::sync::Mutex::new(Vec::new()));
+            struct Running(Arc<AtomicUsize>);
+            impl Drop for Running { fn drop(&mut self) { self.0.fetch_sub(1, Ordering::SeqCst); } }
+            let result = raced(&Timing::default(), &CancellationToken::new(), true, |method| {
+                let running = running.clone(); let visits = visits.clone();
+                async move {
+                    visits.lock().unwrap().push(method);
+                    if method == Method::Tailcat { assert_eq!(running.load(Ordering::SeqCst), 0, "native attempt remains alive"); }
+                    running.fetch_add(1, Ordering::SeqCst); let _guard = Running(running);
+                    if method == winner { return Ok(()); }
+                    tokio::time::sleep(Duration::from_secs(100)).await;
+                    Err("unavailable".into())
+                }
+            }).await.unwrap();
+            assert_eq!(result.0, winner);
+            let visits = visits.lock().unwrap();
+            assert_eq!(visits.contains(&Method::Tailcat), winner == Method::Tailcat);
+            if winner == Method::Tailcat { assert_eq!(visits.last(), Some(&Method::Tailcat)); assert!(visits.contains(&Method::Pwnat)); }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unsupported_pwnat_skips_to_tailcat_and_cancellation_drops_fallback() {
+        let cancel = CancellationToken::new();
+        let mut visits = Vec::new();
+        let result: Result<(Method, ())> = raced(&Timing::default(), &cancel, false, |method| {
+            visits.push(method); let cancel = cancel.clone();
+            async move {
+                assert_ne!(method, Method::Pwnat);
+                if method == Method::Tailcat { cancel.cancel(); std::future::pending().await }
+                else { Err("failed".into()) }
+            }
+        }).await;
+        assert!(result.unwrap_err().to_string().contains("cancelled"));
+        assert_eq!(visits.last(), Some(&Method::Tailcat));
+    }
 
     #[tokio::test(start_paused = true)]
     async fn lan_grace_avoids_dht_discovery_on_fast_lan() {
@@ -991,7 +1128,7 @@ mod tests {
                         }
                         Method::HyperDHT => Ok(()),
                         Method::Public | Method::TcpPunch => std::future::pending::<Result<()>>().await,
-                        Method::Pwnat => panic!("pwnat must remain fallback"),
+                        Method::Pwnat | Method::Tailcat => panic!("pwnat must remain fallback"),
                     }
                 }
             },
@@ -1025,9 +1162,9 @@ mod tests {
             assert_eq!(
                 visited,
                 if available {
-                    METHODS.to_vec()
+                    METHODS[..5].to_vec()
                 } else {
-                    METHODS[..4].to_vec()
+                    [METHODS[..4].to_vec(), vec![Method::Tailcat]].concat()
                 }
             );
         }
@@ -1050,7 +1187,7 @@ mod tests {
                         tokio::time::sleep(Duration::from_secs(10 + 30 + 5)).await;
                         Ok(())
                     }
-                    Method::Pwnat => panic!("must not fall back before the punch window ends"),
+                    Method::Pwnat | Method::Tailcat => panic!("must not fall back before the punch window ends"),
                 }
             },
         )
@@ -1086,7 +1223,7 @@ mod tests {
                 Method::Lan => Err("away".into()),
                 Method::Public => { tokio::time::sleep(Duration::from_millis(80)).await; Ok(()) }
                 Method::HyperDHT => { tokio::time::sleep(Duration::from_secs(3)).await; Ok(()) }
-                Method::TcpPunch | Method::Pwnat => panic!("not needed"),
+                Method::TcpPunch | Method::Pwnat | Method::Tailcat => panic!("not needed"),
             }
         }).await.unwrap();
         assert_eq!(result.0, Method::Public);
@@ -1101,7 +1238,7 @@ mod tests {
                 Method::Lan | Method::Public => Err("away".into()),
                 Method::HyperDHT => std::future::pending::<Result<()>>().await,
                 Method::TcpPunch => { tokio::time::sleep(Duration::from_millis(400)).await; Ok(()) }
-                Method::Pwnat => panic!("not needed"),
+                Method::Pwnat | Method::Tailcat => panic!("not needed"),
             }
         }).await.unwrap();
         assert_eq!(result.0, Method::TcpPunch);
