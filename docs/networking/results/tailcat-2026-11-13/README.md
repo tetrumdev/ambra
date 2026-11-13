@@ -64,10 +64,12 @@ separately reported.
 The sample size is not a general NAT success-rate estimate.
 
 The test audio is a 10-second, 5,494,649-byte lossless excerpt of existing music,
-not random bytes or synthetic silence. Its average file bitrate is about
-0.524 MiB/s. The slowest observed public-DERP rate falls below that bitrate.
-Public DERP therefore does **not** demonstrate reliable sustained high-resolution
-playback. Initial burst rates must not be mistaken for sustained relay capacity.
+not random bytes or synthetic silence. Its whole-file average is about
+0.524 MiB/s, including container/metadata payload; that is not a steady audio
+bitrate. Source metadata is 24-bit/44.1 kHz stereo, with an uncompressed PCM
+ceiling of about 0.252 MiB/s. Observed rates exceed that PCM rate, but these
+short file transfers do **not** establish reliable sustained playback or capacity
+for higher sample rates. Initial burst rates must not be mistaken for sustained relay capacity.
 No private cross-network DERP service was available, and no public relay service
 was deployed. Public-relay tests remain bounded functional transfers, including
 one deliberately paced drain test, rather than sustained saturation benchmarks.
