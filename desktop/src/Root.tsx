@@ -17,6 +17,7 @@ const sharedPlaybackKey = "ambra.shared-playback.v1";
  */
 function sameStatus(current: NetworkStatus, next: NetworkStatus) {
   return current.state === next.state && (current.method ?? null) === (next.method ?? null) && (current.error ?? null) === (next.error ?? null)
+    && current.tailcatPath?.kind === next.tailcatPath?.kind && current.tailcatPath?.region === next.tailcatPath?.region
     ? current : next;
 }
 

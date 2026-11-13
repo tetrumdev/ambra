@@ -48,7 +48,9 @@ pub struct ServerConfig {
     pub paired_clients: Vec<PairedClient>,
 }
 
-fn secure_port() -> u16 { 38149 }
+fn secure_port() -> u16 {
+    38149
+}
 
 fn enabled() -> bool {
     true
@@ -90,8 +92,13 @@ impl ServerConfig {
         let mut config: Self = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
         // Old versions accepted reserved hints. Discard only that hint, never
         // the server identity or paired devices when upgrading their settings.
-        if config.public_endpoint.is_some_and(|endpoint| ambra_net::pwnat::validate_endpoint(endpoint).is_err()) {
-            eprintln!("Ignoring invalid legacy pwnat endpoint; retaining server settings and paired devices");
+        if config
+            .public_endpoint
+            .is_some_and(|endpoint| ambra_net::pwnat::validate_endpoint(endpoint).is_err())
+        {
+            eprintln!(
+                "Ignoring invalid legacy pwnat endpoint; retaining server settings and paired devices"
+            );
             config.public_endpoint = None;
         }
         config.validate()?;
@@ -126,6 +133,12 @@ impl ServerConfig {
         validate_name(&self.name)?;
         if let Some(endpoint) = self.public_endpoint {
             ambra_net::pwnat::validate_endpoint(endpoint).map_err(|e| e.to_string())?;
+        }
+        if let Some(url) = &self.tailcat_derp_map_url {
+            let parsed: reqwest::Url = url.parse().map_err(|_| "Invalid DERP map URL")?;
+            if parsed.scheme() != "https" || parsed.host_str().is_none() {
+                return Err("DERP map requires HTTPS".into());
+            }
         }
         parse_bind(&self.bind).map(|_| ())
     }
@@ -247,7 +260,12 @@ mod tests {
         old.as_object_mut().unwrap().remove("pwnat");
         assert!(!serde_json::from_value::<ServerConfig>(old).unwrap().pwnat);
         assert!(!config.pwnat);
-        for endpoint in ["100.106.252.60:38149", "192.0.2.1:38149", "[::1]:38149", "8.8.8.8:0"] {
+        for endpoint in [
+            "100.106.252.60:38149",
+            "192.0.2.1:38149",
+            "[::1]:38149",
+            "8.8.8.8:0",
+        ] {
             config.public_endpoint = Some(endpoint.parse().unwrap());
             assert!(config.validate().is_err());
         }
@@ -259,7 +277,13 @@ mod tests {
     fn invalid_legacy_endpoint_does_not_reset_identity_or_pairing() {
         let mut config = ServerConfig::new();
         config.public_endpoint = Some("203.0.113.10:38149".parse().unwrap());
-        config.paired_clients.push(PairedClient { id: "existing".into(), name: "Device".into(), token_sha256: token_hash("existing-token"), paired_at_ms: 1, public_key: None });
+        config.paired_clients.push(PairedClient {
+            id: "existing".into(),
+            name: "Device".into(),
+            token_sha256: token_hash("existing-token"),
+            paired_at_ms: 1,
+            public_key: None,
+        });
         let restored = ServerConfig::decode(&serde_json::to_vec(&config).unwrap()).unwrap();
         assert_eq!(restored.id, config.id);
         assert_eq!(restored.paired_clients, config.paired_clients);
@@ -270,8 +294,14 @@ mod tests {
     fn bind_shorthands_and_bare_ips() {
         assert_eq!(parse_bind("lan").unwrap().to_string(), "0.0.0.0:38147");
         assert_eq!(parse_bind("local").unwrap().to_string(), "127.0.0.1:38147");
-        assert_eq!(parse_bind("192.168.1.20").unwrap().to_string(), "192.168.1.20:38147");
-        assert_eq!(parse_bind("10.0.0.2:9000").unwrap().to_string(), "10.0.0.2:9000");
+        assert_eq!(
+            parse_bind("192.168.1.20").unwrap().to_string(),
+            "192.168.1.20:38147"
+        );
+        assert_eq!(
+            parse_bind("10.0.0.2:9000").unwrap().to_string(),
+            "10.0.0.2:9000"
+        );
         assert!(parse_bind("not an address").is_err());
     }
 
@@ -282,10 +312,15 @@ mod tests {
             id: "c1".into(),
             name: "Laptop".into(),
             token_sha256: token_hash("secret"),
-            paired_at_ms: 0, public_key: None,
+            paired_at_ms: 0,
+            public_key: None,
         });
         assert_eq!(config.client_for_token("secret").unwrap().name, "Laptop");
         assert!(config.client_for_token("Secret").is_none());
-        assert!(!serde_json::to_string(&config).unwrap().contains("\"secret\""));
+        assert!(
+            !serde_json::to_string(&config)
+                .unwrap()
+                .contains("\"secret\"")
+        );
     }
 }

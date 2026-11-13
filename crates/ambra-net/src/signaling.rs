@@ -92,7 +92,9 @@ pub enum Message {
     Connected {},
     Failed {},
     TailcatRequest {},
-    TailcatAddress { address: crate::tailcat::Address },
+    TailcatAddress {
+        address: crate::tailcat::Address,
+    },
 }
 impl Message {
     fn phase(&self) -> &'static str {

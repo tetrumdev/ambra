@@ -1,6 +1,11 @@
 import { createContext, useContext } from "react";
 
-export type NetworkStatus = { state: string; method?: string | null; error?: string | null };
+export type NetworkStatus = {
+  state: string;
+  method?: string | null;
+  error?: string | null;
+  tailcatPath?: { kind: "unknown" | "direct" | "derp"; region?: number } | null;
+};
 export type ClientConnection = {
   connected: boolean;
   network: NetworkStatus;

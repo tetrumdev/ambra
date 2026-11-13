@@ -3,6 +3,7 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "$0")/../.." && pwd)"
 manifest="$project_dir/crates/ambra-mobile-bridge/Cargo.toml"
 module_dir="$project_dir/mobile/modules/ambra-network"
+command -v go >/dev/null || { echo 'Install Go 1.27.4 to build bundled Tailcat native library.' >&2; exit 1; }
 case "${1:-}" in
   ios)
     xcodebuild -version >/dev/null 2>&1 || { echo 'Full Xcode is required.' >&2; exit 1; }
