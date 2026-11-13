@@ -132,7 +132,7 @@ async fn run(app: &AppHandle, command: Command) -> Result<Value, String> {
             );
         }
         return Ok(
-            json!({ "network": crate::server_link::network_connection_status(link), "native": native }),
+            json!({ "network": crate::server_link::current_network_status(&link), "native": native }),
         );
     }
     let connection = link.connection();

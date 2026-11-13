@@ -13,6 +13,7 @@ mod windows {
     static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
     const TRAY_MESSAGE: u32 = WM_APP + 1;
     const STOP: usize = 1;
+    const ALLOW_FIREWALL: usize = 2;
     fn wide(value: &str) -> Vec<u16> { value.encode_utf16().chain(Some(0)).collect() }
 
     unsafe extern "system" fn window_proc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -28,6 +29,16 @@ mod windows {
                     let menu = CreatePopupMenu();
                     AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, wide("Ambra Server — Running").as_ptr());
                     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+                    // Shown while other devices can't reach the server through Windows Firewall.
+                    match crate::firewall::status().state {
+                        crate::firewall::State::Blocked | crate::firewall::State::Declined => {
+                            AppendMenuW(menu, MF_STRING, ALLOW_FIREWALL, wide("Allow through Windows Firewall…").as_ptr());
+                        }
+                        crate::firewall::State::PublicNetwork => {
+                            AppendMenuW(menu, MF_STRING | MF_DISABLED, 0, wide("Other devices can't connect: this network is marked Public").as_ptr());
+                        }
+                        _ => {}
+                    }
                     AppendMenuW(menu, MF_STRING, STOP, wide("Stop server").as_ptr());
                     let mut point = POINT::default();
                     GetCursorPos(&mut point);
@@ -38,6 +49,7 @@ mod windows {
                     0
                 }
                 WM_COMMAND if wparam & 0xffff == STOP => { crate::server_process::stop(); 0 }
+                WM_COMMAND if wparam & 0xffff == ALLOW_FIREWALL => { crate::firewall::retry(); 0 }
                 WM_CLOSE => { DestroyWindow(window); 0 }
                 WM_DESTROY => { PostQuitMessage(0); 0 }
                 _ => DefWindowProcW(window, message, wparam, lparam),

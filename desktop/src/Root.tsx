@@ -8,8 +8,11 @@ import { connectToServer, serverConnection, setServerOnline, subscribeServerConn
 import { flushServerState, hydrateServerState, installServerStateLifecycle, serverStateStatus, subscribeServerState, reloadServerState } from "./utils/serverState";
 import { mark } from "./utils/perf";
 import { useStartupWindow } from "./hooks/useStartupWindow";
+import { refreshServiceAvailability } from "./hooks/useServiceAvailability";
 
 const sharedPlaybackKey = "ambra.shared-playback.v1";
+/** How long a connection attempt may take before the server is shown as disconnected. */
+const SETTLE_MS = 20_000;
 
 /**
  * The connection is read every few seconds and nearly always reads the same. Keeping the
@@ -36,6 +39,16 @@ export function Root() {
   const releasePlayer = useRef<() => Promise<void>>(async () => {});
   const registerPlaybackRelease = useCallback((release: () => Promise<void>) => { releasePlayer.current = release; }, []);
   const connected = networkServer === connection?.baseUrl && network.state.startsWith("Connected");
+  // The server that last failed to connect, or took too long to. A server on its way isn't
+  // called disconnected: like any app's own server, it's just connecting.
+  const [failedServer, setFailedServer] = useState<string | null>(null);
+  const settling = !!connection?.server && !connected && failedServer !== connection.baseUrl;
+  useEffect(() => {
+    if (!settling || !connection) return;
+    const server = connection.baseUrl;
+    const timer = setTimeout(() => setFailedServer(server), SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [settling, connection]);
   // A transport retry does not transfer ownership of buffered audio to the
   // local player. Keep the established shared owner while the same server's
   // bounded connection attempt runs. Terminal failure and explicit selection
@@ -44,7 +57,10 @@ export function Root() {
     && networkServer === connection.baseUrl
     && (network.state === "Reconnecting" || network.state === "DiscoveringLocal"
       || network.state.startsWith("Connecting") || network.state === "Authenticating");
-  setServerOnline(connected);
+  // A server on its way is used as if it answered: requests wait for the connection, as they
+  // would for any app's own slow server, and its cached library shows in the meantime.
+  const reachable = connected || settling;
+  setServerOnline(reachable);
   useStartupWindow(ready);
 
   const applySharedPlayback = useCallback((shared: boolean) => {
@@ -80,19 +96,26 @@ export function Root() {
     await flushPersistentState();
   }, [applySharedPlayback]);
 
+  const noteOutcome = useCallback((status: NetworkStatus) => {
+    if (status.state.startsWith("Connected")) setFailedServer(null);
+    else if (status.state === "Failed" || (status.state === "Offline" && status.error)) setFailedServer(serverConnection?.baseUrl ?? null);
+  }, []);
+
   const reconnect = useCallback(() => {
     if (!serverConnection?.server) return;
     const base = serverBaseUrl;
     void invoke<NetworkStatus>("network_connection_status").then(status => {
       if (base !== serverBaseUrl) return;
-      setNetworkServer(serverConnection?.baseUrl ?? null); setNetwork(status);
+      setNetworkServer(serverConnection?.baseUrl ?? null); setNetwork(status); noteOutcome(status);
     }).catch(() => { if (base === serverBaseUrl) setNetwork({ state: "Offline" }); });
     void hydrateServerState().catch(() => {});
-  }, [setNetwork]);
+  }, [setNetwork, noteOutcome]);
 
   useEffect(() => {
     let disposed = false;
-    void hydratePersistentStorage().finally(() => {
+    // The selected server is known before the app first draws, so it opens with that server's
+    // cached library rather than switching to it a moment later.
+    void connectToServer().catch(() => {}).then(hydratePersistentStorage).finally(() => {
       if (!disposed) {
         setPreferSharedPlayback(getPersistentItem(sharedPlaybackKey) !== "false");
         setReady(true);
@@ -105,24 +128,37 @@ export function Root() {
     if (!ready) return;
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
+    // The status last heard. Given it, the desktop app answers as soon as the status changes
+    // (or after a few seconds), so a new connection shows the moment it's made.
+    let known: NetworkStatus | null = null;
     const check = async () => {
+      let next = 3000;
       try {
         await connectToServer();
         if (disposed) return;
-        if (!serverConnection?.server) { setNetwork({ state: "Offline" }); setNetworkServer(null); return; }
+        if (!serverConnection?.server) { known = null; setNetwork({ state: "Offline" }); setNetworkServer(null); return; }
         const selected = serverConnection;
-        const status = await invoke<NetworkStatus>("network_connection_status");
-        if (disposed || selected !== serverConnection) return;
+        const asked = Date.now();
+        const status = await invoke<NetworkStatus>("network_connection_status", { known, waitMs: 3000 });
+        if (disposed || selected !== serverConnection) { known = null; return; }
+        // A change is followed at once; an unchanged answer has already waited its turn.
+        const unchanged = known !== null && JSON.stringify(known) === JSON.stringify(status);
+        next = unchanged ? Math.max(250, 3000 - (Date.now() - asked)) : 0;
+        known = status;
         setNetworkServer(serverConnection?.baseUrl ?? null);
         setNetwork(status);
+        noteOutcome(status);
         if (status.state.startsWith("Connected")) void hydrateServerState().catch(() => {});
-      } catch { if (!disposed) setNetwork({ state: "Offline" }); }
-      finally { if (!disposed) timer = setTimeout(() => void check(), 3000); }
+      } catch { known = null; if (!disposed) setNetwork({ state: "Offline" }); }
+      finally { if (!disposed) timer = setTimeout(() => void check(), next); }
     };
     void check();
     return () => { disposed = true; clearTimeout(timer); };
-  }, [ready, connection, setNetwork]);
+  }, [ready, connection, setNetwork, noteOutcome]);
   useEffect(installServerStateLifecycle, []);
+  // Asked for while the server was still on its way, the services' sign-in state may not have
+  // arrived; ask again now that it answers.
+  useEffect(() => { if (connected) void refreshServiceAvailability(); }, [connected]);
   useEffect(() => {
     if (ready) void applySharedPlayback((connected || recoveringSharedPlayback) && preferSharedPlayback).catch(() => {});
   }, [ready, connected, recoveringSharedPlayback, preferSharedPlayback, applySharedPlayback]);
@@ -133,9 +169,9 @@ export function Root() {
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-window-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
-      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!connected} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
+      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!reachable} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>
-    {serverConnection?.server && !connected && <div className="stateSaveError" role="status">
+    {serverConnection?.server && !connected && !settling && <div className="stateSaveError" role="status">
       <span>{serverConnection.server.name} disconnected. Local music remains available.</span>
       <button onClick={reconnect}>Reconnect</button>
     </div>}
