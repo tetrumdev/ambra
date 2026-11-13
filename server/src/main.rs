@@ -79,13 +79,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             storage::migrate_legacy();
             return_unused_memory_periodically();
             if tray && cfg!(target_os = "windows") {
-                tokio::spawn(async move {
-                    if let Err(error) = api::serve(bind).await {
-                        eprintln!("{error}");
-                    }
+                let server = tokio::spawn(async move {
+                    let result = api::serve(bind).await;
                     tray::quit();
+                    result
                 });
-                tray::run().map_err(Into::into)
+                // The tray is optional: SSH sessions have no Explorer, and the shell may
+                // still be starting at login. Its failure must not stop the server.
+                let _ = tray::run();
+                server.await?
             } else {
                 api::serve(bind).await
             }

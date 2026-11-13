@@ -49,17 +49,15 @@ export function Root() {
     const timer = setTimeout(() => setFailedServer(server), SETTLE_MS);
     return () => clearTimeout(timer);
   }, [settling, connection]);
-  // A transport retry does not transfer ownership of buffered audio to the
-  // local player. Keep the established shared owner while the same server's
-  // bounded connection attempt runs. Terminal failure and explicit selection
-  // changes still release it so local playback remains independent.
+  // Transport availability does not change the selected playback owner. Remounting
+  // App on each failed retry resets navigation, layout and open controls. Only an
+  // explicit mode or server change should hand an established shared player back.
   const recoveringSharedPlayback = sharedPlayback && !!connection?.server
-    && networkServer === connection.baseUrl
-    && (network.state === "Reconnecting" || network.state === "DiscoveringLocal"
-      || network.state.startsWith("Connecting") || network.state === "Authenticating");
-  // A server on its way is used as if it answered: requests wait for the connection, as they
-  // would for any app's own slow server, and its cached library shows in the meantime.
+    && networkServer === connection.baseUrl;
+  // Keep the selected server's cached UI through outages. Requests still use the
+  // actual reachability below, so unavailable remote tracks cannot start playing.
   const reachable = connected || settling;
+  const showServerLibrary = reachable || recoveringSharedPlayback;
   setServerOnline(reachable);
   useStartupWindow(ready);
 
@@ -169,7 +167,7 @@ export function Root() {
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-window-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
-      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!reachable} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
+      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!showServerLibrary} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>
     {serverConnection?.server && !connected && !settling && <div className="stateSaveError" role="status">
       <span>{serverConnection.server.name} disconnected. Local music remains available.</span>
