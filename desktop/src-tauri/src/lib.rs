@@ -769,7 +769,7 @@ fn read_track(path: &Path, library_root: &Path, covers: &Path) -> Result<Track, 
 }
 
 #[tauri::command]
-fn local_music_directory(app: tauri::AppHandle) -> Result<String, String> {
+fn open_local_music_directory(app: tauri::AppHandle) -> Result<(), String> {
     let music_directory = app
         .path()
         .audio_dir()
@@ -777,7 +777,8 @@ fn local_music_directory(app: tauri::AppHandle) -> Result<String, String> {
         .join("Ambra");
     std::fs::create_dir_all(&music_directory)
         .map_err(|error| format!("Could not create {}: {error}", music_directory.display()))?;
-    Ok(music_directory.to_string_lossy().into_owned())
+    tauri_plugin_opener::open_path(&music_directory, None::<&str>)
+        .map_err(|error| format!("Could not open {}: {error}", music_directory.display()))
 }
 
 #[tauri::command]
@@ -1119,7 +1120,7 @@ pub fn run() {
             load_service_playlist_cache,
             save_service_playlist_cache,
             load_cached_music,
-            local_music_directory,
+            open_local_music_directory,
             scan_music,
             keyboard::native_function_modifier_pressed,
             window_drag::set_window_drag_regions,

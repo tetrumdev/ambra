@@ -82,7 +82,7 @@ dependencies = [
 
 [[package]]
 name = "ambra-server"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "ambra-net",
  "ambra-vault",

@@ -344,8 +344,26 @@ pub async fn discover_servers(timeout_ms: Option<u64>) -> Result<Vec<DiscoveredS
     }).collect())
 }
 
+/// The connection's status. Given the status the app last saw (`known`), it answers as soon
+/// as that changes, or after `wait_ms`: the app hears of a connection the moment it's made,
+/// rather than at its next look.
 #[tauri::command]
-pub fn network_connection_status(link: tauri::State<'_, ServerLink>) -> Value {
+pub async fn network_connection_status(link: tauri::State<'_, ServerLink>, known: Option<Value>, wait_ms: Option<u64>) -> Result<Value, String> {
+    let manager = link.runtime.lock().map_err(|_| "Server connection is unavailable")?.manager.clone();
+    if let (Some(manager), Some(known)) = (manager, known) {
+        let mut status = manager.subscribe();
+        let wait = Duration::from_millis(wait_ms.unwrap_or(3000).min(30_000));
+        let _ = tokio::time::timeout(wait, async {
+            loop {
+                let current = serde_json::to_value(&*status.borrow_and_update()).unwrap_or(Value::Null);
+                if current != known || status.changed().await.is_err() { return; }
+            }
+        }).await;
+    }
+    Ok(current_network_status(&link))
+}
+
+pub fn current_network_status(link: &ServerLink) -> Value {
     let runtime = link.runtime.lock().expect("server connection lock");
     runtime.manager.as_ref().map(|m| serde_json::to_value(m.status()).unwrap_or(Value::Null)).unwrap_or_else(|| {
         json!({ "state": if runtime.connection.mode == Mode::Join { "Failed" } else { "Offline" },

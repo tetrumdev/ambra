@@ -168,6 +168,13 @@ pub async fn run(
     let mut tasks = tokio::task::JoinSet::new();
     if !address.ip().is_loopback() {
         tasks.spawn(crate::discovery::run(network.clone(), cancel.clone()));
+        // Other devices reach these listeners only once Windows lets them in.
+        let ports = crate::firewall::Ports {
+            secure: port,
+            http: address.port(),
+            discovery: ambra_net::lan::DISCOVERY_PORT,
+        };
+        tokio::task::spawn_blocking(move || crate::firewall::ensure(ports, false));
     }
     match ambra_net::lan::bind(secure).await {
         Ok(listener) => {
