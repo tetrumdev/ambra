@@ -1,4 +1,4 @@
-//! Native direct-only networking shared by Ambra's server and native clients.
+//! Native networking shared by Ambra's server and clients, with Tailcat as the final fallback.
 pub mod bridge;
 pub mod gate;
 pub mod hyperdht;

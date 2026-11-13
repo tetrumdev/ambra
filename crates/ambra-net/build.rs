@@ -108,8 +108,13 @@ fn main() {
                 println!("cargo:rustc-link-lib=framework=IOKit");
             }
         }
-        "linux" | "android" => {
+        "linux" => {
             for library in ["pthread", "dl", "m"] {
+                println!("cargo:rustc-link-lib={library}");
+            }
+        }
+        "android" => {
+            for library in ["dl", "m", "log"] {
                 println!("cargo:rustc-link-lib={library}");
             }
         }

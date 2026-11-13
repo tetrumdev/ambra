@@ -118,6 +118,7 @@ pub struct Status {
     pub server: PublicKey,
     pub error: Option<String>,
     pub tailcat_path: Option<tailcat::PeerPath>,
+    pub tailcat_rtt_ms: Option<f64>,
 }
 
 const MAX_PUBLIC: usize = 8;
@@ -208,6 +209,7 @@ impl ConnectionManager {
             server: selected.public_key,
             error: None,
             tailcat_path: None,
+            tailcat_rtt_ms: None,
         });
         Arc::new_cyclic(|owner| Self {
             dht: hyperdht::Client::new(identity.clone()),
@@ -231,16 +233,19 @@ impl ConnectionManager {
             timing,
         })
     }
+    fn tailcat_diagnostics(&self) -> Option<Arc<tailcat::Diagnostics>> {
+        self.tailcat_path
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .as_ref()
+            .and_then(Weak::upgrade)
+    }
     pub fn status(&self) -> Status {
         let mut status = self.status.borrow().clone();
         if status.method == Some(Method::Tailcat) {
-            status.tailcat_path = self
-                .tailcat_path
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .map(|diagnostics| diagnostics.path());
+            let diagnostics = self.tailcat_diagnostics();
+            status.tailcat_path = diagnostics.as_ref().map(|d| d.path());
+            status.tailcat_rtt_ms = diagnostics.as_ref().and_then(|d| d.rtt_ms());
         }
         status
     }
@@ -255,12 +260,12 @@ impl ConnectionManager {
             server: self.selected.public_key,
             error,
             tailcat_path: if method == Some(Method::Tailcat) {
-                self.tailcat_path
-                    .lock()
-                    .unwrap_or_else(|p| p.into_inner())
-                    .as_ref()
-                    .and_then(Weak::upgrade)
-                    .map(|diagnostics| diagnostics.path())
+                self.tailcat_diagnostics().map(|d| d.path())
+            } else {
+                None
+            },
+            tailcat_rtt_ms: if method == Some(Method::Tailcat) {
+                self.tailcat_diagnostics().and_then(|d| d.rtt_ms())
             } else {
                 None
             },
@@ -291,7 +296,12 @@ impl ConnectionManager {
                     match tailcat::connect(address, &self.identity, self.selected.public_key).await
                     {
                         Ok(connected) => Some(connected),
-                        Err(error) if error.is::<tailcat::DialFailure>() => None,
+                        Err(error) if error.is::<tailcat::DialFailure>() => {
+                            tracing::info!(
+                                "Cached Tailcat tunnel unavailable; refreshing encrypted discovery"
+                            );
+                            None
+                        }
                         Err(error) => return Err(error),
                     }
                 } else {
@@ -923,10 +933,10 @@ impl ConnectionManager {
                         tracing::info!(?method, "Connection stopped answering after a network change");
                         return;
                     }
-                    if away && authorized && self.upgrade(method).await { return; }
+                    if away && authorized && self.check_upgrade(method).await { return; }
                 }
                 _ = upgrade.tick(), if away && authorized => {
-                    if self.upgrade(method).await { return; }
+                    if self.check_upgrade(method).await { return; }
                 }
             }
         }
@@ -995,18 +1005,32 @@ impl ConnectionManager {
     /// Moves to a better path when one answers: back to the LAN, or from HyperDHT to the
     /// forwarded TCP port. The new session is newer, so the server closes the old one once
     /// it is authorized.
-    async fn upgrade(&self, current: Option<Method>) -> bool {
-        if current == Some(Method::Tailcat) {
-            if self.upgrade_to(Method::Lan, self.timing.lan).await {
-                return true;
+    async fn check_upgrade(&self, current: Option<Method>) -> bool {
+        match self.upgrade(current).await {
+            Ok(upgraded) => upgraded,
+            Err(error) => {
+                self.state(
+                    current.map_or(ConnectionState::Offline, Method::connected),
+                    current,
+                    Some(error.to_string()),
+                );
+                false
             }
+        }
+    }
+
+    async fn upgrade(&self, current: Option<Method>) -> Result<bool> {
+        if self.upgrade_to(Method::Lan, self.timing.lan).await? {
+            return Ok(true);
+        }
+        if current == Some(Method::Tailcat) {
             {
                 let mut last = self
                     .native_upgrade_at
                     .lock()
                     .unwrap_or_else(|p| p.into_inner());
                 if last.is_some_and(|at| at.elapsed() < Duration::from_secs(120)) {
-                    return false;
+                    return Ok(false);
                 }
                 *last = Some(tokio::time::Instant::now());
             }
@@ -1016,7 +1040,6 @@ impl ConnectionManager {
                 tcp_punch: Duration::from_secs(12),
                 ..self.timing.clone()
             };
-            let previous = self.status();
             let candidate = raced(
                 &timing,
                 &self.cancel,
@@ -1029,57 +1052,55 @@ impl ConnectionManager {
                 },
             )
             .await;
-            if let Ok((method, connection)) = candidate {
-                if tokio::time::timeout(
-                    Duration::from_secs(5),
-                    self.authenticate(&connection, method),
-                )
-                .await
-                .is_ok_and(|r| r.is_ok())
-                {
-                    if let Some(old) = self.active.write().await.replace(connection) {
-                        retire(old);
-                    }
-                    return true;
-                }
-                connection.close();
-                self.state(previous.state, previous.method, previous.error);
-            }
-            return false;
+            return match candidate {
+                Ok((method, connection)) => self.install_candidate(method, connection).await,
+                Err(error) if authentication_failure(&error) => Err(error),
+                _ => Ok(false),
+            };
         }
-        if self.upgrade_to(Method::Lan, self.timing.lan).await {
-            return true;
+        if current == Some(Method::HyperDHT) && !self.public_endpoints().is_empty() {
+            return self.upgrade_to(Method::Public, self.timing.public).await;
         }
-        current == Some(Method::HyperDHT)
-            && !self.public_endpoints().is_empty()
-            && self.upgrade_to(Method::Public, self.timing.public).await
+        Ok(false)
     }
 
-    async fn upgrade_to(&self, method: Method, budget: Duration) -> bool {
-        let Ok(Ok(connection)) =
-            tokio::time::timeout(budget, self.attempt_reporting(method, false)).await
-        else {
-            return false;
-        };
+    async fn upgrade_to(&self, method: Method, budget: Duration) -> Result<bool> {
+        match tokio::time::timeout(budget, self.attempt_reporting(method, false)).await {
+            Ok(Ok(connection)) => self.install_candidate(method, connection).await,
+            Ok(Err(error)) if authentication_failure(&error) => Err(error),
+            _ => Ok(false),
+        }
+    }
+
+    async fn install_candidate(
+        &self,
+        method: Method,
+        connection: Arc<HttpConnection>,
+    ) -> Result<bool> {
         let previous = self.status();
-        if tokio::time::timeout(
+        let result = tokio::time::timeout(
             Duration::from_secs(5),
             self.authenticate(&connection, method),
         )
-        .await
-        .is_ok_and(|result| result.is_ok())
-        {
+        .await;
+        if matches!(result, Ok(Ok(()))) {
             tracing::info!(?method, "Moved to a better connection");
             if let Some(old) = self.active.write().await.replace(connection) {
                 retire(old);
             }
-            true
-        } else {
-            connection.close();
-            self.state(previous.state, previous.method, previous.error);
-            false
+            return Ok(true);
+        }
+        connection.close();
+        self.state(previous.state, previous.method, previous.error);
+        match result {
+            Ok(Err(error)) if authentication_failure(&error) => Err(error),
+            _ => Ok(false),
         }
     }
+}
+
+fn authentication_failure(error: &crate::Error) -> bool {
+    error.is::<AuthorizationError>() || error.is::<crate::transport::PeerAuthenticationError>()
 }
 
 /// How long a replaced connection may finish the requests it already carries (a song
@@ -1401,6 +1422,7 @@ mod tests {
         *manager.tailcat_address.lock().unwrap() = Some(address);
         let old = manager.connect().await.unwrap();
         assert_eq!(manager.status().method, Some(Method::Tailcat));
+        let diagnostics = manager.tailcat_diagnostics().unwrap();
         let native = tokio::spawn(crate::lan::serve(
             listener,
             identity,
@@ -1408,12 +1430,19 @@ mod tests {
             admit,
             stop.clone(),
         ));
-        assert!(manager.upgrade(Some(Method::Tailcat)).await);
+        assert!(manager.upgrade(Some(Method::Tailcat)).await.unwrap());
         assert_eq!(manager.status().method, Some(Method::Lan));
         assert!(!old.is_closed(), "in-flight work must retain drain window");
         tokio::time::timeout(RETIRE_AFTER + Duration::from_secs(2), old.closed())
             .await
             .unwrap();
+        tokio::time::timeout(Duration::from_secs(6), async {
+            while !diagnostics.is_retired() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         assert!(manager.connect().await.is_ok());
         manager.shutdown().await;
         stop.cancel();
