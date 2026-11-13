@@ -6,8 +6,9 @@ helper executable, administrative forwarding service, or separate music protocol
 
 The verified physical combination is a macOS client on school Wi-Fi and a Kubuntu
 server on home Wi-Fi. Windows GNU networking builds, but Windows runtime and MSVC
-release packaging remain unverified. iOS and Android share the native-library
-build path; their SDK builds remain blocked in this environment. This is not a
+release packaging remain unverified. Android ARM64, ARMv7, and x86-64 native
+libraries build with NDK r27c/API 24; Android device operation remains unverified.
+iOS SDK builds remain blocked because full Xcode is unavailable. This is not a
 claim that every release platform has passed acceptance.
 
 ## Selection and authorization
@@ -144,7 +145,10 @@ relay details are embedded in the encrypted address, so clients need no separate
 map configuration.
 
 Public DERP is shared, rate limited, and has no sustained-throughput guarantee.
-The recorded public-relay runs are bounded functional audio transfers. They do
+The recorded public-relay runs are bounded functional audio transfers. Observed
+download rates range from 0.415 to 2.409 MiB/s. The slowest is below the
+0.524 MiB/s average bitrate of the tested high-resolution FLAC excerpt; public
+DERP cannot be claimed to sustain that workload reliably. They do
 not establish a relay capacity or concurrent-listener service guarantee. Sustained
 benchmarks require a private relay; no public relay service was deployed here.
 
@@ -154,8 +158,9 @@ CI installs the pinned Go toolchain. Windows cgo requires MinGW-w64; MSVC releas
 linking still needs validation on Windows. Android requires cargo-ndk and the NDK;
 iOS requires full Xcode and its device/simulator SDKs. The existing mobile script
 builds the same Rust/Go transport into Android libraries and the iOS XCFramework.
-The podspec includes the required Apple frameworks. Neither mobile SDK build ran
-successfully on this machine, so native mobile operation is unverified.
+The podspec includes the required Apple frameworks. Android native builds pass for all three packaged ABIs, including dependency
+SONAME checks and 16 KiB alignment on 64-bit targets. iOS cannot build without
+full Xcode. Neither mobile platform has physical playback validation.
 
 ## Tests, reproduction, and limits
 

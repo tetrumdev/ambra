@@ -56,6 +56,16 @@ def main():
     command = [str(args.probe.resolve()), mode, str(args.profile.resolve()), args.server_key, str(args.rounds)]
     raw_log = args.profile / f"{args.output.stem}.log"
     samples = []
+    diagnostic_failures = []
+    def capture(command, kind, timeout):
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            diagnostic_failures.append({"tool": kind, "timed_out": True})
+            return ""
+        if result.returncode:
+            diagnostic_failures.append({"tool": kind, "exit_code": result.returncode})
+        return result.stdout
     started = time.monotonic()
     with raw_log.open("w") as log:
         raw_log.chmod(0o600)
@@ -68,9 +78,9 @@ def main():
                 except subprocess.TimeoutExpired:
                     if time.monotonic() - started > 360:
                         raise TimeoutError("Bounded benchmark exceeded 360 seconds")
-                    local = subprocess.run(["lsof", "-a", "-p", str(process.pid), "-iTCP", "-sTCP:ESTABLISHED", "-nP"], capture_output=True, text=True, timeout=10)
-                    remote = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", args.host, "ss -tinpH 'sport = :443'"], capture_output=True, text=True, timeout=15)
-                    samples.append({"local": local.stdout, "remote": remote.stdout})
+                    local = capture(["lsof", "-a", "-p", str(process.pid), "-iTCP", "-sTCP:ESTABLISHED", "-nP"], "local sockets", 10)
+                    remote = capture(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", args.host, "ss -tinpH 'sport = :443'"], "administrative SSH sockets", 15)
+                    samples.append({"local": local, "remote": remote})
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -107,6 +117,7 @@ def main():
             "sample_count": len(samples),
             "tcp_rtt_ms_samples": [float(rtt) for sample in samples for rtt in re.findall(r"\brtt:([0-9.]+)/", sample["remote"])],
         },
+        "diagnostic_failures": diagnostic_failures,
         "tailcat_started": "ConnectingTailcat" in raw,
         "failed_native_methods": re.findall(r"Transport attempt failed.*?method=(Lan|Public|TcpPunch|HyperDHT|Pwnat)\b", raw),
         "pwnat_skipped": "ConnectingPwnat" not in raw,
