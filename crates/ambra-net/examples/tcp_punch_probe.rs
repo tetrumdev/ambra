@@ -82,8 +82,8 @@ async fn main() -> ambra_net::Result<()> {
         manager.shutdown().await;
         return Ok(());
     }
-    if mode != "run" {
-        return Err("Expected enroll or run".into());
+    if !["run", "tailcat"].contains(&mode.as_str()) {
+        return Err("Expected enroll, run, or tailcat".into());
     }
     let rounds: usize = args
         .get(4)
@@ -102,9 +102,15 @@ async fn main() -> ambra_net::Result<()> {
             hyperdht: Duration::ZERO,
             pwnat: Duration::ZERO,
             lan_grace: Duration::ZERO,
+            tcp_punch: if mode == "tailcat" {
+                Duration::ZERO
+            } else {
+                Timing::default().tcp_punch
+            },
             ..Default::default()
         },
     );
+    manager.use_endpoint_cache(directory.join("endpoints.json"));
     // A real WAV container, synthetic silence. This verifies audio-file delivery, not audible playback.
     let size = 8 * 1024 * 1024usize;
     let mut audio = vec![0; size];
@@ -120,7 +126,22 @@ async fn main() -> ambra_net::Result<()> {
     audio[34..36].copy_from_slice(&16u16.to_le_bytes());
     audio[36..40].copy_from_slice(b"data");
     audio[40..44].copy_from_slice(&((size - 44) as u32).to_le_bytes());
-    let path = format!("/api/music/local/files/{:x}.wav", Sha256::digest(&audio));
+    let extension = if let Ok(file) = std::env::var("AMBRA_BENCH_AUDIO") {
+        audio = std::fs::read(file)?;
+        if audio.starts_with(b"fLaC") {
+            "flac"
+        } else if audio.starts_with(b"RIFF") {
+            "wav"
+        } else {
+            return Err("Benchmark needs FLAC or WAV".into());
+        }
+    } else {
+        "wav"
+    };
+    let path = format!(
+        "/api/music/local/files/{:x}.{extension}",
+        Sha256::digest(&audio)
+    );
     let mut passed = 0;
     for round in 0..rounds {
         let started = Instant::now();
@@ -128,8 +149,8 @@ async fn main() -> ambra_net::Result<()> {
         let result=async {
             manager.network_changed();
             active = Some(manager.connect().await?);
-            if manager.status().method!=Some(Method::TcpPunch) {return Err("Non-native fallback selected; test rejected".into());}
-            metric(serde_json::json!({"stage":"authenticated","round":round,"connection_ms":started.elapsed().as_secs_f64()*1000.,"method":manager.status().method}));
+            if manager.status().method!=Some(if mode == "tailcat" {Method::Tailcat} else {Method::TcpPunch}) {return Err("Non-native fallback selected; test rejected".into());}
+            metric(serde_json::json!({"stage":"authenticated","round":round,"connection_ms":started.elapsed().as_secs_f64()*1000.,"method":manager.status().method,"tailcat_path":manager.status().tailcat_path}));
             let api=Instant::now();manager.json("GET","/api/session",None).await?;
             metric(serde_json::json!({"stage":"api","round":round,"latency_ms":api.elapsed().as_secs_f64()*1000.}));
             if round==0 {
@@ -138,7 +159,7 @@ async fn main() -> ambra_net::Result<()> {
                 response.into_body().collect().await?;
             }
             let started=Instant::now();let mut bytes=0usize;let mut requests=0;
-            while started.elapsed()<Duration::from_secs(15) {
+            while started.elapsed()<Duration::from_secs(if mode == "tailcat" {1} else {15}) {
                 let (stream,range,api)=tokio::join!(
                     manager.request(hyper::Request::builder().uri(&path).body(Body::empty())?),
                     manager.request(hyper::Request::builder().uri(&path).header("range","bytes=100-199").body(Body::empty())?),

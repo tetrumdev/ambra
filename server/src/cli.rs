@@ -59,7 +59,11 @@ pub fn parse(arguments: Vec<String>) -> Result<Command, String> {
     match arguments.first().map(String::as_str) {
         None => Ok(Command::Run(vec!["help".into()])),
         Some("start" | "serve" | "--bind") => {
-            let rest = if arguments[0] == "--bind" { &arguments[..] } else { &arguments[1..] };
+            let rest = if arguments[0] == "--bind" {
+                &arguments[..]
+            } else {
+                &arguments[1..]
+            };
             let tray = arguments[0] == "serve" && rest.first().is_some_and(|arg| arg == "--tray");
             let rest = if tray { &rest[1..] } else { rest };
             let bind = match rest {
@@ -70,7 +74,11 @@ pub fn parse(arguments: Vec<String>) -> Result<Command, String> {
                 }
                 _ => return Err("Usage: ambra-server start [--bind <address>]".into()),
             };
-            if arguments[0] == "start" { Ok(Command::Start { bind }) } else { Ok(Command::Serve { bind, tray }) }
+            if arguments[0] == "start" {
+                Ok(Command::Start { bind })
+            } else {
+                Ok(Command::Serve { bind, tray })
+            }
         }
         Some(_) => Ok(Command::Run(arguments)),
     }
@@ -82,56 +90,115 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
     match words.as_slice() {
         ["help" | "--help" | "-h"] => Ok(HELP.into()),
         ["status"] => status().await,
-        ["network", "status" | "diagnose"] => match local("GET", "/api/local/network", None).await {
-            Ok(status) => pretty(status),
-            Err(error) if not_running(&error) => Ok(error),
-            Err(error) => Err(error),
-        },
+        ["network", "status" | "diagnose"] => {
+            match local("GET", "/api/local/network", None).await {
+                Ok(status) => pretty(status),
+                Err(error) if not_running(&error) => Ok(error),
+                Err(error) => Err(error),
+            }
+        }
         ["network", "identity"] => {
-            let identity = ambra_net::Identity::load_or_create(&crate::storage::config_path("network-identity.key")).map_err(|e| e.to_string())?;
+            let identity = ambra_net::Identity::load_or_create(&crate::storage::config_path(
+                "network-identity.key",
+            ))
+            .map_err(|e| e.to_string())?;
             Ok(identity.public_key().to_string())
-        },
-        ["network", "p2p", enabled @ ("on" | "off")] => config_set(json!({ "p2p": *enabled == "on" })).await,
-        ["network", "tailcat", enabled @ ("on" | "off")] => config_set(json!({ "tailcat": *enabled == "on" })).await,
-        ["network", "pwnat", enabled @ ("on" | "off")] => config_set(json!({ "pwnat": *enabled == "on" })).await,
+        }
+        ["network", "p2p", enabled @ ("on" | "off")] => {
+            config_set(json!({ "p2p": *enabled == "on" })).await
+        }
+        ["network", "tailcat", enabled @ ("on" | "off")] => {
+            config_set(json!({ "tailcat": *enabled == "on" })).await
+        }
+        ["network", "pwnat", enabled @ ("on" | "off")] => {
+            config_set(json!({ "pwnat": *enabled == "on" })).await
+        }
         ["network", "endpoint", "auto"] => config_set(json!({ "publicEndpoint": null })).await,
         ["network", "endpoint", endpoint] => {
-            let endpoint = endpoint.parse::<std::net::SocketAddr>().map_err(|_| "Use a public IP:port")?;
+            let endpoint = endpoint
+                .parse::<std::net::SocketAddr>()
+                .map_err(|_| "Use a public IP:port")?;
             ambra_net::pwnat::validate_endpoint(endpoint).map_err(|e| e.to_string())?;
             config_set(json!({ "publicEndpoint": endpoint })).await
-        },
+        }
         ["pair", "qr"] => {
             let response = local("GET", "/api/local/pairing/qr", None).await?;
             let payload = response["payload"].as_str().ok_or("No pairing payload")?;
             let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
-            Ok(format!("{}\n{}\nApprove the six-digit code after the device connects.", code.render::<char>().quiet_zone(true).module_dimensions(2, 1).build(), payload))
-        },
+            Ok(format!(
+                "{}\n{}\nApprove the six-digit code after the device connects.",
+                code.render::<char>()
+                    .quiet_zone(true)
+                    .module_dimensions(2, 1)
+                    .build(),
+                payload
+            ))
+        }
         ["login", "spotify"] => login_spotify().await,
         ["login", provider @ ("tidal" | "qobuz")] => {
             let reply = local("POST", &format!("/api/auth/{provider}/start"), None).await?;
             if let Some(url) = reply["loginUrl"].as_str() {
-                Ok(format!("Open {url}\nAfter signing in, run `ambra-server login complete {provider}` and paste the callback URL."))
-            } else { Ok(format!("{provider} connected.")) }
-        },
+                Ok(format!(
+                    "Open {url}\nAfter signing in, run `ambra-server login complete {provider}` and paste the callback URL."
+                ))
+            } else {
+                Ok(format!("{provider} connected."))
+            }
+        }
         ["login", "complete", provider @ ("tidal" | "qobuz")] => {
-            let callback = rpassword::prompt_password("Callback URL (hidden): ").map_err(|_| "Could not read the callback URL securely")?;
-            local("POST", &format!("/api/auth/{provider}/complete"), Some(json!({ "callbackUrl": callback }))).await?;
+            let callback = rpassword::prompt_password("Callback URL (hidden): ")
+                .map_err(|_| "Could not read the callback URL securely")?;
+            local(
+                "POST",
+                &format!("/api/auth/{provider}/complete"),
+                Some(json!({ "callbackUrl": callback })),
+            )
+            .await?;
             Ok(format!("{provider} connected on the server."))
-        },
-        ["logout", provider @ ("spotify" | "tidal" | "qobuz")] => pretty(local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?),
+        }
+        ["logout", provider @ ("spotify" | "tidal" | "qobuz")] => {
+            pretty(local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?)
+        }
         ["services", "status"] => pretty(local("GET", "/api/auth/status", None).await?),
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
         ["spotify", "soloist", "setup"] => setup_soloist().await,
         ["spotify", "soloist", "driver", "setup"] => setup_windows_driver().await,
-        ["spotify", "soloist", "disable"] => pretty(local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": false, "downloadConsent": false}))).await?),
-        ["spotify", "soloist", action @ ("pair" | "reset" | "check" | "sign-out")] => pretty(local("POST", &format!("/api/local/spotify/soloist/{action}"), None).await?),
+        ["spotify", "soloist", "disable"] => pretty(
+            local(
+                "POST",
+                "/api/local/spotify/playback",
+                Some(json!({"losslessEnabled": false, "downloadConsent": false})),
+            )
+            .await?,
+        ),
+        [
+            "spotify",
+            "soloist",
+            action @ ("pair" | "reset" | "check" | "sign-out"),
+        ] => pretty(
+            local(
+                "POST",
+                &format!("/api/local/spotify/soloist/{action}"),
+                None,
+            )
+            .await?,
+        ),
         ["spotify", "soloist", "key"] => {
-            let key = rpassword::prompt_password("Personal Soloist API key (hidden): ").map_err(|_| "Could not read the key securely from the terminal")?;
-            local("POST", "/api/local/spotify/playback", Some(json!({ "apiKey": key }))).await?;
+            let key = rpassword::prompt_password("Personal Soloist API key (hidden): ")
+                .map_err(|_| "Could not read the key securely from the terminal")?;
+            local(
+                "POST",
+                "/api/local/spotify/playback",
+                Some(json!({ "apiKey": key })),
+            )
+            .await?;
             Ok("Soloist API key saved on the server.".into())
         }
 
-        ["stop"] => { local("POST", "/api/local/stop", None).await?; Ok("Ambra server is stopping.".into()) }
+        ["stop"] => {
+            local("POST", "/api/local/stop", None).await?;
+            Ok("Ambra server is stopping.".into())
+        }
         ["config"] | ["config", "show"] => config_show().await,
         ["config", "set", "bind", address] => config_set(json!({ "bind": address })).await,
         ["config", "set", "name", name @ ..] if !name.is_empty() => {
@@ -147,22 +214,51 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
         }
         ["pair"] | ["pair", "list"] => pair_list().await,
         ["pair", "approve", code] => {
-            let reply = local("POST", "/api/local/pairing/approve", Some(json!({ "code": code }))).await?;
-            Ok(format!("Paired {}.", reply["paired"].as_str().unwrap_or("the device")))
+            let reply = local(
+                "POST",
+                "/api/local/pairing/approve",
+                Some(json!({ "code": code })),
+            )
+            .await?;
+            Ok(format!(
+                "Paired {}.",
+                reply["paired"].as_str().unwrap_or("the device")
+            ))
         }
         ["pair", "deny", code] => {
-            let reply = local("POST", "/api/local/pairing/deny", Some(json!({ "code": code }))).await?;
-            Ok(format!("Refused {}.", reply["denied"].as_str().unwrap_or("the device")))
+            let reply = local(
+                "POST",
+                "/api/local/pairing/deny",
+                Some(json!({ "code": code })),
+            )
+            .await?;
+            Ok(format!(
+                "Refused {}.",
+                reply["denied"].as_str().unwrap_or("the device")
+            ))
         }
         ["pair", "revoke", device @ ..] if !device.is_empty() => {
-            let reply = local("POST", "/api/local/pairing/revoke", Some(json!({ "client": device.join(" ") }))).await?;
-            Ok(format!("Unpaired {}.", reply["revoked"].as_str().unwrap_or("the device")))
+            let reply = local(
+                "POST",
+                "/api/local/pairing/revoke",
+                Some(json!({ "client": device.join(" ") })),
+            )
+            .await?;
+            Ok(format!(
+                "Unpaired {}.",
+                reply["revoked"].as_str().unwrap_or("the device")
+            ))
         }
-        _ => Err(format!("Unknown command `{}`.\n\n{HELP}", arguments.join(" "))),
+        _ => Err(format!(
+            "Unknown command `{}`.\n\n{HELP}",
+            arguments.join(" ")
+        )),
     }
 }
 
-fn pretty(value: Value) -> Result<String, String> { serde_json::to_string_pretty(&value).map_err(|e| e.to_string()) }
+fn pretty(value: Value) -> Result<String, String> {
+    serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+}
 
 async fn login_spotify() -> Result<String, String> {
     println!("Signing in through librespot. Complete browser login on the server machine.");
@@ -171,23 +267,45 @@ async fn login_spotify() -> Result<String, String> {
 }
 
 async fn setup_soloist() -> Result<String, String> {
-    println!("Optional Soloist lossless support downloads Spotify's executable directly to this independent server and maintains automatic updates. Never redistribute that executable.");
-    println!("Review Spotify's conditions: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates");
-    println!("Soloist playback is supported in normal server builds. Regular High playback remains available when Soloist is not ready.");
+    println!(
+        "Optional Soloist lossless support downloads Spotify's executable directly to this independent server and maintains automatic updates. Never redistribute that executable."
+    );
+    println!(
+        "Review Spotify's conditions: https://developer.spotify.com/documentation/soloist/reference/downloads-and-updates"
+    );
+    println!(
+        "Soloist playback is supported in normal server builds. Regular High playback remains available when Soloist is not ready."
+    );
     if !consent("Consent to server-managed Soloist downloads and automatic updates? [y/N] ")? {
         return Ok("No consent granted. Spotify continues at High through librespot.".into());
     }
-    local("POST", "/api/local/spotify/playback", Some(json!({"losslessEnabled": true, "downloadConsent": true}))).await?;
-    println!("Automatic installation started. Generate your personal key: https://developer.spotify.com/dashboard/soloist");
-    let key = rpassword::prompt_password("Personal Soloist API key (hidden; empty to enter later): ").map_err(|_| "Could not read the key securely")?;
+    local(
+        "POST",
+        "/api/local/spotify/playback",
+        Some(json!({"losslessEnabled": true, "downloadConsent": true})),
+    )
+    .await?;
+    println!(
+        "Automatic installation started. Generate your personal key: https://developer.spotify.com/dashboard/soloist"
+    );
+    let key =
+        rpassword::prompt_password("Personal Soloist API key (hidden; empty to enter later): ")
+            .map_err(|_| "Could not read the key securely")?;
     if !key.trim().is_empty() {
-        local("POST", "/api/local/spotify/playback", Some(json!({"apiKey": key}))).await?;
+        local(
+            "POST",
+            "/api/local/spotify/playback",
+            Some(json!({"apiKey": key})),
+        )
+        .await?;
     }
     #[cfg(target_os = "windows")]
     if !crate::soloist::windows_driver::configured() {
         match setup_windows_driver().await {
             Ok(message) => println!("{message}"),
-            Err(error) => println!("Optional Windows capture setup did not complete: {error}. Spotify continues at High."),
+            Err(error) => println!(
+                "Optional Windows capture setup did not complete: {error}. Spotify continues at High."
+            ),
         }
     }
     Ok("Check `ambra-server spotify status`. When installed, run `ambra-server spotify soloist pair`, then select Ambra Soloist Pairing in Spotify with the same account. Lossless becomes preferred automatically when setup and capture are ready; otherwise High continues.".into())
@@ -196,29 +314,50 @@ async fn setup_soloist() -> Result<String, String> {
 fn consent(prompt: &str) -> Result<bool, String> {
     use std::io::{IsTerminal, Write};
     if !std::io::stdin().is_terminal() {
-        return Err("Run this setup command in a terminal on the server machine to grant consent".into());
+        return Err(
+            "Run this setup command in a terminal on the server machine to grant consent".into(),
+        );
     }
     print!("{prompt}");
     std::io::stdout().flush().map_err(|e| e.to_string())?;
     let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).map_err(|e| e.to_string())?;
-    Ok(matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    std::io::stdin()
+        .read_line(&mut answer)
+        .map_err(|e| e.to_string())?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 #[cfg(target_os = "windows")]
 async fn setup_windows_driver() -> Result<String, String> {
     let status = local("GET", "/api/spotify/playback/status", None).await?;
     if status["effectiveRenderer"] == "soloist"
-        && matches!(status["state"].as_str(), Some("playing" | "buffering")) {
-        return Err("Pause shared Spotify playback before configuring the server audio driver".into());
+        && matches!(status["state"].as_str(), Some("playing" | "buffering"))
+    {
+        return Err(
+            "Pause shared Spotify playback before configuring the server audio driver".into(),
+        );
     }
-    println!("Optional Windows lossless capture uses the signed VB-CABLE driver on Ambra Server only. No client installs or hosts it.");
-    println!("Vendor downloads and license: {}", crate::soloist::windows_driver::DOWNLOADS);
-    println!("This dedicates the CABLE Input/Output endpoints to this server: 44,100 Hz stereo and no Listen monitoring. Existing cable settings may change; physical audio defaults are unchanged. Windows requests administrator approval for driver installation; a reboot is required.");
-    if !consent("Download/install the optional driver if missing and configure this server's virtual cable? [y/N] ")? {
+    println!(
+        "Optional Windows lossless capture uses the signed VB-CABLE driver on Ambra Server only. No client installs or hosts it."
+    );
+    println!(
+        "Vendor downloads and license: {}",
+        crate::soloist::windows_driver::DOWNLOADS
+    );
+    println!(
+        "This dedicates the CABLE Input/Output endpoints to this server: 44,100 Hz stereo and no Listen monitoring. Existing cable settings may change; physical audio defaults are unchanged. Windows requests administrator approval for driver installation; a reboot is required."
+    );
+    if !consent(
+        "Download/install the optional driver if missing and configure this server's virtual cable? [y/N] ",
+    )? {
         return Ok("No driver setup consent granted. Spotify continues at High unless an existing lossless route is ready.".into());
     }
-    let message = crate::soloist::windows_driver::install().await.map_err(|error| error.message)?;
+    let message = crate::soloist::windows_driver::install()
+        .await
+        .map_err(|error| error.message)?;
     local("POST", "/api/local/spotify/soloist/check", None).await?;
     Ok(message)
 }
@@ -236,11 +375,17 @@ fn local_url(path: &str) -> String {
 /// A local-only API call; `Err` says whether the server is running at all.
 async fn local(method: &str, path: &str, body: Option<Value>) -> Result<Value, String> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(if path == "/api/auth/spotify/start" { 180 } else { 45 }))
+        .timeout(Duration::from_secs(if path == "/api/auth/spotify/start" {
+            180
+        } else {
+            45
+        }))
         .build()
         .map_err(|error| error.to_string())?;
     let request = match method {
-        "POST" => client.post(local_url(path)).json(&body.unwrap_or(Value::Null)),
+        "POST" => client
+            .post(local_url(path))
+            .json(&body.unwrap_or(Value::Null)),
         _ => client.get(local_url(path)),
     };
     let response = request.send().await.map_err(|error| {
@@ -258,11 +403,14 @@ async fn local(method: &str, path: &str, body: Option<Value>) -> Result<Value, S
     if status.is_success() {
         Ok(value)
     } else {
-        Err(value["error"].as_str().map_or_else(|| format!("The server answered {status}"), str::to_owned))
+        Err(value["error"]
+            .as_str()
+            .map_or_else(|| format!("The server answered {status}"), str::to_owned))
     }
 }
 
-const OLDER_SERVER: &str = "The Ambra server running on this machine is an older version; restart it to use this command.";
+const OLDER_SERVER: &str =
+    "The Ambra server running on this machine is an older version; restart it to use this command.";
 
 /// No server here holds the settings in memory, so the file can be edited directly.
 fn not_running(error: &str) -> bool {
@@ -275,9 +423,19 @@ async fn status() -> Result<String, String> {
             let listening = config["listening"].as_str().unwrap_or("?");
             let shared = parse_bind(listening).is_ok_and(|address| !address.ip().is_loopback());
             let mut lines = vec![
-                format!("Running as \"{}\" on {listening}.", config["name"].as_str().unwrap_or("?")),
+                format!(
+                    "Running as \"{}\" on {listening}.",
+                    config["name"].as_str().unwrap_or("?")
+                ),
                 if shared {
-                    format!("Shared with the local network{}.", if config["discovery"] == true { "; clients can find it" } else { ", but hidden from discovery" })
+                    format!(
+                        "Shared with the local network{}.",
+                        if config["discovery"] == true {
+                            "; clients can find it"
+                        } else {
+                            ", but hidden from discovery"
+                        }
+                    )
                 } else {
                     "Only this machine can use it.".into()
                 },
@@ -286,11 +444,16 @@ async fn status() -> Result<String, String> {
             if let Ok(pairing) = local("GET", "/api/local/pairing", None).await {
                 let waiting = pairing["pending"].as_array().map_or(0, Vec::len);
                 if waiting > 0 {
-                    lines.push(format!("{waiting} device(s) waiting to pair; see `ambra-server pair list`."));
+                    lines.push(format!(
+                        "{waiting} device(s) waiting to pair; see `ambra-server pair list`."
+                    ));
                 }
             }
             if config["bind"] != config["listening"] {
-                lines.push(format!("Will listen on {} after a restart.", config["bind"].as_str().unwrap_or("?")));
+                lines.push(format!(
+                    "Will listen on {} after a restart.",
+                    config["bind"].as_str().unwrap_or("?")
+                ));
             }
             Ok(lines.join("\n"))
         }
@@ -316,11 +479,16 @@ async fn config_show() -> Result<String, String> {
         config["name"].as_str().unwrap_or("?"),
         config["bind"].as_str().unwrap_or("?"),
         match config["listening"].as_str() {
-            Some(listening) if Some(listening) != config["bind"].as_str() => format!(" (listening on {listening} until restarted)"),
+            Some(listening) if Some(listening) != config["bind"].as_str() =>
+                format!(" (listening on {listening} until restarted)"),
             Some(_) => String::new(),
             None => " (not running)".into(),
         },
-        if config["discovery"] == true { "on" } else { "off" },
+        if config["discovery"] == true {
+            "on"
+        } else {
+            "off"
+        },
         if config["p2p"] == true { "on" } else { "off" },
         config["pairedClients"],
         config["path"].as_str().unwrap_or("?"),
@@ -340,12 +508,26 @@ async fn config_set(change: Value) -> Result<String, String> {
                 validate_name(name)?;
                 config.name = name.trim().to_owned();
             }
-            if let Some(p2p) = change["p2p"].as_bool() { config.p2p = p2p; }
-            if let Some(pwnat) = change["pwnat"].as_bool() { config.pwnat = pwnat; }
-            if let Some(tailcat) = change["tailcat"].as_bool() { config.tailcat = tailcat; }
+            if let Some(p2p) = change["p2p"].as_bool() {
+                config.p2p = p2p;
+            }
+            if let Some(pwnat) = change["pwnat"].as_bool() {
+                config.pwnat = pwnat;
+            }
+            if let Some(tailcat) = change["tailcat"].as_bool() {
+                config.tailcat = tailcat;
+            }
             if let Some(endpoint) = change.get("publicEndpoint") {
-                config.public_endpoint = if endpoint.is_null() { None } else {
-                    Some(endpoint.as_str().ok_or("Invalid public endpoint")?.parse().map_err(|_| "Invalid public endpoint")?)
+                config.public_endpoint = if endpoint.is_null() {
+                    None
+                } else {
+                    Some(
+                        endpoint
+                            .as_str()
+                            .ok_or("Invalid public endpoint")?
+                            .parse()
+                            .map_err(|_| "Invalid public endpoint")?,
+                    )
                 };
             }
             if let Some(discovery) = change["discovery"].as_bool() {
@@ -357,7 +539,11 @@ async fn config_set(change: Value) -> Result<String, String> {
         Err(error) => return Err(error),
     }
     let shown = config_show().await?;
-    Ok(if restart { format!("Saved; restart the server to listen there.\n\n{shown}") } else { format!("Saved.\n\n{shown}") })
+    Ok(if restart {
+        format!("Saved; restart the server to listen there.\n\n{shown}")
+    } else {
+        format!("Saved.\n\n{shown}")
+    })
 }
 
 async fn pair_list() -> Result<String, String> {
@@ -383,7 +569,11 @@ async fn pair_list() -> Result<String, String> {
             lines.push(String::new());
             lines.push("Paired:".into());
             for device in paired {
-                lines.push(format!("  {}  (ID {})", device["name"].as_str().unwrap_or("?"), device["id"].as_str().unwrap_or("?")));
+                lines.push(format!(
+                    "  {}  (ID {})",
+                    device["name"].as_str().unwrap_or("?"),
+                    device["id"].as_str().unwrap_or("?")
+                ));
             }
         }
         _ => {}
@@ -400,12 +590,25 @@ mod tests {
         assert!(matches!(parse(vec![]).unwrap(), Command::Run(words) if words == ["help"]));
         for name in ["start", "serve"] {
             let parsed = parse(vec![name.into()]).unwrap();
-            assert!(matches!(parsed, Command::Start { bind: None } | Command::Serve { bind: None, tray: false }));
-            let parsed = parse(vec![name.into(), "--bind".into(), "127.0.0.1:39147".into()]).unwrap();
-            assert!(matches!(parsed, Command::Start { bind: Some(address) } | Command::Serve { bind: Some(address), tray: false } if address == "127.0.0.1:39147"));
+            assert!(matches!(
+                parsed,
+                Command::Start { bind: None }
+                    | Command::Serve {
+                        bind: None,
+                        tray: false
+                    }
+            ));
+            let parsed =
+                parse(vec![name.into(), "--bind".into(), "127.0.0.1:39147".into()]).unwrap();
+            assert!(
+                matches!(parsed, Command::Start { bind: Some(address) } | Command::Serve { bind: Some(address), tray: false } if address == "127.0.0.1:39147")
+            );
             assert!(parse(vec![name.into(), "--bind".into()]).is_err());
             assert!(parse(vec![name.into(), "--bind".into(), "invalid".into()]).is_err());
         }
-        assert!(matches!(parse(vec!["serve".into(), "--tray".into()]).unwrap(), Command::Serve { tray: true, .. }));
+        assert!(matches!(
+            parse(vec!["serve".into(), "--tray".into()]).unwrap(),
+            Command::Serve { tray: true, .. }
+        ));
     }
 }

@@ -112,7 +112,7 @@ export async function restore() {
   return { address: payload, paired: true };
 }
 
-export const networkStatus = () => networkCall<{ state: string; method?: string; error?: string }>("status");
+export const networkStatus = () => networkCall<{ state: string; method?: string; error?: string; tailcatPath?: { kind: "unknown" | "direct" | "derp"; region?: number } }>("status");
 
 async function forget() {
   resetSession();

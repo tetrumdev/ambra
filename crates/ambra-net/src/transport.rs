@@ -3,7 +3,9 @@ use axum::{Router, body::Body};
 use hyper::{Request, Response, body::Incoming};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use peeroxide_dht::{noise::Keypair, secret_stream::SecretStream};
-use std::{net::SocketAddr, sync::{
+use std::{
+    net::SocketAddr,
+    sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
@@ -397,36 +399,68 @@ mod keep_alive_tests {
         let (far, server) = tokio::io::duplex(64 * 1024);
         let (mut near_read, mut near_write) = tokio::io::split(near);
         let (mut far_read, mut far_write) = tokio::io::split(far);
-        async fn carry(mut from: impl AsyncRead + Unpin, mut to: impl AsyncWrite + Unpin, mut broken: watch::Receiver<bool>) {
+        async fn carry(
+            mut from: impl AsyncRead + Unpin,
+            mut to: impl AsyncWrite + Unpin,
+            mut broken: watch::Receiver<bool>,
+        ) {
             let mut buffer = [0; 16 * 1024];
             loop {
-                let Ok(length) = from.read(&mut buffer).await else { return };
-                if length == 0 { return; }
-                if broken.wait_for(|broken| !broken).await.is_err() { return; }
-                if to.write_all(&buffer[..length]).await.is_err() { return; }
+                let Ok(length) = from.read(&mut buffer).await else {
+                    return;
+                };
+                if length == 0 {
+                    return;
+                }
+                if broken.wait_for(|broken| !broken).await.is_err() {
+                    return;
+                }
+                if to.write_all(&buffer[..length]).await.is_err() {
+                    return;
+                }
             }
         }
         let other = broken.clone();
         let task = tokio::spawn(async move {
-            tokio::join!(carry(&mut near_read, &mut far_write, broken), carry(&mut far_read, &mut near_write, other));
+            tokio::join!(
+                carry(&mut near_read, &mut far_write, broken),
+                carry(&mut far_read, &mut near_write, other)
+            );
         });
         (client, server, task)
     }
 
     fn pump() -> Pump {
-        Pump { cancel: CancellationToken::new(), task: tokio::spawn(async {}), retained: Vec::new() }
+        Pump {
+            cancel: CancellationToken::new(),
+            task: tokio::spawn(async {}),
+            retained: Vec::new(),
+        }
     }
 
-    async fn connected(broken: watch::Receiver<bool>) -> (Arc<HttpConnection>, JoinHandle<Result<()>>, JoinHandle<()>) {
+    async fn connected(
+        broken: watch::Receiver<bool>,
+    ) -> (Arc<HttpConnection>, JoinHandle<Result<()>>, JoinHandle<()>) {
         let (client, server, path) = path(broken);
         let app = Router::new().route("/api/ok", axum::routing::get(|| async { "ok" }));
-        let peer = RemotePeer { public_key: Identity::generate().unwrap().public_key(), address: "192.0.2.1:0".parse().unwrap(), session: Arc::new(Session::default()) };
+        let peer = RemotePeer {
+            public_key: Identity::generate().unwrap().public_key(),
+            address: "192.0.2.1:0".parse().unwrap(),
+            session: Arc::new(Session::default()),
+        };
         let serving = tokio::spawn(serve(server, pump(), peer, app, CancellationToken::new()));
-        (HttpConnection::new(client, pump()).await.unwrap(), serving, path)
+        (
+            HttpConnection::new(client, pump()).await.unwrap(),
+            serving,
+            path,
+        )
     }
 
     async fn answers(connection: &HttpConnection) -> bool {
-        let request = Request::builder().uri("/api/ok").body(Body::empty()).unwrap();
+        let request = Request::builder()
+            .uri("/api/ok")
+            .body(Body::empty())
+            .unwrap();
         matches!(tokio::time::timeout(Duration::from_secs(2), connection.request(request)).await, Ok(Ok(response)) if response.status().is_success())
     }
 
@@ -442,7 +476,10 @@ mod keep_alive_tests {
         tokio::time::sleep(Duration::from_millis(7_200)).await;
         breaking.send_replace(false);
         tokio::time::sleep(Duration::from_secs(3)).await;
-        assert!(!connection.is_closed(), "a recovered break ended the session");
+        assert!(
+            !connection.is_closed(),
+            "a recovered break ended the session"
+        );
         assert!(!serving.is_finished());
         assert!(answers(&connection).await);
     }

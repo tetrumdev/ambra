@@ -178,6 +178,8 @@ export function ServerSettings({ active }: { active: boolean }) {
     : network.method === "TcpPunch" ? "Direct TCP (Nostr)"
     : network.method === "Pwnat" ? "pwnat"
     : network.method === "HyperDHT" ? "HyperDHT"
+    : network.method === "Tailcat" ? network.tailcatPath?.kind === "direct" ? "Tailcat (direct)"
+      : network.tailcatPath?.kind === "derp" ? "Tailcat (DERP relay)" : "Tailcat (path unknown)"
     : network.method === "Public" ? "Internet (direct)" : "Unknown";
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
