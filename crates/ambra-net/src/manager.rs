@@ -144,6 +144,15 @@ struct SessionReply {
     tailcat_address: Option<tailcat::Address>,
 }
 
+#[derive(Debug)]
+struct AuthorizationError;
+impl std::fmt::Display for AuthorizationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Device authorization failed; pairing may have been revoked")
+    }
+}
+impl std::error::Error for AuthorizationError {}
+
 pub struct ConnectionManager {
     pub selected: SelectedServer,
     identity: Identity,
@@ -155,7 +164,7 @@ pub struct ConnectionManager {
     endpoint_cache: std::sync::Mutex<Option<std::path::PathBuf>>,
     tailcat_address: std::sync::Mutex<Option<tailcat::Address>>,
     tailcat_path: std::sync::Mutex<Option<Weak<tailcat::Diagnostics>>>,
-    native_upgrade_at: std::sync::Mutex<Option<std::time::Instant>>,
+    native_upgrade_at: std::sync::Mutex<Option<tokio::time::Instant>>,
     active: RwLock<Option<Arc<HttpConnection>>>,
     /// An encrypted HyperDHT session held open, unauthenticated, while another method is
     /// active. Authorizing it takes one request, so losing the LAN never waits for discovery.
@@ -606,7 +615,7 @@ impl ConnectionManager {
                 )
                 .await?;
             if !response.status().is_success() {
-                return Err("Device authorization failed; pairing may have been revoked".into());
+                return Err(AuthorizationError.into());
             }
             self.learn_endpoints(response).await;
             self.state(method.connected(), Some(method), None);
@@ -672,8 +681,9 @@ impl ConnectionManager {
                 let owner = self.owner.upgrade().ok_or("Connection manager dropped")?;
                 let task = tokio::spawn(async move {
                     let result = match owner.promote_standby().await {
-                        Some(connection) => Ok(connection),
-                        None => {
+                        Ok(Some(connection)) => Ok(connection),
+                        Err(error) => Err(error),
+                        Ok(None) => {
                             // A standby opened before this round is older than it; the server
                             // would refuse to let it take over, so it is replaced.
                             let result = owner.connect_round().await;
@@ -733,7 +743,7 @@ impl ConnectionManager {
             result = tokio::time::timeout(Duration::from_secs(15), connection.request(request)) => result??,
         };
         if !response.status().is_success() {
-            return Err("Device authorization failed; pairing may have been revoked".into());
+            return Err(AuthorizationError.into());
         }
         self.learn_endpoints(response).await;
         *self.token.write().await = Some(token);
@@ -950,11 +960,13 @@ impl ConnectionManager {
     }
 
     /// Authorizes the warm HyperDHT session in place of a lost connection.
-    async fn promote_standby(&self) -> Option<Arc<HttpConnection>> {
-        let standby = self.standby.lock().await.take()?;
+    async fn promote_standby(&self) -> Result<Option<Arc<HttpConnection>>> {
+        let Some(standby) = self.standby.lock().await.take() else {
+            return Ok(None);
+        };
         if standby.is_closed() || self.token.read().await.is_none() {
             standby.close();
-            return None;
+            return Ok(None);
         }
         match tokio::time::timeout(
             Duration::from_secs(5),
@@ -964,11 +976,18 @@ impl ConnectionManager {
         {
             Ok(Ok(())) => {
                 tracing::info!("Promoted HyperDHT standby without rediscovery");
-                Some(standby)
+                Ok(Some(standby))
+            }
+            Ok(Err(error))
+                if error.is::<AuthorizationError>()
+                    || error.is::<crate::transport::PeerAuthenticationError>() =>
+            {
+                standby.close();
+                Err(error)
             }
             _ => {
                 standby.close();
-                None
+                Ok(None)
             }
         }
     }
@@ -989,7 +1008,7 @@ impl ConnectionManager {
                 if last.is_some_and(|at| at.elapsed() < Duration::from_secs(120)) {
                     return false;
                 }
-                *last = Some(std::time::Instant::now());
+                *last = Some(tokio::time::Instant::now());
             }
             let timing = Timing {
                 lan: Duration::ZERO,
@@ -1270,6 +1289,56 @@ fn attempt_error<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn rejected_standby_authorization_does_not_restart_transport_selection() {
+        let server = Identity::generate().unwrap();
+        let identity = Identity::generate().unwrap();
+        let listener = lan::bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = CancellationToken::new();
+        let app = axum::Router::new().route(
+            "/api/network/session",
+            axum::routing::get(|| async { hyper::StatusCode::UNAUTHORIZED }),
+        );
+        let serving = tokio::spawn(lan::serve(
+            listener,
+            server.clone(),
+            app,
+            crate::gate::admit_all(),
+            stop.clone(),
+        ));
+        let (io, pump) = lan::connect(address, server.public_key(), &identity)
+            .await
+            .unwrap();
+        let standby = HttpConnection::new(io, pump).await.unwrap();
+        let manager = ConnectionManager::new(
+            identity,
+            SelectedServer {
+                public_key: server.public_key(),
+                local_addresses: vec![],
+                public_endpoint: None,
+                public_tcp: vec![],
+            },
+            Some("revoked".into()),
+        );
+        *manager.standby.lock().await = Some(standby);
+        let result = tokio::time::timeout(Duration::from_secs(1), manager.connect())
+            .await
+            .unwrap();
+        assert!(result.is_err());
+        assert_eq!(manager.status().state, ConnectionState::Offline);
+        assert!(
+            manager
+                .status()
+                .error
+                .unwrap()
+                .contains("authorization failed")
+        );
+        manager.shutdown().await;
+        stop.cancel();
+        serving.await.unwrap().unwrap();
+    }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn tailcat_recovers_to_authenticated_lan_and_retires_old_connection() {

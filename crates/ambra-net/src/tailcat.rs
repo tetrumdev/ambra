@@ -65,7 +65,7 @@ pub type SharedState = Arc<RwLock<ListenerState>>;
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum PeerPath {
     Unknown,
-    Direct,
+    Direct { endpoint: std::net::SocketAddr },
     Derp { region: u64 },
 }
 pub struct Diagnostics {
@@ -82,8 +82,8 @@ impl Diagnostics {
 }
 impl PeerPath {
     fn from_ping(value: &serde_json::Value) -> Self {
-        if value["endpoint"].as_str().is_some_and(|s| !s.is_empty()) {
-            Self::Direct
+        if let Some(endpoint) = value["endpoint"].as_str().and_then(|s| s.parse().ok()) {
+            Self::Direct { endpoint }
         } else if let Some(region) = value["derp_region_id"].as_u64().filter(|id| *id != 0) {
             Self::Derp { region }
         } else {
@@ -188,8 +188,9 @@ pub async fn connect(
     identity: &Identity,
     server: PublicKey,
 ) -> Result<(tokio::io::DuplexStream, transport::Pump, Arc<Diagnostics>)> {
-    let client =
-        native::Resource::new(serde_json::json!({"address":address}).to_string(), false).await?;
+    let client = native::Resource::new(serde_json::json!({"address":address}).to_string(), false)
+        .await
+        .map_err(|_| DialFailure)?;
     let mut raw = client.dial().await.map_err(|_| DialFailure)?;
     raw.write_all(&gate::knock(identity, server)).await?;
     let (io, _, pump) = transport::secure(raw, identity, Some(server)).await?;
@@ -430,7 +431,9 @@ pub(crate) mod tests {
         );
         assert_eq!(
             PeerPath::from_ping(&serde_json::json!({"endpoint":"192.0.2.2:123"})),
-            PeerPath::Direct
+            PeerPath::Direct {
+                endpoint: "192.0.2.2:123".parse().unwrap()
+            }
         );
         assert!(
             !format!("{:?}", Address::try_from("tcSECRET".to_owned()).unwrap()).contains("SECRET")
@@ -531,7 +534,7 @@ pub(crate) mod tests {
             .unwrap();
         assert!(matches!(
             path.path(),
-            PeerPath::Direct | PeerPath::Derp { .. }
+            PeerPath::Direct { .. } | PeerPath::Derp { .. }
         ));
         let connection = transport::HttpConnection::new(io, pump).await.unwrap();
         let request = |range: bool, token: &str| {
