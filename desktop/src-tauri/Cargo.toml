@@ -1,6 +1,6 @@
 [package]
 name = "AMBRA"
-version = "0.3.1"
+version = "0.4.0"
 description = "Ambra music player"
 authors = ["tetrum"]
 edition = "2024"
