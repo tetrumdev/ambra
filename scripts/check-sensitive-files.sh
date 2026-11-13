@@ -7,7 +7,7 @@ if [[ "$mode" != "working-tree" && "$mode" != "--staged" && "$mode" != "--histor
   exit 2
 fi
 
-history_baseline="ed2c8a388537062d215539e9b32f287d695c9ca5"
+history_baseline="fef0ca048041eb5e4953ccd5ea8be69c5576210c"
 blocked_path='(^|/)(\.env($|\.)|[^/]*(credential|credentials|session|secret)s?\.(json|ya?ml|toml)|[^/]*metadata-cache\.json|\.?streaming-library\.json|\.?library-track-ids\.json|desktop-state\.json)$|(^|/)\.?spotify-cache/'
 secret_content='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}'
 assigned_secret="(\"?(access_token|refresh_token|user_auth_token|client_secret|password|auth_data)\"?[[:space:]]*[:=][[:space:]]*(\"[A-Za-z0-9_+/.=-]{16,}\"|'[A-Za-z0-9_+/.=-]{16,}'|[A-Za-z0-9_+/.=-]{16,}[[:space:]]*$))"
