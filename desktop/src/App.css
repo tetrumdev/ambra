@@ -132,7 +132,7 @@ body,
     outline-offset: 0;
 }
 
-:root:has([data-tauri-drag-region]) {
+:root:has([data-window-drag-region]) {
     --library-titlebar-height: 32px;
 }
 
@@ -146,9 +146,9 @@ body,
     display: none;
 }
 
-:root[data-platform="windows"] [data-tauri-drag-region],
-:root[data-platform="linux"] [data-tauri-drag-region],
-:root[data-window-fullscreen] [data-tauri-drag-region] {
+:root[data-platform="windows"] [data-window-drag-region],
+:root[data-platform="linux"] [data-window-drag-region],
+:root[data-window-fullscreen] [data-window-drag-region] {
     display: none !important;
     pointer-events: none !important;
 }

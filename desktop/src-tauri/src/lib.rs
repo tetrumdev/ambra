@@ -43,6 +43,7 @@ mod playlist_export;
 mod remote_endpoint;
 mod server_link;
 mod service_login;
+mod window_drag;
 mod window_size;
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1099,6 +1100,8 @@ pub fn run() {
             app.manage(link);
             #[cfg(any(target_os = "windows", target_os = "macos"))]
             keyboard::setup(app)?;
+            #[cfg(target_os = "macos")]
+            window_drag::setup(app)?;
             media_controls::setup(app)?;
             native_audio::setup(app);
             downloads::setup(app);
@@ -1119,6 +1122,8 @@ pub fn run() {
             local_music_directory,
             scan_music,
             keyboard::native_function_modifier_pressed,
+            window_drag::set_window_drag_regions,
+            window_drag::start_window_drag,
             native_audio::load_native_audio,
             native_audio::warm_native_audio,
             native_audio::queue_native_audio,

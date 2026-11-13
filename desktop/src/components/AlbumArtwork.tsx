@@ -54,7 +54,7 @@ export function AlbumArtwork({ src, title, noun = "cover", resolveFull }: {
           setExpanded(false);
           loadFull();
           setHasDragRegion(Boolean(document.querySelector(
-            ".libraryTitlebar:not(.albumArtworkDragRegion)[data-tauri-drag-region], .bigscreenTitlebar[data-tauri-drag-region]",
+            ".libraryTitlebar:not(.albumArtworkDragRegion)[data-window-drag-region], .bigscreenTitlebar[data-window-drag-region]",
           )));
           openDialog(dialog.current);
         }}
@@ -75,7 +75,7 @@ export function AlbumArtwork({ src, title, noun = "cover", resolveFull }: {
         onKeyDown={(event) => event.stopPropagation()}
       >
         {hasDragRegion && (
-          <div className="libraryTitlebar albumArtworkDragRegion" data-tauri-drag-region aria-hidden="true" />
+          <div className="libraryTitlebar albumArtworkDragRegion" data-window-drag-region aria-hidden="true" />
         )}
         <button
           type="button"
