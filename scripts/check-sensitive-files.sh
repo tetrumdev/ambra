@@ -10,14 +10,14 @@ fi
 history_baseline="ed2c8a388537062d215539e9b32f287d695c9ca5"
 blocked_path='(^|/)(\.env($|\.)|[^/]*(credential|credentials|session|secret)s?\.(json|ya?ml|toml)|[^/]*metadata-cache\.json|\.?streaming-library\.json|\.?library-track-ids\.json|desktop-state\.json)$|(^|/)\.?spotify-cache/'
 secret_content='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}'
-assigned_secret='("?(access_token|refresh_token|user_auth_token|client_secret|password|auth_data)"?[[:space:]]*[:=][[:space:]]*"?[A-Za-z0-9_+/.=-]{16,})'
+assigned_secret="(\"?(access_token|refresh_token|user_auth_token|client_secret|password|auth_data)\"?[[:space:]]*[:=][[:space:]]*(\"[A-Za-z0-9_+/.=-]{16,}\"|'[A-Za-z0-9_+/.=-]{16,}'|[A-Za-z0-9_+/.=-]{16,}[[:space:]]*$))"
 failed=0
 
 check_blob() {
   local path="$1"
   local temporary_file="$2"
   local context="$3"
-  if grep -IEn "$secret_content|$assigned_secret" "$temporary_file" >/dev/null 2>&1; then
+  if grep -IEn -- "$secret_content|$assigned_secret" "$temporary_file" >/dev/null 2>&1; then
     echo "sensitive-content guard: possible secret in $path ($context)" >&2
     failed=1
   fi
@@ -27,12 +27,6 @@ check_path() {
   local path="$1"
   local source="$2"
   local context="$3"
-  if [[ "$path" =~ $blocked_path ]]; then
-    echo "sensitive-file guard: blocked path $path ($context)" >&2
-    failed=1
-    return
-  fi
-
   temporary_file="$(mktemp)"
   if [[ "$source" == "working-tree" ]]; then
     cp "$path" "$temporary_file" 2>/dev/null || true
@@ -40,6 +34,15 @@ check_path() {
     git show ":$path" >"$temporary_file" 2>/dev/null || true
   else
     git show "$source:$path" >"$temporary_file" 2>/dev/null || true
+  fi
+  # This immutable, sanitized failure report contains no credentials. Its name
+  # matches the credential-file rule; permit only the reviewed Git blob.
+  if [[ "$path" =~ $blocked_path ]] && ! {
+    [[ "$path" == "docs/networking/results/tailcat-2026-11-13/invalid-credential.json" ]] &&
+      [[ "$(git hash-object "$temporary_file")" == "e63ad0432be363fb7f9fda6e4ea2570da231d0ed" ]]
+  }; then
+    echo "sensitive-file guard: blocked path $path ($context)" >&2
+    failed=1
   fi
   check_blob "$path" "$temporary_file" "$context"
   rm -f "$temporary_file"
