@@ -146,9 +146,9 @@ map configuration.
 
 Public DERP is shared, rate limited, and has no sustained-throughput guarantee.
 The recorded public-relay runs are bounded functional audio transfers. Observed
-download rates range from 0.415 to 2.409 MiB/s. The slowest is below the
-0.524 MiB/s average bitrate of the tested high-resolution FLAC excerpt; public
-DERP cannot be claimed to sustain that workload reliably. They do
+download rates range from 0.415 to 2.409 MiB/s. Whole-file transfer rate includes container/metadata bytes and is not a steady
+audio bitrate. The source is 24-bit/44.1 kHz stereo (0.252 MiB/s uncompressed
+PCM). Short transfers do not prove sustained relay capacity or playback behavior. They do
 not establish a relay capacity or concurrent-listener service guarantee. Sustained
 benchmarks require a private relay; no public relay service was deployed here.
 
