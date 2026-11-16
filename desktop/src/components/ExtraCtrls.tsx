@@ -264,11 +264,6 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                           data-tooltip-overflow=""
                         >
                           {device.name}
-                          {audio?.devices.find(
-                            (connected) => connected.id === device.id,
-                          )?.isDefault
-                            ? " (Default)"
-                            : ""}
                         </span>
                       </button>
                     ))

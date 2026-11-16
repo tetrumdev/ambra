@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import type { Track } from "../src/types/music";
-import { groupSearchResults, rankSearchResults } from "../src/utils/searchRanking";
+import { rankAlbums, rankArtists } from "../src/utils/catalogRanking";
+import { queryVariants } from "../src/utils/searchMatch";
+import { groupSearchResults, rankSearchGroups, rankSearchResults } from "../src/utils/searchRanking";
 
 function track(provider: Track["provider"], id: string, values: Partial<Track> = {}): Track {
   return {
@@ -70,7 +72,8 @@ test("an explicitly requested release and explicitness still take precedence", (
   const requested = spotify("requested", { album: "Requested Album" });
   const other = track("qobuz", "other", { album: "Other Album" });
   expect(groupSearchResults([other, requested], "Deadly Verses Requested Album")[0].track).toBe(requested);
-  const clean = track("qobuz", "clean", { explicit: false });
+  // A clean edit is its own audio, with its own ISRC.
+  const clean = track("qobuz", "clean", { explicit: false, isrc: "US25T9920792" });
   expect(groupSearchResults([clean, requested], "Deadly Verses")[0].track).toBe(requested);
 });
 
@@ -105,4 +108,116 @@ test("a shared ISRC with no artist in common stays apart", () => {
   const left = track("qobuz", "a", { artists: [artist("Gangsta Pat")] });
   const right = spotify("b", { artist: "Someone Else", artists: [artist("Someone Else")] });
   expect(groupSearchResults([left, right], "deadly verses")).toHaveLength(2);
+});
+
+// Search results as the services returned them for the queries below.
+const troy = { name: "They Reminisce Over You (T.R.O.Y.)", album: "Mecca And The Soul Brother", isrc: "USEE10000148", durationSeconds: 287, explicit: false, releaseDate: "1992-06-09" };
+const peteRock = {
+  qobuz: track("qobuz", "troy", { ...troy, artist: "PETE ROCK & C.L. SMOOTH", artists: [artist("PETE ROCK & C.L. SMOOTH")], durationSeconds: 286 }),
+  tidal: track("tidal", "troy", { ...troy, artist: "Pete Rock", artists: [artist("Pete Rock"), artist("C.L. SMOOTH")], quality: "FLAC", maximumBitDepth: null, maximumSamplingRateKHz: null }),
+  spotify: spotify("troy", { ...troy, artist: "Pete Rock & C.L. Smooth", artists: [artist("Pete Rock & C.L. Smooth")], durationSeconds: 286, explicit: true }),
+};
+const lullaby = track("qobuz", "lullaby", { name: "They Reminisce Over You  (T.R.O.Y)", artist: "The Lullabeats", artists: [artist("The Lullabeats")],
+  album: "90's Hip Hop 4 Babies, Vol. 2", isrc: "FRPZ92203230", durationSeconds: 114, explicit: false,
+  quality: "FLAC 24-bit/48 kHz", maximumBitDepth: 24, maximumSamplingRateKHz: 48 });
+const cumbia = track("qobuz", "cumbia", { name: "They Reminisce Over You (T.R.O.Y.)", artist: "Quantic", artists: [artist("Quantic"), artist("Los Miticos Del Ritmo")],
+  album: "Hip Hop En Cumbia EP", isrc: "GBEUE1002200", durationSeconds: 123, explicit: false });
+const instrumental = track("qobuz", "instrumental", { ...troy, name: "They Reminisce over You (T.R.O.Y.)", version: "Instrumental Version",
+  artist: "PETE ROCK & C.L. SMOOTH", artists: [artist("PETE ROCK & C.L. SMOOTH")], isrc: "USEE11100364", durationSeconds: 296 });
+const takeYouThere = track("tidal", "take", { name: "Take You There", artist: "Pete Rock", artists: [artist("Pete Rock"), artist("C.L. SMOOTH")],
+  album: "The Main Ingredient", isrc: "USEE19400168", durationSeconds: 285, explicit: false });
+
+test("a pasted \"Artist – Title (Subtitle)\" finds the song however each service punctuates its credits", () => {
+  const found = [instrumental, peteRock.qobuz, peteRock.tidal, takeYouThere, peteRock.spotify, lullaby];
+  const groups = rankSearchGroups(found, "Pete Rock & CL Smooth – They Reminisce Over You (T.R.O.Y.)");
+  // One song from three services, credited as an act on two and as two artists on the third.
+  expect(groups[0].track).toBe(peteRock.qobuz);
+  expect(groups[0].alternatives).toHaveLength(3);
+  // Its instrumental follows it; another song by the artist and another artist's cover are not it.
+  expect(groups.map(group => group.track)).toEqual([peteRock.qobuz, instrumental]);
+});
+
+test("a title alone leads with the recording the services agree on, not the best-sounding cover", () => {
+  for (const found of [
+    [peteRock.qobuz, cumbia, lullaby, peteRock.tidal, peteRock.spotify],
+    [lullaby, cumbia, peteRock.spotify, peteRock.tidal, peteRock.qobuz],
+  ]) {
+    const result = rankSearchResults(found, "They Reminisce Over You (T.R.O.Y.)");
+    expect(result[0]).toBe(peteRock.qobuz);
+    // A lullaby rendition is a match, and the last one.
+    expect(result.at(-1)).toBe(lullaby);
+  }
+});
+
+test("an unflagged lossless copy of explicit audio is not passed over as a clean edit", () => {
+  const group = groupSearchResults([peteRock.spotify, peteRock.qobuz], "they reminisce over you")[0];
+  expect(group.track).toBe(peteRock.qobuz);
+});
+
+test("an ISRC written with hyphens joins the copy written without", () => {
+  const kirk = { name: "Mr Kirk's Nightmare", artist: "4hero", artists: [artist("4hero")], album: "Reinforced Presents Callin For Reinforcements", durationSeconds: 382, explicit: false };
+  const lossy = spotify("kirk", { ...kirk, isrc: "GB-SZC-07-00012" });
+  const lossless = track("qobuz", "kirk", { ...kirk, isrc: "GBSZC0700012" });
+  const groups = rankSearchGroups([lossy, lossless], "4hero mr kirk's nightmare");
+  expect(groups).toHaveLength(1);
+  expect(groups[0].track).toBe(lossless);
+  // "4 hero" and "kirks" are the same words.
+  expect(rankSearchResults([lossy, lossless], "4 hero mr kirks nightmare")[0]).toBe(lossless);
+});
+
+test("a remix follows the song unless the query asks for it, and a misspelling still finds the song", () => {
+  const song = track("qobuz", "song", { name: "Get Lucky", artist: "Daft Punk", artists: [artist("Daft Punk")], album: "Random Access Memories", isrc: "A" });
+  const remix = track("tidal", "remix", { name: "Get Lucky (Daft Punk Remix)", artist: "Daft Punk", artists: [artist("Daft Punk")], album: "Get Lucky", isrc: "B", durationSeconds: 630 });
+  expect(rankSearchResults([remix, song], "daft punk get lucky")[0]).toBe(song);
+  expect(rankSearchResults([song, remix], "daft punk get lucky remix")[0]).toBe(remix);
+  expect(rankSearchResults([remix, song], "daft pnuk get lucky (official audio)")[0]).toBe(song);
+});
+
+test("results the query's words don't explain keep the services' own order", () => {
+  const first = track("tidal", "first", { name: "アイドル", artist: "YOASOBI", artists: [artist("YOASOBI")], isrc: "A" });
+  const second = track("tidal", "second", { name: "夜に駆ける", artist: "YOASOBI", artists: [artist("YOASOBI")], isrc: "B" });
+  expect(rankSearchResults([first, second], "sad anime opening")).toEqual([first, second]);
+});
+
+const catalogArtist = (provider: "qobuz" | "tidal" | "spotify", name: string) => ({ id: `${provider}:${name}`, provider, name, imageUrl: null });
+const catalogAlbum = (provider: "qobuz" | "tidal" | "spotify", title: string, by: string) => ({ id: `${provider}:${title}`, provider, title, artist: by, imageUrl: null });
+
+test("artists and albums a service pads its results with are left out", () => {
+  const query = "Pete Rock & CL Smooth – They Reminisce Over You (T.R.O.Y.)";
+  const songs = [{ name: troy.name, artist: "PETE ROCK & C.L. SMOOTH", album: troy.album }];
+  const artists = rankArtists(["Lost Boyz", "Pete Rock", "Camp Lo", "CL Smooth"].map(name => catalogArtist("tidal", name)), query, songs);
+  expect(artists.map(found => found.name)).toEqual(["Pete Rock", "CL Smooth"]);
+  const albums = rankAlbums([
+    catalogAlbum("tidal", "Cabin In The Sky", "De La Soul"), catalogAlbum("tidal", "Mecca And The Soul Brother", "Pete Rock, CL Smooth"),
+    catalogAlbum("qobuz", "Mecca And The Soul Brother", "PETE ROCK & C.L. SMOOTH"), catalogAlbum("tidal", "They Reminisce Over You (T.R.O.Y.)", "Pete Rock, C.L. SMOOTH"),
+  ], query, songs);
+  expect(albums.map(found => found.title)).toEqual(["They Reminisce Over You (T.R.O.Y.)", "Mecca And The Soul Brother"]);
+  // One album on two services, whichever way each credits the pair.
+  expect(albums[1].versions).toHaveLength(2);
+});
+
+test("an artist still being typed is the one the leading songs are by", () => {
+  const artists = rankArtists([catalogArtist("qobuz", "KENDRICK LAM"), catalogArtist("tidal", "Kendrick Lamar"), catalogArtist("tidal", "Lamont")],
+    "kendrick lam", [{ name: "luther", artist: "Kendrick Lamar", album: "GNX" }]);
+  expect(artists.map(found => found.name)).toEqual(["Kendrick Lamar", "KENDRICK LAM"]);
+});
+
+test("a service is asked again without the punctuation it may stumble on", () => {
+  expect(queryVariants("Pete Rock & CL Smooth – They Reminisce Over You (T.R.O.Y.)")).toEqual([
+    "Pete Rock & CL Smooth They Reminisce Over You T.R.O.Y.",
+    "Pete Rock & CL Smooth They Reminisce Over You",
+    "They Reminisce Over You T.R.O.Y.",
+  ]);
+  expect(queryVariants("pete rock")).toEqual([]);
+});
+
+test("the explicit edit wins over a better-sounding clean one unless the query says clean", () => {
+  const explicit = spotify("explicit", { explicit: true });
+  const clean = track("qobuz", "clean edit", { explicit: false, isrc: "US25T9920792" });
+  for (const copies of [[explicit, clean], [clean, explicit]]) {
+    expect(groupSearchResults(copies, "gangsta pat deadly verses")[0].track).toBe(explicit);
+    expect(groupSearchResults(copies, "gangsta pat deadly verses clean")[0].track).toBe(clean);
+    // "clean" asks for an edit; it is not a word the song has to explain.
+    expect(rankSearchResults(copies, "gangsta pat deadly verses clean")).toEqual([clean]);
+  }
 });
