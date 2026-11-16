@@ -58,6 +58,7 @@ import { acceptsPlaybackShortcut, isTypingTarget, wasKeyHandled } from "./utils/
 import { announceShortcut, isMac, matchesShortcut, matchingShortcut, setShortcutOverrides, type ShortcutOverrides } from "./utils/shortcuts";
 import { actOnCursor, flashItem, hidePointer, installPointerCursor, moveCursor, moveSidebar, SIDEBAR_ROOT } from "./utils/keyboardNav";
 import { ShortcutToast } from "./components/ShortcutToast";
+import { MusicDropZone } from "./components/MusicDropZone";
 import { PageFilterBar } from "./components/PageFilterBar";
 import { UpdateNotice } from "./components/UpdateNotice";
 import { useAutomaticUpdateChecks } from "./hooks/useAppUpdate";
@@ -1595,6 +1596,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
       <ShortcutToast />
+      <MusicDropZone onImport={library.importFiles} />
       <NavigationSwipe canNavigate={canNavigate} navigate={navigate} contextKey={`${screen}:${activeViewKey}:${settingsTab}`} />
     </>
   );

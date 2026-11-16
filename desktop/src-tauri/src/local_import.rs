@@ -1,5 +1,5 @@
 //! Copies scanned local music and its artwork into the selected server's permanent library.
-use std::{collections::BTreeMap, fs::File, io::{Read, Seek}, path::Path, time::{Duration, UNIX_EPOCH}};
+use std::{collections::{BTreeMap, BTreeSet}, fs::File, io::{Read, Seek}, path::{Path, PathBuf}, time::{Duration, UNIX_EPOCH}};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::blocking::{Client, RequestBuilder};
@@ -84,24 +84,102 @@ fn metadata(track: &crate::Track, file: &str, artwork: Option<&str>, migrate: bo
     })
 }
 
+/// Copies scanned tracks to the server's library and returns the server's whole list.
+fn upload_tracks(app: &tauri::AppHandle, connection: &Connection, tracks: impl IntoIterator<Item = crate::Track>) -> Result<Vec<Value>, String> {
+    let client = Client::builder().timeout(Duration::from_secs(30 * 60)).build().map_err(|e| e.to_string())?;
+    let cache_path = crate::cache_directory(app)?.join("server-imports.v1.json");
+    let mut cache: BTreeMap<String, CachedFile> = std::fs::read(&cache_path).ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    for track in tracks {
+        let file = upload_file(&client, connection, Path::new(&track.audio), &mut cache)?;
+        let artwork = track.cover.as_deref().map(|cover| upload_artwork(&client, connection, cover, &mut cache)).transpose()?;
+        let details = metadata(&track, &file, artwork.as_deref(), connection.mode == Mode::Host || connection.fallback);
+        check(authorize(client.post(format!("{}/api/music/local/tracks", connection.base_url)), connection)
+            .json(&details).send().map_err(|e| e.to_string())?)?;
+    }
+    crate::write_file_atomic(&cache_path, &serde_json::to_vec(&cache).map_err(|e| e.to_string())?)?;
+    check(authorize(client.get(format!("{}/api/music/local/tracks", connection.base_url)), connection)
+        .send().map_err(|e| e.to_string())?)?.json().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn import_local_music(app: tauri::AppHandle) -> Result<Vec<Value>, String> {
     let connection = app.state::<ServerLink>().connection();
     tauri::async_runtime::spawn_blocking(move || {
         let tracks = crate::scan_music_blocking(&app)?;
-        let client = Client::builder().timeout(Duration::from_secs(30 * 60)).build().map_err(|e| e.to_string())?;
-        let cache_path = crate::cache_directory(&app)?.join("server-imports.v1.json");
-        let mut cache: BTreeMap<String, CachedFile> = std::fs::read(&cache_path).ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        for track in tracks {
-            let file = upload_file(&client, &connection, Path::new(&track.audio), &mut cache)?;
-            let artwork = track.cover.as_deref().map(|cover| upload_artwork(&client, &connection, cover, &mut cache)).transpose()?;
-            let details = metadata(&track, &file, artwork.as_deref(), connection.mode == Mode::Host || connection.fallback);
-            check(authorize(client.post(format!("{}/api/music/local/tracks", connection.base_url)), &connection)
-                .json(&details).send().map_err(|e| e.to_string())?)?;
+        upload_tracks(&app, &connection, tracks)
+    }).await.map_err(|e| e.to_string())?
+}
+
+/// Whether two files hold the same bytes, so dropping a song twice keeps one copy.
+fn same_contents(left: &Path, right: &Path) -> Result<bool, String> {
+    let (mut left, mut right) = (File::open(left).map_err(|e| e.to_string())?, File::open(right).map_err(|e| e.to_string())?);
+    if left.metadata().map_err(|e| e.to_string())?.len() != right.metadata().map_err(|e| e.to_string())?.len() { return Ok(false) }
+    let (mut a, mut b) = (vec![0_u8; 128 * 1024], vec![0_u8; 128 * 1024]);
+    loop {
+        let read = left.read(&mut a).map_err(|e| e.to_string())?;
+        if read == 0 { return Ok(true) }
+        right.read_exact(&mut b[..read]).map_err(|e| e.to_string())?;
+        if a[..read] != b[..read] { return Ok(false) }
+    }
+}
+
+/// Copies one dropped file into the music folder and returns where it now lives. A file
+/// already there, or an identical copy of it, is not copied again.
+fn copy_into_library(source: &Path, library: &Path, canonical_library: &Path) -> Result<PathBuf, String> {
+    let canonical = source.canonicalize().map_err(|e| format!("Could not read {}: {e}", source.display()))?;
+    // Spelled the way the scanner spells it, so the scanned track can be matched.
+    if let Ok(inside) = canonical.strip_prefix(canonical_library) { return Ok(library.join(inside)) }
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("Track").to_owned();
+    let extension = source.extension().and_then(|s| s.to_str()).unwrap_or_default().to_owned();
+    for copy in 1.. {
+        let name = if copy == 1 { format!("{stem}.{extension}") } else { format!("{stem} ({copy}).{extension}") };
+        let destination = library.join(name);
+        if destination.exists() {
+            if same_contents(&source, &destination)? { return Ok(destination) }
+            continue;
         }
-        crate::write_file_atomic(&cache_path, &serde_json::to_vec(&cache).map_err(|e| e.to_string())?)?;
-        check(authorize(client.get(format!("{}/api/music/local/tracks", connection.base_url)), &connection)
-            .send().map_err(|e| e.to_string())?)?.json().map_err(|e| e.to_string())
+        // The scanner skips the partial name, so a concurrent scan never indexes half a file.
+        let partial = destination.with_extension("partial");
+        std::fs::copy(&source, &partial).map_err(|e| format!("Could not copy {}: {e}", source.display()))?;
+        std::fs::rename(&partial, &destination).map_err(|e| {
+            let _ = std::fs::remove_file(&partial);
+            format!("Could not add {}: {e}", source.display())
+        })?;
+        return Ok(destination);
+    }
+    unreachable!()
+}
+
+#[derive(Serialize)]
+pub struct DroppedMusic {
+    /// This device's whole local library after the import.
+    tracks: Vec<crate::Track>,
+    /// How many dropped songs are now in the library.
+    imported: usize,
+    /// The server's whole list, when the songs were also copied there.
+    server: Option<Vec<Value>>,
+}
+
+/// Adds audio files (or folders of them) dropped on the window to the music folder, and
+/// to the server's library too when `upload` is set.
+#[tauri::command]
+pub async fn import_dropped_music(app: tauri::AppHandle, paths: Vec<String>, upload: bool) -> Result<DroppedMusic, String> {
+    let connection = app.state::<ServerLink>().connection();
+    tauri::async_runtime::spawn_blocking(move || {
+        let library = crate::local_music_directory(&app)?;
+        let canonical_library = library.canonicalize().map_err(|e| e.to_string())?;
+        let mut added = BTreeSet::new();
+        for path in paths {
+            for entry in walkdir::WalkDir::new(&path).follow_links(false).into_iter().filter_map(Result::ok) {
+                if entry.file_type().is_file() && crate::is_supported_audio(entry.path()) {
+                    added.insert(copy_into_library(entry.path(), &library, &canonical_library)?.to_string_lossy().into_owned());
+                }
+            }
+        }
+        let entries = crate::scan_music_entries(&app)?;
+        let imported: Vec<_> = entries.iter().filter(|entry| added.contains(&entry.path)).map(|entry| entry.track.clone()).collect();
+        let server = if upload && !imported.is_empty() { Some(upload_tracks(&app, &connection, imported.iter().cloned())?) } else { None };
+        Ok(DroppedMusic { imported: imported.len(), tracks: entries.into_iter().map(|entry| entry.track).collect(), server })
     }).await.map_err(|e| e.to_string())?
 }

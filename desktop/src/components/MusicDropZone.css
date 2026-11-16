@@ -1,0 +1,30 @@
+/* Covers the window while audio files are dragged over it, in the toast's glass (ShortcutToast.css). */
+.musicDropZone {
+    position: fixed;
+    inset: 12px;
+    z-index: 70;
+    display: grid;
+    place-items: center;
+    border: 2px dashed rgba(255, 255, 255, 0.35);
+    border-radius: 16px;
+    background: rgba(10, 10, 10, 0.55);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.musicDropZone[data-shown] {
+    opacity: 1;
+}
+
+.musicDropZoneBody {
+    padding: 12px 24px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.6);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    color: white;
+    font: 500 1rem "Stack Sans Text", Inter, sans-serif;
+}
+
