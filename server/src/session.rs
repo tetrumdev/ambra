@@ -824,8 +824,8 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
     if change.queue["version"] != 1 {
         return error(StatusCode::BAD_REQUEST, "Unsupported queue");
     }
-    core.commands.send_modify(|revision| *revision += 1);
     let base = change.base;
+    let replay = change.play_track_id.is_some();
     let mut queue = change.queue;
     let applied = core
         .change_queue(move |saved| {
@@ -836,12 +836,24 @@ async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) 
             queue["revision"] = json!(current);
             // Another song made current (a shuffle, a new list) starts like a skip.
             let moved = saved["current"]["globalTrackId"] != queue["current"]["globalTrackId"];
+            // Editing upcoming songs must not replace the stream already playing with
+            // refreshed metadata (a download, new quality or a renewed stream URL).
+            if !moved && !replay {
+                if let Some(active) = track_of(saved, &saved["current"]) {
+                    if let Some(tracks) = queue["tracks"].as_array_mut() {
+                        tracks.retain(|track| track["globalId"] != active["globalId"]);
+                        tracks.push(active.clone());
+                    }
+                }
+            }
             *saved = queue;
             Ok((true, Ok(moved)))
         })
         .await;
     match applied {
         Ok(Ok(moved)) => {
+            // A queue-only edit must not cancel and resend an in-flight audio load.
+            if moved || replay { core.commands.send_modify(|revision| *revision += 1); }
             if moved { core.transport().silence_skipped = true; }
         }
         Ok(Err(current)) => {

@@ -132,6 +132,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
   const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
+  const homePlaylists = useMemo(
+    () => playlists.filter(playlist => !playlist.provider || preferences.ui.servicePlaylistVisibility[playlist.provider]),
+    [playlists, preferences.ui.servicePlaylistVisibility],
+  );
   const [librarySection, setLibrarySection] =
     useState<LibrarySection>(preferences.ui.navigation?.section ?? "overview");
   const [collectionSorts, setCollectionSorts] = useState<
@@ -1510,7 +1514,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             registerScrollElement={registerScrollElement}
           />
         ) : isHomeView ? (
-          <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={playlists}
+          <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={homePlaylists}
             error={listeningHistory.error} onAction={onEntityAction}
             onSelectPlaylist={id => {
               setBrowseEntity(null);
