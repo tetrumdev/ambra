@@ -1,7 +1,8 @@
-import { categoryOrder, rankArtists, rankAlbums, searchText, searchTrackTitle } from "./catalogRanking";
+import { albumBaseTitle, categoryOrder, rankArtists, rankAlbums, searchText, searchTrackTitle } from "./catalogRanking";
 import type { CatalogArtist, CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
 import type { Track } from "../types/music";
-import { albumTitleFamily, everyCopy, groupSearchResults, rankSearchGroups, sameRecording, type RecordingGroup } from "./searchRanking";
+import { albumTitleFamily, asksForClean, everyCopy, explicitAudio, groupSearchResults, lossless, rankSearchGroups, sameSong, STRONG_MATCH, type RecordingGroup } from "./searchRanking";
+import { artistCredits, matchTrack, queryVariants } from "./searchMatch";
 import { musicProviderName } from "./musicProviderName";
 
 export type SearchSnapshot = {
@@ -23,6 +24,8 @@ type Source = {
   albums: CatalogAlbum[];
   nextOffset: number | null;
   pending: boolean;
+  /** Its first page is in: what it holds for the query is known, though it may still be asked more. */
+  answered: boolean;
   error: string | null;
 };
 
@@ -44,8 +47,14 @@ type Options = {
 
 /** How many leading songs are looked for on the services that didn't return them. */
 const COMPLETED_GROUPS = 5;
-/** Extra requests per search, at most. */
+/** Songs and services looked up per search, at most. */
 const MAX_COMPLETIONS = 10;
+/** How many leading songs are also looked for by their album. */
+const ALBUM_SEARCHED_GROUPS = 2;
+/** Other phrasings of the query tried on a service that found nothing good, at most. */
+const MAX_VARIANTS = 2;
+/** Services with no lossless audio: their answer can't replace a lossless copy already found. */
+const LOSSY = new Set<StreamingProvider>(["spotify"]);
 
 // Sources keep independent cursors and failures; the first display waits briefly
 // for a combined result set so provider timing doesn't immediately swap cards.
@@ -59,24 +68,29 @@ export class SearchSession {
   /** Services already searched for a leading song they didn't return, by service and song. */
   private completions = new Set<string>();
   private completing = 0;
+  /** The lookups among those on services with lossless audio: only they can change the copy shown. */
+  private improving = 0;
 
   constructor(private options: Options) {
     for (const provider of [...new Set(options.providers)].sort()) {
-      this.sources.set(provider, { tracks: new Map(), artists: [], albums: [], nextOffset: 0, pending: false, error: null });
+      this.sources.set(provider, { tracks: new Map(), artists: [], albums: [], nextOffset: 0, pending: false, answered: false, error: null });
     }
   }
 
   snapshot(): SearchSnapshot {
     const sources = [...this.sources.values()];
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
+    const ranked = rankSearchGroups(candidates, this.options.query);
     // Grouping preserves the native order of a single provider's recordings.
-    const groups = this.options.combined ? rankSearchGroups(candidates, this.options.query) : groupSearchResults(candidates, "");
+    const groups = this.options.combined ? ranked : groupSearchResults(candidates, "");
     const results = groups.map(group => group.track);
+    // The songs the query plainly names: their artists and albums belong in the results.
+    const named = ranked.filter(group => group.relevance >= STRONG_MATCH).slice(0, 3).map(group => group.track);
     const artistCandidates = sources.flatMap(source => source.artists);
     const albumCandidates = sources.flatMap(source => source.albums);
     const intent = categoryOrder(this.options.query, results, artistCandidates, albumCandidates, candidates)[0];
-    const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : results);
-    const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : results);
+    const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : named);
+    const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named);
     const errors = [...this.sources].filter(([, source]) => source.error)
       .map(([provider]) => musicProviderName(provider));
     return {
@@ -99,10 +113,31 @@ export class SearchSession {
     this.publish();
   };
 
+  /**
+   * Whether the first list can be shown before every service answers: the leading song is one
+   * the query plainly names, in lossless, and only services without lossless audio are still
+   * out or being asked for it. Their answer can add copies and songs below; it can't change
+   * which copy leads.
+   */
+  private settled(next: SearchSnapshot) {
+    if (!this.options.combined || this.improving > 0) return false;
+    const waiting = [...this.sources].filter(([, source]) => source.pending);
+    if (!waiting.every(([provider, source]) => source.answered ? false : LOSSY.has(provider))) return false;
+    const leader = next.results[0];
+    return !!leader && lossless(leader) && matchTrack(leader, this.options.query).score >= STRONG_MATCH;
+  }
+
   private publish() {
     if (this.controller.signal.aborted) return;
+    // Started as each service answers, not after the slowest one: the services that have
+    // answered are asked for the leading songs they left out while the others are still out.
+    this.completeLeaders();
     const next = this.snapshot();
-    if (!next.isSearching) this.completeLeaders();
+    if (!this.initialResultsReleased && this.settled(next)) {
+      this.initialResultsReleased = true;
+      clearTimeout(this.mergeTimer);
+      clearTimeout(this.deadlineTimer);
+    }
     // The first list waits for the leading songs' other copies too, within the same deadline,
     // so a song isn't shown from one service and then swapped for a better copy.
     if (!next.isSearching && this.completing === 0) {
@@ -124,6 +159,23 @@ export class SearchSession {
   }
 
   /**
+   * Asks a service again, another way, when it found no song the query plainly names: its
+   * search may stumble on a dash, a bracket or pasted words that ours reads through.
+   */
+  private async widen(provider: StreamingProvider, source: Source, signal: AbortSignal) {
+    const named = () => [...source.tracks.values()].some(track => matchTrack(track, this.options.query).score >= STRONG_MATCH);
+    for (const variant of queryVariants(this.options.query).slice(0, MAX_VARIANTS)) {
+      if (named() || signal.aborted) return;
+      const page = await this.options.fetchPage(variant, provider, signal, 0, 20).catch(() => null);
+      if (!page || signal.aborted) continue;
+      // After the service's own answer, so its order still says what it found most likely.
+      for (const track of page.tracks) if (!source.tracks.has(track.globalId)) source.tracks.set(track.globalId, track);
+      source.artists.push(...page.artists ?? []);
+      source.albums.push(...page.albums ?? []);
+    }
+  }
+
+  /**
    * Looks on every service for the leading songs it didn't return. A service's search often
    * leaves out a song another one finds, or finds its release only as an album. Without its
    * copy the song would be shown from whichever service did return it, in that one's quality,
@@ -134,43 +186,95 @@ export class SearchSession {
     const sources = [...this.sources.values()];
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
     const albums = sources.flatMap(source => source.albums);
-    for (const group of rankSearchGroups(candidates, this.options.query).slice(0, COMPLETED_GROUPS)) {
+    // Only songs the query plainly names: a loose match isn't worth asking every service about.
+    const leaders = rankSearchGroups(candidates, this.options.query).slice(0, COMPLETED_GROUPS).filter(group => group.relevance >= STRONG_MATCH);
+    for (const [index, group] of leaders.entries()) {
       const song = `${searchText(group.track.artist)}|${searchText(group.track.name)}`;
+      const explicit = explicitAudio(group.alternatives);
+      // The explicit edit is the one meant. A service showing only its clean edit holds the
+      // explicit one too, so it is looked for there rather than settled for from another service.
+      const explicitWanted = !asksForClean(this.options.query) && group.alternatives.some(explicit);
       for (const [provider, source] of this.sources) {
         if (this.completions.size >= MAX_COMPLETIONS) return;
-        const key = `${provider}|${song}`;
-        if (source.error || this.completions.has(key) || group.alternatives.some(copy => copy.provider === provider)) continue;
+        const held = group.alternatives.filter(copy => copy.provider === provider);
+        const onlyClean = explicitWanted && held.length > 0 && !held.some(explicit);
+        const key = `${provider}|${song}${onlyClean ? "|explicit" : ""}`;
+        // A service still out may yet return the song itself.
+        if (!source.answered || source.error || this.completions.has(key) || (held.length > 0 && !onlyClean)) continue;
         this.completions.add(key);
         this.completing++;
-        void this.findCopies(provider, group, albums.filter(album => album.provider === provider && this.releases(album, group)))
-          .then(copies => { for (const track of copies) source.tracks.set(track.globalId, track); })
+        const improves = !LOSSY.has(provider);
+        if (improves) this.improving++;
+        const tried = new Set(held.map(copy => copy.albumId?.split(":").pop()));
+        const releases = albums.filter(album => album.provider === provider && this.releases(album, group)
+          && !(onlyClean && tried.has(album.id.split(":").pop())))
+          // An album marked explicit first: it is where the explicit edit is.
+          .sort((a, b) => Number(b.explicit ?? false) - Number(a.explicit ?? false));
+        void this.findCopies(provider, group, releases, index < ALBUM_SEARCHED_GROUPS, onlyClean)
+          .then(({ copies, album }) => {
+            for (const track of copies) source.tracks.set(track.globalId, track);
+            // Its album was found here too: the album's card can now open this service's copy.
+            if (album) source.albums.push(album);
+          })
           .catch(() => {})
-          .finally(() => { this.completing--; this.publish(); });
+          .finally(() => { this.completing--; if (improves) this.improving--; this.publish(); });
       }
     }
   }
 
-  /** The group's song on `provider`: from its release there, else from a search for just that song. */
-  private async findCopies(provider: StreamingProvider, group: RecordingGroup, releases: CatalogAlbum[]) {
+  /**
+   * The group's song on `provider`: from its release there when the search already found it,
+   * else from a search for just that song. With `searchAlbums`, its album is then searched
+   * for too: a service can hold a song it will not return by name, on an album it will.
+   */
+  private async findCopies(provider: StreamingProvider, group: RecordingGroup, releases: CatalogAlbum[], searchAlbums: boolean, explicitOnly = false): Promise<{ copies: Track[]; album?: CatalogAlbum }> {
     const signal = AbortSignal.any([this.controller.signal, AbortSignal.timeout(this.options.timeoutMs ?? 8000)]);
+    // `explicitOnly`: the service's clean edit is already known; only its explicit one is news.
     const matching = (tracks: Track[]) => tracks.filter(track => track.provider === provider
-      && group.alternatives.some(copy => sameRecording(copy, track)));
+      && (!explicitOnly || track.explicit) && group.alternatives.some(copy => sameSong(copy, track)));
     const load = this.options.albumTracks;
-    for (const album of load ? releases.slice(0, 1) : []) {
-      const copies = matching(await load!(album, signal).catch(() => []));
-      if (copies.length) return copies;
-    }
+    const onAlbum = async (albums: CatalogAlbum[]): Promise<{ copies: Track[]; album?: CatalogAlbum }> => {
+      // An explicit edit sits on another edition of the album, so more than the first is opened.
+      for (const album of load ? albums.slice(0, explicitOnly ? 3 : 1) : []) {
+        const copies = matching(await load!(album, signal).catch(() => []));
+        if (copies.length) return { copies, album };
+      }
+      return { copies: [] };
+    };
+    const released = (page: SearchPage | null) => (page?.albums ?? []).filter(album => album.provider === provider && this.releases(album, group))
+      .sort((a, b) => Number(b.explicit ?? false) - Number(a.explicit ?? false));
+    const known = await onAlbum(releases);
+    if (known.copies.length) return { copies: known.copies };
     const song = group.track;
-    const page = await this.options.fetchPage(`${song.artist} ${searchTrackTitle(song.name)}`, provider, signal, 0, 10);
-    return matching(page.tracks);
+    const search = (text: string) => this.options.fetchPage(text, provider, signal, 0, 10).catch(() => null);
+    // The album the song is on, rather than a single named after it, which the song search covers.
+    const album = load && searchAlbums ? group.alternatives.find(copy => albumTitleFamily(copy.album) !== albumTitleFamily(copy.name)) : undefined;
+    const credit = album ? album.albumArtists[0]?.name ?? album.artist : "";
+    // Both searches leave together: the album's answer is ready by the time the song's has failed.
+    const songSearch = search(`${song.artist} ${searchTrackTitle(song.name)}`);
+    const albumSearch = album ? search(/^various( artists)?$/i.test(credit.trim()) ? albumBaseTitle(album.album) : `${albumBaseTitle(album.album)} ${credit}`) : null;
+    const page = await songSearch;
+    const copies = matching(page?.tracks ?? []);
+    if (copies.length || !load || !searchAlbums) return { copies };
+    const single = await onAlbum(released(page));
+    if (single.copies.length) return single;
+    if (!albumSearch) return { copies: [] };
+    const found = await albumSearch;
+    const listed = matching(found?.tracks ?? []);
+    return listed.length ? { copies: listed } : onAlbum(released(found));
   }
 
   /** An album that is the group's song's release: the song's album or single, by its artist. */
   private releases(album: CatalogAlbum, group: RecordingGroup) {
-    const artist = searchText(album.artist);
     const titles = new Set(group.alternatives.flatMap(copy => [albumTitleFamily(copy.album), albumTitleFamily(copy.name)]).filter(Boolean));
-    return titles.has(albumTitleFamily(album.title))
-      && group.alternatives.some(copy => searchText(copy.artist) === artist || copy.albumArtists.some(credit => searchText(credit.name) === artist));
+    if (!titles.has(albumTitleFamily(album.title))) return false;
+    const names = artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]);
+    // A compilation is credited to its artists on one service and to "Various Artists" on another.
+    const various = (credits: Set<string>) => credits.has("various artists") || credits.has("various");
+    return various(names) || group.alternatives.some(copy => {
+      const credits = artistCredits([copy.artist, ...copy.artists.map(artist => artist.name), ...copy.albumArtists.map(artist => artist.name)]);
+      return various(credits) || [...credits].some(name => names.has(name));
+    });
   }
 
   replaceTrack(track: Track) {
@@ -214,6 +318,13 @@ export class SearchSession {
         source.artists.push(...page.artists ?? []);
         source.albums.push(...page.albums ?? []);
         source.nextOffset = page.nextOffset;
+        if (!source.answered) {
+          source.answered = true;
+          // Shown or completed from now, not after the other phrasings below have been tried.
+          this.publish();
+        }
+        // Another phrasing is a bonus: running out of time on it must not fail the answer already in hand.
+        if (offset === 0) await Promise.race([this.widen(provider, source, controller.signal), aborted]).catch(() => {});
       } catch (error) {
         if (!this.controller.signal.aborted) source.error = error instanceof Error ? error.message : String(error);
       } finally {

@@ -1,4 +1,4 @@
-import { textRelevance } from "./catalogRanking";
+import { artistCredits, matchTrack, variantFactor } from "./searchMatch";
 import { serviceRank } from "./servicePreference";
 import type { Track } from "../types/music";
 
@@ -31,7 +31,7 @@ function remaster(track: Track) {
 // Only edition annotations count: a song called "Live Forever" is not a live performance.
 function performance(track: Track) {
   const annotations = [track.version ?? "", ...(track.name.match(/\([^)]*\)|\[[^\]]*\]|\s[-–—]\s.*$/g) ?? [])];
-  return [...new Set(normalized(annotations.join(" ")).match(/\b(live|acoustic|instrumental|karaoke|tribute|remix|mix|edit|demo|session|cover)\b/g) ?? [])].sort().join(" ");
+  return [...new Set(normalized(annotations.join(" ")).match(/\b(live|acoustic|instrumental|acapella|capella|cappella|karaoke|tribute|remix|rmx|mix|edit|demo|session|cover|dub|rework)\b/g) ?? [])].sort().join(" ");
 }
 
 function albumFamily(track: Track) {
@@ -49,14 +49,26 @@ function relatedFamilies(a: string, b: string) {
   return Boolean(a && b && (a === b || a.startsWith(`${b} `) || b.startsWith(`${a} `)));
 }
 
+const credits = new WeakMap<Track, Set<string>>();
+
 /**
  * Each credited artist, without a parenthesized alias: services credit the same act as
  * "groove chronicles" and "Groove Chronicles (Noodles)", or list remixers and guests
- * alongside the lead artist that another service credits alone.
+ * alongside the lead artist that another service credits alone. A joint credit also counts
+ * as each of its acts: one service's "Pete Rock & C.L. Smooth" is another's two artists.
  */
 function artistNames(track: Track) {
-  const names = track.artists.length ? track.artists.map(artist => artist.name) : track.artist.split(/\s*(?:,|&|\bfeat\.?|\bft\.?|\bx\b)\s*/i);
-  return new Set(names.map(name => normalized(name.replace(/\s*[([][^)\]]*[)\]]/g, ""))).filter(Boolean));
+  let names = credits.get(track);
+  if (!names) {
+    names = artistCredits(track.artists.length ? track.artists.map(artist => artist.name) : [track.artist]);
+    credits.set(track, names);
+  }
+  return names;
+}
+
+/** An ISRC without the hyphens some services write it with ("GB-SZC-07-00012"). */
+function isrcCode(track: Track) {
+  return (track.isrc ?? "").replace(/[^a-z0-9]/gi, "").toUpperCase();
 }
 
 function shareArtist(left: Track, right: Track) {
@@ -66,12 +78,12 @@ function shareArtist(left: Track, right: Track) {
 
 export function sameRecording(left: Track, right: Track) {
   if (left.globalId === right.globalId) return true;
-  const leftIsrc = normalized(left.isrc ?? "");
-  const rightIsrc = normalized(right.isrc ?? "");
+  const leftIsrc = isrcCode(left);
+  const rightIsrc = isrcCode(right);
   // An ISRC names one recording. Services spell its credits differently, so one shared
   // artist is enough to rule out a mislabeled code.
   if (leftIsrc && leftIsrc === rightIsrc && shareArtist(left, right)) return true;
-  if (!normalized(left.artist) || normalized(left.artist) !== normalized(right.artist)) return false;
+  if (!shareArtist(left, right)) return false;
   if (performance(left) !== performance(right)) return false;
   if (!title(left.name) || title(left.name) !== title(right.name)) return false;
   if (left.durationSeconds <= 0 || right.durationSeconds <= 0) return false;
@@ -91,6 +103,18 @@ export function sameRecording(left: Track, right: Track) {
   return true;
 }
 
+/**
+ * One song as a search result: the same recording, or a copy nothing sets apart but its
+ * identifier, such as a reissue on another album. Looser than `sameRecording`, which a
+ * playlist relies on to never swap a song for a different take.
+ */
+export function sameSong(left: Track, right: Track) {
+  if (sameRecording(left, right)) return true;
+  if (!shareArtist(left, right) || performance(left) !== performance(right)) return false;
+  if (!title(left.name) || title(left.name) !== title(right.name)) return false;
+  return left.durationSeconds > 0 && right.durationSeconds > 0 && Math.abs(left.durationSeconds - right.durationSeconds) <= 3;
+}
+
 function compilation(track: Track) {
   // A soundtrack can be the original release; do not classify every soundtrack as a compilation.
   return /\b(greatest hits|best of|anthology|compilation|box set|rock anthems|various artists)\b/i.test(track.album)
@@ -103,7 +127,7 @@ function single(track: Track) {
   return albumFamily(track) === title(track.name);
 }
 
-function lossless(track: Track) {
+export function lossless(track: Track) {
   return /flac|lossless|alac/i.test(track.quality ?? "");
 }
 
@@ -125,9 +149,26 @@ function plainEdition(track: Track) {
  * Which copy stands for a recording. A total order, so the same song shows the same copy
  * whatever was searched and whichever service answered first.
  */
-function compareEdition(left: Track, right: Track, query: string) {
+/** Whether the query asks for the clean edit by name; otherwise the explicit one is always meant. */
+export function asksForClean(query: string) {
+  return /\bclean\b/i.test(query);
+}
+
+/**
+ * Which copies are the explicit audio. One ISRC is one piece of audio and services flag it
+ * differently, so a copy is explicit when any copy with its ISRC is: an unflagged lossless
+ * copy of explicit audio isn't a clean edit.
+ */
+export function explicitAudio(copies: Track[]) {
+  const flagged = new Set(copies.filter(copy => copy.explicit).map(isrcCode).filter(Boolean));
+  return (copy: Track) => copy.explicit || flagged.has(isrcCode(copy));
+}
+
+function compareEdition(left: Track, right: Track, query: string, explicit = (track: Track) => track.explicit) {
+  // The explicit edit always wins, before sound quality, unless the query says "clean".
+  const wanted = asksForClean(query) ? -1 : 1;
   return requestedEdition(left, query) - requestedEdition(right, query)
-    || Number(left.explicit) - Number(right.explicit)
+    || wanted * (Number(explicit(left)) - Number(explicit(right)))
     // Audio quality wins before release placement. A song sharing its album's title is not proof of a single.
     || compareSoundQuality(left, right)
     || Number(compilation(right)) - Number(compilation(left))
@@ -224,72 +265,124 @@ export function bestPlaylistCopy(original: Track, candidates: Track[], replace =
   return best ?? original;
 }
 
-function relevance(track: Track, query: string) {
-  const search = normalized(query);
-  if (!search) return 0;
-  const name = title(track.name), artist = normalized(track.artist), album = normalized(track.album);
-  const combined = `${name} ${artist}`;
-  const tokens = [...new Set(search.split(" "))];
-  if (combined === search || `${artist} ${name}` === search) return 5;
-  if (name === search || artist === search || textRelevance(track.artist, query) === 5 || textRelevance(track.name, query) === 5) return 4;
-  if (tokens.every(token => combined.split(" ").includes(token))) return 3;
-  if (tokens.every(token => combined.includes(token))) return 2;
-  if (tokens.every(token => `${combined} ${album}`.includes(token))) return 1;
-  return Math.min(2, textRelevance(`${track.name} ${track.artist}`, query));
-}
-
 export type RecordingGroup = {
   track: Track;
   alternatives: Track[];
+  /** 0 to 1: how well the song answers the query, by its best-matching copy. */
   relevance: number;
+  /** Agreement between services: more of them returning the song, and nearer the top, is more. */
   fusionScore: number;
 };
 
+/** Reciprocal-rank constant: small, so a service's first results count far more than its tenth. */
+const FUSION_RANK = 10;
+
 export function groupSearchResults(tracks: Track[], query: string): RecordingGroup[] {
-  const groups: RecordingGroup[] = [];
-  const byIdentity = new Map<string, RecordingGroup[]>();
-  const providerRanks = new Map<Track["provider"], number>();
-  const providerGroups = new Map<Track["provider"], Set<RecordingGroup>>();
+  const groups = new Set<RecordingGroup>();
+  const groupOf = new Map<Track, RecordingGroup>();
+  const byIdentity = new Map<string, Track[]>();
   const seenIds = new Set<string>();
   for (const track of tracks) {
     if (seenIds.has(track.globalId)) continue;
     seenIds.add(track.globalId);
-    const keys = [`title:${normalized(track.artist)}:${title(track.name)}`];
-    if (track.isrc) keys.push(`isrc:${normalized(track.isrc)}`);
-    const candidates = new Set(keys.flatMap(key => byIdentity.get(key) ?? []));
-    let group = [...candidates].find(candidate => candidate.alternatives.every(other => sameRecording(other, track)));
-    if (!group) {
-      group = { track, alternatives: [], relevance: 0, fusionScore: 0 };
-      groups.push(group);
+    const keys = [...artistNames(track)].map(name => `title:${name}:${title(track.name)}`);
+    const isrc = isrcCode(track);
+    if (isrc) keys.push(`isrc:${isrc}`);
+    // A shared ISRC joins a copy to its recording however a service titled it. Otherwise it
+    // must be the same song as a copy already gathered, and near the first one's length, so
+    // a chain of near misses can't drift into another take.
+    const joined = [...new Set(keys.flatMap(key => byIdentity.get(key) ?? []).map(other => groupOf.get(other)!))]
+      .filter(candidate => candidate.alternatives.some(other => isrc && isrc === isrcCode(other) && shareArtist(other, track))
+        || (Math.abs(candidate.alternatives[0].durationSeconds - track.durationSeconds) <= 15
+          && candidate.alternatives.some(other => sameSong(other, track))));
+    const group = joined[0] ?? { track, alternatives: [], relevance: 0, fusionScore: 0 };
+    groups.add(group);
+    // A copy that belongs to two groups shows they were one song all along.
+    for (const other of joined.slice(1)) {
+      groups.delete(other);
+      for (const copy of other.alternatives) groupOf.set(copy, group);
+      group.alternatives.push(...other.alternatives);
     }
     group.alternatives.push(track);
-    group.relevance = Math.max(group.relevance, relevance(track, query));
-    if (compareEdition(track, group.track, query) > 0) group.track = track;
-    for (const key of keys) {
-      const bucket = byIdentity.get(key) ?? [];
-      if (!bucket.includes(group)) bucket.push(group);
-      byIdentity.set(key, bucket);
-    }
-    const contributed = providerGroups.get(track.provider) ?? new Set<RecordingGroup>();
-    if (!contributed.has(group)) {
-      const rank = (providerRanks.get(track.provider) ?? 0) + 1;
-      providerRanks.set(track.provider, rank);
-      group.fusionScore += 1 / (60 + rank);
-      contributed.add(group);
-      providerGroups.set(track.provider, contributed);
+    groupOf.set(track, group);
+    for (const key of keys) byIdentity.set(key, [...byIdentity.get(key) ?? [], track]);
+  }
+  const position = new Map(tracks.map((track, index) => [track, index]));
+  const providerRanks = new Map<Track["provider"], number>();
+  const ranked = new Map<RecordingGroup, Set<Track["provider"]>>();
+  for (const group of groups) {
+    // Found order, so the chosen copy doesn't depend on which groups merged.
+    group.alternatives.sort((a, b) => position.get(a)! - position.get(b)!);
+    group.track = group.alternatives[0];
+    const explicit = explicitAudio(group.alternatives);
+    for (const copy of group.alternatives) {
+      group.relevance = Math.max(group.relevance, matchTrack(copy, query).score);
+      if (compareEdition(copy, group.track, query, explicit) > 0) group.track = copy;
     }
   }
-  return groups;
+  // Each service ranks a song by where it first returned any copy of it.
+  for (const track of tracks) {
+    const group = groupOf.get(track);
+    if (!group) continue;
+    const services = ranked.get(group) ?? new Set();
+    if (services.has(track.provider)) continue;
+    services.add(track.provider);
+    ranked.set(group, services);
+    const rank = (providerRanks.get(track.provider) ?? 0) + 1;
+    providerRanks.set(track.provider, rank);
+    group.fusionScore += 1 / (FUSION_RANK + rank);
+  }
+  return [...groups];
 }
 
+/** Below this, nothing found says the query was understood as a title or an artist. */
+const UNDERSTOOD = 0.3;
+/** A song at least this good is one the query plainly names. */
+export const STRONG_MATCH = 0.6;
+
+/**
+ * Songs in the order to show them.
+ *
+ * What was typed decides first: a song that explains the whole query, title and artist, leads.
+ * Between songs that match equally, the one the services agree on leads (returned by more of
+ * them, nearer the top), so the well-known recording comes before a cover with the same name.
+ * A remix, live take or remake follows the song as released unless the query asks for it.
+ * Sound quality never reorders different songs: it only picks which copy of a song is shown.
+ *
+ * Songs that match far worse than the best one are left out. When nothing matches the query's
+ * words at all (lyrics, a description, another alphabet), the services' own order is kept.
+ */
 export function rankSearchGroups(tracks: Track[], query: string) {
-  return groupSearchResults(tracks, query)
-    .filter(group => group.relevance > 0)
-    // Among equally relevant results, a copy found only on compilations follows the album's own.
-    .sort((a, b) => b.relevance - a.relevance || Number(compilation(a.track)) - Number(compilation(b.track))
-      // Between equally relevant songs, the one that sounds better leads.
+  const groups = groupSearchResults(tracks, query);
+  const best = Math.max(0, ...groups.map(group => group.relevance));
+  const order = new Map(groups.map((group, index) => [group, index]));
+  if (best < UNDERSTOOD) return groups.sort((a, b) => b.fusionScore - a.fusionScore || order.get(a)! - order.get(b)!);
+  const services = new Set(tracks.map(track => track.provider)).size || 1;
+  const cutoff = Math.max(UNDERSTOOD, best * 0.4);
+  // How much of its artist's name the query spells, by the song's best-matching copy.
+  const credit = new Map(groups.map(group => [group, Math.max(...group.alternatives.map(copy => matchTrack(copy, query).artist))]));
+  // The query names a song and who it is by: "jay-z 99 problems".
+  const byArtist = groups.some(group => group.relevance >= STRONG_MATCH && credit.get(group)! >= 0.99
+    && group.alternatives.some(copy => matchTrack(copy, query).title >= 0.99));
+  const rank = new Map(groups.map(group => {
+    const { track } = group;
+    const variant = variantFactor({ title: track.name, notes: track.version ? [track.version] : [],
+      artists: track.artists.length ? track.artists.map(artist => artist.name) : [track.artist], album: track.album }, query);
+    const agreement = group.fusionScore / (services / (FUSION_RANK + 1));
+    // A song released many times over is usually the known one.
+    const releases = Math.min(group.alternatives.length, 5) / 5;
+    // Then a song by someone else that only mentions the artist, as covers do in their
+    // titles ("99 Problems (Jay-Z)"), is not the one asked for.
+    const mention = byArtist && credit.get(group)! < 0.5 ? 0.7 : 1;
+    return [group, group.relevance * variant * mention + 0.2 * agreement + 0.02 * releases];
+  }));
+  return groups
+    .filter(group => group.relevance >= cutoff)
+    .sort((a, b) => rank.get(b)! - rank.get(a)!
+      // Among equal results, a copy found only on compilations follows the album's own.
+      || Number(compilation(a.track)) - Number(compilation(b.track))
       || compareSoundQuality(b.track, a.track)
-      || b.fusionScore - a.fusionScore || byCodePoint(a.track.globalId, b.track.globalId));
+      || byCodePoint(a.track.globalId, b.track.globalId));
 }
 
 export function rankSearchResults(tracks: Track[], query: string) {

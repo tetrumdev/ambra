@@ -1,10 +1,10 @@
+import { artistCredits, fold, foldTokens, matchEntry, matchName, variantFactor } from "./searchMatch";
 import { serviceRank } from "./servicePreference";
 import type { CatalogArtist, CatalogAlbum } from "../api/server";
 
 export function searchText(value: string) {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
-function compact(value: string) { return searchText(value).replace(/ /g, ""); }
 function distance(a: string, b: string) {
   if (Math.abs(a.length - b.length) > 2) return 3;
   let previous = Array.from({ length: b.length + 1 }, (_, i) => i);
@@ -15,11 +15,18 @@ function distance(a: string, b: string) {
   }
   return previous[b.length];
 }
+/** 5: the same text. 4: every query word is in the value. 3: the value contains the query. 2: close spellings. */
 export function textRelevance(value: string, query: string): number {
-  const a = searchText(value), b = searchText(query);
-  if (!a || !b) return 0;
-  if (a === b || compact(a) === compact(b)) return 5;
-  const words = a.split(" "), terms = b.split(" ");
+  // "&" and "and" are one word some services write and others leave out.
+  const plain = (text: string) => {
+    const words = foldTokens(text);
+    const kept = words.filter(word => word !== "and");
+    return kept.length ? kept : words;
+  };
+  const words = plain(value), terms = plain(query);
+  if (!words.length || !terms.length) return 0;
+  const a = words.join(" "), b = terms.join(" ");
+  if (a === b || words.join("") === terms.join("")) return 5;
   if (terms.every(term => words.includes(term))) return 4;
   if (a.includes(b)) return 3;
   if (terms.every(term => words.some(word => term.length >= 4 && distance(word, term) <= (term.length >= 8 ? 2 : 1)))) return 2;
@@ -38,34 +45,81 @@ export function searchTrackTitle(name: string) {
   return name.replace(/\s*[([][^)\]]*\bremaster(?:ed)?\b[^)\]]*[)\]]/gi, "")
     .replace(/\s+[-–—]\s+(?:(?:19|20)\d{2}\s+)?remaster(?:ed)?(?:\s+(?:19|20)\d{2})?$/i, "").trim();
 }
+const songMatch = (track: TrackCredit, query: string) => matchEntry({ title: searchTrackTitle(track.name), artists: [track.artist] }, query);
+
+/** The first song, when the query names its whole title and nothing the song doesn't explain. */
 export function leadingSong(query: string, tracks: TrackCredit[]) {
   const first = tracks[0];
-  return first && (textRelevance(searchTrackTitle(first.name), query) === 5 || entityRelevance(searchTrackTitle(first.name), first.artist, query) === 6) ? first : null;
+  if (!first) return null;
+  const match = songMatch(first, query);
+  return match.coverage >= 0.99 && match.title >= 0.99 ? first : null;
 }
 
 export function matchingTrackArtist(query: string, tracks: TrackCredit[]): string | null {
   const names = new Set(tracks.filter(track => {
-    const title = searchTrackTitle(track.name);
-    return textRelevance(`${title} ${track.artist}`, query) === 5 || textRelevance(`${track.artist} ${title}`, query) === 5;
+    const match = songMatch(track, query);
+    return match.coverage >= 0.99 && match.title >= 0.99 && match.artist >= 0.99;
   }).map(track => track.artist));
   // Only infer a credit when the song-and-artist match is unambiguous.
   return names.size === 1 ? [...names][0] : null;
 }
+
+/** An album at least this good belongs to the query; the rest is a service's filler. */
+const RELATED = 0.55;
+/** The same for an artist: a name is short, so one near-miss word must not be enough. */
+const RELATED_ARTIST = 0.65;
+/** One act however a service spells it: "4hero" and "4 Hero", "C.L. Smooth" and "CL Smooth". */
+const artistKey = (name: string) => fold(name).replace(/ /g, "");
+
+/**
+ * Artists the query names, and those credited on the songs it names; best first. A service's
+ * search pads its artists with loosely related acts: those are left out whenever anything
+ * does match. `tracks` are the songs the query plainly names; with none, and no artist
+ * matching, the query wasn't understood and the services' own artists are kept.
+ */
 export function rankArtists(values: CatalogArtist[], query: string, tracks: TrackCredit[] = []) {
   const credit = matchingTrackArtist(query, tracks) ?? leadingSong(query, tracks)?.artist;
-  const score = (artist: CatalogArtist) => credit && searchText(artist.name) === searchText(credit) ? 6 : textRelevance(artist.name, query);
+  const credited = credit ? artistCredits([credit]) : new Set<string>();
+  // Whoever the leading songs are by, when the query names them even in part: "kendrick lam"
+  // is Kendrick Lamar being typed, whatever lesser-known act is spelled exactly that.
+  const performers = new Set(tracks.slice(0, 3).filter(track => songMatch(track, query).artist >= 0.5)
+    .flatMap(track => [...artistCredits([track.artist])]));
+  const scores = new Map<CatalogArtist, { score: number; coverage: number; spelled: boolean }>();
+  const score = (artist: CatalogArtist) => {
+    const { named, coverage, exact } = matchName(artist.name, query);
+    // The whole name within a longer query, or a query that is the start of a name.
+    const typed = Math.max(named * (0.6 + 0.4 * coverage), coverage * (0.5 + 0.5 * named));
+    const name = fold(artist.name);
+    const performs = performers.has(name);
+    const services = (artist.sources ?? [artist]).length;
+    return {
+      score: (performs ? Math.max(typed, 0.9) + 0.15 : credited.has(name) ? Math.max(typed, 0.9) : typed) + 0.02 * (services - 1),
+      // Credited artists answer the query through their song, however little of it names them.
+      coverage: performs || credited.has(name) ? 1 : coverage,
+      spelled: exact || performs || credited.has(name),
+    };
+  };
   // Equal names within one service can be different artists. Only collapse across services,
   // keeping each service's entry so the artist page can gather releases from all of them.
   const result: CatalogArtist[] = [];
   for (const item of values) {
     if (result.some(other => other.sources?.some(source => source.id === item.id) ?? other.id === item.id)) continue;
-    const index = result.findIndex(other => searchText(other.name) === searchText(item.name) && other.provider !== item.provider);
+    const index = result.findIndex(other => artistKey(other.name) === artistKey(item.name)
+      && !(other.sources ?? [other]).some(source => source.provider === item.provider));
     if (index < 0) { result.push(item); continue; }
-    const sources = result[index].sources ?? [result[index]];
-    if (!sources.some(source => source.provider === item.provider)) result[index] = { ...result[index], sources: [...sources, item] };
+    result[index] = { ...result[index], sources: [...result[index].sources ?? [result[index]], item] };
   }
-  return result.sort((a, b) => score(b) - score(a));
+  for (const artist of result) scores.set(artist, score(artist));
+  result.sort((a, b) => scores.get(b)!.score - scores.get(a)!.score);
+  let related = result.filter(artist => scores.get(artist)!.score >= RELATED_ARTIST);
+  // With the name spelled out, near misses ("Peter Rock" for "pete rock") are not it; and when
+  // a name holds the whole query, one holding a word of it ("Rock") is not it either.
+  for (const kept of [(artist: CatalogArtist) => scores.get(artist)!.spelled, (artist: CatalogArtist) => scores.get(artist)!.coverage >= 0.99]) {
+    if (related.some(kept)) related = related.filter(kept);
+  }
+  return related.length || tracks.length ? related : result;
 }
+
 // Labels that mark another pressing of the same album rather than a different record.
 // Anything else in brackets (Live, Acoustic, Blue Album…) keeps editions apart.
 const editionWords = new Set(["remaster", "remastered", "remasters", "deluxe", "super", "expanded", "anniversary", "edition", "special", "collector", "collectors", "bonus", "track", "tracks", "version", "reissue", "legacy", "definitive", "explicit", "digital", "the", "and", "s"]);
@@ -103,8 +157,10 @@ function albumArtistNames(album: CatalogAlbum) {
  */
 export function sameAlbum(left: CatalogAlbum, right: CatalogAlbum) {
   if (albumIdentity(left) !== albumIdentity(right)) return false;
-  const theirs = albumArtistNames(right);
-  return [...albumArtistNames(left)].some(name => theirs.has(name));
+  // One service credits "Pete Rock & C.L. Smooth" as an act, another as two artists.
+  const credits = (album: CatalogAlbum) => artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]);
+  const theirs = credits(right);
+  return [...credits(left)].some(name => theirs.has(name));
 }
 
 // A choice is filed under each credited artist, so a service listing collaborators differently still finds it.
@@ -192,23 +248,31 @@ export function bestEditions(albums: CatalogAlbum[]): CatalogAlbum[] {
   return best;
 }
 
+/**
+ * Albums the query names, by the artist it names, or holding the song it names; best first,
+ * one entry per album. Like `rankArtists`, a service's unrelated albums are left out whenever
+ * anything matches, and kept when the query wasn't understood at all.
+ */
 export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackCredit[] = []) {
-  const song = leadingSong(query, tracks);
+  const songs = tracks.slice(0, 3).map(track => ({
+    album: fold(albumBaseTitle(track.album ?? "")), artists: artistCredits([track.artist]),
+  }));
   const score = (album: CatalogAlbum) => {
-    const raw = entityRelevance(album.title, album.artist, query);
-    const direct = raw === 4 ? 5 : raw;
-    if (textRelevance(album.artist, query) === 5 && tracks[0] && textRelevance(tracks[0].artist, query) === 5) return 7;
-    if (song && searchText(album.artist) === searchText(song.artist)) {
-      if (song.album && searchText(album.title) === searchText(song.album)) return 8;
-      if (textRelevance(album.title, query) === 5) return 7;
-    }
-    return direct;
+    const entry = { title: album.title, notes: album.version ? [album.version] : [],
+      artists: album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist] };
+    const typed = matchEntry(entry, query).score * variantFactor(entry, query);
+    // The release a named song is on, most of all the leading song's.
+    const title = fold(albumBaseTitle(album.title));
+    const names = artistCredits(entry.artists);
+    const held = songs.findIndex(song => song.album && song.album === title
+      && (names.has("various artists") || names.has("various") || [...song.artists].some(name => names.has(name))));
+    return held < 0 ? typed : Math.max(typed, 0.85 - 0.05 * held);
   };
   // An edition the query names (deluxe, 2011 remaster…) wins over a better-sounding one.
   const terms = searchText(query).split(" ").filter(term => editionWords.has(term) || /^\d{4}$/.test(term));
   const asked = (album: CatalogAlbum) => terms.filter(term => searchText(`${album.title} ${album.version ?? ""}`).split(" ").includes(term)).length;
   // Every edition and service of one album collapses into its best copy; earlier results win ties.
-  const groups: { album: CatalogAlbum; copies: CatalogAlbum[]; fusion: number; providers: Set<string> }[] = [];
+  const groups: { album: CatalogAlbum; copies: CatalogAlbum[]; fusion: number; providers: Set<string>; score: number }[] = [];
   const ranks = new Map<string, number>();
   const seen = new Set<string>();
   for (const item of values) {
@@ -216,8 +280,9 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
     if (seen.has(key)) continue;
     seen.add(key);
     let group = groups.find(group => group.copies.some(copy => sameAlbum(copy, item)));
-    if (!group) { group = {album: item, copies: [], fusion: 0, providers: new Set()}; groups.push(group); }
+    if (!group) { group = {album: item, copies: [], fusion: 0, providers: new Set(), score: 0}; groups.push(group); }
     group.copies.push(item);
+    group.score = Math.max(group.score, score(item));
     if (!group.providers.has(item.provider)) {
       const rank = (ranks.get(item.provider) ?? 0) + 1;
       ranks.set(item.provider, rank);
@@ -226,15 +291,18 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
     }
     if (compareEditions(item, group.album, [asked(item), asked(group.album)]) > 0) group.album = item;
   }
-  return groups.sort((a, b) => score(b.album) - score(a.album) || b.fusion - a.fusion).map(group => withAlbumVersions(group.album, group.copies));
+  groups.sort((a, b) => b.score - a.score || b.fusion - a.fusion);
+  const related = groups.filter(group => group.score >= RELATED);
+  return (related.length || tracks.length ? related : groups).map(group => withAlbumVersions(group.album, group.copies));
 }
 
 // Match a title and its actual credited artist together. Artist names embedded in
 // tribute/karaoke titles are only title text, not evidence of that artist credit.
 function entityRelevance(title: string, artist: string, query: string) {
   const titleMatch = textRelevance(title, query);
-  const combined = Math.max(textRelevance(`${title} ${artist}`, query), textRelevance(`${artist} ${title}`, query));
-  return Math.max(titleMatch, combined === 5 ? 6 : combined);
+  const match = matchEntry({ title, artists: [artist] }, query);
+  // 6: the query is this title by this artist, however either is punctuated or ordered.
+  return match.coverage >= 0.99 && match.title >= 0.99 && match.artist >= 0.99 ? 6 : titleMatch;
 }
 
 export type SearchCategory = "tracks" | "artists" | "albums";
