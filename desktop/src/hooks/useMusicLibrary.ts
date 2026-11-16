@@ -30,7 +30,7 @@ import {
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
-import { loadLocalMusic } from "../api/localMusic";
+import { loadLocalMusic, localMusicTrack } from "../api/localMusic";
 import { offlineTrack, useDownloads } from "../utils/offlineDownloads";
 
 type MusicLibrary = {
@@ -48,6 +48,8 @@ type MusicLibrary = {
     providerTrackId: string,
   ) => Promise<boolean>;
   rescanLocalMusic: () => Promise<number>;
+  /** Adds dropped audio files or folders to the library; resolves to how many songs were added. */
+  importFiles: (paths: string[]) => Promise<number>;
   refreshStreamingMusic: () => Promise<number>;
   removeTracks: (trackIds: GlobalTrackId[]) => void;
   reorderTracks: (orderedTrackIds: GlobalTrackId[]) => void;
@@ -406,6 +408,21 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     }
   }, [localOnly, serverKey]);
 
+  const importFiles = useCallback(async (paths: string[]) => {
+    if (!isTauri()) throw new Error("Add music from the desktop app.");
+    // Shared playback lists only the server's music, so dropped songs are copied there too.
+    const upload = !localOnly && sharedPlayback;
+    const result = await invoke<{ tracks: ScannedTrack[]; imported: number; server: Track[] | null }>(
+      "import_dropped_music", { paths, upload },
+    );
+    setLocalTracks((current) => reconcileTracks(current, result.tracks.map(localTrack)));
+    if (result.server) {
+      const shared = result.server.map(localMusicTrack);
+      setSharedLocalTracks((current) => reconcileTracks(current, shared));
+    }
+    return result.imported;
+  }, [localOnly, sharedPlayback]);
+
   const refreshStreamingMusic = useCallback(async () => {
     if (localOnly) return 0;
     try {
@@ -433,6 +450,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     addAlbum,
     addTrack,
     rescanLocalMusic,
+    importFiles,
     refreshStreamingMusic,
     removeTracks,
     reorderTracks: (orderedTrackIds: GlobalTrackId[]) => {

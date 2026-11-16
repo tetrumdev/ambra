@@ -22,6 +22,7 @@
 
 :root[data-graphics="low"] .settingsSaveBar,
 :root[data-graphics="low"] .shortcutToastBody,
+:root[data-graphics="low"] .musicDropZoneBody,
 :root[data-graphics="low"] .lyricsNotice {
     background: rgba(22, 22, 22, 0.92);
 }

@@ -997,16 +997,30 @@ fn spawn_thumbnail_worker(app: tauri::AppHandle, pending: Vec<PathBuf>) {
     }
 }
 
-fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
-    let started = Instant::now();
-    let music_directory: PathBuf = app
+/// `Music/Ambra`, created if missing. Scanned paths are under this exact spelling.
+fn local_music_directory(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let music_directory = app
         .path()
         .audio_dir()
         .map_err(|error| format!("Could not locate the Music directory: {error}"))?
         .join("Ambra");
-
     std::fs::create_dir_all(&music_directory)
         .map_err(|error| format!("Could not create {}: {error}", music_directory.display()))?;
+    Ok(music_directory)
+}
+
+fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
+    Ok(scan_music_entries(app)?
+        .into_iter()
+        .map(|entry| entry.track)
+        .collect())
+}
+
+/// Each track with the path of the file it was read from; a FLAC's `audio` may instead
+/// point at its seekable cached copy.
+fn scan_music_entries(app: &tauri::AppHandle) -> Result<Vec<IndexEntry<Track>>, String> {
+    let started = Instant::now();
+    let music_directory = local_music_directory(app)?;
     let cache = cache_directory(app)?;
     let index_path = library_index_path(app)?;
     let had_index = index_path.is_file();
@@ -1045,11 +1059,7 @@ fn scan_music_blocking(app: &tauri::AppHandle) -> Result<Vec<Track>, String> {
         );
     }
 
-    Ok(reconciled
-        .entries
-        .into_iter()
-        .map(|entry| entry.track)
-        .collect())
+    Ok(reconciled.entries)
 }
 
 static PROCESS_STARTED: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
@@ -1169,6 +1179,7 @@ pub fn run() {
             service_login::cancel_service_login,
             service_login::submit_service_login,
             local_import::import_local_music,
+            local_import::import_dropped_music,
             downloads::offline_downloads,
             downloads::remove_offline_downloads,
         ])
