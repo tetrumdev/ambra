@@ -24,6 +24,15 @@ use tokio::sync::{Mutex, watch};
 
 const MAX_STATE_BYTES: usize = 64 * 1024 * 1024;
 const MAX_WAIT_SECONDS: u64 = 30;
+/// The queues of sessions other than the first are kept here too, under this prefix and the
+/// session's id. Only the core writes them, and apps never receive them: each app follows its
+/// session's queue through `/api/session`.
+pub const SESSION_QUEUE_PREFIX: &str = "ambra.queue.v1@";
+
+fn private_key(key: &str) -> bool {
+    key.starts_with(SESSION_QUEUE_PREFIX)
+}
+
 const KEYS: &[&str] = &[
     "ambra.playlists.v1",
     "ambra.queue.v1",
@@ -75,7 +84,7 @@ impl Snapshot {
     fn changes_since(&self, revision: u64, except: &Changes) -> Changes {
         self.key_revisions
             .iter()
-            .filter(|(key, changed)| **changed > revision && !except.contains_key(*key))
+            .filter(|(key, changed)| **changed > revision && !except.contains_key(*key) && !private_key(key))
             .map(|(key, _)| (key.clone(), self.values.get(key).cloned()))
             .collect()
     }
@@ -425,7 +434,7 @@ pub(crate) fn track(value: &Value) -> bool {
 }
 
 fn validate(key: &str, encoded: &str) -> Result<(), String> {
-    if !KEYS.contains(&key) {
+    if !KEYS.contains(&key) && !private_key(key) {
         return Err(format!("Unsupported listening-state key: {key}"));
     }
     let value: Value = serde_json::from_str(encoded)
@@ -457,7 +466,7 @@ fn validate(key: &str, encoded: &str) -> Result<(), String> {
                     .as_f64()
                     .is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0)
         }
-        "ambra.queue.v1" => {
+        key if key == "ambra.queue.v1" || private_key(key) => {
             value["version"] == 1
                 && value.get("tracks").is_none_or(|tracks| {
                     tracks
@@ -542,7 +551,7 @@ async fn read(State(state): State<std::sync::Arc<UserState>>, Query(query): Quer
             seen = current;
             if without.is_empty() { break; }
             // Only the keys this app left out changed: it keeps waiting for one it follows.
-            let wanted = { let without = without.clone(); state.peek(move |saved| since > saved.revision || saved.key_revisions.iter().any(|(key, changed)| *changed > since && !without.contains_key(key))).await };
+            let wanted = { let without = without.clone(); state.peek(move |saved| since > saved.revision || saved.key_revisions.iter().any(|(key, changed)| *changed > since && !without.contains_key(key) && !private_key(key))).await };
             if wanted.unwrap_or(true) { break; }
         }
     }
@@ -560,7 +569,7 @@ async fn read(State(state): State<std::sync::Arc<UserState>>, Query(query): Quer
                 let mut except = without;
                 let mut patches = serde_json::Map::new();
                 for (key, patch) in patched {
-                    if patch.base <= since && since < patch.revision && saved.key_revisions.get(&key) == Some(&patch.revision) && !except.contains_key(&key) {
+                    if patch.base <= since && since < patch.revision && saved.key_revisions.get(&key) == Some(&patch.revision) && !except.contains_key(&key) && !private_key(&key) {
                         except.insert(key.clone(), None);
                         patches.insert(key, patch.patch);
                     }
@@ -571,7 +580,7 @@ async fn read(State(state): State<std::sync::Arc<UserState>>, Query(query): Quer
             }
             // A revision the server never reached means its state was replaced; start over.
             Some(_) => Err(()),
-            None => Ok(json!({ "revision": saved.revision, "values": saved.values })),
+            None => Ok(json!({ "revision": saved.revision, "values": saved.values.iter().filter(|(key, _)| !private_key(key)).collect::<BTreeMap<_, _>>() })),
         })
         .await;
     match answer {
@@ -657,7 +666,7 @@ fn apply(state: &UserState, saved: &mut Snapshot, patch: Patch) -> Result<Value,
     if identical && saved.revision != 0 {
         return Ok(receipt(saved));
     }
-    if saved.revision != 0 && patch.changes.contains_key("ambra.queue.v1") {
+    if patch.changes.keys().any(|key| private_key(key)) || saved.revision != 0 && patch.changes.contains_key("ambra.queue.v1") {
         return Err(Refused::Status(StatusCode::BAD_REQUEST, "Change the queue through /api/session/queue".into()));
     }
     let next_revision = saved.revision.checked_add(1).ok_or_else(|| {

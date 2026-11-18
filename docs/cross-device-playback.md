@@ -9,6 +9,15 @@ output. Mobile's Server tab retains the existing shared player; Local music uses
 Choosing another shared output moves the server's song and position there. This supports one
 selected shared output, rather than synchronized playback across several outputs at once.
 
+A server runs several **sessions**, each with its own queue, position and output, so different
+rooms can play different music at once. Every server has a `Main` session, which can be renamed
+but not removed. Create, rename, follow and remove sessions in Settings → Server → Sessions; the
+volume menu switches between them once there are two or more. Each desktop remembers the session
+it follows. Choosing an output that another session uses moves it: that session keeps its song
+and position and waits for a new output. Spotify plays one stream at a time, so starting Spotify
+in one session pauses Spotify in another. Plays from every session count in the one listening
+history. Mobile and the web remote follow `Main`.
+
 Spotify uses librespot for its primary integration and automatic High playback. Optional
 server-owned Soloist rendering automatically prefers Lossless when ready. Linux private
 PulseAudio capture, macOS process taps, and Windows WASAPI process capture are implemented.
@@ -28,6 +37,11 @@ and server-generated `ambra://pair/` links use encrypted pairing. Approve the co
 preserve device files, playlists, history, and settings. See [ownership and migration](local-clients.md).
 
 ## Install and start the independent server
+
+In the desktop app, Settings → Server → **Run a server on this computer** downloads the
+`ambra-server` build matching the app's release and adds it to PATH (`~/.local/bin` through
+`~/.zprofile` on macOS, `%LOCALAPPDATA%\Ambra\bin` on Windows). The app package itself never
+contains the server. Each GitHub release also offers the server as a separate download.
 
 From the repository, install the standalone command once:
 
@@ -111,7 +125,11 @@ server's permanent track IDs. Unchanged local files reuse cached hashes on later
 
 ## Implementation and verification
 
-`server/src/session.rs` owns transport and queue changes. Session responses include the
+`server/src/session.rs` owns transport and queue changes, for every session. Apps name a
+session with `?session=<id>` on `/api/session` routes; without one they get `main`, as older apps
+expect. `/api/sessions` lists, creates, renames and removes sessions. `Main`'s queue stays in the
+shared `ambra.queue.v1` state; other sessions' queues are kept beside it, never sent to apps
+through `/api/state`, and their transports in `transport.<id>.v1.json`. Session responses include the
 queue when the client's queue revision differs; otherwise clients retain their existing
 snapshot. Conflicting queue edits retry against the server's returned snapshot. Track-list
 preloading goes to the selected output computer, so browsing on a remote prepares audio

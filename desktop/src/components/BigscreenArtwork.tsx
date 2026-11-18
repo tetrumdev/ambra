@@ -12,7 +12,7 @@ import {
   settledBigscreenArtwork,
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
-import { swirlPalette } from "../utils/artworkPalette";
+import { coverShadowShare, swirlPalette } from "../utils/artworkPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
@@ -74,6 +74,17 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
   // transition (which a resize would set off too), the switch itself animates from where the
   // cover was on screen, read while the old layout is still showing.
   const cover = useRef<HTMLDivElement>(null);
+  // A dark-rimmed cover gets a halo instead of a shadow; the palette request is shared with the swirl.
+  useEffect(() => {
+    if (!track) return;
+    let cancelled = false;
+    void artworkPalette(track).then((palette) => {
+      if (!cancelled && palette.colors.length === 4) {
+        cover.current?.style.setProperty("--cover-shadow", String(coverShadowShare(palette)));
+      }
+    });
+    return () => { cancelled = true; };
+  }, [key]);
   const laidOutAs = useRef(layout);
   const before = useRef<DOMRect | null>(null);
   const glide = useRef<Animation | null>(null);

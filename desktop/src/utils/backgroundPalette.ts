@@ -1,13 +1,13 @@
-type Rgb = [number, number, number];
+export type Rgb = [number, number, number];
 
-function parseColor(color: string): Rgb {
+export function parseColor(color: string): Rgb {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return [0, 0, 0];
   return [1, 3, 5].map(
     (offset) => Number.parseInt(color.slice(offset, offset + 2), 16) / 255,
   ) as Rgb;
 }
 
-function luminance([red, green, blue]: Rgb) {
+export function luminance([red, green, blue]: Rgb) {
   return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
 }
 

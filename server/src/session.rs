@@ -1,7 +1,12 @@
 //! The core: this server decides what plays, for every device that uses it.
 //!
-//! There is one session. Its queue is the shared `ambra.queue.v1` state, which only the core
-//! writes: apps send the queue they want (based on the queue revision they saw), or ask for
+//! The server runs any number of sessions (`Sessions`), each with its own queue, transport and
+//! output; apps name theirs with `?session=<id>`, or get the first, `main`. An output plays for
+//! one session at a time, and so does the Spotify renderer. Plays from every session count in
+//! the one listening history.
+//!
+//! The first session's queue is the shared `ambra.queue.v1` state (the others' are kept beside
+//! it, private to the core, under `SESSION_QUEUE_PREFIX`). Only the core writes a queue: apps send the queue they want (based on the queue revision they saw), or ask for
 //! next, previous and the like, and the core applies it and tells every app. The transport —
 //! playing or paused, the position, the chosen output, what that output reports — lives here.
 //!
@@ -11,13 +16,13 @@
 //! a controller's window being open; losing the selected audio output pauses the session.
 
 use std::{
-    sync::{Arc, Mutex as SyncMutex, OnceLock},
+    sync::{Arc, Mutex as SyncMutex, OnceLock, Weak, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use axum::{
     Json, Router,
-    extract::{Query, State},
+    extract::{FromRequestParts, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -37,6 +42,11 @@ const RESTART_AFTER_SECONDS: f64 = 3.0;
 const TICK: Duration = Duration::from_millis(250);
 const MAX_WAIT_SECONDS: u64 = 30;
 const TRANSPORT_FILE: &str = "transport.v1.json";
+/// The session apps get when they name none: the one every server has, which can't be removed.
+pub const MAIN_SESSION: &str = "main";
+const SESSIONS_FILE: &str = "sessions.v1.json";
+const MAX_SESSIONS: usize = 32;
+const MAX_SESSION_NAME: usize = 60;
 /// A queue is saved in the shared state, so it may be as large as that allows. Axum's own
 /// limit (2 MiB) refused a queue of a couple of thousand songs.
 const MAX_QUEUE_BYTES: usize = 64 * 1024 * 1024;
@@ -152,6 +162,12 @@ pub struct Core {
     commands: watch::Sender<u64>,
     transport_path: std::path::PathBuf,
     instance_id: String,
+    id: String,
+    /// Where this session's queue is kept in the shared state.
+    queue_key: String,
+    sessions: Weak<Sessions>,
+    /// Set when the session is removed: its driver stops and its streams end.
+    closed: AtomicBool,
 }
 
 type Shared = Arc<Core>;
@@ -350,13 +366,10 @@ fn error(status: StatusCode, message: impl Into<String>) -> Response {
 }
 
 impl Core {
-    #[cfg(test)]
-    pub fn new(state: Arc<UserState>, endpoints: Arc<Endpoints>) -> Shared {
-        Self::with_spotify(state, endpoints, None)
-    }
-
-    pub fn with_spotify(state: Arc<UserState>, endpoints: Arc<Endpoints>, spotify_playback: Option<Arc<crate::soloist::Manager>>) -> Shared {
-        let transport_path = state.directory().join(TRANSPORT_FILE);
+    fn open(id: &str, sessions: &Arc<Sessions>) -> Shared {
+        let state = sessions.state.clone();
+        let main = id == MAIN_SESSION;
+        let transport_path = state.directory().join(if main { TRANSPORT_FILE.to_owned() } else { format!("transport.{id}.v1.json") });
         let saved: SavedTransport = std::fs::read(&transport_path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -364,8 +377,8 @@ impl Core {
         let transport = Transport { output: saved.output, position: saved.position, ..Transport::default() };
         let core = Arc::new(Self {
             state,
-            endpoints,
-            spotify_playback,
+            endpoints: sessions.endpoints.clone(),
+            spotify_playback: sessions.spotify_playback.clone(),
             transport: SyncMutex::new(transport),
             revision: watch::channel(1).0,
             positions: watch::channel(0).0,
@@ -378,13 +391,84 @@ impl Core {
             commands: watch::channel(0).0,
             transport_path,
             instance_id: crate::server_config::random_hex(16),
+            id: id.to_owned(),
+            queue_key: if main { QUEUE_KEY.to_owned() } else { format!("{}{id}", crate::user_state::SESSION_QUEUE_PREFIX) },
+            sessions: Arc::downgrade(sessions),
+            closed: AtomicBool::new(false),
         });
-        let weak = Arc::downgrade(&core);
-        core.endpoints.on_report(Box::new(move |endpoint, status, instance, sampled_at| {
-            if let Some(core) = weak.upgrade() { core.adopt_control(endpoint, status, instance, sampled_at); }
-        }));
         tokio::spawn(drive(core.clone()));
         core
+    }
+
+    /// The Spotify renderer, while this session may use it. It renders one stream at a time:
+    /// `claim` takes it for a session about to play Spotify, pausing the session that had it.
+    /// Unclaimed, any session may use it; claimed by another, none but that one.
+    fn soloist(&self, claim: bool) -> Option<Arc<crate::soloist::Manager>> {
+        let manager = self.spotify_playback.clone()?;
+        let sessions = self.sessions.upgrade()?;
+        let previous = {
+            let mut owner = sessions.soloist_owner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            match owner.as_deref() {
+                Some(id) if id == self.id => return Some(manager),
+                Some(_) if !claim => return None,
+                None if !claim => return Some(manager),
+                _ => owner.replace(self.id.clone()),
+            }
+        };
+        if let Some(previous) = previous.and_then(|id| sessions.core(&id)) { previous.yield_soloist(); }
+        Some(manager)
+    }
+
+    /// Lets another session take the Spotify renderer without pausing this one.
+    fn release_soloist(&self) {
+        let Some(sessions) = self.sessions.upgrade() else { return };
+        let mut owner = sessions.soloist_owner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if owner.as_deref() == Some(self.id.as_str()) { *owner = None; }
+    }
+
+    /// Whether another session holds the Spotify renderer.
+    fn soloist_elsewhere(&self) -> bool {
+        self.spotify_playback.is_some() && self.sessions.upgrade().is_some_and(|sessions| {
+            sessions.soloist_owner.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_deref().is_some_and(|id| id != self.id)
+        })
+    }
+
+    /// Another session started Spotify, which plays one stream at a time: this one pauses.
+    fn yield_soloist(&self) {
+        let mut transport = self.transport();
+        if transport.playing {
+            transport.position = transport.position_now();
+            transport.position_at = Some(Instant::now());
+            transport.playing = false;
+            transport.pending_play = Some(false);
+        }
+        transport.error = Some("Spotify started playing in another session".into());
+        drop(transport);
+        self.commands.send_modify(|revision| *revision += 1);
+        self.changed();
+    }
+
+    /// Another session took this session's output; this one keeps its song and position.
+    fn drop_output(&self) {
+        let mut transport = self.transport();
+        transport.position = transport.position_now();
+        transport.position_at = Some(Instant::now());
+        transport.output = None;
+        transport.playing = false;
+        transport.buffering = false;
+        transport.loaded = None;
+        transport.orphaned = None;
+        transport.queued_next = None;
+        transport.pending_play = None;
+        transport.pending_seek = None;
+        drop(transport);
+        self.commands.send_modify(|revision| *revision += 1);
+        self.save_transport();
+        self.changed();
+    }
+
+    fn closed(&self) -> bool {
+        self.closed.load(Ordering::Relaxed)
     }
 
     /// Takes on a play, pause or seek made on the output itself. The listener in front of it
@@ -504,7 +588,7 @@ impl Core {
         }
         let _guard = self.queue_lock.lock().await;
         if let Some(queue) = self.cached_queue() { return queue; }
-        let saved = self.state.value(QUEUE_KEY).await.ok().flatten();
+        let saved = self.state.value(&self.queue_key).await.ok().flatten();
         let queue = Arc::new(Self::parse_queue(saved.as_deref()));
         if let Ok(mut cached) = self.queue.lock() {
             *cached = Some((saved.unwrap_or_default().into(), queue.clone()));
@@ -516,7 +600,7 @@ impl Core {
     /// Nearly every change is another key's, or the core's own queue change, already kept.
     async fn refresh_queue(&self) {
         let _guard = self.queue_lock.lock().await;
-        let saved = self.state.value(QUEUE_KEY).await.ok().flatten().unwrap_or_default();
+        let saved = self.state.value(&self.queue_key).await.ok().flatten().unwrap_or_default();
         if let Ok(mut cached) = self.queue.lock()
             && cached.as_ref().is_some_and(|(text, _)| **text != *saved)
         {
@@ -532,7 +616,7 @@ impl Core {
         let _guard = self.queue_lock.lock().await;
         let result = self
             .state
-            .update(QUEUE_KEY, move |saved| {
+            .update(&self.queue_key, move |saved| {
                 let mut queue = Self::parse_queue(saved);
                 let (changed, result) = change(&mut queue)?;
                 if !changed {
@@ -731,14 +815,35 @@ async fn clock() -> Json<Value> {
     Json(json!({ "serverTimeMs": server_time_ms() }))
 }
 
-pub fn router<S: Clone + Send + Sync + 'static>(core: Shared) -> Router<S> {
+pub fn router<S: Clone + Send + Sync + 'static>(sessions: Arc<Sessions>) -> Router<S> {
     Router::new()
         .route("/api/session", get(read))
         .route("/api/session/stream", get(stream))
         .route("/api/session/clock", get(clock))
         .route("/api/session/queue", post(set_queue).layer(axum::extract::DefaultBodyLimit::max(MAX_QUEUE_BYTES)))
         .route("/api/session/command", post(command))
-        .with_state(core)
+        .route("/api/sessions", get(list_sessions).post(create_session))
+        .route("/api/sessions/{id}/rename", post(rename_session))
+        .route("/api/sessions/{id}/delete", post(delete_session))
+        .with_state(sessions)
+}
+
+#[derive(Deserialize)]
+struct SessionQuery {
+    session: Option<String>,
+}
+
+/// The session a request is for: `?session=<id>`, or the first one when it names none.
+struct InSession(Shared);
+
+impl FromRequestParts<Arc<Sessions>> for InSession {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut axum::http::request::Parts, sessions: &Arc<Sessions>) -> Result<Self, Response> {
+        let id = Query::<SessionQuery>::try_from_uri(&parts.uri).ok().and_then(|Query(query)| query.session);
+        sessions.core(id.as_deref().unwrap_or(MAIN_SESSION)).map(InSession)
+            .ok_or_else(|| error(StatusCode::NOT_FOUND, "That session no longer exists"))
+    }
 }
 
 #[derive(Deserialize)]
@@ -751,7 +856,7 @@ struct ReadQuery {
     patches: Option<u8>,
 }
 
-async fn read(State(core): State<Shared>, Query(query): Query<ReadQuery>) -> Json<SessionView> {
+async fn read(InSession(core): InSession, Query(query): Query<ReadQuery>) -> Json<SessionView> {
     if let (Some(since), Some(wait)) = (query.since, query.wait.filter(|wait| *wait > 0)) {
         let mut revision = core.revision.subscribe();
         let _ = tokio::time::timeout(Duration::from_secs(wait.min(MAX_WAIT_SECONDS)), revision.wait_for(|current| *current != since)).await;
@@ -774,11 +879,12 @@ const STREAM_HEARTBEAT: Duration = Duration::from_secs(10);
 
 /// The session as it changes, one view per line: at once for anything an app shows, and with
 /// each position the output reports. Apps following it don't wait on a poll to see either.
-async fn stream(State(core): State<Shared>, Query(query): Query<StreamQuery>) -> Response {
+async fn stream(InSession(core): InSession, Query(query): Query<StreamQuery>) -> Response {
     struct Follow { core: Shared, revision: watch::Receiver<u64>, positions: watch::Receiver<u64>, queue: Option<u64>, detail: QueueDetail, sent: Option<Instant> }
     let detail = if QueueDetail::of(query.patches) == QueueDetail::Patched { QueueDetail::PatchedOrLeftOut } else { QueueDetail::Whole };
     let follow = Follow { revision: core.revision.subscribe(), positions: core.positions.subscribe(), core, queue: query.queue, detail, sent: None };
     let lines = futures_util::stream::unfold(follow, |mut follow| async move {
+        if follow.core.closed() { return None; }
         if let Some(sent) = follow.sent {
             tokio::select! {
                 changed = follow.revision.changed() => { if changed.is_err() { return None; } }
@@ -793,6 +899,7 @@ async fn stream(State(core): State<Shared>, Query(query): Query<StreamQuery>) ->
                 () = tokio::time::sleep(STREAM_HEARTBEAT) => {}
             }
         }
+        if follow.core.closed() { return None; }
         follow.revision.mark_unchanged();
         follow.positions.mark_unchanged();
         let view = view(&follow.core, follow.queue, follow.detail).await;
@@ -819,7 +926,7 @@ struct QueueChange {
     play_track_id: Option<String>,
 }
 
-async fn set_queue(State(core): State<Shared>, Json(change): Json<QueueChange>) -> Response {
+async fn set_queue(InSession(core): InSession, Json(change): Json<QueueChange>) -> Response {
     let _operation = core.operation.lock().await;
     if change.queue["version"] != 1 {
         return error(StatusCode::BAD_REQUEST, "Unsupported queue");
@@ -899,18 +1006,18 @@ enum Command {
     Volume { volume: f64 },
 }
 
-async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
+async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
     let retry_live = matches!(&command, Command::Play | Command::Toggle | Command::Seek { .. }) && core.transport().error.is_some();
     let interrupts_live = retry_live || matches!(&command, Command::Pause | Command::Stop | Command::Seek { .. } | Command::Next | Command::Previous | Command::PlayTrack { .. } | Command::Output { .. })
         || matches!(&command, Command::Toggle) && core.transport().playing;
-    if interrupts_live && let Some(manager) = &core.spotify_playback { manager.interrupt(); }
+    if interrupts_live && let Some(manager) = core.soloist(false) { manager.interrupt(); }
     let guard = core.operation.lock().await;
     if !matches!(&command, Command::Volume { .. }) {
         core.commands.send_modify(|revision| *revision += 1);
     }
     let mut operation = OutputOperation { core: &core, operation: Some(guard), commands: core.commands.subscribe() };
     core.transport().failed_live_load = None;
-    if retry_live && let Some(manager) = &core.spotify_playback {
+    if retry_live && let Some(manager) = core.soloist(false) {
         if operation.wait(manager.retry_playback()).await.is_err() {
             return Json(view(&core, query.queue, QueueDetail::of(query.patches)).await).into_response();
         }
@@ -994,6 +1101,14 @@ async fn command(State(core): State<Shared>, Query(query): Query<ReadQuery>, Jso
                 previous
             };
             drop(operation.operation.take());
+            // An output plays for one session: any other session using it lets it go.
+            if let (Some(output), Some(sessions)) = (&output, core.sessions.upgrade()) {
+                for other in sessions.cores() {
+                    if other.id != core.id && other.transport().output.as_ref().is_some_and(|theirs| theirs.endpoint_id == output.endpoint_id) {
+                        other.drop_output();
+                    }
+                }
+            }
             // The song moves: the old output stops, and the driver loads it on the new one.
             if let Some(previous) = previous.filter(|previous| Some(previous) != output.as_ref()) {
                 let _ = core.endpoints.call(&previous.endpoint_id, "pause_native_audio", json!({})).await;
@@ -1049,6 +1164,7 @@ async fn drive(core: Shared) {
             }
             _ = tokio::time::sleep(TICK) => {}
         }
+        if core.closed() { return; }
         if let Err(message) = step(&core).await {
             if message == SUPERSEDED { continue; }
             let mut transport = core.transport();
@@ -1116,16 +1232,22 @@ async fn step(core: &Core) -> Result<(), String> {
     macro_rules! provider {
         ($future:expr) => { io.wait($future).await? };
     }
+    macro_rules! stop_soloist {
+        () => {
+            if let Some(manager) = core.soloist(false) { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+            core.release_soloist();
+        };
+    }
     let queue = core.queue().await;
     let (current, mut next) = current_and_next(&queue);
     let Some(output) = core.transport().output.clone() else {
-        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+        stop_soloist!();
         return Ok(());
     };
     let endpoint = output.endpoint_id.clone();
 
     let Some((track, canonical_source)) = current else {
-        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+        stop_soloist!();
         // Nothing to play: the output stops if it was playing something.
         let was_loaded = core.transport().loaded.take().is_some();
         if was_loaded {
@@ -1140,7 +1262,7 @@ async fn step(core: &Core) -> Result<(), String> {
         return Ok(());
     };
     if crate::service_auth::disconnected(track["provider"].as_str().unwrap_or("")) {
-        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+        stop_soloist!();
         let was_loaded = {
             let mut transport = core.transport();
             let loaded = transport.loaded.take().is_some();
@@ -1164,7 +1286,7 @@ async fn step(core: &Core) -> Result<(), String> {
             return Err(format!("Waiting for {} to reconnect", output.endpoint_name));
         }
         core.pause_disconnected_output();
-        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+        stop_soloist!();
         return Err(format!("Audio output {} is offline", output.endpoint_name));
     };
 
@@ -1184,7 +1306,7 @@ async fn step(core: &Core) -> Result<(), String> {
         loaded.endpoint_id == endpoint && loaded.endpoint_instance != endpoint_instance);
     if restarted || empty_engine {
         core.pause_disconnected_output();
-        if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); manager.clear_effective_renderer(); }
+        stop_soloist!();
     }
     core.restore_orphaned(&endpoint, &output.device_id, &endpoint_instance, &canonical_source, next.as_deref(), &status);
     // The output's own changes the core knows of when it sends a command. The output ignores a
@@ -1208,7 +1330,19 @@ async fn step(core: &Core) -> Result<(), String> {
     let mut source = canonical_source.clone();
     let mut live = false;
     let mut live_position = None;
-    if let Some(manager) = &core.spotify_playback {
+    let spotify = track["provider"] == "spotify";
+    let playing = core.transport().playing;
+    if spotify && !playing && core.soloist_elsewhere() {
+        // Spotify is playing in another session: leave it be until this one plays again.
+        if core.transport().loaded.take().is_some() {
+            let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
+        }
+        let mut transport = core.transport();
+        transport.pending_play = None;
+        transport.buffering = false;
+        return Ok(());
+    }
+    if let Some(manager) = core.soloist(spotify && playing) {
         let (generation, playing, position, seek, pinned, restarted, failed) = {
             let transport = core.transport();
             let same = transport.loaded.as_ref().filter(|loaded| loaded.track_source == canonical_source && loaded.generation == transport.generation);
@@ -1251,6 +1385,7 @@ async fn step(core: &Core) -> Result<(), String> {
             }
         }
         if !live { provider!(manager.stop_playback()); }
+        if !spotify { core.release_soloist(); }
         // Optional lossless resolves its renderer at the next-track boundary.
         if manager.lossless_enabled() && queue["upcoming"].as_array().and_then(|items| items.first()).and_then(|item| track_of(&queue, item)).is_some_and(|track| track["provider"] == "spotify") { next = None; }
     }
@@ -1278,7 +1413,7 @@ async fn step(core: &Core) -> Result<(), String> {
         if let Err(error) = remote!(core.endpoints
             .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay, "control": known() }))) {
             if live {
-                if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); }
+                if let Some(manager) = core.soloist(false) { provider!(manager.stop_playback()); }
                 core.transport().failed_live_load = Some(wanted);
                 core.transport().loaded = None;
                 core.transport().position = position;
@@ -1289,7 +1424,7 @@ async fn step(core: &Core) -> Result<(), String> {
         if core.endpoints.status(&endpoint).await.is_none_or(|(_, _, _, instance)| instance != endpoint_instance) {
             return Ok(());
         }
-        if let Some(manager) = &core.spotify_playback {
+        if let Some(manager) = core.soloist(false) {
             if track["provider"] == "spotify" { manager.report_renderer(live); }
             else { manager.clear_effective_renderer(); }
         }
@@ -1369,10 +1504,10 @@ async fn step(core: &Core) -> Result<(), String> {
     }
 
     if track["provider"] == "spotify" {
-        if let Some(manager) = &core.spotify_playback { manager.report_renderer(live); }
+        if let Some(manager) = core.soloist(false) { manager.report_renderer(live); }
         if live && status["error"].is_string() {
             // Stop and retry the same generation. No queue advance and no new history entry.
-            if let Some(manager) = &core.spotify_playback { provider!(manager.stop_playback()); }
+            if let Some(manager) = core.soloist(false) { provider!(manager.stop_playback()); }
             let loaded = core.transport().loaded.take();
             let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
             let mut transport = core.transport();
@@ -1437,6 +1572,199 @@ async fn step(core: &Core) -> Result<(), String> {
         core.changed();
     }
     Ok(())
+}
+
+// ---------- Sessions ----------
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionInfo {
+    id: String,
+    name: String,
+}
+
+/// Every session this server runs. `main` always exists; the others are made and removed by apps.
+pub struct Sessions {
+    state: Arc<UserState>,
+    endpoints: Arc<Endpoints>,
+    spotify_playback: Option<Arc<crate::soloist::Manager>>,
+    /// The session using the Spotify renderer, if one has claimed it (`Core::soloist`).
+    soloist_owner: SyncMutex<Option<String>>,
+    sessions: SyncMutex<Vec<(SessionInfo, Shared)>>,
+    path: std::path::PathBuf,
+}
+
+fn valid_session_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 32 && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+fn session_name(name: &str) -> Result<String, Response> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > MAX_SESSION_NAME {
+        return Err(error(StatusCode::BAD_REQUEST, format!("A session name is 1 to {MAX_SESSION_NAME} characters")));
+    }
+    Ok(name.to_owned())
+}
+
+impl Sessions {
+    pub fn open(state: Arc<UserState>, endpoints: Arc<Endpoints>, spotify_playback: Option<Arc<crate::soloist::Manager>>) -> Arc<Self> {
+        let path = state.directory().join(SESSIONS_FILE);
+        let mut saved: Vec<SessionInfo> = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default();
+        saved.retain(|info| valid_session_id(&info.id));
+        saved.truncate(MAX_SESSIONS);
+        if !saved.iter().any(|info| info.id == MAIN_SESSION) {
+            saved.insert(0, SessionInfo { id: MAIN_SESSION.into(), name: "Main".into() });
+        }
+        let sessions = Arc::new(Self {
+            state, endpoints, spotify_playback,
+            soloist_owner: SyncMutex::new(None),
+            sessions: SyncMutex::new(Vec::new()),
+            path,
+        });
+        let opened = saved.into_iter().map(|info| { let core = Core::open(&info.id, &sessions); (info, core) }).collect();
+        *sessions.list() = opened;
+        let weak = Arc::downgrade(&sessions);
+        sessions.endpoints.on_report(Box::new(move |endpoint, status, instance, sampled_at| {
+            let Some(sessions) = weak.upgrade() else { return };
+            for core in sessions.cores() {
+                if core.transport().output.as_ref().is_some_and(|output| output.endpoint_id == endpoint) {
+                    core.adopt_control(endpoint, status, instance, sampled_at);
+                    core.wake.notify_one();
+                }
+            }
+        }));
+        sessions
+    }
+
+    fn list(&self) -> std::sync::MutexGuard<'_, Vec<(SessionInfo, Shared)>> {
+        self.sessions.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn cores(&self) -> Vec<Shared> {
+        self.list().iter().map(|(_, core)| core.clone()).collect()
+    }
+
+    fn core(&self, id: &str) -> Option<Shared> {
+        self.list().iter().find(|(info, _)| info.id == id).map(|(_, core)| core.clone())
+    }
+
+    pub fn save_transports(&self) {
+        for core in self.cores() { core.save_transport(); }
+    }
+
+    fn save(&self) -> Result<(), String> {
+        let infos: Vec<SessionInfo> = self.list().iter().map(|(info, _)| info.clone()).collect();
+        let bytes = serde_json::to_vec(&infos).map_err(|error| error.to_string())?;
+        crate::server_config::write_private(&self.path, &bytes)
+    }
+
+    async fn summaries(&self) -> Vec<SessionSummary> {
+        let list: Vec<(SessionInfo, Shared)> = self.list().clone();
+        let mut summaries = Vec::with_capacity(list.len());
+        for (info, core) in list {
+            let queue = core.queue().await;
+            let track = current_and_next(&queue).0.map(|(track, _)| json!({
+                "title": track["title"], "artist": track["artist"], "album": track["album"], "cover": track["cover"],
+            }));
+            let transport = core.transport();
+            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), track });
+        }
+        summaries
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionSummary {
+    id: String,
+    name: String,
+    playing: bool,
+    output: Option<Output>,
+    /// The current song, for showing what each session is playing.
+    track: Option<Value>,
+}
+
+#[derive(Deserialize)]
+struct SessionName {
+    name: String,
+}
+
+async fn list_sessions(State(sessions): State<Arc<Sessions>>) -> Json<Vec<SessionSummary>> {
+    Json(sessions.summaries().await)
+}
+
+async fn create_session(State(sessions): State<Arc<Sessions>>, Json(body): Json<SessionName>) -> Response {
+    let name = match session_name(&body.name) { Ok(name) => name, Err(response) => return response };
+    let id = crate::server_config::random_hex(6);
+    {
+        let mut list = sessions.list();
+        if list.len() >= MAX_SESSIONS {
+            return error(StatusCode::BAD_REQUEST, format!("A server runs at most {MAX_SESSIONS} sessions"));
+        }
+        let core = Core::open(&id, &sessions);
+        list.push((SessionInfo { id: id.clone(), name }, core));
+    }
+    if let Err(message) = sessions.save() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    let created = sessions.summaries().await.into_iter().find(|summary| summary.id == id);
+    Json(created).into_response()
+}
+
+async fn rename_session(State(sessions): State<Arc<Sessions>>, axum::extract::Path(id): axum::extract::Path<String>, Json(body): Json<SessionName>) -> Response {
+    let name = match session_name(&body.name) { Ok(name) => name, Err(response) => return response };
+    let core = {
+        let mut list = sessions.list();
+        let Some((info, core)) = list.iter_mut().find(|(info, _)| info.id == id) else {
+            return error(StatusCode::NOT_FOUND, "That session no longer exists");
+        };
+        info.name = name;
+        core.clone()
+    };
+    if let Err(message) = sessions.save() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    core.changed();
+    Json(sessions.summaries().await).into_response()
+}
+
+/// Removes a session: its output stops, and its queue and transport are forgotten.
+async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Path(id): axum::extract::Path<String>) -> Response {
+    if id == MAIN_SESSION {
+        return error(StatusCode::BAD_REQUEST, "The main session can't be removed");
+    }
+    let core = {
+        let mut list = sessions.list();
+        let Some(index) = list.iter().position(|(info, _)| info.id == id) else {
+            return error(StatusCode::NOT_FOUND, "That session no longer exists");
+        };
+        list.remove(index).1
+    };
+    if let Err(message) = sessions.save() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    core.closed.store(true, Ordering::Relaxed);
+    core.commands.send_modify(|revision| *revision += 1);
+    core.changed();
+    let _operation = core.operation.lock().await;
+    let owned_soloist = {
+        let mut owner = sessions.soloist_owner.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        if owner.as_deref() == Some(id.as_str()) { owner.take().is_some() } else { false }
+    };
+    if owned_soloist && let Some(manager) = &sessions.spotify_playback {
+        let _ = manager.stop_playback().await;
+        manager.clear_effective_renderer();
+    }
+    let loaded = core.transport().loaded.as_ref().map(|loaded| loaded.endpoint_id.clone());
+    if let Some(endpoint) = loaded {
+        let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+    }
+    let _ = core.state.update(&core.queue_key, |_| Ok((None, ()))).await;
+    let _ = std::fs::remove_file(&core.transport_path);
+    Json(sessions.summaries().await).into_response()
 }
 
 #[cfg(test)]
@@ -1556,10 +1884,11 @@ mod driver_tests {
             let directory = std::env::temp_dir().join(format!("ambra-core-{}-{}", std::process::id(), crate::server_config::random_hex(4)));
             let state = Arc::new(UserState::at(directory.join("user-state.v1.json")));
             let endpoints = Arc::new(Endpoints::default());
-            let core = if soloist { Core::with_spotify(state.clone(), endpoints.clone(), Some(crate::soloist::tests::manager(&directory, true))) } else { Core::new(state.clone(), endpoints.clone()) };
+            let sessions = Sessions::open(state.clone(), endpoints.clone(), soloist.then(|| crate::soloist::tests::manager(&directory, true)));
+            let core = sessions.core(MAIN_SESSION).unwrap();
             let app: Router = Router::new()
                 .merge(crate::endpoints::router(endpoints.clone()))
-                .merge(router(core.clone()))
+                .merge(router(sessions))
                 .layer(axum::Extension(crate::access::Caller { client_id: None }));
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());

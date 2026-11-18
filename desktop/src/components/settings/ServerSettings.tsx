@@ -5,6 +5,10 @@ import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { SettingRow, Toggle } from "./SettingsControls";
+import {
+  MAIN_SESSION, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore,
+  type CoreSession,
+} from "../../api/core";
 
 type Discovered = { id: string; name: string; version: string; address: string };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
@@ -147,6 +151,96 @@ function SavedServers({ saved, changing, onChange }: {
   </>;
 }
 
+function describeSession(session: CoreSession) {
+  const track = session.track ? [session.track.title, session.track.artist].filter(Boolean).join(" · ") : "Nothing queued";
+  const output = session.output ? `${session.playing ? "Playing" : "Paused"} on ${session.output.endpointName}` : "No output";
+  return `${track} — ${output}`;
+}
+
+/** The server's sessions: each has its own queue and output, and this device follows one. */
+function PlaybackSessions() {
+  const current = useSyncExternalStore(subscribeCore, coreSession);
+  const [sessions, setSessions] = useState<CoreSession[]>([]);
+  const [naming, setNaming] = useState<{ id: string | null; name: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const refresh = useCallback(() => coreSessions().then(setSessions), []);
+  useEffect(() => {
+    void refresh().catch(reason => setError(String(reason)));
+    const timer = setInterval(() => void refresh().catch(() => {}), 3000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+  // A server from before sessions answers with none.
+  if (!sessions.length) return null;
+  const act = async (work: () => Promise<unknown>) => {
+    setError(null);
+    try { await work(); await refresh(); }
+    catch (reason) { setError(String(reason)); }
+  };
+  const save = () => {
+    if (!naming?.name.trim()) return;
+    void act(async () => {
+      if (naming.id) await renameCoreSession(naming.id, naming.name);
+      else setCoreSession((await createCoreSession(naming.name)).id);
+      setNaming(null);
+    });
+  };
+  return <>
+    <h2>Sessions</h2>
+    <p className="settingsMuted">Each session has its own queue and plays on its own output. This device controls the one it follows.</p>
+    {sessions.map(session => <SettingRow key={session.id} label={session.name} hint={describeSession(session)}>
+      <span className="serverJoinActions">
+        {session.id === current
+          ? <span className="settingsChip" data-state="connected">Following</span>
+          : <button type="button" className="settingsPill" onClick={() => setCoreSession(session.id)}>Follow</button>}
+        <button type="button" className="settingsPill" onClick={() => setNaming({ id: session.id, name: session.name })}>Rename</button>
+        {session.id !== MAIN_SESSION && <button type="button" className="settingsPill"
+          onClick={() => void act(() => removeCoreSession(session.id))}>Remove</button>}
+      </span>
+    </SettingRow>)}
+    {naming ? <SettingRow label={naming.id ? "Rename session" : "New session"}>
+      <span className="settingsFieldRow">
+        <input type="text" aria-label="Session name" value={naming.name} maxLength={60} autoFocus
+          onChange={event => setNaming({ ...naming, name: event.target.value })}
+          onKeyDown={event => { if (event.key === "Enter") save(); else if (event.key === "Escape") setNaming(null); }} />
+        <button type="button" className="settingsPill" disabled={!naming.name.trim()} onClick={save}>Save</button>
+        <button type="button" className="settingsLink" onClick={() => setNaming(null)}>Cancel</button>
+      </span>
+    </SettingRow> : <button type="button" className="settingsPill" onClick={() => setNaming({ id: null, name: "" })}>New session</button>}
+    {error && <p className="settingsError" role="alert">{error}</p>}
+  </>;
+}
+
+type ServerCommand = { path: string; installed: boolean; available: boolean };
+
+/** Downloads the server for this computer from the release matching this app; the app never ships it. */
+function ServerCommandInstall() {
+  const [command, setCommand] = useState<ServerCommand | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const [done, setDone] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (isTauri()) void invoke<ServerCommand>("server_command_status").then(setCommand).catch(() => {});
+  }, []);
+  if (!command?.available) return null;
+  const install = async () => {
+    setInstalling(true);
+    setError(null);
+    try { setCommand(await invoke<ServerCommand>("install_server_command")); setDone(true); }
+    catch (reason) { setError(String(reason)); }
+    finally { setInstalling(false); }
+  };
+  return <>
+    <SettingRow label="Run a server on this computer"
+      hint={command.installed ? `ambra-server is installed at ${command.path}.` : "Downloads the ambra-server command and adds it to your PATH."}>
+      <button type="button" className="settingsPill" disabled={installing} onClick={() => void install()}>
+        {installing ? "Downloading…" : command.installed ? "Update" : "Download"}
+      </button>
+    </SettingRow>
+    {done && <p className="settingsMuted" role="status">Installed. Open a new terminal and run <code>ambra-server start</code>.</p>}
+    {error && <p className="settingsError" role="alert">{error}</p>}
+  </>;
+}
+
 export function ServerSettings({ active }: { active: boolean }) {
   const { connected, network, sharedPlayback, setSharedPlayback, reconnect } = useClientConnection();
   const [setup, setSetup] = useState(false);
@@ -196,6 +290,7 @@ export function ServerSettings({ active }: { active: boolean }) {
         <SettingRow label="Shared playback session" hint="Control the server queue and share this device’s output. Turn off to play your private local queue.">
           <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
         </SettingRow>
+        {sharedPlayback && connected && <PlaybackSessions />}
         <div className="serverJoinActions">
           <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
           <button type="button" className="settingsPill" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
@@ -210,6 +305,7 @@ export function ServerSettings({ active }: { active: boolean }) {
         <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
       </>}
       <SavedServers saved={saved} changing={changing} onChange={(command, args) => void change(command, args)} />
+      <ServerCommandInstall />
     </div>}
   </>;
 }
