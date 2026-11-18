@@ -12,13 +12,16 @@ let targetIdentity = identity;
 let networkState = "Offline";
 let pairingStatus = "pending";
 let commandFailure: string | null = null;
+let connectionMethod: string | null = null;
+const methodSelections: (string | null)[] = [];
 let showSettings = false;
 let mounts = 0;
 const tauriCore = await import("@tauri-apps/api/core");
-mock.module("@tauri-apps/api/core", () => ({ ...tauriCore, isTauri: () => true, invoke: async (command: string) => {
+mock.module("@tauri-apps/api/core", () => ({ ...tauriCore, isTauri: () => true, invoke: async (command: string, args?: { method?: string | null }) => {
   calls.push(command);
-  if (command === "server_connection") return { mode: paired ? "join" : "host", baseUrl: bridge, token: null, server: paired ? { id: "home", name: "Home", address: "music.local", publicKey: identity } : null, clientId: "test", clientName: "Test" };
+  if (command === "server_connection") return { mode: paired ? "join" : "host", baseUrl: bridge, token: null, server: paired ? { id: "home", name: "Home", address: "music.local", publicKey: identity } : null, clientId: "test", clientName: "Test", connectionMethod };
   if (command === commandFailure) throw new Error("Connection failed safely");
+  if (command === "set_connection_method") { connectionMethod = args?.method ?? null; methodSelections.push(connectionMethod); }
   if (command === "network_connection_status") return { state: networkState, error: networkState === "Offline" ? "Server unavailable" : null };
   if (command === "poll_pairing") return pairingStatus;
   if (command === "join_server") { paired = true; bridge = targetBridge; identity = targetIdentity; }
@@ -74,9 +77,10 @@ test("Server settings opens optional setup, discovers external servers and accep
   localStorage.setItem("ambra.playlists.v1", "keep local playlists");
   const container = document.createElement("div"); const root = createRoot(container);
   await act(async () => { root.render(<ServerSettings active />); });
-  const connectionType = container.querySelector<HTMLInputElement>('input[aria-label="Connection type"]')!;
-  expect(connectionType.value).toBe("Local");
-  expect(connectionType.readOnly).toBe(true);
+  const connectionType = container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
+  expect(connectionType.value).toBe("");
+  expect(connectionType.disabled).toBe(true);
+  expect(container.textContent).toContain("Current: Local.");
   const connect = [...container.querySelectorAll("button")].find(button => button.textContent === "Add a server")!;
   expect(connect).toBeDefined();
   await act(async () => connect.click());
@@ -96,7 +100,7 @@ test("Server settings opens optional setup, discovers external servers and accep
   expect(localStorage.getItem("ambra.playlists.v1")).toBe("keep local playlists");
   await act(async () => root.unmount());
 });
-test("Server tab updates its read-only connection type and keeps client connection actions", async () => {
+test("Server tab shows current transport separately from selection and keeps client connection actions", async () => {
   paired = true;
   const { connectToServer } = await import("../src/api/serverConnection"); await connectToServer();
   const container = document.createElement("div"); const root = createRoot(container);
@@ -109,15 +113,47 @@ test("Server tab updates its read-only connection type and keeps client connecti
     [false, "Offline", null, "Offline"],
   ] as const) {
     await act(async () => root.render(<ClientConnectionContext.Provider value={{ connected, network: { state, method }, sharedPlayback: false, setSharedPlayback: async () => {}, reconnect: () => {} }}><ServerSettings active /></ClientConnectionContext.Provider>));
-    const connectionType = container.querySelector<HTMLInputElement>('input[aria-label="Connection type"]')!;
-    expect(connectionType.value).toBe(expected);
-    expect(connectionType.readOnly).toBe(true);
+    const connectionType = container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
+    expect(connectionType.value).toBe("");
+    expect(container.textContent).toContain(`Current: ${expected}.`);
     expect(connectionType.disabled).toBe(false);
   }
   expect(container.textContent).toContain("Disconnect");
   expect(container.textContent).toContain("Add a server");
   expect(container.textContent).not.toContain("Stop server");
   await act(async () => root.unmount());
+});
+
+test("connection dropdown applies every transport, restores automatic and retains selection after failure", async () => {
+  paired = true; connectionMethod = null;
+  const { connectToServer } = await import("../src/api/serverConnection"); await connectToServer();
+  const container = document.createElement("div"); const root = createRoot(container);
+  await act(async () => root.render(<ServerSettings active />));
+  const select = () => container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
+  const choose = async (value: string) => {
+    await act(async () => {
+      select().value = value;
+      select().dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+    });
+  };
+  const start = methodSelections.length;
+  try {
+    expect([...select().options].map(option => option.value)).toEqual(["", "Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat"]);
+    for (const method of ["Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat", ""]) {
+      await choose(method);
+      expect(select().value).toBe(method);
+      expect(connectionMethod).toBe(method || null);
+    }
+    expect(methodSelections.slice(start)).toEqual(["Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat", null]);
+    commandFailure = "set_connection_method";
+    await choose("HyperDHT");
+    expect(select().value).toBe("");
+    expect(container.textContent).toContain("Connection failed safely");
+    expect(select().disabled).toBe(false);
+  } finally {
+    commandFailure = null; connectionMethod = null;
+    await act(async () => root.unmount());
+  }
 });
 
 test("cached metadata rebases only onto its verified server while device files remain untouched", async () => {

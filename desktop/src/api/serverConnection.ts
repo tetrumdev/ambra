@@ -11,6 +11,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
  */
 export type ServerLinkMode = "host" | "join";
 export type WhenServerAway = "wait" | "fallback";
+export type ConnectionMethod = "Lan" | "Public" | "HyperDHT" | "TcpPunch" | "Pwnat" | "Tailcat";
 export type JoinedServer = { id: string; name: string; address: string; publicKey?: string | null };
 export type ServerConnection = {
   mode: ServerLinkMode;
@@ -23,6 +24,7 @@ export type ServerConnection = {
   clientName: string;
   /** This app's ID on the server, under which its outputs appear to other devices. */
   clientId: string;
+  connectionMethod?: ConnectionMethod | null;
 };
 
 const builtInBaseUrl = (import.meta.env.VITE_AMBRA_SERVER_URL ?? "http://127.0.0.1:9").replace(/\/$/, "");

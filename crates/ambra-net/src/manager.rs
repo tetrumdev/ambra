@@ -33,7 +33,7 @@ pub enum ConnectionState {
     Reconnecting,
     Failed,
 }
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum Method {
     Lan,
     Pwnat,
@@ -180,6 +180,8 @@ pub struct ConnectionManager {
     status: watch::Sender<Status>,
     pub cancel: CancellationToken,
     timing: Timing,
+    /// A selected transport stays selected through retries and network changes.
+    forced_method: Option<Method>,
 }
 // Waiters own receivers, not the attempt. Dropping any waiter never cancels
 // establishment for other requests. Shutdown owns and joins the worker.
@@ -197,11 +199,28 @@ impl ConnectionManager {
     pub fn new(identity: Identity, selected: SelectedServer, token: Option<String>) -> Arc<Self> {
         Self::with_timing(identity, selected, token, Timing::default())
     }
+    pub fn with_method(
+        identity: Identity,
+        selected: SelectedServer,
+        token: Option<String>,
+        method: Option<Method>,
+    ) -> Arc<Self> {
+        Self::build(identity, selected, token, Timing::default(), method)
+    }
     pub fn with_timing(
         identity: Identity,
         selected: SelectedServer,
         token: Option<String>,
         timing: Timing,
+    ) -> Arc<Self> {
+        Self::build(identity, selected, token, timing, None)
+    }
+    fn build(
+        identity: Identity,
+        selected: SelectedServer,
+        token: Option<String>,
+        timing: Timing,
+        forced_method: Option<Method>,
     ) -> Arc<Self> {
         let (status, _) = watch::channel(Status {
             state: ConnectionState::Offline,
@@ -231,6 +250,7 @@ impl ConnectionManager {
             status,
             cancel: CancellationToken::new(),
             timing,
+            forced_method,
         })
     }
     fn tailcat_diagnostics(&self) -> Option<Arc<tailcat::Diagnostics>> {
@@ -644,9 +664,10 @@ impl ConnectionManager {
 
     async fn connect_round(&self) -> Result<Arc<HttpConnection>> {
         let started = std::time::Instant::now();
-        let (method, connection) = raced(
+        let (method, connection) = selected_transport(
             &self.timing,
             &self.cancel,
+            self.forced_method,
             pwnat::capability().available,
             |method| self.attempt(method),
         )
@@ -914,7 +935,8 @@ impl ConnectionManager {
         network: &mut watch::Receiver<u64>,
     ) {
         let authorized = self.token.read().await.is_some();
-        let roaming = self.roaming.load(std::sync::atomic::Ordering::Relaxed);
+        let roaming =
+            self.forced_method.is_none() && self.roaming.load(std::sync::atomic::Ordering::Relaxed);
         let away = method.is_some_and(Method::away);
         let mut upgrade = tokio::time::interval(Duration::from_secs(30));
         upgrade.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -1024,6 +1046,9 @@ impl ConnectionManager {
     }
 
     async fn upgrade(&self, current: Option<Method>) -> Result<bool> {
+        if self.forced_method.is_some() {
+            return Ok(false);
+        }
         if self.upgrade_to(Method::Lan, self.timing.lan).await? {
             return Ok(true);
         }
@@ -1181,6 +1206,42 @@ impl ConnectionManager {
     }
 }
 
+/// Manual selection never falls back to a different transport.
+async fn selected_transport<T, F, Fut>(
+    timing: &Timing,
+    cancel: &CancellationToken,
+    selected: Option<Method>,
+    pwnat_available: bool,
+    mut attempt: F,
+) -> Result<(Method, T)>
+where
+    F: FnMut(Method) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let Some(method) = selected else {
+        return raced(timing, cancel, pwnat_available, attempt).await;
+    };
+    if method == Method::Pwnat && !pwnat_available {
+        return Err("pwnat is unavailable on this device".into());
+    }
+    let budget = match method {
+        Method::Lan => timing.lan,
+        Method::Public => timing.public,
+        Method::HyperDHT => timing.hyperdht,
+        Method::TcpPunch => timing.tcp_punch,
+        Method::Pwnat => timing.pwnat,
+        Method::Tailcat => Duration::from_secs(90),
+    };
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err("Connection cancelled".into()),
+        result = tokio::time::timeout(budget, attempt(method)) => match result {
+            Ok(Ok(connection)) => Ok((method, connection)),
+            result => Err(attempt_error(method, result, budget)?.into()),
+        }
+    }
+}
+
 /// Race pinned encrypted transports. Device authorization starts only after
 /// losers are dropped. Optional pwnat runs only after both native paths fail.
 async fn raced<T, F, Fut>(
@@ -1314,6 +1375,96 @@ fn attempt_error<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn manual_selection_attempts_only_selected_transport_on_success_failure_and_timeout() {
+        for method in METHODS {
+            for outcome in ["success", "failure", "timeout"] {
+                let mut visits = Vec::new();
+                let cancel = CancellationToken::new();
+                let result = selected_transport(
+                    &Timing::default(),
+                    &cancel,
+                    Some(method),
+                    true,
+                    |attempted| {
+                        visits.push(attempted);
+                        async move {
+                            match outcome {
+                                "success" => Ok(()),
+                                "failure" => Err("unavailable".into()),
+                                _ => std::future::pending::<Result<()>>().await,
+                            }
+                        }
+                    },
+                )
+                .await;
+                assert_eq!(visits, vec![method]);
+                if outcome == "success" {
+                    assert_eq!(result.unwrap().0, method);
+                } else {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains(&format!("{method:?}:"))
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_selection_honors_cancellation_and_pwnat_capability() {
+        let cancel = CancellationToken::new();
+        let result: Result<(Method, ())> = selected_transport(
+            &Timing::default(),
+            &cancel,
+            Some(Method::Pwnat),
+            false,
+            |_| async {
+                panic!("Unavailable pwnat must not start");
+            },
+        )
+        .await;
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("pwnat is unavailable")
+        );
+        cancel.cancel();
+        let result: Result<(Method, ())> = selected_transport(
+            &Timing::default(),
+            &cancel,
+            Some(Method::Lan),
+            true,
+            |_| async {
+                panic!("Cancelled selection must not start");
+            },
+        )
+        .await;
+        assert_eq!(result.unwrap_err().to_string(), "Connection cancelled");
+    }
+
+    #[tokio::test]
+    async fn manual_selection_never_upgrades_to_another_transport() {
+        for method in METHODS {
+            let manager = ConnectionManager::with_method(
+                Identity::generate().unwrap(),
+                SelectedServer {
+                    public_key: Identity::generate().unwrap().public_key(),
+                    local_addresses: vec![],
+                    public_endpoint: None,
+                    public_tcp: vec![],
+                },
+                Some("token".into()),
+                Some(method),
+            );
+            assert!(!manager.upgrade(Some(method)).await.unwrap());
+            manager.shutdown().await;
+        }
+    }
 
     #[tokio::test(start_paused = true)]
     async fn cryptographic_rejection_is_terminal_but_io_loss_allows_fallback() {
