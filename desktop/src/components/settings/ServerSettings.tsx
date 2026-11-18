@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { connectToServer, getServerConnection, subscribeServerConnection } from "../../api/serverConnection";
+import { connectToServer, getServerConnection, subscribeServerConnection, type ConnectionMethod } from "../../api/serverConnection";
 import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
@@ -13,7 +13,16 @@ import {
 type Discovered = { id: string; name: string; version: string; address: string };
 type PairingStarted = { requestId: string; code: string; address: string; serverName: string };
 type SavedServer = { id: string; name: string; address: string; publicKey: string | null; selected: boolean };
-type ConnectionCommand = "join_server" | "leave_server" | "connect_saved_server" | "forget_saved_server";
+type ConnectionCommand = "join_server" | "leave_server" | "connect_saved_server" | "forget_saved_server" | "set_connection_method";
+
+const connectionMethods: { value: ConnectionMethod; label: string }[] = [
+  { value: "Lan", label: "Local network" },
+  { value: "Public", label: "Internet (direct)" },
+  { value: "HyperDHT", label: "HyperDHT" },
+  { value: "TcpPunch", label: "Direct TCP (Nostr)" },
+  { value: "Pwnat", label: "pwnat" },
+  { value: "Tailcat", label: "Tailcat" },
+];
 
 /** Save both owners before changing the optional server; leave the local player mounted. */
 async function applyConnection(command: ConnectionCommand, setSharedPlayback: (shared: boolean, remember?: boolean) => Promise<void>, args?: Record<string, unknown>) {
@@ -279,8 +288,12 @@ export function ServerSettings({ active }: { active: boolean }) {
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <div className="settingsGroup">
-      <SettingRow label="Connection type">
-        <input type="text" aria-label="Connection type" value={connectionType} readOnly />
+      <SettingRow label="Connection type" hint={`Current: ${connectionType}.${server ? " Changing type reconnects and turns off shared playback. Manual types do not fall back. Automatic chooses the best available connection." : " Connect to a server to test connection types."}`}>
+        <select aria-label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} disabled={!server || changing || !isTauri()}
+          onChange={event => void change("set_connection_method", { method: event.currentTarget.value || null })}>
+          <option value="">Automatic</option>
+          {connectionMethods.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
+        </select>
       </SettingRow>
       {server ? <>
         <SettingRow label={server.name} hint={server.address}>

@@ -1166,6 +1166,7 @@ pub fn run() {
             remote_endpoint::shared_output_skip,
             server_link::server_connection,
             server_link::network_connection_status,
+            server_link::set_connection_method,
             server_link::discover_servers,
             server_link::start_pairing,
             server_link::poll_pairing,

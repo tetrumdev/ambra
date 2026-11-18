@@ -71,6 +71,8 @@ struct Settings {
     /// (home, a friend's) without pairing again. `server` and `token` are the selected one.
     #[serde(default)]
     saved: Vec<SavedServer>,
+    #[serde(default)]
+    connection_method: Option<ambra_net::manager::Method>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,6 +105,7 @@ impl Settings {
             client_id: id.iter().map(|byte| format!("{byte:02x}")).collect(),
             when_away: WhenAway::Wait,
             saved: Vec::new(),
+            connection_method: None,
         }
     }
 
@@ -152,6 +155,7 @@ pub struct Connection {
     pub client_name: String,
     /// This app's ID on the server, under which its outputs appear to other devices.
     pub client_id: String,
+    pub connection_method: Option<ambra_net::manager::Method>,
 }
 
 pub struct ServerLink {
@@ -215,6 +219,7 @@ impl ServerLink {
             base_url: bridge.map(|bridge| bridge.base_url.clone()).unwrap_or_else(|| "http://127.0.0.1:9".into()),
             token: None, fallback: false, server: settings.server.clone(), when_away: WhenAway::Wait,
             decided: settings.decided, client_name: client_name(), client_id: settings.client_id.clone(),
+            connection_method: settings.connection_method,
         }
     }
 
@@ -252,6 +257,7 @@ impl ServerLink {
         manager.authorize(token.clone()).await.map_err(|e| e.to_string())?;
         let mut next = self.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
         next.mode = Mode::Join; next.decided = true; next.server = Some(server); next.token = Some(token);
+        next.connection_method = None;
         next.remember_selected();
         self.install(next, app, Some(manager)).await?;
         // Ownership moved into the joined runtime; dropping enrollment must not close it.
@@ -293,7 +299,7 @@ impl Runtime {
             let public_key = server.public_key.ok_or("Legacy pairing has no cryptographic identity. Pair again using the server QR link.")?;
             let identity = ambra_net::Identity::load_or_create(&directory.join("client-network-identity.key")).map_err(|e| e.to_string())?;
             let selected = ambra_net::SelectedServer { public_key, local_addresses: server.local_addresses.clone(), public_endpoint: server.public_endpoint, public_tcp: server.public_tcp.clone() };
-            let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::new(identity, selected, settings.token.clone()));
+            let manager = enrollment.unwrap_or_else(|| ambra_net::ConnectionManager::with_method(identity, selected, settings.token.clone(), settings.connection_method));
             // Remembers the server's public address learned at home, for use away from it.
             manager.use_endpoint_cache(endpoint_cache(directory, &public_key));
             // Like the phone: a warm Internet path beside the LAN, network changes noticed at
@@ -525,6 +531,19 @@ pub async fn leave_server(app: tauri::AppHandle, link: tauri::State<'_, ServerLi
     link.install(next, Some(&app), None).await
 }
 
+/// Rebuild the selected server's transport using the same guarded transition as server changes.
+#[tauri::command]
+pub async fn set_connection_method(app: tauri::AppHandle, link: tauri::State<'_, ServerLink>, method: Option<ambra_net::manager::Method>) -> Result<(), String> {
+    let _transition = link.transition.lock().await;
+    let mut next = link.settings.lock().map_err(|_| "Server settings are unavailable")?.clone();
+    if next.mode != Mode::Join || next.server.is_none() {
+        return Err("Connect to a server before choosing a connection type".into());
+    }
+    if next.connection_method == method { return Ok(()); }
+    next.connection_method = method;
+    link.install(next, Some(&app), None).await
+}
+
 /// The first-run offer to join a server on the network was answered or dismissed.
 #[tauri::command]
 pub async fn set_server_link_decided(link: tauri::State<'_, ServerLink>) -> Result<(), String> {
@@ -554,6 +573,7 @@ pub async fn connect_saved_server(app: tauri::AppHandle, link: tauri::State<'_, 
     let saved = next.saved.iter().find(|saved| saved.server.public_key == Some(public_key)).cloned()
         .ok_or("That server is no longer saved")?;
     next.mode = Mode::Join; next.decided = true; next.server = Some(saved.server); next.token = Some(saved.token);
+    next.connection_method = None;
     link.install(next, Some(&app), None).await
 }
 
@@ -613,8 +633,10 @@ mod tests {
         legacy["server"] = serde_json::to_value(server("Home")).unwrap();
         legacy["token"] = json!("old-token");
         legacy.as_object_mut().unwrap().remove("saved");
+        legacy.as_object_mut().unwrap().remove("connectionMethod");
         std::fs::write(directory.join(FILE_NAME), serde_json::to_vec(&legacy).unwrap()).unwrap();
         let mut settings = Settings::load(&directory);
+        assert_eq!(settings.connection_method, None);
         assert_eq!(settings.saved, vec![SavedServer { server: server("Home"), token: "old-token".into() }]);
         // Pairing with the same server again replaces its entry rather than adding another.
         settings.server = Some(server("Home renamed"));
@@ -655,6 +677,7 @@ mod tests {
                     next.mode = Mode::Join;
                     next.server = Some(JoinedServer { id: index.to_string(), name: "Independent".into(), address: "127.0.0.1:9".into(), public_key: Some(keys[index % 2]), local_addresses: vec![], public_endpoint: None, public_tcp: vec![] });
                     next.token = Some(format!("token-{index}"));
+                    next.connection_method = Some(ambra_net::manager::Method::Lan);
                 }
                 link.install(next, None, None).await.unwrap();
                 if let Some((url, manager)) = previous.take() {
@@ -666,6 +689,8 @@ mod tests {
                 }
                 let connection = link.connection();
                 assert_eq!(connection.client_id, initial.client_id);
+                assert_eq!(connection.connection_method, Settings::load(&directory).connection_method);
+                assert_eq!(connection.connection_method, if index % 3 != 2 { Some(ambra_net::manager::Method::Lan) } else { None });
                 assert!(connection.token.is_none(), "the bridge must keep authentication private");
                 let runtime = link.runtime.lock().unwrap();
                 if let Some(manager) = &runtime.manager {
