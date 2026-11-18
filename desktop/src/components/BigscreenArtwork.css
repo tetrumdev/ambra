@@ -12,7 +12,7 @@
     z-index: 6;
     visibility: hidden;
     /* Its size and place glide only when the layout switches (AlbumArtwork), never with a window resize. */
-    transition: opacity 400ms ease;
+    transition: opacity 400ms ease, box-shadow 600ms ease;
 }
 
 /* Beside the lyrics: centred in the left column, as large as fits under the controls. */
@@ -40,11 +40,14 @@
     visibility: visible;
 }
 
-/* The swirl is drawn in the cover's own colors, so a soft shadow lifts the cover off it. */
+/* The swirl is drawn in the cover's own colors, so the cover is lifted off it by whichever suits its rim
+   (coverShadowShare): a soft shadow under a light rim, a soft halo around a dark one. */
 #albumCover:not([data-empty="true"]) {
     box-shadow:
-        0 4px 16px rgba(0, 0, 0, 0.28),
-        0 18px 60px rgba(0, 0, 0, 0.42);
+        0 4px 16px rgba(0, 0, 0, calc(0.28 * var(--cover-shadow, 1))),
+        0 18px 60px rgba(0, 0, 0, calc(0.42 * var(--cover-shadow, 1))),
+        0 0 18px rgba(255, 255, 255, calc(0.16 * (1 - var(--cover-shadow, 1)))),
+        0 0 70px rgba(255, 255, 255, calc(0.14 * (1 - var(--cover-shadow, 1))));
 }
 
 /* Opening and closing the player is instant. */

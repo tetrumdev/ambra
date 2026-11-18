@@ -41,6 +41,7 @@ mod live_pcm;
 mod persistence;
 mod playlist_export;
 mod remote_endpoint;
+mod server_install;
 mod server_link;
 mod service_login;
 mod window_drag;
@@ -1175,6 +1176,8 @@ pub fn run() {
             server_link::saved_servers,
             server_link::connect_saved_server,
             server_link::forget_saved_server,
+            server_install::server_command_status,
+            server_install::install_server_command,
             service_login::open_service_login,
             service_login::cancel_service_login,
             service_login::submit_service_login,

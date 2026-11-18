@@ -44,6 +44,17 @@ export type CoreView = {
 type ArrivingView = Omit<CoreView, "queue"> & { queue?: CoreView["queue"]; queuePatch?: QueuePatch };
 
 const QUEUE_KEY = "ambra.queue.v1";
+/** A server runs several sessions, each with its own queue and output; this app follows one. */
+export type CoreSession = {
+  id: string;
+  name: string;
+  playing: boolean;
+  output: CoreOutput | null;
+  track: { title?: string; artist?: string; album?: string; cover?: string } | null;
+};
+export const MAIN_SESSION = "main";
+const SESSION_KEY = "ambra.core-session";
+let session = (() => { try { return localStorage.getItem(SESSION_KEY) || MAIN_SESSION; } catch { return MAIN_SESSION; } })();
 let view: CoreView | null = null;
 /** When `view` arrived, so its position can be carried forward while playing. */
 let viewAt = performance.now();
@@ -57,6 +68,53 @@ subscribeServerConnection(() => {
 });
 
 export const coreView = () => view;
+export const coreSession = () => session;
+
+/** The first session's requests name none, as servers from before sessions expect. */
+function inSession(path: string) {
+  return session === MAIN_SESSION ? path : `${path}${path.includes("?") ? "&" : "?"}session=${encodeURIComponent(session)}`;
+}
+
+/** Follows another of the server's sessions from now on; this device remembers the choice. */
+export function setCoreSession(id: string) {
+  if (id === session) return;
+  session = id;
+  try {
+    if (id === MAIN_SESSION) localStorage.removeItem(SESSION_KEY);
+    else localStorage.setItem(SESSION_KEY, id);
+  } catch { /* Storage unavailable: the choice lasts until the app closes. */ }
+  const wasFollowing = following !== null;
+  following?.abort(); following = null;
+  view = null; unsentQueueChange = null; askingForQueue = null;
+  for (const listener of listeners) listener();
+  if (wasFollowing) followCore();
+}
+
+async function sessionsRequest<T>(path: string, body?: unknown): Promise<T> {
+  const signal = serverConnectionSignal();
+  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { cache: "no-store", signal } : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+  });
+  const value = await response.json().catch(() => null) as (T & { error?: string }) | null;
+  if (!response.ok) throw new Error(value?.error ?? `The server answered ${response.status}`);
+  return JSON.parse(fromStorage(JSON.stringify(value))) as T;
+}
+
+/** The server's sessions; none from a server too old to run more than one. */
+export async function coreSessions(): Promise<CoreSession[]> {
+  const response = await fetch(`${serverBaseUrl}/api/sessions`, { cache: "no-store", signal: serverConnectionSignal() });
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`The server answered ${response.status}`);
+  return JSON.parse(fromStorage(JSON.stringify(await response.json()))) as CoreSession[];
+}
+
+export const createCoreSession = (name: string) => sessionsRequest<CoreSession>("/api/sessions", { name });
+export const renameCoreSession = (id: string, name: string) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/rename`, { name });
+export async function removeCoreSession(id: string) {
+  const left = await sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/delete`, {});
+  if (id === session) setCoreSession(MAIN_SESSION);
+  return left;
+}
 
 /** Prepare where the song will play, including when this app is only a remote. */
 export async function warmCoreTrack(track: Track) {
@@ -144,11 +202,16 @@ function sameApartFromPosition(current: CoreView, next: Omit<CoreView, "queue">)
 const knownQueue = () => view ? `queue=${view.queueRevision}&patches=1` : "patches=1";
 
 async function request<T>(path: string, body?: unknown, signal = serverConnectionSignal()): Promise<T> {
-  const response = await fetch(`${serverBaseUrl}${path}`, body === undefined ? { cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {
+  const asked = session;
+  const response = await fetch(`${serverBaseUrl}${inSession(path)}`, body === undefined ? { cache: "no-store", signal: AbortSignal.any([signal, AbortSignal.timeout(35_000)]) } : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(20_000)]),
   });
   const value = await response.json().catch(() => null) as (T & { error?: string }) | null;
   signal.throwIfAborted();
+  // An answer about the session this app just left.
+  if (asked !== session) throw new DOMException("The session changed", "AbortError");
+  // The session was removed on another device: back to the first one.
+  if (response.status === 404 && asked !== MAIN_SESSION) setCoreSession(MAIN_SESSION);
   if (!response.ok) throw Object.assign(new Error(value?.error ?? `The server answered ${response.status}`), { status: response.status, body: value });
   return value as T;
 }
@@ -212,7 +275,8 @@ export function followCore() {
       });
     }
   })();
-  return () => controller.abort();
+  // The session can change meanwhile, which follows it anew (setCoreSession).
+  return () => following?.abort();
 }
 
 /** A stream that sends nothing for this long has stalled on the way and is opened again. */
@@ -227,9 +291,11 @@ async function followStream(requestSignal: AbortSignal, signal: AbortSignal): Pr
   let timer = setTimeout(() => silence.abort(), STREAM_SILENCE_MS);
   const heard = () => { clearTimeout(timer); timer = setTimeout(() => silence.abort(), STREAM_SILENCE_MS); };
   try {
-    const response = await fetch(`${serverBaseUrl}/api/session/stream?${knownQueue()}`, {
+    const asked = session;
+    const response = await fetch(`${serverBaseUrl}${inSession(`/api/session/stream?${knownQueue()}`)}`, {
       cache: "no-store", signal: AbortSignal.any([requestSignal, silence.signal]),
     });
+    if (response.status === 404 && asked !== MAIN_SESSION) { setCoreSession(MAIN_SESSION); return true; }
     if (response.status === 404) return false;
     if (!response.ok || !response.body) throw new Error(`The server answered ${response.status}`);
     const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
@@ -278,7 +344,8 @@ export function coreCommand(action: string, details: Record<string, unknown> = {
 
 /** The queue as the server has it, with this app's copies of its songs where it knows them. */
 export function coreQueue(tracks: Track[]): QueueState & { revision: number } {
-  const snapshot = view?.queue ?? parseQueueSnapshot(getServerItem(QUEUE_KEY));
+  // Only the first session's queue is also in the shared state.
+  const snapshot = view?.queue ?? (session === MAIN_SESSION ? parseQueueSnapshot(getServerItem(QUEUE_KEY)) : null);
   const revision = (snapshot as { revision?: number } | null)?.revision ?? 0;
   return { ...(snapshot ? resolveQueueSnapshot(snapshot, tracks) : { history: [], current: null, upcoming: [] }), revision };
 }

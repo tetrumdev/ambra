@@ -16,7 +16,7 @@ import { acceptsPlaybackShortcut } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
 import { invokeOn, useEndpoints } from "../utils/playbackTarget";
-import { coreCommand, coreView, subscribeCore, type CoreOutput } from "../api/core";
+import { coreCommand, coreSession, coreSessions, coreView, setCoreSession, subscribeCore, type CoreOutput, type CoreSession } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 
 /** How far keyboard and wheel input change the volume, in percent. */
@@ -62,6 +62,16 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
   const coreOutput = core?.output ?? null;
   const target = coreOutput && coreOutput.endpointId !== serverConnection?.clientId ? coreOutput : null;
   const endpoints = useEndpoints(audioMenuOpen && core !== null, true);
+  // With more than one session on the server, the menu also switches which one this app controls.
+  const currentSession = useSyncExternalStore(subscribeCore, coreSession);
+  const [sessions, setSessions] = useState<CoreSession[]>([]);
+  const following = core !== null;
+  useEffect(() => {
+    if (!audioMenuOpen || !following) return;
+    let disposed = false;
+    void coreSessions().then(list => { if (!disposed) setSessions(list); }).catch(() => {});
+    return () => { disposed = true; };
+  }, [audioMenuOpen, following]);
   const isPlayingHere = (deviceId: string) => core ? coreOutput?.endpointId === serverConnection?.clientId && coreOutput?.deviceId === deviceId : selectedDeviceId === deviceId;
   const pickHere = (deviceId: string, deviceName: string) => {
     if (core && serverConnection) chooseOutput({ endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName });
@@ -232,6 +242,21 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
                   aria-label="Audio output device"
                   onKeyDown={moveDeviceFocus}
                 >
+                  {core && sessions.length > 1 && <>
+                    <span className="audioDeviceHeading" aria-hidden="true">Session</span>
+                    {sessions.map(session => <button
+                      key={`session:${session.id}`}
+                      className="audioDeviceOption"
+                      type="button"
+                      role="radio"
+                      aria-checked={session.id === currentSession}
+                      aria-label={`${session.name} session`}
+                      onClick={() => setCoreSession(session.id)}
+                    >
+                      <span className="audioDeviceCheck" aria-hidden="true" />
+                      <span className="audioDeviceName" data-tooltip={session.name} data-tooltip-overflow="">{session.name}</span>
+                    </button>)}
+                  </>}
                   <span className="audioDeviceHeading" aria-hidden="true">
                     {core && endpoints.length ? "This computer" : "Output"}
                   </span>

@@ -207,12 +207,12 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
 
     // One store of shared state and one set of devices, for the routes and the core alike.
     let endpoints = Arc::new(crate::endpoints::Endpoints::default());
-    let core = crate::session::Core::with_spotify(user_state.clone(), endpoints.clone(), Some(state.soloist.clone()));
+    let sessions = crate::session::Sessions::open(user_state.clone(), endpoints.clone(), Some(state.soloist.clone()));
     let app = Router::new()
         .merge(crate::network::public_router(network.clone()))
         .merge(crate::network::local_router(network.clone()))
         .merge(crate::endpoints::router(endpoints.clone()))
-        .merge(crate::session::router(core.clone()))
+        .merge(crate::session::router(sessions.clone()))
         .merge(crate::soloist::router(state.soloist.clone()))
         .merge(crate::impulses::router())
         .merge(crate::remote::router())
@@ -351,8 +351,8 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     Ok(()) };
     let result = tokio::select! {
         result = serving => { state.soloist.shutdown().await; result },
-        _ = crate::server_process::stopped() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
-        _ = shutdown_signal() => { core.save_transport(); state.soloist.shutdown().await; Ok(()) }
+        _ = crate::server_process::stopped() => { sessions.save_transports(); state.soloist.shutdown().await; Ok(()) }
+        _ = shutdown_signal() => { sessions.save_transports(); state.soloist.shutdown().await; Ok(()) }
     };
     networking_cancel.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(4), networking).await;
