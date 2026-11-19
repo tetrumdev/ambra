@@ -31,7 +31,7 @@ import {
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
 import { loadLocalMusic, localMusicTrack } from "../api/localMusic";
-import { offlineTrack, useDownloads } from "../utils/offlineDownloads";
+import { offlineTrack, useLocalDownloads } from "../utils/offlineDownloads";
 
 type MusicLibrary = {
   tracks: LibraryTrack[];
@@ -116,6 +116,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
   const [sharedLocalTracks, setSharedLocalTracks] = useState<Track[]>([]);
+  const lastSharedListing = useRef<Track[] | null>(null);
   const [serverTracks, setServerTracks] = useState<Track[]>(
     () => localOnly ? [] : loadCachedServerTracks(),
   );
@@ -129,14 +130,16 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   const [error, setError] = useState<string | null>(null);
   const [isAddingAlbum, setIsAddingAlbum] = useState(false);
   const [addAlbumError, setAddAlbumError] = useState<string | null>(null);
-  const { local: downloaded } = useDownloads();
+  const downloaded = useLocalDownloads();
+  const offlineDownloads = !sharedPlayback && (localOnly || !isServerReachable) && downloaded.size ? downloaded : null;
   const catalogTracks = useMemo(() => {
-    const catalog = [...(localOnly ? [] : [...serverTracks, ...sharedLocalTracks]), ...(sharedPlayback ? [] : localTracks)];
+    const catalog = localOnly && !sharedPlayback ? localTracks
+      : [...(localOnly ? [] : serverTracks), ...(localOnly ? [] : sharedLocalTracks), ...(sharedPlayback ? [] : localTracks)];
     // Without a server, songs downloaded to this device are still there to play.
-    if (sharedPlayback || (!localOnly && isServerReachable) || downloaded.size === 0) return catalog;
+    if (!offlineDownloads) return catalog;
     const known = new Set(catalog.map(track => track.globalId));
-    return [...catalog, ...[...downloaded.values()].filter(entry => !known.has(entry.id)).map(offlineTrack)];
-  }, [serverTracks, sharedLocalTracks, localTracks, localOnly, sharedPlayback, isServerReachable, downloaded]);
+    return [...catalog, ...[...offlineDownloads.values()].filter(entry => !known.has(entry.id)).map(offlineTrack)];
+  }, [serverTracks, sharedLocalTracks, localTracks, localOnly, sharedPlayback, offlineDownloads]);
   const tracks = useMemo(
     () =>
       orderLibraryTracks(catalogTracks, libraryOrder)
@@ -288,6 +291,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
 
   useEffect(() => {
     if (localOnly) return;
+    lastSharedListing.current = null;
     let disposed = false;
     let refreshing = false;
     const controller = new AbortController();
@@ -296,7 +300,12 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
       refreshing = true;
       try {
         const tracks = await loadLocalMusic(controller.signal);
-        if (!disposed) setSharedLocalTracks(current => reconcileTracks(current, tracks));
+        // The loader returns the same array for an unchanged listing, even if reconciliation
+        // kept older track objects. Skip both the state update and the full comparison.
+        if (!disposed && tracks !== lastSharedListing.current) {
+          lastSharedListing.current = tracks;
+          setSharedLocalTracks(current => reconcileTracks(current, tracks));
+        }
       } catch { /* The device library stays available while the server is away. */ }
       finally { refreshing = false; }
     };
@@ -418,6 +427,7 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     setLocalTracks((current) => reconcileTracks(current, result.tracks.map(localTrack)));
     if (result.server) {
       const shared = result.server.map(localMusicTrack);
+      lastSharedListing.current = null;
       setSharedLocalTracks((current) => reconcileTracks(current, shared));
     }
     return result.imported;

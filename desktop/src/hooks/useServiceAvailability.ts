@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { serviceAuthStatus, type ServiceAuthStatus, type StreamingProvider } from "../api/server";
 import { isDeviceTrack } from "../utils/nativeAudioSource";
-import { isDownloadedOnServer, offlineSource, useDownloads } from "../utils/offlineDownloads";
+import { isDownloadedOnServer, offlineSource, useLocalDownloads, useServerDownloads } from "../utils/offlineDownloads";
 import { hasServerConnection, serverConnection, serverOnline, subscribeServerConnection } from "../api/serverConnection";
 import type { Track } from "../types/music";
 
@@ -52,7 +52,8 @@ function subscribe(listener: () => void) {
 
 export function useServiceAvailability() {
   // What's downloaded also decides availability, so its changes re-render too.
-  useDownloads();
+  useLocalDownloads();
+  useServerDownloads();
   return useSyncExternalStore(subscribe, () => status);
 }
 

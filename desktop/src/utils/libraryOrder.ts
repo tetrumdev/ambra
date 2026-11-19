@@ -2,6 +2,7 @@ import { mergeVisibleTrackOrder } from "./trackCollectionOrder";
 import { getPersistentItem } from "./persistentStorage";
 
 export function orderLibraryTracks<T extends { globalId: string }>(tracks: T[], order: string[]): T[] {
+  if (order.length === 0) return tracks;
   const positions = new Map(order.map((id, index) => [id, index]));
   return [...tracks].sort((a, b) => (positions.get(a.globalId) ?? Infinity) - (positions.get(b.globalId) ?? Infinity));
 }

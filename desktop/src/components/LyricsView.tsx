@@ -172,21 +172,17 @@ const IntlSegmenter = (
 const unspacedScript =
   /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}]/u;
 
-function graphemes(text: string, lang?: string): string[] {
-  return IntlSegmenter
-    ? Array.from(new IntlSegmenter(lang, { granularity: "grapheme" }).segment(text), (part) => part.segment)
-    : Array.from(text);
-}
-
 /** Splits text into unbreakable words; scripts without spaces fall back to dictionary words. */
 function wordPieces(text: string, lang?: string): string[] {
+  let segmenter: TextSegmenter | undefined;
   return text.split(/(\s+)/).flatMap((token) => {
     if (!token || /^\s+$/.test(token)) return token ? [token] : [];
     if (!IntlSegmenter || !unspacedScript.test(token))
       // Hyphens and dashes stay with the part before them and may end a line, as in plain text.
       return token.match(/[^-‐‑–—/]*[-‐‑–—/]+|[^-‐‑–—/]+/g) ?? [token];
     const pieces: string[] = [];
-    for (const part of new IntlSegmenter(lang, { granularity: "word" }).segment(token)) {
+    segmenter ??= new IntlSegmenter(lang, { granularity: "word" });
+    for (const part of segmenter.segment(token)) {
       // Keep punctuation on the word before it so it never starts a line.
       if (!part.isWordLike && pieces.length) pieces[pieces.length - 1] += part.segment;
       else pieces.push(part.segment);
@@ -203,11 +199,8 @@ function SweptText({ line, lang }: { line: LyricLine; lang?: string }) {
     segmentStarts.push(length);
     length += segment.text.length;
   }
-  const segmentAt = (offset: number) => {
-    let index = 0;
-    while (index + 1 < segmentStarts.length && segmentStarts[index + 1] <= offset) index++;
-    return index;
-  };
+  let segment = 0;
+  let segmenter: TextSegmenter | undefined;
   const letterCounts = line.segments.map(() => 0);
   let offset = 0;
   const words = wordPieces(line.text, lang).map((piece) => {
@@ -215,10 +208,12 @@ function SweptText({ line, lang }: { line: LyricLine; lang?: string }) {
     offset += piece.length;
     if (/^\s+$/.test(piece)) return { space: true as const, text: piece };
     let letterOffset = start;
+    if (IntlSegmenter) segmenter ??= new IntlSegmenter(lang, { granularity: "grapheme" });
+    const graphemes = segmenter ? Array.from(segmenter.segment(piece), (part) => part.segment) : Array.from(piece);
     return {
       space: false as const,
-      letters: graphemes(piece, lang).map((text) => {
-        const segment = segmentAt(letterOffset);
+      letters: graphemes.map((text) => {
+        while (segment + 1 < segmentStarts.length && segmentStarts[segment + 1] <= letterOffset) segment++;
         letterOffset += text.length;
         return { text, segment, index: letterCounts[segment]++ };
       }),
@@ -442,7 +437,7 @@ function SyncedLyrics({
 
   useEffect(() => {
     wake.current();
-  }, [playing]);
+  }, [playing, frozen]);
 
   useEffect(() => {
     const container = viewport.current;
@@ -501,7 +496,6 @@ function SyncedLyrics({
                   },
                 ),
                 active: false,
-                animating: false,
                 snap: true,
               };
             })
@@ -545,6 +539,7 @@ function SyncedLyrics({
       };
     });
     const rows = layout.flatMap((block) => block.rows);
+    const animatingRows = new Set<(typeof rows)[number]>();
     const lineBlocks = new Map(
       layout.flatMap(({ block }, index) =>
         block.kind === "lines" ? [[block.line, index] as const] : [],
@@ -714,7 +709,7 @@ function SyncedLyrics({
               const head = Math.min(2, Math.max(-1, letterHead(letter.motion, time)));
               setStyle(letter.element, letter, "head", "--lyric-head", headValue(head));
             }
-            row.animating = true;
+            animatingRows.add(row);
             if (discontinuity) row.snap = true;
           }
           row.active = active;
@@ -800,8 +795,7 @@ function SyncedLyrics({
       }
       // Letters keep easing after their line ends or playback pauses, so this runs every frame.
       let settling = false;
-      for (const row of rows) {
-        if (!row.animating) continue;
+      for (const row of animatingRows) {
         let rowMoving = false;
         for (const letter of row.letters) {
           if (reducedMotion) restLetter(letter.motion, letter.element);
@@ -813,10 +807,8 @@ function SyncedLyrics({
         row.snap = false;
         // Letters stay in their line's layer: promoting and dropping a layer per letter at every
         // line change cost more than repainting one line.
-        row.animating =
-          rowMoving ||
-          (!reducedMotion &&
-            (row.active || row.letters.some((letter) => releasing(letter.motion, time))));
+        if (!rowMoving && (reducedMotion || (!row.active &&
+          !row.letters.some((letter) => releasing(letter.motion, time))))) animatingRows.delete(row);
         settling ||= rowMoving;
       }
       for (const block of layout) {
@@ -936,7 +928,7 @@ function SyncedLyrics({
       lastFrame = 0;
       schedule();
     };
-    const unsubscribe = clock.subscribe(schedule);
+    const unsubscribe = clock.subscribe(() => { if (!frozenRef.current) schedule(); });
     container.addEventListener("wheel", hold, { passive: true });
     container.addEventListener("touchstart", hold, { passive: true });
     container.addEventListener("keydown", onKey);

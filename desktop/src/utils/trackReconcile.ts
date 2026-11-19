@@ -24,6 +24,7 @@ export function reconcileTracks<T extends { globalId: string }>(
   previous: T[],
   next: T[],
 ): T[] {
+  if (previous === next) return previous;
   if (previous.length === 0) return next.length === 0 ? previous : next;
 
   const existing = new Map(previous.map((track) => [track.globalId, track]));

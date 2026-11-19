@@ -4,11 +4,21 @@ type PositionedTrack = {
   trackNumber: number | null;
 };
 
+type TrackList = readonly { globalId: string }[];
+// Native status samples look up the same song several times a second. Keep one lookup
+// per immutable list so a large library needs neither a scan per sample nor a full index.
+const lastPosition = new WeakMap<TrackList, { id: string; index: number }>();
+
 export function trackPosition(
-  tracks: readonly { globalId: string }[],
+  tracks: TrackList,
   trackId: string | null,
 ) {
-  return tracks.findIndex((track) => track.globalId === trackId);
+  if (trackId === null) return -1;
+  const previous = lastPosition.get(tracks);
+  if (previous?.id === trackId) return previous.index;
+  const index = tracks.findIndex((track) => track.globalId === trackId);
+  lastPosition.set(tracks, { id: trackId, index });
+  return index;
 }
 
 export function moveAlbumToEndInOrder<T extends PositionedTrack>(

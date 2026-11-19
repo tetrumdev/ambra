@@ -1,5 +1,6 @@
 import type { Track } from "../types/music";
 import { offlineSource } from "./offlineDownloads";
+import { trackPosition } from "./trackOrder";
 
 /** Tauri uses an HTTP asset origin on Windows and the asset scheme on macOS. Both are device files. */
 export function isDeviceTrack(track: Pick<Track, "provider" | "audio">) {
@@ -68,9 +69,7 @@ export function trackForNativeAudioStatus(
 ) {
   if (!currentSource) return undefined;
 
-  const currentTrack = tracks.find(
-    (track) => track.globalId === currentTrackId,
-  );
+  const currentTrack = tracks[trackPosition(tracks, currentTrackId)];
   if (
     currentTrack &&
     nativeAudioSource(currentTrack) === currentSource
@@ -78,8 +77,9 @@ export function trackForNativeAudioStatus(
     return { track: currentTrack, advanced: false };
   }
 
+  if (!nextTrack) return undefined;
   const sourceTrack = trackForNativeAudioSource(tracks, currentSource);
-  if (!sourceTrack || sourceTrack.globalId !== nextTrack?.globalId) {
+  if (!sourceTrack || sourceTrack.globalId !== nextTrack.globalId) {
     return undefined;
   }
   return { track: sourceTrack, advanced: true };
