@@ -9,6 +9,29 @@ use super::{AudioOutput, StreamSpec, writable_frames};
 use super::{NativeAudioDevice, normalized_to_signed};
 
 const POLLING_BUFFER_PERIODS: i64 = 8;
+/// Shared mode used to ask for a single engine period (~10 ms), so any stall of the playback
+/// thread longer than that, such as Windows reshuffling priorities when a fullscreen game
+/// loses focus, emptied the buffer and was heard as a stutter. Exclusive mode already keeps
+/// eight periods queued; shared mode now keeps the same margin.
+const SHARED_BUFFER_PERIODS: i64 = 8;
+/// The longest the writer sleeps while the buffer is full, so commands such as pause stay prompt
+/// even with the deeper shared buffer.
+const MAX_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Registers the calling thread with the Multimedia Class Scheduler Service, which keeps an
+/// audio thread scheduled ahead of ordinary work, including a game's, so the output buffer is
+/// refilled on time. Failure only leaves the thread at normal priority.
+pub fn register_playback_thread() {
+    use windows_sys::Win32::System::Threading::AvSetMmThreadCharacteristicsW;
+    let task: Vec<u16> = "Audio".encode_utf16().chain(std::iter::once(0)).collect();
+    let mut task_index = 0_u32;
+    // SAFETY: `task` is a NUL-terminated UTF-16 string that outlives the call, and `task_index`
+    // is a valid out pointer. The registration lasts for the life of the thread.
+    let handle = unsafe { AvSetMmThreadCharacteristicsW(task.as_ptr(), &mut task_index) };
+    if handle.is_null() {
+        eprintln!("Could not raise the native audio thread's scheduling priority");
+    }
+}
 
 #[derive(Clone, Copy)]
 enum DeviceSampleFormat {
@@ -264,7 +287,7 @@ impl PlatformOutput {
         } else {
             let mode = StreamMode::PollingShared {
                 autoconvert: true,
-                buffer_duration_hns: default_period,
+                buffer_duration_hns: default_period.saturating_mul(SHARED_BUFFER_PERIODS),
             };
             audio_client
                 .initialize_client(&wave_format, &Direction::Render, &mode)
@@ -278,7 +301,7 @@ impl PlatformOutput {
         let buffer_frames = audio_client.get_buffer_size().map_err(wasapi_error)? as usize;
         let poll_interval =
             Duration::from_secs_f64(buffer_frames as f64 / f64::from(spec.sample_rate) / 4.0)
-                .max(Duration::from_millis(1));
+                .clamp(Duration::from_millis(1), MAX_POLL_INTERVAL);
 
         Ok(Self {
             audio_client,

@@ -6,7 +6,7 @@ import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { SettingRow, Toggle } from "./SettingsControls";
 import {
-  MAIN_SESSION, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore,
+  MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore,
   type CoreSession,
 } from "../../api/core";
 
@@ -162,7 +162,8 @@ function SavedServers({ saved, changing, onChange }: {
 
 function describeSession(session: CoreSession) {
   const track = session.track ? [session.track.title, session.track.artist].filter(Boolean).join(" · ") : "Nothing queued";
-  const output = session.output ? `${session.playing ? "Playing" : "Paused"} on ${session.output.endpointName}` : "No output";
+  const outputs = coreOutputs(session);
+  const output = outputs.length ? `${session.playing ? "Playing" : "Paused"} on ${outputs.map(output => output.endpointName).join(", ")}` : "No output";
   return `${track} — ${output}`;
 }
 

@@ -16,7 +16,7 @@ import { acceptsPlaybackShortcut } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
 import { invokeOn, useEndpoints } from "../utils/playbackTarget";
-import { coreCommand, coreSession, coreSessions, coreView, setCoreSession, subscribeCore, type CoreOutput, type CoreSession } from "../api/core";
+import { coreCommand, coreOutputs, coreSession, coreSessions, coreView, setCoreSession, subscribeCore, type CoreOutput, type CoreSession } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 
 /** How far keyboard and wheel input change the volume, in percent. */
@@ -106,6 +106,70 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     setTargetError(null);
     void coreCommand("output", { output }).catch(error => setTargetError(String(error)));
   };
+
+  // With a server, several outputs can play in step: the box beside each (or a right-click)
+  // adds it to the ones playing, or takes it away; choosing the output itself plays there alone.
+  const groupOutputs = coreOutputs(core);
+  const inGroup = (output: CoreOutput) => groupOutputs.some(member => member.endpointId === output.endpointId && member.deviceId === output.deviceId);
+  const toggleInGroup = (output: CoreOutput) => {
+    setTargetError(null);
+    let next: CoreOutput[];
+    if (inGroup(output)) {
+      next = groupOutputs.filter(member => !(member.endpointId === output.endpointId && member.deviceId === output.deviceId));
+      if (next.length === 0) return;
+    } else {
+      // A computer plays one of its outputs at a time: another of its outputs takes that one's place.
+      next = groupOutputs.some(member => member.endpointId === output.endpointId)
+        ? groupOutputs.map(member => member.endpointId === output.endpointId ? output : member)
+        : [...groupOutputs, output];
+    }
+    void coreCommand("outputs", { outputs: next }).catch(error => setTargetError(String(error)));
+  };
+  const groupRow = (output: CoreOutput, label: string, { syncs, disabled = false, offline = false }: { syncs: boolean; disabled?: boolean; offline?: boolean }) => {
+    const checked = inGroup(output);
+    const lastOne = checked && groupOutputs.length <= 1;
+    const canToggle = syncs && !lastOne;
+    const hint = !syncs ? "Update Ambra there to play in sync"
+      : lastOne ? "Choose another output to play elsewhere"
+      : checked ? "Stop playing here" : "Also play here, in sync";
+    return <div
+      key={`${output.endpointId}:${output.deviceId}`}
+      className="audioDeviceRow"
+      onContextMenu={event => {
+        event.preventDefault();
+        if (canToggle && !disabled) toggleInGroup(output);
+      }}
+    >
+      <button
+        className="audioDeviceOption"
+        type="button"
+        aria-current={checked || undefined}
+        aria-label={label}
+        disabled={disabled || offline}
+        onClick={() => chooseOutput(output)}
+      >
+        <span className="audioDeviceCheck" aria-hidden="true" />
+        <span className="audioDeviceName" data-tooltip={output.deviceName} data-tooltip-overflow="">
+          {offline ? `${output.deviceName} (offline)` : output.deviceName}
+        </span>
+      </button>
+      <button
+        className="audioDeviceToggle"
+        type="button"
+        role="checkbox"
+        aria-checked={checked}
+        aria-label={`Play on ${label} in sync`}
+        data-tooltip={hint}
+        disabled={disabled || !canToggle}
+        onClick={() => toggleInGroup(output)}
+      >
+        <span className="audioDeviceBox" aria-hidden="true" />
+      </button>
+    </div>;
+  };
+  const here = core && serverConnection ? serverConnection : null;
+  // Outputs playing that the list doesn't show, because their computer is out of reach.
+  const offlineMembers = groupOutputs.filter(member => member.endpointId !== here?.clientId && !endpoints.some(endpoint => endpoint.id === member.endpointId));
 
   const selectAudioDevice = async (deviceId: string) => {
     if (!audio || audio.saving) return;
@@ -239,7 +303,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
               <>
                 <div
                   className="audioDeviceList"
-                  role="radiogroup"
+                  role={here ? "group" : "radiogroup"}
                   aria-label="Audio output device"
                   onKeyDown={moveDeviceFocus}
                 >
@@ -272,6 +336,12 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                       <span className="audioDeviceCheck" aria-hidden="true" />
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
+                  ) : here ? (
+                    audioDevices.map(device => groupRow(
+                      { endpointId: here.clientId, deviceId: device.id, endpointName: here.clientName, deviceName: device.name },
+                      device.name,
+                      { syncs: true, disabled: isChangingDevice },
+                    ))
                   ) : (
                     audioDevices.map((device) => (
                       <button
@@ -296,26 +366,16 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                   )}
                   {endpoints.map(endpoint => <Fragment key={endpoint.id}>
                     <span className="audioDeviceHeading" aria-hidden="true">{endpoint.name}</span>
-                    {endpoint.devices.map(device => <button
-                      key={`${endpoint.id}:${device.id}`}
-                      className="audioDeviceOption"
-                      type="button"
-                      role="radio"
-                      aria-checked={target?.endpointId === endpoint.id && target.deviceId === device.id}
-                      aria-label={`${device.name} on ${endpoint.name}`}
-                      onClick={() => chooseOutput({ endpointId: endpoint.id, endpointName: endpoint.name, deviceId: device.id, deviceName: device.name })}
-                    >
-                      <span className="audioDeviceCheck" aria-hidden="true" />
-                      <span className="audioDeviceName" data-tooltip={device.name} data-tooltip-overflow="">{device.name}</span>
-                    </button>)}
+                    {endpoint.devices.map(device => groupRow(
+                      { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: device.id, deviceName: device.name },
+                      `${device.name} on ${endpoint.name}`,
+                      { syncs: endpoint.syncs },
+                    ))}
                   </Fragment>)}
-                  {target && !endpoints.some(endpoint => endpoint.id === target.endpointId) && <>
-                    <span className="audioDeviceHeading" aria-hidden="true">{target.endpointName}</span>
-                    <button className="audioDeviceOption" type="button" role="radio" aria-checked disabled>
-                      <span className="audioDeviceCheck" aria-hidden="true" />
-                      <span className="audioDeviceName">{target.deviceName} (offline)</span>
-                    </button>
-                  </>}
+                  {offlineMembers.map(member => <Fragment key={`offline:${member.endpointId}`}>
+                    <span className="audioDeviceHeading" aria-hidden="true">{member.endpointName}</span>
+                    {groupRow(member, `${member.deviceName} on ${member.endpointName}`, { syncs: true, offline: true })}
+                  </Fragment>)}
                 </div>
               </>
             )}

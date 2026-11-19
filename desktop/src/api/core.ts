@@ -34,6 +34,11 @@ export type CoreView = {
   audioQuality: AudioQuality | null;
   output: CoreOutput | null;
   outputOnline: boolean;
+  /**
+   * Every output playing, in step with one another: `output`, which leads, then the rest.
+   * Missing from servers older than synced playback.
+   */
+  outputs?: CoreOutput[];
   queueRevision: number;
   queue: PersistedQueue & { revision?: number };
 };
@@ -50,8 +55,15 @@ export type CoreSession = {
   name: string;
   playing: boolean;
   output: CoreOutput | null;
+  outputs?: CoreOutput[];
   track: { title?: string; artist?: string; album?: string; cover?: string } | null;
 };
+
+/** Every output a session plays on, the leading one first. */
+export function coreOutputs(session: { output: CoreOutput | null; outputs?: CoreOutput[] } | null | undefined): CoreOutput[] {
+  if (!session) return [];
+  return session.outputs ?? (session.output ? [session.output] : []);
+}
 export const MAIN_SESSION = "main";
 const SESSION_KEY = "ambra.core-session";
 let session = (() => { try { return localStorage.getItem(SESSION_KEY) || MAIN_SESSION; } catch { return MAIN_SESSION; } })();
@@ -118,8 +130,8 @@ export async function removeCoreSession(id: string) {
 
 /** Prepare where the song will play, including when this app is only a remote. */
 export async function warmCoreTrack(track: Track) {
-  const output = view?.output;
-  if (output) await invokeOn(output, "warm_native_audio", { source: serverAudioSource(track) });
+  const source = serverAudioSource(track);
+  await Promise.all(coreOutputs(view).map(output => invokeOn(output, "warm_native_audio", { source })));
 }
 
 /**

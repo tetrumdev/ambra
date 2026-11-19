@@ -88,6 +88,60 @@
     background: url("/check.svg") center / contain no-repeat;
 }
 
+/* With a server, each output has a box of its own, over the check column: ticking it adds the
+   output to those playing in step, while the row itself plays there alone. */
+.audioDeviceRow {
+    position: relative;
+    display: grid;
+}
+
+.audioDeviceRow:hover .audioDeviceOption:not(:disabled) {
+    background: #303030;
+}
+
+.audioDeviceToggle {
+    position: absolute;
+    top: 50%;
+    left: 3px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    transform: translateY(-50%);
+    cursor: pointer;
+}
+
+.audioDeviceToggle:hover:not(:disabled),
+.audioDeviceToggle:focus-visible {
+    background: #3c3c3c;
+}
+
+.audioDeviceToggle:disabled {
+    cursor: default;
+}
+
+.audioDeviceBox {
+    box-sizing: border-box;
+    width: 12px;
+    height: 12px;
+    border: 1.5px solid #a3a2a3;
+    border-radius: 3px;
+}
+
+.audioDeviceToggle[aria-checked="true"] .audioDeviceBox {
+    border-color: transparent;
+    background: url("/check.svg") center / contain no-repeat;
+}
+
+/* The only output playing can't be unticked: it looks ticked, not unavailable. */
+.audioDeviceToggle:disabled[aria-checked="false"] .audioDeviceBox {
+    opacity: 0.4;
+}
+
 .audioDeviceName {
     overflow: hidden;
     text-overflow: ellipsis;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { coreCommand, coreView, coreViewAge, followCore, subscribeCore, type CoreView } from "../api/core";
+import { coreCommand, coreOutputs, coreView, coreViewAge, followCore, subscribeCore, type CoreView } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 import { createPlaybackClock } from "../utils/playbackClock";
 import { useAudioSettings } from "./AudioSettingsContext";
@@ -36,6 +36,12 @@ function sameSource(left: string | null | undefined, right: string | null | unde
   };
   return key(left) === key(right);
 }
+
+/**
+ * Whether this device's engine may act on its own, ahead of the server: only when it plays
+ * alone. A synced group pauses, seeks and skips together, so the server is asked.
+ */
+const playsAlone = () => coreOutputs(coreView()).length <= 1;
 
 /** Where the song is now, carrying `view`'s position forward while it plays. */
 function positionOf(view: CoreView) {
@@ -187,7 +193,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
    * or if the engine can't, the server is asked.
    */
   const control = useCallback(async (action: "play" | "pause" | "seek", positionSeconds?: number) => {
-    if (followsEngine()) {
+    if (followsEngine() && playsAlone()) {
       try {
         await invoke("shared_output_control", { action, positionSeconds });
         return;
@@ -211,6 +217,8 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
    * lost skip can't leave it playing. The core's load of the next song plays as it asks.
    */
   const holdForSkip = useCallback(() => {
+    // A synced group is silenced by the server, all together.
+    if (!playsAlone()) return;
     void invoke("shared_output_control", { action: "hold" }).catch(() => {});
   }, []);
   const skip = useCallback((direction: "next" | "previous") => {
@@ -220,7 +228,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       seekTo(0);
       return;
     }
-    if (direction === "next" && followsEngine()) {
+    if (direction === "next" && followsEngine() && playsAlone()) {
       // This device's engine usually has the next song ready already: it starts it at once, and
       // the server follows from its report as it does when a song ends.
       const from = coreView()?.loadedSource;

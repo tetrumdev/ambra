@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
-import { enabledOutputsFirst, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
+import { enabledOutputsFirst, MAX_OUTPUT_LATENCY_MS, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
 import { ANIMATION_FPS_OPTIONS } from "../utils/frameRate";
 import { MAX_LYRICS_OFFSET_MS, type LyricMotion } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
@@ -43,7 +43,9 @@ function usePlayingOn() {
   const shared = useClientConnection().sharedPlayback;
   const sharedCore = useSyncExternalStore(subscribeCore, coreView);
   const core = shared ? sharedCore : null;
-  return { core, playingOn: (endpointId: string, deviceId: string) => core?.output?.endpointId === endpointId && core.output.deviceId === deviceId };
+  // A synced group plays on every one of its outputs.
+  const outputs = core ? core.outputs ?? (core.output ? [core.output] : []) : [];
+  return { core, playingOn: (endpointId: string, deviceId: string) => outputs.some(output => output.endpointId === endpointId && output.deviceId === deviceId) };
 }
 
 type Props = { onRescanLocalMusic: () => Promise<number>; onServiceConnected: () => void; tab: SettingsTab; onTabChange: (tab: SettingsTab) => void; showAudioQuality: boolean; onShowAudioQuality: (show: boolean) => void; reduceMotion: boolean; onReduceMotion: (reduce: boolean) => void; animateSwirl: boolean; onAnimateSwirl: (animate: boolean) => void; lyricMotion: LyricMotion; onLyricMotionChange: (motion: LyricMotion) => void; maxAnimationFps: number; onMaxAnimationFpsChange: (fps: number) => void; autoSyncLyrics: boolean; onAutoSyncLyrics: (enabled: boolean) => void; lyricsOffsetMs: number; onLyricsOffsetChange: (offsetMs: number) => void; servicePlaylistVisibility: Record<StreamingProvider, boolean>; onServicePlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void; shortcuts: ShortcutOverrides; onShortcutsChange: (shortcuts: ShortcutOverrides) => void; registerScrollElement: RefCallback<HTMLDivElement> };
@@ -221,8 +223,29 @@ function OutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPr
         </span>
         <small className="settingsFieldHint">Silence when the format changes</small>
       </label>
+      <label className="settingsField"><span>Sync latency</span>
+        <LatencyInput label={`Sync latency for ${output.name}`} value={output.latencyMs} disabled={audio.saving}
+          onChange={latencyMs => update({ latencyMs })} />
+        <small className="settingsFieldHint">Device delay, like Bluetooth, for playing in step with other outputs</small>
+      </label>
     </div>
   </article>;
+}
+
+/** Milliseconds the device itself delays sound, which synced playback makes up for. */
+function LatencyInput({ label, value, disabled, onChange }: { label: string; value: number; disabled?: boolean; onChange: (latencyMs: number) => Promise<unknown> }) {
+  return <span className="settingsFieldRow settingsUnitInput">
+    <input type="number" aria-label={label} min={0} max={MAX_OUTPUT_LATENCY_MS} step={1} required
+      key={value} defaultValue={value} disabled={disabled}
+      onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      onBlur={async e => {
+        const input = e.currentTarget;
+        const latency = input.valueAsNumber;
+        if (!input.checkValidity()) { input.reportValidity(); input.value = String(value); return; }
+        if (latency !== value && await onChange(latency) === false) input.value = String(value);
+      }} />
+    <small>ms</small>
+  </span>;
 }
 
 function UpdateSettings() {
@@ -314,6 +337,10 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
         </SettingRow>
         <SettingRow label="Exclusive mode" hint="Bit-perfect, with no other sounds">
           <Toggle label={`Exclusive mode for ${output.name} on ${endpoint.name}`} checked={output.exclusiveMode} onChange={exclusiveMode => void change(output, { exclusiveMode })} />
+        </SettingRow>
+        <SettingRow label="Sync latency" hint="Device delay, like Bluetooth, for playing in step with other outputs">
+          <LatencyInput label={`Sync latency for ${output.name} on ${endpoint.name}`} value={output.latencyMs ?? 0}
+            onChange={latencyMs => change(output, { latencyMs })} />
         </SettingRow>
       </article>;
     })}

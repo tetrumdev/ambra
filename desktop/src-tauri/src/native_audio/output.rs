@@ -80,7 +80,11 @@ fn writable_frames(available_frames: usize, sample_count: usize, channels: usize
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::PlatformOutput;
+pub use windows::{PlatformOutput, register_playback_thread};
+
+/// Gives the playback thread audio scheduling priority where the platform offers it.
+#[cfg(not(target_os = "windows"))]
+pub fn register_playback_thread() {}
 
 #[cfg(target_os = "macos")]
 mod macos;

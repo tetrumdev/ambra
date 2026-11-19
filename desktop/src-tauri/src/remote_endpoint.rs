@@ -38,11 +38,23 @@ const LOCAL_STATUS_EVERY: Duration = Duration::from_millis(100);
 /// screen that just began listening, and for the screens to know the engine still reports.
 const LOCAL_STATUS_REPEAT: Duration = Duration::from_millis(400);
 
+/// Where `monotonic_ms` counts from.
+fn clock_start() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
 fn monotonic_ms() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    clock_start().elapsed().as_secs_f64() * 1000.0
 }
+
+/// How often the server's clock is read again, to follow the two clocks drifting apart.
+const CLOCK_EVERY: Duration = Duration::from_secs(2);
+/// Readings compared; the one with the quickest round trip was held up least on the way.
+const CLOCK_WINDOW: Duration = Duration::from_secs(20);
+/// A reading this far from the estimate means the server restarted (its clock starts anew).
+const CLOCK_JUMP_MS: f64 = 1000.0;
 
 struct Agent {
     app: AppHandle,
@@ -61,6 +73,9 @@ struct Agent {
     /// Signalled when something was asked of the engine, so its report doesn't wait for the
     /// next look at it.
     wake: tokio::sync::Notify,
+    /// The server's clock less this app's (`monotonic_ms`), once measured: synced groups start
+    /// and keep time on the server's clock.
+    clock_offset_ms: Mutex<Option<f64>>,
 }
 
 /// This device's own latest play, pause or seek: `seq` counts them, `playing` is what it left.
@@ -79,7 +94,7 @@ impl Control {
 }
 
 struct Running {
-    tasks: [tauri::async_runtime::JoinHandle<()>; 4],
+    tasks: [tauri::async_runtime::JoinHandle<()>; 5],
     agent: std::sync::Arc<Agent>,
 }
 
@@ -108,6 +123,8 @@ pub async fn stop_shared_output(app: &AppHandle) {
     let mut tasks = state.0.lock().await;
     if let Some(previous) = tasks.take() {
         for task in previous.tasks { task.abort(); let _ = task.await; }
+        // Playing on alone from here.
+        let _ = native_audio::dispatch_sync(&app.state::<NativeAudioPlayer>(), native_audio::SyncCommand::Clear);
         let _ = previous.agent.request(reqwest::Method::POST, "departure")
             .timeout(Duration::from_secs(1))
             .json(&json!({ "instanceId": previous.agent.instance_id }))
@@ -138,6 +155,8 @@ pub async fn shared_output_control(app: AppHandle, action: String, position_seco
         }
         _ => return Err(format!("Unknown action `{action}`")),
     };
+    // Played here alone: this device leaves any synced group until the core starts one again.
+    native_audio::dispatch_sync(&player, native_audio::SyncCommand::Clear)?;
     // Counted before the engine acts, so a report showing the change also carries it.
     if let Ok(mut control) = agent.control.lock() {
         control.seq += 1;
@@ -174,8 +193,9 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
         app, client, base_url, token, id, name, instance_id,
         sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), control: Mutex::new(Control::default()),
         wake: tokio::sync::Notify::new(),
+        clock_offset_ms: Mutex::new(None),
     });
-    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone()))];
+    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone())), tauri::async_runtime::spawn(follow_clock(agent.clone()))];
     Ok(Running { tasks, agent })
 }
 
@@ -236,7 +256,34 @@ impl Agent {
         if control.seq > 0 && status.is_object() {
             status["control"] = json!({ "seq": control.seq, "playing": control.playing });
         }
+        // The group's timeline, on the server's clock; left out until that clock is known.
+        if let Some(anchor) = status.get("syncAnchor").cloned().filter(Value::is_object) {
+            match (self.clock_offset(), anchor["inMs"].as_f64()) {
+                (Some(offset), Some(in_ms)) => {
+                    status["syncAnchor"] = json!({ "atServerMs": monotonic_ms() + in_ms + offset, "positionSeconds": anchor["positionSeconds"] });
+                }
+                _ => {
+                    if let Some(status) = status.as_object_mut() { status.remove("syncAnchor"); }
+                }
+            }
+        }
         status
+    }
+
+    fn clock_offset(&self) -> Option<f64> {
+        self.clock_offset_ms.lock().ok().and_then(|offset| *offset)
+    }
+
+    /// When `server_ms`, on the server's clock, comes here. Before the clocks are compared,
+    /// `sent_ms` (when the server sent it) stands for now.
+    fn local_instant(&self, server_ms: f64, sent_ms: Option<f64>) -> Instant {
+        let (start, at_ms) = match (self.clock_offset(), sent_ms) {
+            (Some(offset), _) => (clock_start(), server_ms - offset),
+            (None, Some(sent)) => (Instant::now(), server_ms - sent),
+            (None, None) => (Instant::now(), 0.0),
+        };
+        let by = Duration::from_secs_f64((at_ms.abs() / 1000.0).min(1.0e6));
+        if at_ms >= 0.0 { start.checked_add(by) } else { start.checked_sub(by) }.unwrap_or(start)
     }
 
     /// Tells this app's own screens where the engine is, so they follow it rather than the core.
@@ -290,7 +337,7 @@ async fn refresh_devices(agent: std::sync::Arc<Agent>) {
     let _listener = SettingsListener(agent.app.clone(), listener);
     loop {
         let player = agent.app.state::<NativeAudioPlayer>();
-        let devices = native_audio::list_native_audio_devices(player.clone()).await;
+        let devices = native_audio::list_native_audio_devices().await;
         let settings = native_audio::native_audio_settings(player).await;
         if let (Ok(devices), Ok(settings)) = (devices, settings) {
             // System Default is a virtual output, so hardware enumeration never includes it.
@@ -344,6 +391,8 @@ async fn report(agent: std::sync::Arc<Agent>) {
         // stalled tunnel, say) is then placed when it was true, not when it finally arrived.
         body["sampledAtMs"] = json!(monotonic_ms());
         status["livePcmV1"] = Value::Bool(true);
+        // Can play in step with other outputs (`native_audio/sync.rs`).
+        status["syncV1"] = Value::Bool(true);
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
         let reported = transitions(&status);
         body["status"] = status;
@@ -387,8 +436,38 @@ async fn report(agent: std::sync::Arc<Agent>) {
 }
 
 /// What the core acts on at once when it changes, as opposed to the advancing position.
-fn transitions(status: &Value) -> [Value; 6] {
-    ["currentSource", "isPlaying", "buffering", "ended", "error", "control"].map(|key| status[key].clone())
+fn transitions(status: &Value) -> [Value; 7] {
+    ["currentSource", "isPlaying", "buffering", "ended", "error", "control", "syncReady"].map(|key| status[key].clone())
+}
+
+/// Follows the server's clock, NTP-style: each reading is taken as true halfway through its
+/// round trip, and the quickest recent one is trusted most.
+async fn follow_clock(agent: std::sync::Arc<Agent>) {
+    let mut readings = VecDeque::<(Instant, f64, f64)>::new();
+    loop {
+        let sent = monotonic_ms();
+        let mut request = agent.client.get(format!("{}/api/session/clock", agent.base_url)).timeout(Duration::from_secs(5));
+        if let Some(token) = &agent.token { request = request.bearer_auth(token); }
+        let answer = match request.send().await {
+            Ok(response) if response.status().is_success() => response.json::<Value>().await.ok(),
+            _ => None,
+        };
+        let received = monotonic_ms();
+        if let Some(server_ms) = answer.as_ref().and_then(|answer| answer["serverTimeMs"].as_f64()) {
+            let round_trip = received - sent;
+            let offset = server_ms - (sent + received) / 2.0;
+            if agent.clock_offset().is_some_and(|known| (known - offset).abs() > CLOCK_JUMP_MS + round_trip) {
+                readings.clear();
+            }
+            readings.retain(|(at, _, _)| at.elapsed() < CLOCK_WINDOW);
+            readings.push_back((Instant::now(), round_trip, offset));
+            let best = readings.iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(_, _, offset)| *offset);
+            if let Ok(mut known) = agent.clock_offset_ms.lock() { *known = best; }
+        }
+        // A handful of quick readings first, then enough to follow the drift.
+        let wait = if readings.len() < 5 { Duration::from_millis(200) } else { CLOCK_EVERY };
+        tokio::time::sleep(wait).await;
+    }
 }
 
 async fn serve(agent: std::sync::Arc<Agent>) {
@@ -436,6 +515,14 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         return Ok(Value::Null);
     }
     let player = agent.app.state::<NativeAudioPlayer>();
+    // A synced group's load, seek or play is held for the group's start; any other plays alone.
+    if matches!(command, "load_native_audio" | "seek_native_audio" | "play_native_audio") {
+        let sync = match args["sync"]["epoch"].as_u64() {
+            Some(epoch) if !control.overrules(args) => native_audio::SyncCommand::Hold { epoch },
+            _ => native_audio::SyncCommand::Clear,
+        };
+        native_audio::dispatch_sync(&player, sync)?;
+    }
     let number = |key: &str| args[key].as_f64().ok_or_else(|| format!("`{key}` is missing"));
     match command {
         "load_native_audio" => native_audio::dispatch_remote_load(
@@ -452,6 +539,16 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         "play_native_audio" => native_audio::play_native_audio(player).await.map(|()| Value::Null),
         "pause_native_audio" => native_audio::pause_native_audio(player).await.map(|()| Value::Null),
         "seek_native_audio" => native_audio::dispatch_remote_seek(&player, number("positionSeconds")?).map(|()| Value::Null),
+        // The group's start: song position `positionSeconds` is heard at `atServerMs`.
+        "sync_native_audio" => {
+            let at = agent.local_instant(number("atServerMs")?, args["sentAtServerMs"].as_f64());
+            native_audio::dispatch_sync(&player, native_audio::SyncCommand::Start {
+                epoch: args["epoch"].as_u64().ok_or("`epoch` is missing")?,
+                at,
+                position: number("positionSeconds")?,
+                group_resync: Duration::from_millis(args["groupResyncMs"].as_u64().unwrap_or(0).min(10_000)),
+            }).map(|()| Value::Null)
+        }
         "warm_native_audio" => native_audio::warm_native_audio(player, agent.arg_source(args, "source").ok_or("`source` is missing")?).map(|()| Value::Null),
         "set_native_audio_volume" => native_audio::set_native_audio_volume(player, number("volume")?).await.map(|()| Value::Null),
         "native_audio_volume" => native_audio::native_audio_volume(player).await.map(|volume| json!(volume)),
@@ -468,7 +565,7 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         "native_audio_settings" => native_audio::native_audio_settings(player)
             .await
             .and_then(|settings| serde_json::to_value(settings).map_err(|error| error.to_string())),
-        // One output's own settings: its preset, exclusive mode, resync delay and whether it's shown.
+        // One output's own settings: its preset, exclusive mode, resync delay, latency and whether it's shown.
         "set_output_settings" => {
             let output_id = args["outputId"].as_str().ok_or("`outputId` is missing")?.to_owned();
             let change = &args["change"];
@@ -489,6 +586,9 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             }
             if let Some(delay) = change["resyncDelayMs"].as_u64() {
                 output.resync_delay_ms = u32::try_from(delay).map_err(|_| "That resync delay is too long")?;
+            }
+            if let Some(latency) = change["latencyMs"].as_u64() {
+                output.latency_ms = u32::try_from(latency).map_err(|_| "That latency is too long")?;
             }
             native_audio::set_native_audio_settings(player, settings).await.map(|()| Value::Null)
         }
