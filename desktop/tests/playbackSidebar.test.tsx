@@ -183,6 +183,69 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
   }
 });
 
+test("page history restores scroll positions and clears the page filter across visits", async () => {
+  const { default: App } = await import("../src/App");
+  const { AudioSettingsProvider } = await import("../src/hooks/AudioSettingsContext");
+  const { defaultAudioSettings } = await import("../src/utils/audioSettings");
+  const { loadPreferences } = await import("../src/utils/preferences");
+  const audio = { native: false, load: async () => defaultAudioSettings(), devices: async () => [], save: async () => {} };
+  const viewport = document.createElement("div");
+  document.body.append(viewport);
+  const root = createRoot(viewport);
+  const click = (selector: string) => act(async () => {
+    viewport.querySelector<HTMLButtonElement>(selector)!.click();
+  });
+  const moveHistory = (button: number) => act(async () => {
+    window.dispatchEvent(new dom.MouseEvent("mouseup", { button, cancelable: true }) as unknown as MouseEvent);
+  });
+  const nextFrame = () => act(async () => {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  });
+  const filter = () => viewport.querySelector(".pageFilter");
+  const libraryPage = () => viewport.querySelector<HTMLDivElement>(".libraryView")!;
+  try {
+    await act(async () => root.render(<AudioSettingsProvider api={audio}><App localOnly /></AudioSettingsProvider>));
+    await click(".sidebarHomeButton");
+    await nextFrame();
+    libraryPage().scrollTop = 150;
+
+    await click("#libraryContainer > button.sidebarLibraryButton:not(.sidebarHomeButton)");
+    await click(".libraryOverviewCard:last-child");
+    await nextFrame();
+    expect(libraryPage().querySelector("h1")?.textContent).toContain("Tracks");
+    libraryPage().scrollTop = 60;
+    await act(async () => {
+      window.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "/", code: "Slash", cancelable: true }) as unknown as KeyboardEvent);
+    });
+    expect(filter()).not.toBeNull();
+
+    await moveHistory(3);
+    expect(libraryPage().querySelector("h1")?.textContent).toBe("My Library");
+    expect(filter()).toBeNull();
+    await moveHistory(3);
+    expect(libraryPage().classList.contains("homeView")).toBe(true);
+    expect(libraryPage().scrollTop).toBe(150);
+    await moveHistory(4);
+    await moveHistory(4);
+    expect(libraryPage().querySelector("h1")?.textContent).toContain("Tracks");
+    expect(libraryPage().scrollTop).toBe(60);
+    expect(filter()).toBeNull();
+
+    await click(".sidebarSettingsButton");
+    const specs = viewport.querySelector<HTMLInputElement>('[aria-label="Show song specs"]')!;
+    const previous = specs.checked;
+    await act(async () => specs.click());
+    expect(loadPreferences().ui.showAudioQuality).toBe(!previous);
+    await act(async () => specs.click());
+    await click(".settingsBack");
+    expect(libraryPage().querySelector("h1")?.textContent).toContain("Tracks");
+    expect(libraryPage().scrollTop).toBe(60);
+  } finally {
+    await act(async () => root.unmount());
+    viewport.remove();
+  }
+});
+
 test("shared playback follows the server's listening history as plays arrive", async () => {
   const { useListeningHistory } = await import("../src/hooks/useListeningHistory");
   const { setServerForTesting } = await import("../src/api/serverConnection");

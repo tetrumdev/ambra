@@ -201,7 +201,7 @@ function LibraryActions({ tracks }: { tracks: Track[] }) {
   );
 }
 
-export function LibraryView({
+export const LibraryView = memo(function LibraryView({
   section,
   onSectionChange,
   ...props
@@ -255,7 +255,7 @@ export function LibraryView({
       content={content}
     />
   );
-}
+});
 
 export function CatalogAlbumGrid({ albums, onOpenEntity }: { albums: CatalogAlbum[]; onOpenEntity: (entity: BrowseEntity) => void }) {
   return <VirtualEntityGrid items={albums} label="Albums" cacheKey="catalog-album-grid" renderItem={(album, index) => <article className="libraryEntityCard" role="listitem" aria-posinset={index + 1} aria-setsize={albums.length} key={album.id} data-virtual-item="">

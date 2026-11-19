@@ -10,6 +10,11 @@ import { readShortcutOverrides, type ShortcutOverrides } from "./shortcuts";
 export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
 export type PlayerView = Extract<AppScreen, "bigscreen" | "lyrics">;
+
+export function isPlayerScreen(screen: AppScreen): screen is PlayerView {
+  return screen === "bigscreen" || screen === "lyrics";
+}
+
 export type PlaylistGroup = "ambra" | "spotify" | "qobuz" | "tidal";
 
 type NavigationPreferences = {
