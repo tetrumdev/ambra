@@ -1,7 +1,6 @@
 import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { isTauri } from "@tauri-apps/api/core";
 import {
-  Fragment,
   useEffect,
   useRef,
   useState,
@@ -149,7 +148,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
         onClick={() => chooseOutput(output)}
       >
         <span className="audioDeviceCheck" aria-hidden="true" />
-        <span className="audioDeviceName" data-tooltip={output.deviceName} data-tooltip-overflow="">
+        <span className="audioDeviceName" data-tooltip={label}>
           {offline ? `${output.deviceName} (offline)` : output.deviceName}
         </span>
       </button>
@@ -170,6 +169,20 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
   const here = core && serverConnection ? serverConnection : null;
   // Outputs playing that the list doesn't show, because their computer is out of reach.
   const offlineMembers = groupOutputs.filter(member => member.endpointId !== here?.clientId && !endpoints.some(endpoint => endpoint.id === member.endpointId));
+  // Every computer's outputs in one list, by name: renaming them is how they're told apart and
+  // kept in order, not which computer they're on.
+  const outputRows = here ? [
+    ...audioDevices.map(device => ({
+      output: { endpointId: here.clientId, deviceId: device.id, endpointName: here.clientName, deviceName: device.name },
+      syncs: true, disabled: isChangingDevice, offline: false,
+    })),
+    ...endpoints.flatMap(endpoint => endpoint.devices.map(device => ({
+      output: { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: device.id, deviceName: device.name },
+      syncs: endpoint.syncs, disabled: false, offline: false,
+    }))),
+    ...offlineMembers.map(output => ({ output, syncs: true, disabled: false, offline: true })),
+  ].sort((a, b) => a.output.deviceName.localeCompare(b.output.deviceName, undefined, { sensitivity: "base", numeric: true })
+    || a.output.endpointName.localeCompare(b.output.endpointName)) : [];
 
   const selectAudioDevice = async (deviceId: string) => {
     if (!audio || audio.saving) return;
@@ -323,7 +336,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                     </button>)}
                   </>}
                   <span className="audioDeviceHeading" aria-hidden="true">
-                    {core && endpoints.length ? "This computer" : "Output"}
+                    {here ? "Outputs" : "Output"}
                   </span>
                   {isLoadingDevices ? (
                     <button
@@ -337,11 +350,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
                   ) : here ? (
-                    audioDevices.map(device => groupRow(
-                      { endpointId: here.clientId, deviceId: device.id, endpointName: here.clientName, deviceName: device.name },
-                      device.name,
-                      { syncs: true, disabled: isChangingDevice },
-                    ))
+                    outputRows.map(({ output, ...state }) => groupRow(output, `${output.deviceName} on ${output.endpointName}`, state))
                   ) : (
                     audioDevices.map((device) => (
                       <button
@@ -364,18 +373,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                       </button>
                     ))
                   )}
-                  {endpoints.map(endpoint => <Fragment key={endpoint.id}>
-                    <span className="audioDeviceHeading" aria-hidden="true">{endpoint.name}</span>
-                    {endpoint.devices.map(device => groupRow(
-                      { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: device.id, deviceName: device.name },
-                      `${device.name} on ${endpoint.name}`,
-                      { syncs: endpoint.syncs },
-                    ))}
-                  </Fragment>)}
-                  {offlineMembers.map(member => <Fragment key={`offline:${member.endpointId}`}>
-                    <span className="audioDeviceHeading" aria-hidden="true">{member.endpointName}</span>
-                    {groupRow(member, `${member.deviceName} on ${member.endpointName}`, { syncs: true, offline: true })}
-                  </Fragment>)}
+
                 </div>
               </>
             )}
