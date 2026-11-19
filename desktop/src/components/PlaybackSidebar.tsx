@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { useTrackReorder } from "../hooks/useTrackReorder";
@@ -31,6 +31,7 @@ type SidebarQueueProps = {
 
 type PlaybackSidebarProps = SidebarQueueProps & {
   view: PlaybackSidebarView;
+  preferredWidth: RefObject<number | null>;
   onChangeView: (view: PlaybackSidebarView) => void;
   onClose: () => void;
   lyrics: ReactNode;
@@ -40,19 +41,20 @@ type PlaybackSidebarProps = SidebarQueueProps & {
 };
 
 export function PlaybackSidebar({
-  view, onChangeView, onClose, lyrics, recent, recentError, onPlayRecent, ...queue
+  view, preferredWidth, onChangeView, onClose, lyrics, recent, recentError, onPlayRecent, ...queue
 }: PlaybackSidebarProps) {
   return (
     <aside className="playbackSidebar" id="playbackSidebar" aria-label="Playback sidebar"
       onKeyDown={event => { if (event.key === " " && event.target instanceof HTMLButtonElement) event.stopPropagation(); }}>
+      <PlaybackSidebarResize preferredWidth={preferredWidth} />
       <header className="playbackSidebarHeader">
         <div className="playbackSidebarViews" role="group" aria-label="Playback sidebar view">
           {views.map(({ id, label }) => (
             <button key={id} type="button" aria-pressed={view === id} onClick={() => onChangeView(id)}>{label}</button>
           ))}
         </div>
-        <button type="button" className="playbackSidebarIcon" aria-label="Close playback sidebar" onClick={onClose}>
-          <img src="/x.svg" alt="" />
+        <button type="button" className="xContainer playbackSidebarClose" aria-label="Close playback sidebar" onClick={onClose}>
+          <img className="closeBtn" src="/x.svg" alt="" />
         </button>
       </header>
       {view === "queue" && <SidebarQueue {...queue} />}
@@ -61,6 +63,77 @@ export function PlaybackSidebar({
     </aside>
   );
 }
+
+const MIN_SIDEBAR_WIDTH = 320;
+const MAX_SIDEBAR_WIDTH = 520;
+const MIN_PAGE_WIDTH = 500;
+const SIDEBAR_WIDTH_PROPERTY = "--playback-sidebar-width";
+
+function PlaybackSidebarResize({ preferredWidth }: { preferredWidth: RefObject<number | null> }) {
+  const handle = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ pointerId: number; x: number; width: number } | null>(null);
+  const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
+  const [requestedWidth, setRequestedWidth] = useState(preferredWidth.current);
+  const min = Math.min(MIN_SIDEBAR_WIDTH, windowWidth);
+  const max = Math.min(MAX_SIDEBAR_WIDTH, Math.max(min, windowWidth - MIN_PAGE_WIDTH));
+  const clampWidth = (width: number) => Math.min(max, Math.max(min, Math.round(width)));
+  const width = clampWidth(requestedWidth ?? Math.min(380, windowWidth * 0.28));
+
+  useLayoutEffect(() => {
+    const syncWindowWidth = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", syncWindowWidth);
+    return () => window.removeEventListener("resize", syncWindowWidth);
+  }, []);
+  useLayoutEffect(() => {
+    // The panel, page, scrollbar and page filter all use the same width.
+    const viewport = handle.current?.closest<HTMLElement>(".appViewport");
+    viewport?.style.setProperty(SIDEBAR_WIDTH_PROPERTY, `${width}px`);
+    return () => { viewport?.style.removeProperty(SIDEBAR_WIDTH_PROPERTY); };
+  }, [width]);
+
+  function resize(next: number) {
+    preferredWidth.current = clampWidth(next);
+    setRequestedWidth(preferredWidth.current);
+  }
+
+  return (
+    <div className="playbackSidebarResize" ref={handle} role="separator" tabIndex={0}
+      aria-label="Playback sidebar width" aria-controls="playbackSidebar" aria-orientation="vertical"
+      aria-valuemin={min} aria-valuemax={max} aria-valuenow={width} aria-valuetext={`${width} pixels`}
+      onPointerDown={event => {
+        if (!event.isPrimary || event.button !== 0) return;
+        const target = event.currentTarget;
+        drag.current = { pointerId: event.pointerId, x: event.clientX, width };
+        target.setPointerCapture(event.pointerId);
+        target.setAttribute("data-resizing", "");
+      }}
+      onPointerMove={event => {
+        const start = drag.current;
+        if (start?.pointerId === event.pointerId) resize(start.width + start.x - event.clientX);
+      }}
+      onLostPointerCapture={event => {
+        if (drag.current?.pointerId !== event.pointerId) return;
+        drag.current = null;
+        event.currentTarget.removeAttribute("data-resizing");
+      }}
+      onKeyDown={event => {
+        if (event.altKey || event.ctrlKey || event.metaKey) return;
+        const step = event.shiftKey ? 40 : 10;
+        switch (event.key) {
+          case "ArrowLeft": resize(width + step); break;
+          case "ArrowRight": resize(width - step); break;
+          case "Home": resize(min); break;
+          case "End": resize(max); break;
+          default: return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+    />
+  );
+}
+
+const TRACK_ROW_HEIGHT = 60;
 
 function SidebarQueue({ currentTrack, upcoming, onJumpTo, onRemove, onReorder, onOpenFullQueue }: SidebarQueueProps) {
   const connected = useServiceAvailability();
@@ -93,13 +166,13 @@ function SidebarQueue({ currentTrack, upcoming, onJumpTo, onRemove, onReorder, o
       />}
       <div className="playbackSidebarScroll" ref={scroller}>
         {currentTrack && <section aria-labelledby="playbackSidebarNowPlaying">
-          <h2 id="playbackSidebarNowPlaying">Now playing</h2>
+          <h2 className="queueSectionTitle" id="playbackSidebarNowPlaying">Now playing</h2>
           <div className="playbackSidebarRow" aria-current="true"><SidebarTrack track={currentTrack} /></div>
         </section>}
         <section aria-labelledby="playbackSidebarUpNext">
           <div className="playbackSidebarSectionHeader">
-            <h2 id="playbackSidebarUpNext">Up next</h2>
-            <button className="playbackSidebarTextButton" type="button" onClick={onOpenFullQueue}>Full queue</button>
+            <h2 className="queueSectionTitle" id="playbackSidebarUpNext">Up next</h2>
+            <button className="queueTextButton playbackSidebarTextButton" type="button" onClick={onOpenFullQueue}>Full queue</button>
           </div>
           {upcoming.length ? <SidebarTrackList
             count={upcoming.length} label="Upcoming tracks" pinnedIndex={draggedTrackId ? ids.indexOf(draggedTrackId) : null}
@@ -156,7 +229,7 @@ function SidebarTrackList({ count, label, pinnedIndex, renderRow }: {
   const list = useRef<HTMLDivElement>(null);
   const virtual = useVirtualWindow({
     count, enabled: count > 120, probeRef: list, probeIsContainer: true,
-    fallback: { rowHeight: 50 }, cacheKey: `playback-sidebar:${label}`, pinnedIndex,
+    fallback: { rowHeight: TRACK_ROW_HEIGHT }, cacheKey: `playback-sidebar:${label}`, pinnedIndex,
   });
   return (
     <div role="list" aria-label={label} ref={list}>

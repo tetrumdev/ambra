@@ -233,6 +233,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   );
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
+  const preferredPlaybackSidebarWidth = useRef<number | null>(null);
   const {
     screen, isPlayerView, isQueueView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
@@ -723,6 +724,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
       {sidebarView && <PlaybackSidebar
         view={sidebarView}
+        preferredWidth={preferredPlaybackSidebarWidth}
         onChangeView={setPlaybackSidebarView}
         onClose={closePlaybackSidebar}
         currentTrack={player.currentTrack}
