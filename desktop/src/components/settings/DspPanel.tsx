@@ -4,7 +4,7 @@ import { useAudioSettings } from "../../hooks/AudioSettingsContext";
 import { newPreset, parseAutoEq, validatePreset, type DspPreset, type DspStatus, type EqBand, type ImpulseFile } from "../../utils/audioSettings";
 import { clippingRiskDb, maxBoostDb } from "../../utils/eqResponse";
 import { EqGraph, formatFrequency } from "./EqGraph";
-import { Segmented, Toggle } from "./SettingsControls";
+import { Help, Segmented, Toggle } from "./SettingsControls";
 
 const KIND_NAMES: Record<EqBand["kind"], string> = { peak: "Peak", lowShelf: "Low shelf", highShelf: "High shelf" };
 const signedDb = (db: number) => `${db > 0 ? "+" : db < 0 ? "−" : ""}${Math.abs(db).toFixed(1)} dB`;
@@ -109,7 +109,10 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
 
   return <>
     <header className="settingsPageHeader">
-      <h1 className="settingsTitle">DSP</h1>
+      <h1 className="settingsTitle">DSP<Help topic="DSP">
+        <p>Headphone EQ, room correction and headroom, saved as presets you give to outputs.</p>
+        <p>Playback is bit-perfect in exclusive mode with DSP off and volume at 100%. Otherwise it's processed in 64-bit and dithered to the device.</p>
+      </Help></h1>
       <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
     </header>
     <div className="dspLayout">
@@ -155,7 +158,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
 
         <section className="dspSection" aria-label="Parametric EQ">
           <div className="dspSectionHeader">
-            <h2>Parametric EQ</h2>
+            <h2>Parametric EQ<Help topic="Parametric EQ">Drag a band to move it, scroll over it to change its width, double-click to add one and right-click to remove it.</Help></h2>
             <div className="dspSectionActions">
               <button type="button" className="settingsPill" disabled={draft.bands.length >= 32} onClick={() => addBand({ enabled: true, kind: "peak", frequency: 1000, gainDb: 0, q: 1 })}>Add band</button>
               <button type="button" className="settingsPill" onClick={() => eqFile.current?.click()}>Import AutoEq</button>
@@ -165,7 +168,6 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
           <input ref={eqFile} type="file" accept=".txt,text/plain" hidden aria-label="Import headphone EQ file"
             onChange={e => { const file = e.currentTarget.files?.[0]; if (file) void importEq(file); e.currentTarget.value = ""; }} />
           <EqGraph bands={draft.bands} selected={band} onSelect={setBand} onChange={editBand} onAdd={addBand} onRemove={removeBand} />
-          <p className="dspHint">Drag a band to move it · scroll over it for width · double-click to add · right-click to remove</p>
           {draft.bands.length > 0 && <div className="dspBandChips" role="listbox" aria-label="EQ bands">
             {draft.bands.map((item, index) => <button key={index} type="button" role="option" aria-selected={band === index} data-off={!item.enabled || undefined}
               className="dspBandChip" onClick={() => setBand(band === index ? null : index)}>
@@ -190,7 +192,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
 
         <section className="dspSection" aria-label="Convolution">
           <div className="dspSectionHeader">
-            <h2>Convolution</h2>
+            <h2>Convolution<Help topic="Convolution">Impulse responses from WAV files, for room correction or a headphone target. Add one per sample rate, mono or stereo.</Help></h2>
             <button type="button" className="settingsPill" disabled={!audio.native || importing} onClick={() => impulseFile.current?.click()}>{importing ? "Importing…" : "Import WAV"}</button>
           </div>
           <input ref={impulseFile} type="file" accept=".wav,audio/wav" hidden aria-label="Import convolution WAV"
@@ -199,16 +201,14 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
             <span className="dspImpulseRate">{impulse.sampleRate / 1000} kHz</span>
             <span className="dspImpulseName">{impulse.name}<small>{impulse.channels === 1 ? "Mono" : "Stereo"} · {impulse.frames.toLocaleString()} taps · {(impulse.frames / impulse.sampleRate * 1000).toFixed(0)} ms</small></span>
             <button type="button" className="settingsLink" onClick={() => edit({ convolution: draft.convolution.filter(i => i.id !== impulse.id) })}>Remove</button>
-          </li>)}</ul> : <p className="settingsMuted">One impulse per sample rate, mono or stereo.</p>}
+          </li>)}</ul> : <p className="settingsMuted">No impulse responses yet.</p>}
         </section>
       </div> : <div className="dspEmpty">
         <h2>Shape your sound</h2>
-        <p className="settingsMuted">Headphone EQ, room correction and headroom, saved as presets you give to outputs.</p>
         <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
       </div>}
     </div>
     {error && <p className="settingsError" role="alert">{error}</p>}
-    <p className="settingsMuted dspFootnote">Bit-perfect in exclusive mode with DSP off and volume at 100%. Otherwise processed in 64-bit and dithered to the device.</p>
     {dirty && <div className="settingsSaveBar" role="region" aria-label="Unsaved changes">
       <span>Unsaved changes</span>
       <button type="button" className="settingsLink" onClick={() => { setDirty(false); setError(null); }}>Discard changes</button>

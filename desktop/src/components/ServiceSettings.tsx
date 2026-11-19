@@ -63,7 +63,6 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   };
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Services</h1></header>
-    <p className="settingsMuted">Sign in using your default browser. Credentials stay on your server.</p>
     {!connected && <p className="settingsMuted">Connect through Settings → Server to use streaming services.</p>}
     {(["tidal", "qobuz", "spotify"] as const).map(provider => <div className="settingsGroup" key={provider}>
       <h2>{provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"}</h2>

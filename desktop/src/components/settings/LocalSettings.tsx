@@ -45,12 +45,12 @@ export function LocalSettings({ onRescanLocalMusic }: Props) {
       <header className="settingsPageHeader"><h1 className="settingsTitle">Local</h1></header>
       <div className="settingsGroup">
         <h2>Local music</h2>
-        <SettingRow label="Music folder" hint="Files in Music/Ambra stay on this device and play without a server.">
+        <SettingRow label="Music folder" help="Files in Music/Ambra stay on this device and play without a server.">
           <button type="button" className="settingsPill" onClick={() => void openImportFolder()} disabled={busy === "local"}>
             Open folder
           </button>
         </SettingRow>
-        <SettingRow label="Scan music" hint="Index new or changed files on this device.">
+        <SettingRow label="Scan music" help="Indexes new or changed files in the music folder.">
           <button type="button" className="settingsPill" onClick={() => void rescan()} disabled={busy === "local"}>
             {busy === "local" ? "Working…" : "Scan now"}
           </button>

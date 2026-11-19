@@ -31,7 +31,7 @@ function PreferredServiceSetting() {
   ];
   return <div className="settingsGroup">
     <h2>Search</h2>
-    <SettingRow label="Preferred service" hint="Shown when several services have a song or album in the same quality. Songs and their albums always come from the same service.">
+    <SettingRow label="Preferred service" help="Shown when several services have a song or album in the same quality. Songs and their albums always come from the same service.">
       <Segmented label="Preferred service" value={service} options={options} onChange={setPreferredService} />
     </SettingRow>
   </div>;
@@ -84,16 +84,17 @@ export function SettingsView({
       <header className="settingsPageHeader"><h1 className="settingsTitle">General</h1></header>
       <div className="settingsGroup">
         <h2>Sound</h2>
-        <SettingRow label="Volume normalization" hint={audio.native ? "Even loudness, dynamics untouched" : DESKTOP_ONLY}>
+        <SettingRow label="Volume normalization" hint={audio.native ? undefined : DESKTOP_ONLY}
+          help="Evens out loudness between songs with one fixed gain per song or album. Dynamics are untouched: nothing is compressed or limited.">
           {/* Album keeps each album's own balance, so it is where normalization starts. */}
           <Toggle label="Volume normalization" checked={audio.settings.normalization !== "off"} disabled={!audio.native || audio.loading || audio.saving}
             onChange={on => setNormalization(on ? "album" : "off")} />
         </SettingRow>
-        {audio.settings.normalization !== "off" && <SettingRow label="Normalize by" hint="Album keeps quiet tracks quiet">
+        {audio.settings.normalization !== "off" && <SettingRow label="Normalize by" help="Album keeps each album's own balance, so quiet tracks stay quiet. Song brings every song to the same loudness.">
           <Segmented label="Normalize by" value={audio.settings.normalization} disabled={audio.saving} onChange={setNormalization}
             options={[{ value: "album", label: "Album" }, { value: "track", label: "Song" }]} />
         </SettingRow>}
-        {audio.settings.normalization !== "off" && <SettingRow label="Target loudness" hint="Higher is louder; quiet songs only rise as far as their peaks allow">
+        {audio.settings.normalization !== "off" && <SettingRow label="Target loudness" help="The loudness songs are brought to. Higher is louder; quiet songs only rise as far as their peaks allow, so nothing clips.">
           <span className="settingsFieldRow settingsUnitInput">
             <input type="number" aria-label="Target loudness (LUFS)" min={MIN_TARGET_LUFS} max={MAX_TARGET_LUFS} step={0.1} required
               key={audio.settings.normalizationTargetLufs} defaultValue={audio.settings.normalizationTargetLufs} disabled={audio.saving}
@@ -110,27 +111,27 @@ export function SettingsView({
       </div>
       <div className="settingsGroup">
         <h2>Player</h2>
-        <SettingRow label="Song specs" hint="Format and bitrate under the progress bar">
+        <SettingRow label="Song specs" help="The song's format and bitrate, under the progress bar.">
           <Toggle label="Show song specs" checked={showAudioQuality} onChange={showAudioQuality => onPreferencesChange({ showAudioQuality })} />
         </SettingRow>
-        <SettingRow label="Reduce motion" hint="Makes transitions instant throughout the app. Independent from system animations">
+        <SettingRow label="Reduce motion" help="Makes transitions instant throughout the app, whatever the system's own animation setting.">
           <Toggle label="Reduce motion" checked={reduceMotion} onChange={reduceMotion => onPreferencesChange({ reduceMotion })} />
         </SettingRow>
-        <SettingRow label="Animate swirl" hint="Independent from Reduce motion">
+        <SettingRow label="Animate swirl" help="Moves the swirl behind the player, whether or not Reduce motion is on.">
           <Toggle label="Animate swirl" checked={animateSwirl} onChange={animateSwirl => onPreferencesChange({ animateSwirl })} />
         </SettingRow>
-        <SettingRow label="Lyric motion" hint="Default follows Reduce motion; Full animates even with it on">
+        <SettingRow label="Lyric motion" help="Default follows Reduce motion. Full animates lyrics even with it on; Reduced keeps them still.">
           <Segmented label="Lyric motion" value={lyricMotion} onChange={lyricMotion => onPreferencesChange({ lyricMotion })}
             options={[{ value: "system", label: "Default" }, { value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]} />
         </SettingRow>
-        <SettingRow label="Animation frame rate" hint="Caps how often lyrics and the swirl redraw. Lower saves power on high refresh rate displays">
+        <SettingRow label="Animation frame rate" help="Caps how often lyrics and the swirl redraw. A lower cap saves power on high refresh rate displays.">
           <Segmented label="Animation frame rate" value={String(maxAnimationFps)} onChange={fps => onPreferencesChange({ maxAnimationFps: Number(fps) })}
             options={ANIMATION_FPS_OPTIONS.map(fps => ({ value: String(fps), label: fps ? `${fps}` : "Unlimited" }))} />
         </SettingRow>
-        <SettingRow label="Auto-sync lyrics" hint={audio.native ? "Lines lyrics up with the vocals" : DESKTOP_ONLY}>
+        <SettingRow label="Auto-sync lyrics" hint={audio.native ? undefined : DESKTOP_ONLY} help="Lines lyrics up with the vocals of the song playing.">
           <Toggle label="Auto-sync lyrics" checked={autoSyncLyrics} disabled={!audio.native} onChange={autoSyncLyrics => onPreferencesChange({ autoSyncLyrics })} />
         </SettingRow>
-        <SettingRow label="Lyrics offset" hint="For a delay in your speakers or headphones, like Bluetooth. Positive shows lyrics earlier on every song">
+        <SettingRow label="Lyrics offset" help="For a delay in your speakers or headphones, like Bluetooth. A positive offset shows lyrics earlier, on every song.">
           <span className="settingsFieldRow settingsUnitInput">
             <input type="number" aria-label="Lyrics offset (milliseconds)" min={-MAX_LYRICS_OFFSET_MS} max={MAX_LYRICS_OFFSET_MS} step={10} required
               key={lyricsOffsetMs} defaultValue={lyricsOffsetMs}
@@ -160,11 +161,14 @@ export function SettingsView({
         <h1 className="settingsTitle">Outputs</h1>
         <button type="button" className="settingsPill" onClick={() => void audio.refresh()} disabled={audio.loading || audio.saving}>Refresh</button>
       </header>
-      {!audio.native && <p className="settingsMuted">Choosing devices needs the desktop app.</p>}
-      {audio.loading ? <p className="settingsMuted" role="status">Loading outputs…</p> : <div className="settingsOutputs">
-        {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <LocalOutputCard key={output.id} output={output}
-          onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
-      </div>}
+      <div className="settingsGroup">
+        <h2>{serverConnection?.clientName ?? "This computer"}</h2>
+        {!audio.native && <p className="settingsMuted settingsGroupNote">Choosing devices needs the desktop app.</p>}
+        {audio.loading ? <p className="settingsMuted settingsGroupNote" role="status">Loading outputs…</p> : <div className="settingsOutputs">
+          {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <LocalOutputCard key={output.id} output={output}
+            onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
+        </div>}
+      </div>
       <RemoteOutputs active={tab === "outputs"} />
     </section>
 
@@ -213,52 +217,35 @@ function OutputCard({ output, presets, on, playing, busy = false, canPlay, onPla
       <input className="settingsOutputName" aria-label={`Name for ${output.name}${where}`} key={output.name} defaultValue={output.name} maxLength={200}
         disabled={busy} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
         onBlur={e => { const name = e.currentTarget.value.trim(); if (name && name !== output.name) void update({ name }); else e.currentTarget.value = output.name; }} />
-      {playing && <span className="settingsChip settingsChipActive">Playing here</span>}
+      {playing && <span className="settingsChip settingsChipActive">Playing</span>}
       {output.id === "" && <span className="settingsChip">Follows system</span>}
       <span className="settingsOutputSpacer" />
       {!playing && <button type="button" className="settingsPill" disabled={!canPlay || busy || !output.enabled} onClick={onPlayHere}>Play here</button>}
-      <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
-      <Toggle label={`Show ${output.name}${where} in player`} checked={output.enabled} disabled={busy} onChange={enabled => void update({ enabled })} />
-    </div>
-    <div className="settingsOutputFields">
-      <label className="settingsField"><span>DSP</span>
-        <span className="settingsFieldRow">
-          <select aria-label={`DSP preset for ${output.name}${where}`} value={output.presetId ?? ""} disabled={busy}
-            onChange={e => void update({ presetId: e.currentTarget.value || null })}>
-            <option value="">None</option>
-            {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}{preset.enabled ? "" : " (bypassed)"}</option>)}
-          </select>
-          {output.presetId && onEditPreset && <button type="button" className="settingsLink" onClick={() => onEditPreset(output.presetId!)}>Edit</button>}
-        </span>
-        {on && <small className="settingsFieldHint">Presets stored on {on}</small>}
-      </label>
-      <div className="settingsField"><span>Mode</span>
-        <Segmented label={`Output mode for ${output.name}${where}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={busy}
-          onChange={mode => void update({ exclusiveMode: mode === "exclusive" })}
-          options={[{ value: "shared", label: "Shared" }, { value: "exclusive", label: "Exclusive" }]} />
-      </div>
-      <label className="settingsField"><span>Resync delay</span>
-        <span className="settingsFieldRow settingsUnitInput">
-          <input type="number" aria-label={`Resync delay for ${output.name}${where}`} min={0} max={10000} step={1} required
-            key={`${output.id}:${output.resyncDelayMs}`} defaultValue={output.resyncDelayMs} disabled={busy}
-            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-            onBlur={async e => {
-              const input = e.currentTarget;
-              const delay = input.valueAsNumber;
-              if (!input.checkValidity()) { input.reportValidity(); input.value = String(output.resyncDelayMs); return; }
-              if (delay !== output.resyncDelayMs && await update({ resyncDelayMs: delay }) === false) input.value = String(output.resyncDelayMs);
-            }} />
-          <small>ms</small>
-        </span>
-        <small className="settingsFieldHint">Silence when the format changes</small>
-      </label>
-      <label className="settingsField"><span>Sync latency</span>
-        <LatencyInput label={`Sync latency for ${output.name}${where}`} value={output.latencyMs ?? 0} disabled={busy}
-          onChange={latencyMs => update({ latencyMs })} />
-        <small className="settingsFieldHint">Device delay, like Bluetooth, for playing in step with other outputs</small>
+      <label className="settingsShowInPlayer">In player
+        <Toggle label={`Show ${output.name}${where} in player`} checked={output.enabled} disabled={busy} onChange={enabled => void update({ enabled })} />
       </label>
     </div>
-  </article>;
+    <SettingRow label="DSP preset" help={on ? `Presets are kept on each computer; these are ${on}'s.` : undefined}>
+      {output.presetId && onEditPreset && <button type="button" className="settingsLink" onClick={() => onEditPreset(output.presetId!)}>Edit</button>}
+      <select aria-label={`DSP preset for ${output.name}${where}`} value={output.presetId ?? ""} disabled={busy}
+        onChange={e => void update({ presetId: e.currentTarget.value || null })}>
+        <option value="">None</option>
+        {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}{preset.enabled ? "" : " (bypassed)"}</option>)}
+      </select>
+    </SettingRow>
+    <SettingRow label="Mode" help="Shared plays alongside other apps' sounds. Exclusive takes the device for Ambra alone, and is bit-perfect when nothing changes the samples.">
+      <Segmented label={`Output mode for ${output.name}${where}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={busy}
+        onChange={mode => void update({ exclusiveMode: mode === "exclusive" })}
+        options={[{ value: "shared", label: "Shared" }, { value: "exclusive", label: "Exclusive" }]} />
+    </SettingRow>
+    <SettingRow label="Resync delay" help="Silence played before a new stream starts, for receivers that need time to lock on to the signal, as when the format changes.">
+      <MillisecondsInput label={`Resync delay for ${output.name}${where}`} value={output.resyncDelayMs} max={10000} disabled={busy}
+        onChange={resyncDelayMs => update({ resyncDelayMs })} />
+    </SettingRow>
+    <SettingRow label="Sync latency" help="Delay inside the device that Ambra can't measure, like Bluetooth. When outputs play in sync, this one sends its audio that much earlier.">
+      <MillisecondsInput label={`Sync latency for ${output.name}${where}`} value={output.latencyMs ?? 0} max={MAX_OUTPUT_LATENCY_MS} disabled={busy}
+        onChange={latencyMs => update({ latencyMs })} />
+    </SettingRow>  </article>;
 }
 
 /** An output on this computer. */
@@ -276,20 +263,19 @@ function LocalOutputCard({ output, onEditPreset }: { output: OutputSettings; onE
     onEditPreset={onEditPreset} />;
 }
 
-/** Milliseconds the device itself delays sound, which synced playback makes up for. */
-function LatencyInput({ label, value, disabled, onChange }: { label: string; value: number; disabled?: boolean; onChange: (latencyMs: number) => Promise<unknown> }) {
+/** A whole number of milliseconds, saved when the field is left; put back when refused. */
+function MillisecondsInput({ label, value, max, disabled, onChange }: { label: string; value: number; max: number; disabled?: boolean; onChange: (milliseconds: number) => Promise<unknown> }) {
   return <span className="settingsFieldRow settingsUnitInput">
-    <input type="number" aria-label={label} min={0} max={MAX_OUTPUT_LATENCY_MS} step={1} required
+    <input type="number" aria-label={label} min={0} max={max} step={1} required
       key={value} defaultValue={value} disabled={disabled}
       onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
       onBlur={async e => {
         const input = e.currentTarget;
-        const latency = input.valueAsNumber;
+        const milliseconds = input.valueAsNumber;
         if (!input.checkValidity()) { input.reportValidity(); input.value = String(value); return; }
-        if (latency !== value && await onChange(latency) === false) input.value = String(value);
+        if (milliseconds !== value && await onChange(milliseconds) === false) input.value = String(value);
       }} />
-    <small>ms</small>
-  </span>;
+    <small>ms</small>  </span>;
 }
 
 function UpdateSettings() {
@@ -314,7 +300,7 @@ function UpdateSettings() {
         : <button type="button" className="settingsPill" disabled={!updatesSupported || update.status === "checking" || update.status === "installing"}
           onClick={() => void checkForUpdate()}>Check for updates</button>}
     </SettingRow>
-    <SettingRow label="Check automatically" hint="Never installs without asking">
+    <SettingRow label="Check automatically" help="Ambra only looks for updates; it never installs one without asking.">
       <Toggle label="Check for updates automatically" checked={automatic} disabled={!updatesSupported}
         onChange={next => { setAutomatic(next); setAutomaticUpdateChecks(next); }} />
     </SettingRow>
@@ -356,10 +342,10 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
     void load();
     return made;
   };
-  return <div className="settingsGroup settingsRemoteOutputs">
-    <h2>On {endpoint.name}</h2>
-    {error && <p className="settingsError" role="alert">{error}</p>}
-    {outputs === null && !error && <p className="settingsMuted" role="status">Loading outputs…</p>}
+  return <div className="settingsGroup">
+    <h2>{endpoint.name}</h2>
+    {error && <p className="settingsError settingsGroupNote" role="alert">{error}</p>}
+    {outputs === null && !error && <p className="settingsMuted settingsGroupNote" role="status">Loading outputs…</p>}
     {outputs !== null && <div className="settingsOutputs">
       {enabledOutputsFirst(outputs).filter(output => connected.has(output.id)).map(output => <OutputCard key={output.id}
         output={output} presets={presets} on={endpoint.name} playing={playingOn(endpoint.id, output.id)} canPlay

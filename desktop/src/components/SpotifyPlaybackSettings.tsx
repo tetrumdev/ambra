@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { spotifyPlaybackStatus, type SoloistStatus } from "../api/spotifyPlayback";
+import { Help } from "./settings/SettingsControls";
 
 export function SpotifyPlaybackSettings({ active, connected }: { active: boolean; connected: boolean }) {
   const [status, setStatus] = useState<SoloistStatus | null>(null);
@@ -12,8 +13,7 @@ export function SpotifyPlaybackSettings({ active, connected }: { active: boolean
     return () => { disposed = true; clearInterval(timer); };
   }, [active, connected]);
   return <section className="settingsGroup" aria-label="Spotify playback">
-    <h2>Spotify playback</h2>
+    <h2>Spotify playback<Help topic="Spotify playback">Manage playback, Soloist installation and pairing with <code>ambra-server spotify</code> on the server.</Help></h2>
     {connected && status && <p role="status">Preferred: {status.preferredQuality ?? status.requestedQuality}. Current renderer: {status.effectiveRenderer ?? "idle"}. {status.state.replace(/_/g, " ")}.</p>}
-    <p className="settingsMuted">Manage playback, Soloist installation, and pairing with <code>ambra-server spotify</code> on the server.</p>
   </section>;
 }

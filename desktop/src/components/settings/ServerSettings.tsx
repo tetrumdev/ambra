@@ -4,7 +4,7 @@ import { connectToServer, getServerConnection, subscribeServerConnection, type C
 import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
-import { SettingRow, Toggle } from "./SettingsControls";
+import { Help, SettingRow, Toggle } from "./SettingsControls";
 import {
   MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore,
   type CoreSession,
@@ -108,14 +108,14 @@ function FindServers({ onConnected }: { onConnected: () => void }) {
       <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Connect</button>
     </SettingRow>)}
     {!servers.length && !searching && <p className="settingsMuted">No Ambra servers answered on this network.</p>}
-    <SettingRow label="Server address or pairing link" hint="Enter an IP address, hostname, or ambra://pair/ link from the server QR code.">
+    <SettingRow label="Server address or pairing link" help="An IP address, a hostname, or the ambra://pair/ link from the server's QR code.">
       <span className="settingsFieldRow">
         <input className="serverAddressInput" aria-label="Server address or pairing link" placeholder="ambra://pair/… or music.local" value={address}
           onChange={event => setAddress(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter") join(); }} />
         <button type="button" className="settingsPill" disabled={!address.trim()} onClick={join}>Connect</button>
       </span>
     </SettingRow>
-    <SettingRow label="Import pairing link" hint="Import a text file containing the server-generated pairing link.">
+    <SettingRow label="Import pairing link" help="A text file holding the pairing link the server made.">
       <input aria-label="Import pairing link" type="file" accept="text/plain,.txt" onChange={event => {
         const file = event.currentTarget.files?.[0];
         if (file) void file.text().then(text => {
@@ -132,8 +132,7 @@ function FindServers({ onConnected }: { onConnected: () => void }) {
 /** Optional connection screen. Local playback remains mounted behind this settings panel. */
 export function ServerSetup({ onBack }: { onBack: () => void }) {
   return <div className="serverSetup">
-    <h2>Connect to Ambra Server</h2>
-    <p className="settingsMuted">Connect to an independently running server for streaming, shared libraries, and shared playback. Local music works without one.</p>
+    <h2>Connect to Ambra Server<Help topic="Ambra Server">A server, running on its own, brings streaming services, a shared library and shared playback. Local music works without one.</Help></h2>
     <FindServers onConnected={onBack} />
     <button type="button" className="settingsLink" onClick={onBack}>Back to local player settings</button>
   </div>;
@@ -195,8 +194,7 @@ function PlaybackSessions() {
     });
   };
   return <>
-    <h2>Sessions</h2>
-    <p className="settingsMuted">Each session has its own queue and plays on its own output. This device controls the one it follows.</p>
+    <h2>Sessions<Help topic="Sessions">Each session has its own queue and plays on its own outputs, so different rooms can play different music at once. This device controls the one it follows.</Help></h2>
     {sessions.map(session => <SettingRow key={session.id} label={session.name} hint={describeSession(session)}>
       <span className="serverJoinActions">
         {session.id === current
@@ -241,7 +239,8 @@ function ServerCommandInstall() {
   };
   return <>
     <SettingRow label="Run a server on this computer"
-      hint={command.installed ? `ambra-server is installed at ${command.path}.` : "Downloads the ambra-server command and adds it to your PATH."}>
+      hint={command.installed ? `Installed at ${command.path}` : undefined}
+      help="Downloads the ambra-server command for this computer and adds it to your PATH.">
       <button type="button" className="settingsPill" disabled={installing} onClick={() => void install()}>
         {installing ? "Downloading…" : command.installed ? "Update" : "Download"}
       </button>
@@ -289,7 +288,8 @@ export function ServerSettings({ active }: { active: boolean }) {
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <div className="settingsGroup">
-      <SettingRow label="Connection type" hint={`Current: ${connectionType}.${server ? " Changing type reconnects and turns off shared playback. Manual types do not fall back. Automatic chooses the best available connection." : " Connect to a server to test connection types."}`}>
+      <SettingRow label="Connection type" hint={`Current: ${connectionType}.`}
+        help="Automatic chooses the best available connection. A manual type never falls back to another. Changing the type reconnects and turns off shared playback.">
         <select aria-label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} disabled={!server || changing || !isTauri()}
           onChange={event => void change("set_connection_method", { method: event.currentTarget.value || null })}>
           <option value="">Automatic</option>
@@ -301,7 +301,7 @@ export function ServerSettings({ active }: { active: boolean }) {
           <span className="settingsChip" data-state={connected ? "connected" : "away"}>{connected ? "Connected" : "Disconnected"}</span>
         </SettingRow>
         {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
-        <SettingRow label="Shared playback session" hint="Control the server queue and share this device’s output. Turn off to play your private local queue.">
+        <SettingRow label="Shared playback session" help="Controls the server's queue and shares this device's outputs with it. Turn it off to play your own local queue.">
           <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
         </SettingRow>
         {sharedPlayback && connected && <PlaybackSessions />}
