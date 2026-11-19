@@ -56,15 +56,19 @@ pub async fn connect_with(
 ) -> Result<(tokio::io::DuplexStream, transport::Pump)> {
     let operation = async {
         let started = std::time::Instant::now();
-        let signaling = Signaling::open(identity.clone(), &relays).await?;
-        let mut events = signaling.notifications();
-        signaling.subscribe().await?;
-        let binding = signaling.discover(server).await?;
-        tracing::info!(
-            elapsed_ms = started.elapsed().as_millis(),
-            "Verified Nostr signaling ready"
-        );
-        let endpoint = Endpoint::gather(config).await?;
+        let signaling_setup = async {
+            let signaling = Signaling::open(identity.clone(), &relays).await?;
+            let events = signaling.notifications();
+            signaling.subscribe().await?;
+            let binding = signaling.discover(server).await?;
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "Verified Nostr signaling ready"
+            );
+            Ok::<_, crate::Error>((signaling, events, binding))
+        };
+        let ((signaling, mut events, binding), endpoint) =
+            tokio::try_join!(signaling_setup, Endpoint::gather(config))?;
         let session = nonce()?;
         let admit: crate::gate::Admit = Arc::new(move |key| *key == server);
         let mut replay = Replay::default();
@@ -117,9 +121,7 @@ pub async fn connect_with(
             elapsed_ms = started.elapsed().as_millis(),
             "Nostr coordinated native TCP peer authenticated; application data is direct"
         );
-        let _ = signaling
-            .send(&binding, &session, 0, Message::Connected {})
-            .await;
+        // Nomination already acknowledged the winner on the direct socket.
         signaling.shutdown().await;
         Ok((io, pump))
     };
