@@ -41,9 +41,11 @@ type TrackCollectionMenuProps = {
   flipY?: number;
   /** Songs a collection menu (no single song) adds to a playlist; null while they load. */
   tracks?: Track[] | null;
+  /** The trigger already says Add to Playlist, so open its picker directly. */
+  startWithPlaylistPicker?: boolean;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false }: TrackCollectionMenuProps) {
   const collection = tracks !== undefined;
   const connected = useServiceAvailability();
   const available = collection || isTrackAvailable(trackId, connected);
@@ -58,7 +60,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   if (trackId && isDownloadedOnServer(trackId) && serverOnline) {
     actions = [...actions, { label: "Remove from Server Downloads", icon: "/delete.svg", whenUnavailable: true, onSelect: () => void removeServerDownloads([trackId]) }];
   }
-  const [choosingPlaylist, setChoosingPlaylist] = useState(false);
+  const [choosingPlaylist, setChoosingPlaylist] = useState(startWithPlaylistPicker);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -109,7 +111,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     }}>
       <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top", width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
-          <button type="button" className="menuItem menuBack" onClick={() => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
+          <button type="button" className="menuItem menuBack" onClick={startWithPlaylistPicker ? onClose : () => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
           <div className="playlistMenuList">
             {playlistOptions.playlists.length === 0 && <p>No playlists yet. Create one below.</p>}
             {([undefined, "spotify", "qobuz", "tidal"] as const).map(provider => {

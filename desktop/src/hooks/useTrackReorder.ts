@@ -32,7 +32,7 @@ export function useTrackReorder(
     suppressClick.current = false;
     if (!latest.current.reorderTracks || event.button !== 0 || !event.isPrimary || event.pointerType === "touch") return;
     const target = event.target as HTMLElement;
-    if (target.closest("[data-collection-menu-trigger], button, input, select")) return;
+    if (target.closest("[data-collection-menu-trigger], button:not([data-playback-menu-trigger]), input, select")) return;
     const row = event.currentTarget;
     if (row.dataset.selecting) return;
     const container = row.parentElement;

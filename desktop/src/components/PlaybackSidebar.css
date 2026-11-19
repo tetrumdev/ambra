@@ -111,36 +111,9 @@
     opacity: 1;
 }
 
-.playbackSidebar button:focus-visible {
+.playbackSidebar :where(.playbackSidebarHeader, .playbackSidebarScroll, .playbackSidebarSelection) button:focus-visible {
     outline: 1px solid #b3b3b3 !important;
     outline-offset: -2px;
-}
-
-.playbackSidebar button.playbackSidebarIcon {
-    display: grid;
-    flex: none;
-    place-items: center;
-    width: 28px;
-    height: 30px;
-    padding: 0;
-    border: 0;
-    border-radius: 100px;
-    background: transparent;
-}
-
-.playbackSidebarIcon img {
-    width: 14px;
-    height: 14px;
-    object-fit: contain;
-    opacity: 0.6;
-}
-
-.playbackSidebar button.playbackSidebarIcon:hover {
-    background: #303030;
-}
-
-.playbackSidebarIcon:is(:hover, :focus-visible, [aria-expanded="true"]) img {
-    opacity: 1;
 }
 
 .playbackSidebarScroll {
@@ -185,141 +158,54 @@
     line-height: 1.5;
 }
 
-.playbackSidebarRow {
-    position: relative;
-    display: flex;
-    align-items: center;
-    box-sizing: border-box;
+.playbackSidebar .playbackSidebarRow {
+    --library-columns: 84px minmax(0, 1fr) 40px;
     height: 60px;
-    border-bottom: 1px solid #2f2f2f;
-}
-
-.playbackSidebarRow:hover,
-.playbackSidebarRow:focus-within {
-    background: #151515;
+    padding-left: 8px;
+    gap: 10px;
+    font: 300 0.9rem "Stack Sans Text", Inter, sans-serif;
 }
 
 .playbackSidebarRow[aria-current="true"] {
-    background: #1c1c1c;
+    background-color: #1c1c1c;
 }
 
-.playbackSidebarRow[data-dragging] {
-    opacity: 0.5;
-}
-
-.playbackSidebarRow[data-drop-position]::before {
-    position: absolute;
-    inset-inline: 0;
-    height: 2px;
-    border-radius: 2px;
-    background: white;
-    content: "";
-    pointer-events: none;
-}
-
-.playbackSidebarRow[data-drop-position="before"]::before {
-    top: 0;
-}
-
-.playbackSidebarRow[data-drop-position="after"]::before {
-    bottom: 0;
-}
-
-.playbackSidebar button.playbackSidebarTrack,
-.playbackSidebarTrack {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    min-width: 0;
-    height: 100%;
-    padding: 0 8px;
-    border: 0;
-    border-radius: inherit;
-    background: none;
-    color: inherit;
-    font: inherit;
-    text-align: left;
-}
-
-.playbackSidebarTrack:disabled {
-    opacity: var(--disabled-opacity);
-}
-
-.playbackSidebarArtwork {
-    position: relative;
-    flex: none;
+.playbackSidebarRow .coverImgContainer {
     width: 44px;
     height: 44px;
-    overflow: hidden;
-    border-radius: 7px;
-}
-
-.playbackSidebarArtwork > img:first-child {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-}
-
-.playbackSidebarPlay {
-    position: absolute;
-    inset: 0;
-    box-sizing: border-box;
-    width: 100%;
-    height: 100%;
-    padding: 14px;
-    background: rgb(0 0 0 / 58%);
-    opacity: 0;
-}
-
-.playbackSidebarTrack:not(:disabled):is(:hover, :focus-visible) .playbackSidebarPlay {
-    opacity: 1;
 }
 
 .playbackSidebarTrackText {
+    display: grid;
     min-width: 0;
-    font-size: 0.9rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 600;
     line-height: 1.35;
+    text-align: left;
 }
 
-.playbackSidebarTrackText > * {
-    display: block;
+.playbackSidebarTrackText small {
     overflow: hidden;
+    color: #a3a2a3;
+    font-size: 0.75rem;
+    font-weight: 400;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.playbackSidebarTrackText small {
-    color: #b3b3b3;
-    font-size: 0.75rem;
+.selectionActionMenu.playbackSidebarSelection {
+    position: static;
+    display: flex;
+    align-self: flex-end;
+    width: auto;
+    margin: 0 16px 6px 18px;
 }
 
-.playbackSidebarTrackText > span {
-    font-weight: 600;
-}
-
-.playbackSidebarGrip {
-    display: grid;
-    place-items: center;
-    flex: none;
-    width: 22px;
-    height: 36px;
-    color: #777;
-    cursor: grab;
-}
-
-.playbackSidebarGrip::before {
-    width: 7px;
-    height: 11px;
-    background: radial-gradient(circle closest-side, currentColor 65%, transparent 95%) 0 0 / 3.5px 3.67px;
-    content: "";
-}
-
-.playbackSidebarGrip:hover {
-    color: #ccc;
-}
-
-.playbackSidebarRow[data-dragging] .playbackSidebarGrip {
-    cursor: grabbing;
+.playbackSidebarSelection button {
+    width: auto;
+    white-space: nowrap;
 }

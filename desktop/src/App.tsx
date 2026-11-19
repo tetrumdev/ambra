@@ -256,15 +256,19 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     return playlistStore.create(name);
   }
 
+  // The queue can restore songs that aren't in the library, history, or loaded search results.
+  const findPlaylistTrack = (trackId: string) =>
+    availableTracks.find(track => track.globalId === trackId)
+      ?? queue.entries.find(({ track }) => track.globalId === trackId)?.track;
   const addTrackToPlaylist = useStableCallback(async (playlistId: string, trackId: string) => {
-    const track = availableTracks.find(track => track.globalId === trackId);
+    const track = findPlaylistTrack(trackId);
     if (!track || !isTrackAvailable(track)) return false;
     if (playlists.find(playlist => playlist.id === playlistId)?.provider)
       return servicePlaylistStore.addTrack(playlistId, track);
     return playlistStore.addTrack(playlistId, await resolveTrackPlayback(track, AbortSignal.timeout(8000)));
   });
   const createPlaylistWithTrack = useStableCallback(async (name: string, trackId: string) => {
-    const track = availableTracks.find(track => track.globalId === trackId);
+    const track = findPlaylistTrack(trackId);
     if (!track || !isTrackAvailable(track)) return false;
     return Boolean(playlistStore.create(name, await resolveTrackPlayback(track, AbortSignal.timeout(8000))));
   });
@@ -733,6 +737,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         onChangeView={setPlaybackSidebarView}
         onClose={closePlaybackSidebar}
         currentTrack={player.currentTrack}
+        isPlaying={player.isPlaying}
+        onTogglePlayback={player.togglePlayback}
         upcoming={queue.upcomingEntries}
         onJumpTo={jumpToQueueEntry}
         onRemove={deleteQueueEntries}
@@ -746,7 +752,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} globalOffsetMs={preferences.ui.lyricsOffsetMs} />}
         recent={listeningHistory.entries}
         recentError={listeningHistory.error}
-        onPlayRecent={track => onEntityAction("standalone", [track], track.globalId)}
+        onRecentAction={(action, track) => onEntityAction(action, [track], track.globalId)}
+        playlistOptions={playlistOptions}
+        savedTrackIds={libraryTrackIds}
+        addToLibrary={addEntityTrack}
       />}
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
