@@ -36,13 +36,14 @@ const BACKGROUND_DOWNLOADS: usize = 2;
 /// A body that delivers nothing for this long is treated as a dead connection.
 const STALL: Duration = Duration::from_secs(8);
 /// Seeking further than this past the downloaded part asks the server for that range directly.
-const FAR_SEEK: u64 = 4 * 1024 * 1024;
+const FAR_SEEK: u64 = 256 * 1024;
 const CHUNK: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Default)]
 struct Progress {
     /// Contiguous bytes on disk, from the start.
     downloaded: u64,
+    headers_ready: bool,
     total: Option<u64>,
     content_type: Option<HeaderValue>,
     done: bool,
@@ -56,6 +57,17 @@ struct Entry {
     /// Lets a download waiting for a background slot start at once when the player needs it.
     urgent: Arc<Notify>,
     task: Mutex<Option<JoinHandle<()>>>,
+}
+impl Entry {
+    fn stop(&self) {
+        self.progress.send_if_modified(|progress| {
+            if progress.done || progress.failed.is_some() {
+                return false;
+            }
+            progress.failed = Some((StatusCode::SERVICE_UNAVAILABLE, "Audio download stopped".into()));
+            true
+        });
+    }
 }
 impl Drop for Entry {
     fn drop(&mut self) {
@@ -180,22 +192,29 @@ impl MediaCache {
                     if let Some(task) = entry.task.lock().ok().and_then(|mut task| task.take()) {
                         task.abort();
                     }
+                    entry.stop();
                 }
             }
         }
-        drop(groups);
         let cache = self.clone();
         let download = entry.clone();
         let path = path.to_owned();
         let task = tokio::spawn(async move {
-            // Ahead-of-time work waits its turn; the player's own requests go first.
-            let _permit = tokio::select! {
-                permit = cache.background.clone().acquire_owned() => permit.ok(),
-                _ = download.urgent.notified() => None,
+            let operation = async {
+                // Ahead-of-time work waits its turn; the player's own requests go first.
+                let _permit = tokio::select! {
+                    biased;
+                    _ = download.urgent.notified() => None,
+                    permit = cache.background.clone().acquire_owned() => permit.ok(),
+                };
+                cache.download(&path, &download).await;
+                if matches!(kind, Kind::Playlist) && download.progress.borrow().done {
+                    cache.prefetch_segments(&path, &download.file).await;
+                }
             };
-            cache.download(&path, &download).await;
-            if matches!(kind, Kind::Playlist) && download.progress.borrow().done {
-                cache.prefetch_segments(&path, &download.file).await;
+            tokio::select! {
+                _ = cache.manager.cancel.cancelled() => download.stop(),
+                () = operation => {},
             }
         });
         if let Ok(mut slot) = entry.task.lock() {
@@ -245,24 +264,13 @@ impl MediaCache {
                 Ok(response) => {
                     let status = response.status();
                     let headers = response.headers().clone();
-                    let mut restart = false;
-                    match status {
-                        StatusCode::OK => {
-                            restart = from > 0;
-                            let total = content_length(&headers);
-                            entry.progress.send_modify(|progress| progress.total = total);
-                        }
+                    let total = match status {
+                        StatusCode::OK => content_length(&headers),
                         StatusCode::PARTIAL_CONTENT => match content_range(&headers) {
-                            Some((start, total)) if start == from => entry.progress.send_modify(|progress| {
-                                if total.is_some() { progress.total = total; }
-                            }),
+                            Some((start, total)) if start == from => total,
                             _ => {
-                                // The server sent a different range than asked; start over cleanly.
-                                entry.progress.send_modify(|progress| progress.downloaded = 0);
-                                let _ = file.set_len(0).await;
-                                let _ = file.seek(SeekFrom::Start(0)).await;
-                                tokio::time::sleep(backoff).await;
-                                continue;
+                                entry.progress.send_modify(|progress| progress.failed = Some((StatusCode::BAD_GATEWAY, "Server returned the wrong audio range".into())));
+                                return;
                             }
                         },
                         StatusCode::RANGE_NOT_SATISFIABLE if entry.progress.borrow().total == Some(from) => {
@@ -280,20 +288,37 @@ impl MediaCache {
                             backoff = (backoff * 2).min(Duration::from_secs(3));
                             continue;
                         }
+                    };
+                    if total.is_some_and(|total| {
+                        total < from || entry.progress.borrow().total.is_some_and(|known| known != total)
+                    }) {
+                        entry.progress.send_modify(|progress| progress.failed = Some((StatusCode::BAD_GATEWAY, "Audio length changed during download".into())));
+                        return;
                     }
-                    if restart {
-                        entry.progress.send_modify(|progress| progress.downloaded = 0);
-                        let _ = file.set_len(0).await;
-                        let _ = file.seek(SeekFrom::Start(0)).await;
-                    }
-                    if let Some(content_type) = headers.get(header::CONTENT_TYPE) {
-                        entry.progress.send_modify(|progress| progress.content_type = Some(content_type.clone()));
-                    }
+                    entry.progress.send_modify(|progress| {
+                        if total.is_some() {
+                            progress.total = total;
+                        }
+                        if !progress.headers_ready {
+                            progress.content_type = headers.get(header::CONTENT_TYPE).cloned();
+                        }
+                        progress.headers_ready = true;
+                    });
+                    // If the origin ignored Range, preserve bytes already visible to readers.
+                    let mut skip = if status == StatusCode::OK { from } else { 0 };
                     let mut body = response.into_body();
                     let finished = loop {
                         match tokio::time::timeout(STALL, body.frame()).await {
                             Ok(Some(Ok(frame))) => {
-                                let Ok(data) = frame.into_data() else { continue };
+                                let Ok(mut data) = frame.into_data() else { continue };
+                                if skip > 0 {
+                                    let skipped = skip.min(data.len() as u64) as usize;
+                                    skip -= skipped as u64;
+                                    data = data.slice(skipped..);
+                                }
+                                if data.is_empty() {
+                                    continue;
+                                }
                                 if file.write_all(&data).await.is_err() || file.flush().await.is_err() {
                                     entry.progress.send_modify(|progress| progress.failed = Some((StatusCode::INSUFFICIENT_STORAGE, "This device ran out of space for audio".into())));
                                     return;
@@ -308,7 +333,7 @@ impl MediaCache {
                     let progress = entry.progress.borrow().clone();
                     let complete = match progress.total {
                         Some(total) => progress.downloaded >= total,
-                        None => finished,
+                        None => finished && skip == 0,
                     };
                     if complete {
                         let _ = file.flush().await;
@@ -323,6 +348,7 @@ impl MediaCache {
             }
             if entry.progress.borrow().downloaded > before {
                 backoff = Duration::from_millis(250);
+                continue;
             }
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(Duration::from_secs(3));
@@ -336,7 +362,7 @@ impl MediaCache {
         };
         let mut progress = entry.progress.subscribe();
         let snapshot = match progress
-            .wait_for(|progress| progress.total.is_some() || progress.done || progress.failed.is_some())
+            .wait_for(|progress| progress.headers_ready || progress.failed.is_some())
             .await
         {
             Ok(snapshot) => snapshot.clone(),
@@ -345,8 +371,18 @@ impl MediaCache {
         if let Some((status, message)) = snapshot.failed.filter(|_| snapshot.downloaded == 0 && !snapshot.done) {
             return (status, message).into_response();
         }
-        let total = snapshot.total.unwrap_or(snapshot.downloaded);
-        let range = headers.get(header::RANGE).and_then(|value| value.to_str().ok()).map(|value| parse_range(value, total));
+        let requested_range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
+        let Some(total) = snapshot.total else {
+            if requested_range.is_some() || *method == Method::HEAD {
+                return self.passthrough(path, method, headers).await;
+            }
+            let mut response = Response::new(Body::from_stream(read_while_downloading(entry, 0, None)));
+            if let Some(content_type) = snapshot.content_type {
+                response.headers_mut().insert(header::CONTENT_TYPE, content_type);
+            }
+            return response;
+        };
+        let range = requested_range.map(|value| parse_range(value, total));
         let (start, end) = match range {
             Some(Some(range)) => range,
             Some(None) => {
@@ -360,7 +396,11 @@ impl MediaCache {
         };
         if !snapshot.done && start > snapshot.downloaded + FAR_SEEK {
             // A long jump ahead plays sooner straight from the server; the download carries on.
-            return self.passthrough(path, headers).await;
+            let response = self.passthrough(path, method, headers).await;
+            if response.status() != StatusCode::OK {
+                return response;
+            }
+            // An origin that ignores Range can still be served from the pending download.
         }
         let length = if total == 0 { 0 } else { end + 1 - start };
         let mut response = Response::builder()
@@ -376,13 +416,13 @@ impl MediaCache {
         let body = if *method == Method::HEAD || length == 0 {
             Body::empty()
         } else {
-            Body::from_stream(read_while_downloading(entry, start, start + length))
+            Body::from_stream(read_while_downloading(entry, start, Some(end + 1)))
         };
         response.body(body).unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
     }
 
-    async fn passthrough(&self, path: &str, headers: &HeaderMap) -> Response {
-        let mut request = Request::builder().method(Method::GET).uri(path);
+    async fn passthrough(&self, path: &str, method: &Method, headers: &HeaderMap) -> Response {
+        let mut request = Request::builder().method(method.clone()).uri(path);
         if let Some(range) = headers.get(header::RANGE) {
             request = request.header(header::RANGE, range);
         }
@@ -394,7 +434,8 @@ impl MediaCache {
     }
 }
 
-fn read_while_downloading(entry: Arc<Entry>, start: u64, end: u64) -> impl futures_util::Stream<Item = std::io::Result<Bytes>> + Send {
+fn read_while_downloading(entry: Arc<Entry>, start: u64, end: Option<u64>) -> impl futures_util::Stream<Item = std::io::Result<Bytes>> + Send {
+    let end = end.unwrap_or(u64::MAX);
     let progress = entry.progress.subscribe();
     futures_util::stream::unfold((entry, progress, None::<tokio::fs::File>, start), move |(entry, mut progress, file, position)| async move {
         if position >= end {
@@ -405,7 +446,7 @@ fn read_while_downloading(entry: Arc<Entry>, start: u64, end: u64) -> impl futur
             Ok(snapshot) if snapshot.downloaded > position => snapshot.downloaded,
             Ok(snapshot) if snapshot.failed.is_some() => {
                 let message = snapshot.failed.map(|(_, message)| message).unwrap_or_default();
-                return Some((Err(std::io::Error::other(message)), (entry, progress, None, end)));
+                return Some((Err(std::io::Error::other(message)), (entry, progress, None, u64::MAX)));
             }
             _ => return None,
         };
@@ -414,22 +455,22 @@ fn read_while_downloading(entry: Arc<Entry>, start: u64, end: u64) -> impl futur
             None => match tokio::fs::File::open(&entry.file).await {
                 Ok(mut file) => {
                     if let Err(error) = file.seek(SeekFrom::Start(position)).await {
-                        return Some((Err(error), (entry, progress, None, end)));
+                        return Some((Err(error), (entry, progress, None, u64::MAX)));
                     }
                     file
                 }
-                Err(error) => return Some((Err(error), (entry, progress, None, end))),
+                Err(error) => return Some((Err(error), (entry, progress, None, u64::MAX))),
             },
         };
         let wanted = (available.min(end) - position).min(CHUNK as u64) as usize;
         let mut buffer = vec![0; wanted];
         match file.read(&mut buffer).await {
-            Ok(0) => Some((Err(std::io::Error::other("Cached audio ended early")), (entry, progress, None, end))),
+            Ok(0) => Some((Err(std::io::Error::other("Cached audio ended early")), (entry, progress, None, u64::MAX))),
             Ok(read) => {
                 buffer.truncate(read);
                 Some((Ok(Bytes::from(buffer)), (entry, progress, Some(file), position + read as u64)))
             }
-            Err(error) => Some((Err(error), (entry, progress, None, end))),
+            Err(error) => Some((Err(error), (entry, progress, None, u64::MAX))),
         }
     })
 }

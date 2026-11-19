@@ -656,6 +656,15 @@ async fn shutdown_cancels_shared_authorization_and_all_waiters() {
 /// player, reading through the cache, still gets every byte in order.
 #[tokio::test]
 async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
+    cached_audio_recovers(true).await;
+}
+
+#[tokio::test]
+async fn cached_audio_preserves_prefix_when_origin_ignores_resume_range() {
+    cached_audio_recovers(false).await;
+}
+
+async fn cached_audio_recovers(supports_resume: bool) {
     const SIZE: usize = 3 * 1024 * 1024;
     let song: Arc<Vec<u8>> = Arc::new((0..SIZE).map(|i| (i % 251) as u8).collect());
     let identity = Identity::generate().unwrap();
@@ -674,7 +683,9 @@ async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
                 let range = request.headers().get(header::RANGE).map(|v| v.to_str().unwrap().to_owned());
                 let first = seen.lock().unwrap().is_empty();
                 seen.lock().unwrap().push(range.clone());
-                let start: usize = range.as_deref().and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.split('-').next()).and_then(|s| s.parse().ok()).unwrap_or(0);
+                let start: usize = if supports_resume {
+                    range.as_deref().and_then(|r| r.strip_prefix("bytes=")).and_then(|r| r.split('-').next()).and_then(|s| s.parse().ok()).unwrap_or(0)
+                } else { 0 };
                 let rest = song[start..].to_vec();
                 let length = rest.len();
                 let chunks: Vec<Result<Bytes, std::io::Error>> = rest.chunks(64 * 1024).enumerate().map(|(index, chunk)| {
@@ -697,15 +708,17 @@ async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
             }
         }));
     let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
-    let directory = std::env::temp_dir().join(format!("ambra-media-cache-test-{}", std::process::id()));
-    let bridge = ambra_net::bridge::Bridge::start_with_cache(manager(&identity, address), Some(directory.clone())).await.unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let bridge = ambra_net::bridge::Bridge::start_with_cache(manager(&identity, address), Some(directory.path().to_owned())).await.unwrap();
     let client = reqwest::Client::new();
     let url = format!("{}/api/providers/test/tracks/1/stream", bridge.base_url);
 
+    let started = std::time::Instant::now();
     let whole = client.get(&url).send().await.unwrap();
     assert_eq!(whole.status(), StatusCode::OK);
     assert_eq!(whole.headers()[header::CONTENT_TYPE], "audio/flac");
     assert_eq!(whole.bytes().await.unwrap().as_ref(), song.as_slice());
+    eprintln!("broken_response_complete_ms={:.1} supports_resume={supports_resume}", started.elapsed().as_secs_f64() * 1000.0);
     {
         let requests = requests.lock().unwrap();
         assert_eq!(requests.len(), 2, "one broken response, then one resumed range: {requests:?}");
@@ -724,7 +737,71 @@ async fn cached_audio_survives_a_broken_response_and_serves_ranges() {
     drop(bridge);
     cancel.cancel();
     task.await.unwrap().unwrap();
-    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[tokio::test]
+async fn cached_audio_starts_before_chunked_end_and_seeks_past_missing_bytes() {
+    const PATH: &str = "/api/music/local/files/fixture.flac";
+    const SEEK: u64 = 1024 * 1024;
+    const SIZE: u64 = 2 * SEEK;
+    let identity = Identity::generate().unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = Router::new()
+        .route("/api/network/session", get(|| async { "authorized" }))
+        .route(PATH, get(|request: Request| async move {
+            if request.headers().contains_key(header::RANGE) {
+                return (
+                    StatusCode::PARTIAL_CONTENT,
+                    [(header::CONTENT_RANGE, format!("bytes {SEEK}-{SEEK}/{SIZE}"))],
+                    "s",
+                ).into_response();
+            }
+            let chunked = request.uri().query() == Some("chunked");
+            let body = futures_util::stream::once(async { Ok::<_, std::io::Error>(Bytes::from_static(b"start")) })
+                .chain(futures_util::stream::once(async move {
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                    let tail = if chunked { Bytes::from_static(b"end") } else { Bytes::from(vec![0; SIZE as usize - 5]) };
+                    Ok(tail)
+                }));
+            let mut response = Body::from_stream(body).into_response();
+            if !chunked {
+                response.headers_mut().insert(header::CONTENT_LENGTH, SIZE.into());
+            }
+            response
+        }));
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn(lan::serve(listener, identity.clone(), app, ambra_net::gate::admit_all(), cancel.clone()));
+    let directory = tempfile::tempdir().unwrap();
+    let bridge = ambra_net::bridge::Bridge::start_with_cache(manager(&identity, address), Some(directory.path().to_owned())).await.unwrap();
+    let client = reqwest::Client::new();
+    let url = format!("{}{PATH}", bridge.base_url);
+
+    let started = std::time::Instant::now();
+    let mut response = client.get(format!("{url}?chunked")).send().await.unwrap();
+    let mut body = response.chunk().await.unwrap().unwrap().to_vec();
+    let first = started.elapsed();
+    while let Some(chunk) = response.chunk().await.unwrap() {
+        body.extend_from_slice(&chunk);
+    }
+    assert_eq!(body, b"startend");
+
+    // Start a length-delimited download, then seek 1 MiB past the first bytes.
+    let response = client.get(&url).send().await.unwrap();
+    assert_eq!(response.content_length(), Some(SIZE));
+    let started = std::time::Instant::now();
+    let response = client.get(&url).header(header::RANGE, format!("bytes={SEEK}-{SEEK}")).send().await.unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    let seek_byte = response.bytes().await.unwrap();
+    let seek = started.elapsed();
+    bridge.shutdown().await;
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+
+    eprintln!("chunked_first_ms={:.1} seek_first_ms={:.1}", first.as_secs_f64() * 1000.0, seek.as_secs_f64() * 1000.0);
+    assert!(first < Duration::from_secs(1), "chunked audio waited for EOF");
+    assert!(seek < Duration::from_secs(1), "seek waited for intervening audio");
+    assert_eq!(seek_byte.as_ref(), b"s");
 }
 
 #[tokio::test]
