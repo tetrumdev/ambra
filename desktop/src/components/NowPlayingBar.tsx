@@ -80,7 +80,8 @@ type NowPlayingBarProps = {
   onNext: () => void;
   onSeek: (time: number) => void;
   onOpenBigscreen?: () => void;
-  onOpenQueue?: () => void;
+  onToggleQueue?: () => void;
+  queueSidebarOpen?: boolean;
   /** 1 when the player moved forward, -1 when it went back; the next song slides in from that side. */
   direction?: () => number;
 };
@@ -104,7 +105,8 @@ export function NowPlayingBar({
   onTogglePlayback,
   onNext,
   onSeek,
-  onOpenQueue,
+  onToggleQueue,
+  queueSidebarOpen,
   direction,
 }: NowPlayingBarProps) {
   const isEmpty = track === undefined;
@@ -179,7 +181,7 @@ export function NowPlayingBar({
         </div>
       </div>
       <div id="extraCtrlsCluster">
-        <ExtraCtrls onOpenQueue={onOpenQueue} />
+        <ExtraCtrls onToggleQueue={onToggleQueue} queueSidebarOpen={queueSidebarOpen} />
       </div>
     </div>
   );

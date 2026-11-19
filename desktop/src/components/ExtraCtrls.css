@@ -156,6 +156,12 @@
 
 #extraCtrls #queueBtn {
     align-self: flex-start;
+    border-radius: 8px;
+}
+
+#queueBtn[aria-expanded="true"],
+#queueBtn:focus-visible {
+    background: #303030;
 }
 
 #queueImg {

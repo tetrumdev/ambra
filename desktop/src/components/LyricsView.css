@@ -592,21 +592,21 @@ button.lyricLine:hover {
     }
 }
 
-#lyricsPage[data-reduced-motion="true"] .lyricsControls,
-#lyricsPage[data-reduced-motion="true"] .lyricsControls::before,
-#lyricsPage[data-reduced-motion="true"] .lyricsResume,
-#lyricsPage[data-reduced-motion="true"] .lyricsSyncTrigger,
-#lyricsPage[data-reduced-motion="true"] .lyricsNotice {
+.lyricsView[data-reduced-motion="true"] .lyricsControls,
+.lyricsView[data-reduced-motion="true"] .lyricsControls::before,
+.lyricsView[data-reduced-motion="true"] .lyricsResume,
+.lyricsView[data-reduced-motion="true"] .lyricsSyncTrigger,
+.lyricsView[data-reduced-motion="true"] .lyricsNotice {
     animation: none;
 }
-#lyricsPage[data-reduced-motion="true"] .lyricGroup {
+.lyricsView[data-reduced-motion="true"] .lyricGroup {
     transition: opacity 150ms ease;
     filter: none;
 }
-#lyricsPage[data-reduced-motion="true"] .lyricPauseGroup {
+.lyricsView[data-reduced-motion="true"] .lyricPauseGroup {
     transition: none;
 }
-#lyricsPage[data-reduced-motion="true"] .lyricLine {
+.lyricsView[data-reduced-motion="true"] .lyricLine {
     transition: color 150ms ease;
 }
 
@@ -650,13 +650,73 @@ button.lyricLine:hover {
     }
 }
 /* Whatever replaces the loading text (lyrics or a message) rises in the same way when it mounts. */
-#lyricsPage[data-loaded-late="true"] .lyricsViewport,
-#lyricsPage[data-loaded-late="true"] .lyricsMessage {
+.lyricsView[data-loaded-late="true"] .lyricsViewport,
+.lyricsView[data-loaded-late="true"] .lyricsMessage {
     animation: lyricsArrive var(--player-view-duration) var(--player-view-ease) both;
 }
-#lyricsPage[data-reduced-motion="true"] .lyricsViewport,
-#lyricsPage[data-reduced-motion="true"] .lyricsMessage {
+.lyricsView[data-reduced-motion="true"] .lyricsViewport,
+.lyricsView[data-reduced-motion="true"] .lyricsMessage {
     animation: none;
+}
+
+.lyricsView[data-compact] {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.lyricsView[data-compact] .lyricsStage {
+    flex: 1;
+    margin: 0;
+    padding: 0;
+}
+
+.lyricsView[data-compact] .lyricsStage::after {
+    height: 48px;
+}
+
+.lyricsView[data-compact] :is(.lyricsLines, .lyricsSyncNote) {
+    padding-inline: 16px;
+}
+
+.lyricsView[data-compact] .lyricGroup {
+    margin-bottom: 18px;
+}
+
+.lyricsView[data-compact] .lyricLine {
+    font-size: 22px;
+}
+
+.lyricsView[data-compact] .lyricRow-background .lyricLine {
+    font-size: 17px;
+}
+
+.lyricsView[data-compact] .lyricRow-romanization .lyricLine {
+    font-size: 14px;
+}
+
+.lyricsView[data-compact] .lyricsControls {
+    display: flex;
+    bottom: 6px;
+}
+
+.lyricsView[data-compact] .lyricsSyncMenu {
+    display: flex;
+    position: static;
+}
+
+.lyricsView[data-compact] .lyricsNotice {
+    top: auto;
+    bottom: 52px;
+    width: max-content;
+    box-sizing: border-box;
+    max-width: calc(100% - 24px);
+    white-space: normal;
+    text-align: center;
+}
+
+.lyricsView[data-compact] .lyricsMessage {
+    font-size: 15px;
 }
 :root[data-reduce-motion] #lyricsPage[data-leaving="true"],
 :root[data-reduce-motion] #lyricsPage[data-leaving="true"] .lyricsStage {

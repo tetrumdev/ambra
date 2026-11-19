@@ -3,7 +3,7 @@ import type { QueueEntry, QueueHistoryEntry, QueueId, Track } from "../types/mus
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { useTrackReorder } from "../hooks/useTrackReorder";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
-import type { QueueEntryRef } from "../utils/queueNavigation";
+import { queueEntryKey, type QueueEntryRef } from "../utils/queueNavigation";
 import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { TrackArtwork } from "./TrackArtwork";
@@ -55,9 +55,8 @@ type RowAction = "select" | MenuKind | "play";
 type EntryAction = (action: RowAction, event: React.MouseEvent<HTMLElement>, entry: DisplayEntry) => void;
 
 function queueEntry(entry: QueueEntry, current = false): DisplayEntry {
-  // Queue IDs are positions, so include the source identity to invalidate old gestures after playback advances.
   return {
-    id: `queue:${entry.queueId}:${entry.track.globalId}:${entry.source.kind}:${entry.source.id}:${entry.source.entryId}`,
+    id: queueEntryKey(entry),
     track: entry.track,
     queueId: entry.queueId,
     current,

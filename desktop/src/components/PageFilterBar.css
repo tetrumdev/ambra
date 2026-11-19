@@ -2,7 +2,7 @@
    player in the corner so the two never read as one. */
 .pageFilter {
     position: fixed;
-    right: 30px;
+    right: calc(30px + var(--playback-sidebar-width, 0px));
     bottom: calc(var(--player-height) + 18px);
     z-index: 12;
     display: flex;

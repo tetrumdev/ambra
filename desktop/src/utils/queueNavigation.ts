@@ -1,9 +1,15 @@
 import type {
+  QueueEntry,
   QueueHistoryEntry,
   QueueId,
   QueueItem,
   Track,
 } from "../types/music";
+
+/** Queue IDs are positions. Include the source identity so a play or edit invalidates stale rows. */
+export function queueEntryKey(entry: QueueEntry) {
+  return `queue:${entry.queueId}:${entry.track.globalId}:${entry.source.kind}:${entry.source.id}:${entry.source.entryId}`;
+}
 
 export type QueueState = {
   history: QueueHistoryEntry[];

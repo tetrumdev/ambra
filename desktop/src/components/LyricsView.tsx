@@ -47,6 +47,7 @@ type LyricsViewProps = {
   track: Track | undefined;
   clock: PlaybackClock;
   playing: boolean;
+  compact?: boolean;
   onSeek?: (seconds: number) => void;
   motion?: LyricMotion;
   autoSync?: boolean;
@@ -1134,6 +1135,7 @@ export function LyricsView({
   track,
   clock,
   playing,
+  compact = false,
   onSeek,
   motion = "system",
   autoSync = false,
@@ -1322,10 +1324,13 @@ export function LyricsView({
   // Lyrics that had to load rise in over the loading text, as cached ones arrive with the page.
   const loadedLate = useRef(false);
   if (track && !error && !lyrics) loadedLate.current = true;
+  const Container = compact ? "div" : "main";
   return (
-    <main
-      id="lyricsPage"
-      aria-label="Lyrics"
+    <Container
+      id={compact ? undefined : "lyricsPage"}
+      className="lyricsView"
+      data-compact={compact || undefined}
+      aria-label={compact ? undefined : "Lyrics"}
       aria-hidden={!shown}
       data-shown={shown}
       data-resting={resting}
@@ -1398,6 +1403,6 @@ export function LyricsView({
           </div>
         )}
       </section>
-    </main>
+    </Container>
   );
 }
