@@ -4,7 +4,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
 import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdateChecks, updatesSupported, useAppUpdate } from "../hooks/useAppUpdate";
-import { enabledOutputsFirst, MAX_OUTPUT_LATENCY_MS, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
+import { enabledOutputsFirst, MAX_OUTPUT_LATENCY_MS, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type DspPreset, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
 import { ANIMATION_FPS_OPTIONS } from "../utils/frameRate";
 import { MAX_LYRICS_OFFSET_MS, type AppPreferences } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
@@ -162,7 +162,7 @@ export function SettingsView({
       </header>
       {!audio.native && <p className="settingsMuted">Choosing devices needs the desktop app.</p>}
       {audio.loading ? <p className="settingsMuted" role="status">Loading outputs…</p> : <div className="settingsOutputs">
-        {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <OutputCard key={output.id} output={output}
+        {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <LocalOutputCard key={output.id} output={output}
           onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
       </div>}
       <RemoteOutputs active={tab === "outputs"} />
@@ -190,66 +190,90 @@ export function SettingsView({
   </div>;
 }
 
-function OutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPreset: (presetId: string) => void }) {
-  const audio = useAudioSettings()!;
-  const { core, playingOn } = usePlayingOn();
-  const selected = core && serverConnection ? playingOn(serverConnection.clientId, output.id) : audio.settings.selectedOutputId === output.id;
-  const update = (change: Partial<OutputSettings>) =>
-    audio.update(current => ({ ...current, outputs: current.outputs.map(item => item.id === output.id ? { ...item, ...change } : item) }));
-  return <article className="settingsOutput" data-selected={selected || undefined}>
+/**
+ * One output's settings, the same for an output on this computer and one on another (`on`):
+ * its name, whether it shows in the player, DSP, mode, resync delay and sync latency.
+ */
+function OutputCard({ output, presets, on, playing, busy = false, canPlay, onPlayHere, update, onEditPreset }: {
+  output: OutputSettings;
+  presets: DspPreset[];
+  /** The computer the output is on, when it isn't this one. */
+  on?: string;
+  playing: boolean;
+  busy?: boolean;
+  canPlay: boolean;
+  onPlayHere: () => void;
+  /** Resolves to false when the change wasn't made. */
+  update: (change: Partial<OutputSettings>) => Promise<unknown>;
+  onEditPreset?: (presetId: string) => void;
+}) {
+  const where = on ? ` on ${on}` : "";
+  return <article className="settingsOutput" data-selected={playing || undefined}>
     <div className="settingsOutputHeader">
-      <input className="settingsOutputName" aria-label={`Name for ${output.name}`} key={output.name} defaultValue={output.name} maxLength={200}
-        disabled={audio.saving} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+      <input className="settingsOutputName" aria-label={`Name for ${output.name}${where}`} key={output.name} defaultValue={output.name} maxLength={200}
+        disabled={busy} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
         onBlur={e => { const name = e.currentTarget.value.trim(); if (name && name !== output.name) void update({ name }); else e.currentTarget.value = output.name; }} />
-      {selected && <span className="settingsChip settingsChipActive">Playing here</span>}
+      {playing && <span className="settingsChip settingsChipActive">Playing here</span>}
       {output.id === "" && <span className="settingsChip">Follows system</span>}
       <span className="settingsOutputSpacer" />
-      {!selected && <button type="button" className="settingsPill" disabled={!audio.native || audio.saving || !output.enabled}
-        onClick={() => {
-          if (core && serverConnection) {
-            void coreCommand("output", { output: { endpointId: serverConnection.clientId, deviceId: output.id, endpointName: serverConnection.clientName, deviceName: output.name } });
-          } else void audio.update(current => ({ ...current, selectedOutputId: output.id }));
-        }}>Play here</button>}
+      {!playing && <button type="button" className="settingsPill" disabled={!canPlay || busy || !output.enabled} onClick={onPlayHere}>Play here</button>}
       <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
-      <Toggle label={`Show ${output.name} in player`} checked={output.enabled} disabled={audio.saving} onChange={enabled => void update({ enabled })} />
+      <Toggle label={`Show ${output.name}${where} in player`} checked={output.enabled} disabled={busy} onChange={enabled => void update({ enabled })} />
     </div>
     <div className="settingsOutputFields">
       <label className="settingsField"><span>DSP</span>
         <span className="settingsFieldRow">
-          <select aria-label={`DSP preset for ${output.name}`} value={output.presetId ?? ""} disabled={audio.saving}
+          <select aria-label={`DSP preset for ${output.name}${where}`} value={output.presetId ?? ""} disabled={busy}
             onChange={e => void update({ presetId: e.currentTarget.value || null })}>
             <option value="">None</option>
-            {audio.settings.presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}{preset.enabled ? "" : " (bypassed)"}</option>)}
+            {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}{preset.enabled ? "" : " (bypassed)"}</option>)}
           </select>
-          {output.presetId && <button type="button" className="settingsLink" onClick={() => onEditPreset(output.presetId!)}>Edit</button>}
+          {output.presetId && onEditPreset && <button type="button" className="settingsLink" onClick={() => onEditPreset(output.presetId!)}>Edit</button>}
         </span>
+        {on && <small className="settingsFieldHint">Presets stored on {on}</small>}
       </label>
       <div className="settingsField"><span>Mode</span>
-        <Segmented label={`Output mode for ${output.name}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={audio.saving}
+        <Segmented label={`Output mode for ${output.name}${where}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={busy}
           onChange={mode => void update({ exclusiveMode: mode === "exclusive" })}
           options={[{ value: "shared", label: "Shared" }, { value: "exclusive", label: "Exclusive" }]} />
       </div>
       <label className="settingsField"><span>Resync delay</span>
         <span className="settingsFieldRow settingsUnitInput">
-          <input type="number" aria-label={`Resync delay for ${output.name}`} min={0} max={10000} step={1} required
-            key={`${output.id}:${output.resyncDelayMs}`} defaultValue={output.resyncDelayMs} disabled={audio.saving}
+          <input type="number" aria-label={`Resync delay for ${output.name}${where}`} min={0} max={10000} step={1} required
+            key={`${output.id}:${output.resyncDelayMs}`} defaultValue={output.resyncDelayMs} disabled={busy}
+            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
             onBlur={async e => {
               const input = e.currentTarget;
               const delay = input.valueAsNumber;
               if (!input.checkValidity()) { input.reportValidity(); input.value = String(output.resyncDelayMs); return; }
-              if (delay !== output.resyncDelayMs && !await update({ resyncDelayMs: delay })) input.value = String(output.resyncDelayMs);
+              if (delay !== output.resyncDelayMs && await update({ resyncDelayMs: delay }) === false) input.value = String(output.resyncDelayMs);
             }} />
           <small>ms</small>
         </span>
         <small className="settingsFieldHint">Silence when the format changes</small>
       </label>
       <label className="settingsField"><span>Sync latency</span>
-        <LatencyInput label={`Sync latency for ${output.name}`} value={output.latencyMs} disabled={audio.saving}
+        <LatencyInput label={`Sync latency for ${output.name}${where}`} value={output.latencyMs ?? 0} disabled={busy}
           onChange={latencyMs => update({ latencyMs })} />
         <small className="settingsFieldHint">Device delay, like Bluetooth, for playing in step with other outputs</small>
       </label>
     </div>
   </article>;
+}
+
+/** An output on this computer. */
+function LocalOutputCard({ output, onEditPreset }: { output: OutputSettings; onEditPreset: (presetId: string) => void }) {
+  const audio = useAudioSettings()!;
+  const { core, playingOn } = usePlayingOn();
+  const playing = core && serverConnection ? playingOn(serverConnection.clientId, output.id) : audio.settings.selectedOutputId === output.id;
+  return <OutputCard output={output} presets={audio.settings.presets} playing={playing} busy={audio.saving} canPlay={audio.native}
+    update={change => audio.update(current => ({ ...current, outputs: current.outputs.map(item => item.id === output.id ? { ...item, ...change } : item) }))}
+    onPlayHere={() => {
+      if (core && serverConnection) {
+        void coreCommand("output", { output: { endpointId: serverConnection.clientId, deviceId: output.id, endpointName: serverConnection.clientName, deviceName: output.name } });
+      } else void audio.update(current => ({ ...current, selectedOutputId: output.id }));
+    }}
+    onEditPreset={onEditPreset} />;
 }
 
 /** Milliseconds the device itself delays sound, which synced playback makes up for. */
@@ -323,46 +347,27 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
     }).catch(reason => { if (!disposed) setError(String(reason)); });
     return () => { disposed = true; };
   }, [endpoint]);
-  const change = async (output: OutputSettings, settings: Partial<OutputSettings>) => {
+  // Made on that computer, which keeps its own outputs' settings; false when it refused.
+  const changeOutput = async (output: OutputSettings, settings: Partial<OutputSettings>) => {
     setOutputs(current => current?.map(item => item.id === output.id ? { ...item, ...settings } : item) ?? null);
-    try { await invokeOn(on, "set_output_settings", { outputId: output.id, change: settings }); }
-    catch (reason) { setError(String(reason)); }
+    let made = true;
+    try { await invokeOn(on, "set_output_settings", { outputId: output.id, change: settings }); setError(null); }
+    catch (reason) { setError(String(reason)); made = false; }
     void load();
+    return made;
   };
   return <div className="settingsGroup settingsRemoteOutputs">
     <h2>On {endpoint.name}</h2>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {outputs === null && !error && <p className="settingsMuted" role="status">Loading outputs…</p>}
-    {enabledOutputsFirst(outputs ?? []).filter(output => connected.has(output.id)).map(output => {
-      const playing = playingOn(endpoint.id, output.id);
-      return <article key={output.id} className="settingsOutput" data-selected={playing || undefined}>
-        <div className="settingsOutputHeader">
-          <strong className="settingsRemoteOutputName">{output.name}</strong>
-          {playing && <span className="settingsChip settingsChipActive">Playing here</span>}
-          <span className="settingsOutputSpacer" />
-          {!playing && <button type="button" className="settingsPill" disabled={!output.enabled} onClick={() => {
-            setError(null);
-            void coreCommand("output", { output: { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: output.id, deviceName: output.name } })
-              .catch(reason => setError(String(reason)));
-          }}>Play here</button>}
-          <span className="settingsShowInPlayer" aria-hidden="true">In player</span>
-          <Toggle label={`Show ${output.name} on ${endpoint.name} in player`} checked={output.enabled} onChange={enabled => void change(output, { enabled })} />
-        </div>
-        <SettingRow label="DSP preset" hint={`Presets stored on ${endpoint.name}`}>
-          <select aria-label={`DSP preset for ${output.name} on ${endpoint.name}`} value={output.presetId ?? ""}
-            onChange={event => void change(output, { presetId: event.currentTarget.value || null })}>
-            <option value="">None</option>
-            {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}</option>)}
-          </select>
-        </SettingRow>
-        <SettingRow label="Exclusive mode" hint="Bit-perfect, with no other sounds">
-          <Toggle label={`Exclusive mode for ${output.name} on ${endpoint.name}`} checked={output.exclusiveMode} onChange={exclusiveMode => void change(output, { exclusiveMode })} />
-        </SettingRow>
-        <SettingRow label="Sync latency" hint="Device delay, like Bluetooth, for playing in step with other outputs">
-          <LatencyInput label={`Sync latency for ${output.name} on ${endpoint.name}`} value={output.latencyMs ?? 0}
-            onChange={latencyMs => change(output, { latencyMs })} />
-        </SettingRow>
-      </article>;
-    })}
-  </div>;
+    {outputs !== null && <div className="settingsOutputs">
+      {enabledOutputsFirst(outputs).filter(output => connected.has(output.id)).map(output => <OutputCard key={output.id}
+        output={output} presets={presets} on={endpoint.name} playing={playingOn(endpoint.id, output.id)} canPlay
+        update={change => changeOutput(output, change)}
+        onPlayHere={() => {
+          setError(null);
+          void coreCommand("output", { output: { endpointId: endpoint.id, endpointName: endpoint.name, deviceId: output.id, deviceName: output.name } })
+            .catch(reason => setError(String(reason)));
+        }} />)}
+    </div>}  </div>;
 }

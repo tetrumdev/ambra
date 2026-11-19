@@ -565,7 +565,7 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         "native_audio_settings" => native_audio::native_audio_settings(player)
             .await
             .and_then(|settings| serde_json::to_value(settings).map_err(|error| error.to_string())),
-        // One output's own settings: its preset, exclusive mode, resync delay, latency and whether it's shown.
+        // One output's own settings: its name, preset, exclusive mode, resync delay, latency and whether it's shown.
         "set_output_settings" => {
             let output_id = args["outputId"].as_str().ok_or("`outputId` is missing")?.to_owned();
             let change = &args["change"];
@@ -575,6 +575,13 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
                 .iter_mut()
                 .find(|output| output.id == output_id)
                 .ok_or("That output isn't on this computer")?;
+            if let Some(name) = change["name"].as_str() {
+                let name = name.trim();
+                if name.is_empty() || name.chars().count() > 200 {
+                    return Err("An output's name is 1 to 200 characters".into());
+                }
+                output.name = name.to_owned();
+            }
             if let Some(preset) = change.get("presetId") {
                 output.preset_id = preset.as_str().map(str::to_owned);
             }
