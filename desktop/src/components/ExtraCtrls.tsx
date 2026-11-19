@@ -422,10 +422,13 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
           aria-haspopup={hasNativeAudio ? "dialog" : undefined}
           aria-expanded={hasNativeAudio ? audioMenuOpen : undefined}
           onClick={() => {
-            if (hasNativeAudio) {
-              if (!audioMenuOpen) void audio?.refresh();
-              setAudioMenuOpen((open) => !open);
+            if (!hasNativeAudio) return;
+            if (audioMenuOpen) {
+              closeAudioMenu();
+              return;
             }
+            void audio?.refresh();
+            setAudioMenuOpen(true);
           }}
         >
           {/* Every level stays loaded, so changing level never waits on an image and blinks out. */}
