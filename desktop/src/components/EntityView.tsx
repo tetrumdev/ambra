@@ -53,7 +53,7 @@ export type EntityViewProps = {
   playlistOptions: PlaylistMenuOptions;
   registerScrollElement: (element: HTMLDivElement | null) => void;
 };
-// Memoized: App rerenders on every playback tick, which must not rebuild this page.
+// Skip rebuilding the catalog page on unrelated app updates.
 export const EntityView = memo(function EntityView(props: EntityViewProps) {
   return props.entity.kind === "artist" ? (
     <ArtistView {...props} artist={props.entity.artist} />

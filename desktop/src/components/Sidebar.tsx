@@ -21,7 +21,6 @@ type SidebarProps = {
   isHomeActive: boolean;
   onOpenSettings: () => void;
   isSettingsActive: boolean;
-  onOpenLibrary: () => void;
   activeLibrarySection: LibrarySection | null;
   activePlaylistId: string | null;
   onOpenLibrarySection: (section: LibrarySection) => void;
@@ -42,7 +41,6 @@ export function Sidebar({
   isHomeActive,
   onOpenSettings,
   isSettingsActive,
-  onOpenLibrary,
   activeLibrarySection,
   activePlaylistId,
   onOpenLibrarySection,
@@ -157,7 +155,7 @@ export function Sidebar({
           </button>}
           {matches("My Library") && <button
             type="button"
-            onClick={onOpenLibrary}
+            onClick={() => onOpenLibrarySection("overview")}
             className="sidebarBtn sidebarLibraryButton"
             aria-current={
               activeLibrarySection === "overview" ? "page" : undefined
