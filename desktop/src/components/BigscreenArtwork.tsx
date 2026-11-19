@@ -12,7 +12,7 @@ import {
   settledBigscreenArtwork,
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
-import { coverShadowShare, swirlPalette } from "../utils/artworkPalette";
+import { RIM_ANGLES, coverShadowShares, rimMask, swirlPalette } from "../utils/artworkPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
@@ -74,16 +74,39 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
   // transition (which a resize would set off too), the switch itself animates from where the
   // cover was on screen, read while the old layout is still showing.
   const cover = useRef<HTMLDivElement>(null);
-  // A dark-rimmed cover gets a halo instead of a shadow; the palette request is shared with the swirl.
+  // Each stretch of rim gets a shadow if light, a halo if dark; the palette request is shared with the swirl.
+  const shadow = useRef<HTMLDivElement>(null);
+  const halo = useRef<HTMLDivElement>(null);
+  const shares = useRef(RIM_ANGLES.map(() => 1));
+  const paint = (values: number[]) => {
+    shares.current = values;
+    shadow.current?.style.setProperty("--rim-mask", rimMask(values));
+    halo.current?.style.setProperty("--rim-mask", rimMask(values.map(share => 1 - share)));
+  };
+  useLayoutEffect(() => paint(shares.current), []);
   useEffect(() => {
     if (!track) return;
     let cancelled = false;
+    let frame = 0;
     void artworkPalette(track).then((palette) => {
-      if (!cancelled && palette.colors.length === 4) {
-        cover.current?.style.setProperty("--cover-shadow", String(coverShadowShare(palette)));
-      }
+      if (cancelled || palette.colors.length !== 4) return;
+      const from = shares.current;
+      const to = coverShadowShares(palette);
+      if (reducedMotion()) return paint(to);
+      // Masks don't transition in CSS, so the shift between covers is eased here, in step with the cover's.
+      const start = performance.now();
+      const step = (now: number) => {
+        const progress = Math.min(1, (now - start) / 600);
+        const eased = progress * progress * (3 - 2 * progress);
+        paint(from.map((value, index) => value + (to[index] - value) * eased));
+        if (progress < 1) frame = requestAnimationFrame(step);
+      };
+      frame = requestAnimationFrame(step);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+    };
   }, [key]);
   const laidOutAs = useRef(layout);
   const before = useRef<DOMRect | null>(null);
@@ -158,6 +181,8 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
 
   return (
     <div id="albumCover" ref={cover} data-active={active} data-layout={layout} data-empty={!track} aria-hidden={!active}>
+      <div ref={shadow} className="coverGlow" data-tone="shadow" />
+      <div ref={halo} className="coverGlow" data-tone="halo" />
       {layers.map((layer) => (
         <img
           key={layer.id}

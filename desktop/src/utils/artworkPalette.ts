@@ -66,25 +66,49 @@ const SHADOW_RIM = 0.68;
 const HALO_LIFT = 0.15;
 
 /**
- * How much of the cover's separation the dark shadow carries, from 0 to 1; a soft light halo
- * carries the rest (BigscreenArtwork.css). A shadow only lifts a cover whose rim is brighter
- * than the darkened field around it; a dark rim sinks into it, and lighter surroundings show
- * that rim instead. Whichever leaves more contrast at the rim wins, with a short crossfade.
+ * Where each server boundary sample sits around the cover, in degrees clockwise from the top.
+ * The server walks eight zones, sampling the top, right, bottom and left rims in each.
  */
-export function coverShadowShare(palette: ArtworkPalette): number {
+const RIM_SAMPLES = Array.from({ length: 32 }, (_, index) => {
+  const along = (2 * Math.floor(index / 4) + 1) / 16 - 0.5;
+  const [x, y] = [[along, -0.5], [0.5, along], [along, 0.5], [-0.5, along]][index % 4];
+  return { index, angle: (Math.atan2(x, -y) * 180 / Math.PI + 360) % 360 };
+}).sort((a, b) => a.angle - b.angle);
+
+/** The rim's angles, in the order coverShadowShares returns its shares. */
+export const RIM_ANGLES = RIM_SAMPLES.map(sample => sample.angle);
+
+/**
+ * How much of the cover's separation the dark shadow carries at each point of its rim, from 0
+ * to 1, in RIM_ANGLES order; a soft light halo carries the rest (BigscreenArtwork.css). A shadow
+ * only lifts a stretch of rim brighter than the darkened field around it; a dark stretch sinks
+ * into it, and lighter surroundings show that stretch instead. Whichever leaves more contrast
+ * wins locally, crossfading where the rim changes so the two never meet at a hard line.
+ */
+export function coverShadowShares(palette: ArtworkPalette): number[] {
   const edges = palette.edgeColors;
-  if (!edges) return 1;
-  let rim = 0;
-  for (let index = 0; index < edges.length; index += 3) {
-    rim += luminance([edges[index], edges[index + 1], edges[index + 2]]);
-  }
-  rim /= edges.length / 3;
+  if (!edges) return RIM_ANGLES.map(() => 1);
   const total = palette.weights.reduce((sum, weight) => sum + weight, 0);
   const field = swirlPalette(palette).colors.reduce(
     (sum, color, index) => sum + luminance(parseColor(color)) * palette.weights[index], 0,
   ) / total * (SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE / 2);
-  const withShadow = rim - field * SHADOW_RIM;
-  const withHalo = field + (1 - field) * HALO_LIFT - rim;
-  const share = Math.min(1, Math.max(0, (withShadow - withHalo + 0.05) / 0.1));
-  return share * share * (3 - 2 * share);
+  const rim = RIM_SAMPLES.map(({ index }) => luminance([edges[3 * index], edges[3 * index + 1], edges[3 * index + 2]]));
+  // Each sample is a single pixel, so neighbours steady it against noise and stray detail.
+  return rim.map((_, at) => {
+    const local = (rim[(at + rim.length - 1) % rim.length] + 2 * rim[at] + rim[(at + 1) % rim.length]) / 4;
+    const withShadow = local - field * SHADOW_RIM;
+    const withHalo = field + (1 - field) * HALO_LIFT - local;
+    const share = Math.min(1, Math.max(0, (withShadow - withHalo + 0.05) / 0.1));
+    return share * share * (3 - 2 * share);
+  });
+}
+
+/** A mask showing a layer as strongly as `strength` asks at each rim angle, blended between them. */
+export function rimMask(strength: number[]) {
+  const first = RIM_ANGLES[0];
+  const last = RIM_ANGLES[RIM_ANGLES.length - 1];
+  const top = strength[strength.length - 1]
+    + (strength[0] - strength[strength.length - 1]) * (360 - last) / (360 - last + first);
+  const stops = [[0, top], ...RIM_ANGLES.map((angle, index) => [angle, strength[index]]), [360, top]];
+  return `conic-gradient(${stops.map(([angle, alpha]) => `rgba(0, 0, 0, ${alpha.toFixed(3)}) ${angle.toFixed(2)}deg`).join(", ")})`;
 }
