@@ -68,10 +68,6 @@ body,
     contain: layout;
 }
 
-.appViewport:has(> .playbackSidebar) {
-    --playback-sidebar-width: min(100%, clamp(280px, 27vw, 360px));
-}
-
 .stateStartup {
     height: 100%;
     display: flex;

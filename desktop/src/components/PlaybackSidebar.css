@@ -5,46 +5,114 @@
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    background: #141414;
-    border-left: 1px solid #2f2f2f;
+    background: var(--surface-black);
+    border-left: 1px solid #535353;
     text-align: left;
+}
+
+.playbackSidebarResize {
+    position: absolute;
+    inset: 0 auto 0 0;
+    z-index: 2;
+    width: 12px;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.playbackSidebarResize::before,
+.playbackSidebarResize::after {
+    position: absolute;
+    content: "";
+    pointer-events: none;
+}
+
+.playbackSidebarResize::before {
+    inset: 0 auto 0 -1px;
+    width: 2px;
+}
+
+.playbackSidebarResize::after {
+    left: 2px;
+    top: calc(50% - 16px);
+    width: 3px;
+    height: 32px;
+    border-radius: 100px;
+    background: #535353;
+}
+
+.playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::before,
+.playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::after {
+    background: #b3b3b3;
+}
+
+:root:has(.playbackSidebarResize[data-resizing]) * {
+    cursor: col-resize !important;
 }
 
 .playbackSidebarHeader {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 4px;
-    min-height: 60px;
-    padding: 0 10px 0 12px;
-    border-bottom: 1px solid #2f2f2f;
+    gap: 8px;
+    min-height: 64px;
+    padding: 0 16px 0 18px;
+}
+
+.playbackSidebarViews,
+.playbackSidebarClose {
+    box-sizing: border-box;
+    height: 38px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgb(22 22 22 / 40%);
 }
 
 .playbackSidebarViews {
     display: flex;
+    align-items: center;
     gap: 2px;
+    padding: 0 3px;
 }
 
-.playbackSidebarViews button,
-.playbackSidebar button.playbackSidebarTextButton {
-    padding: 0 8px;
+.playbackSidebarViews button {
+    padding: 0 10px;
     border: 0;
-    border-radius: 6px;
+    border-radius: 100px;
     background: transparent;
-    color: #aaa;
+    color: #b3b3b3;
     font: inherit;
-    font-size: 13px;
-    line-height: 32px;
+    font-size: 0.8125rem;
+    line-height: 30px;
     white-space: nowrap;
 }
 
 .playbackSidebarViews button[aria-pressed="true"] {
-    background: #303030;
+    background: rgb(255 255 255 / 12%);
     color: white;
 }
 
+.playbackSidebarViews button:hover {
+    color: white;
+}
+
+.playbackSidebarClose {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 38px;
+    padding: 0;
+}
+
+.playbackSidebarClose img {
+    opacity: 0.65;
+}
+
+.playbackSidebarClose:is(:hover, :focus-visible) img {
+    opacity: 1;
+}
+
 .playbackSidebar button:focus-visible {
-    outline: 1px solid #aaa !important;
+    outline: 1px solid #b3b3b3 !important;
     outline-offset: -2px;
 }
 
@@ -56,7 +124,7 @@
     height: 30px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 100px;
     background: transparent;
 }
 
@@ -67,9 +135,8 @@
     opacity: 0.6;
 }
 
-.playbackSidebar :is(.playbackSidebarIcon, .playbackSidebarTextButton, .playbackSidebarViews button):hover {
-    background: #262626;
-    color: white;
+.playbackSidebar button.playbackSidebarIcon:hover {
+    background: #303030;
 }
 
 .playbackSidebarIcon:is(:hover, :focus-visible, [aria-expanded="true"]) img {
@@ -81,29 +148,40 @@
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 8px 10px 16px;
+    padding: 6px 16px 20px 18px;
 }
 
 .playbackSidebarScroll section + section {
-    margin-top: 12px;
+    margin-top: 16px;
 }
 
-.playbackSidebarScroll h2 {
-    margin: 6px 0 4px 6px;
-    font-size: 14px;
-    font-weight: 600;
+.playbackSidebarScroll .queueSectionTitle {
+    padding: 0 8px;
+    border: 0;
+}
+
+.playbackSidebarScroll section > .queueSectionTitle,
+.playbackSidebarSectionHeader {
+    display: flex;
+    align-items: center;
+    min-height: 34px;
+    border-bottom: 1px solid #535353;
 }
 
 .playbackSidebarSectionHeader {
-    display: flex;
     justify-content: space-between;
-    align-items: center;
+}
+
+.playbackSidebar button.playbackSidebarTextButton {
+    padding: 0 8px;
+    font-size: 0.8rem;
+    line-height: 30px;
 }
 
 .playbackSidebarMessage {
-    margin: 8px 6px;
-    color: #aaa;
-    font-size: 13px;
+    margin: 12px 8px;
+    color: #b3b3b3;
+    font-size: 0.9rem;
     line-height: 1.5;
 }
 
@@ -111,13 +189,18 @@
     position: relative;
     display: flex;
     align-items: center;
-    height: 50px;
-    border-radius: 8px;
+    box-sizing: border-box;
+    height: 60px;
+    border-bottom: 1px solid #2f2f2f;
 }
 
 .playbackSidebarRow:hover,
 .playbackSidebarRow:focus-within {
-    background: #202020;
+    background: #151515;
+}
+
+.playbackSidebarRow[aria-current="true"] {
+    background: #1c1c1c;
 }
 
 .playbackSidebarRow[data-dragging] {
@@ -147,10 +230,10 @@
     flex: 1;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
     min-width: 0;
     height: 100%;
-    padding: 0 6px;
+    padding: 0 8px;
     border: 0;
     border-radius: inherit;
     background: none;
@@ -166,10 +249,10 @@
 .playbackSidebarArtwork {
     position: relative;
     flex: none;
-    width: 38px;
-    height: 38px;
+    width: 44px;
+    height: 44px;
     overflow: hidden;
-    border-radius: 5px;
+    border-radius: 7px;
 }
 
 .playbackSidebarArtwork > img:first-child {
@@ -185,7 +268,7 @@
     box-sizing: border-box;
     width: 100%;
     height: 100%;
-    padding: 12px;
+    padding: 14px;
     background: rgb(0 0 0 / 58%);
     opacity: 0;
 }
@@ -196,8 +279,8 @@
 
 .playbackSidebarTrackText {
     min-width: 0;
-    font-size: 13px;
-    line-height: 18px;
+    font-size: 0.9rem;
+    line-height: 1.35;
 }
 
 .playbackSidebarTrackText > * {
@@ -208,12 +291,12 @@
 }
 
 .playbackSidebarTrackText small {
-    color: #aaa;
-    font-size: 12px;
+    color: #b3b3b3;
+    font-size: 0.75rem;
 }
 
-.playbackSidebarRow[aria-current] .playbackSidebarTrackText > span {
-    font-weight: 650;
+.playbackSidebarTrackText > span {
+    font-weight: 600;
 }
 
 .playbackSidebarGrip {

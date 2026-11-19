@@ -183,6 +183,64 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
   }
 });
 
+test("the sidebar divider clamps drag and keyboard resizing and restores the chosen width", async () => {
+  const { default: App } = await import("../src/App");
+  const viewport = document.createElement("div");
+  viewport.className = "appViewport";
+  document.body.append(viewport);
+  const root = createRoot(viewport);
+  const previousWindowWidth = dom.innerWidth;
+  const setWindowWidth = (width: number) => act(async () => dom.happyDOM.setViewport({ width }));
+  const toggle = () => act(async () => viewport.querySelector<HTMLButtonElement>("#queueBtn")!.click());
+  const divider = () => viewport.querySelector<HTMLElement>('[role="separator"][aria-controls="playbackSidebar"]')!;
+  const width = () => viewport.style.getPropertyValue("--playback-sidebar-width");
+  const press = (key: string, shiftKey = false) => act(async () => {
+    divider().dispatchEvent(new dom.KeyboardEvent("keydown", { key, code: key, shiftKey, bubbles: true, cancelable: true }) as unknown as KeyboardEvent);
+  });
+  const pointer = (type: string, clientX: number) => {
+    divider().dispatchEvent(new dom.PointerEvent(type, {
+      clientX, bubbles: true, cancelable: true, isPrimary: true, pointerType: "mouse", pointerId: 1,
+    }) as unknown as PointerEvent);
+  };
+
+  try {
+    await setWindowWidth(1200);
+    await act(async () => root.render(<App localOnly />));
+    await toggle();
+    divider().focus();
+    await press("Home");
+    await press("ArrowRight");
+    expect(width()).toBe("320px");
+    await press("ArrowLeft", true);
+    expect(width()).toBe("360px");
+    expect(divider().getAttribute("aria-valuenow")).toBe("360");
+
+    await act(async () => {
+      pointer("pointerdown", 840);
+      pointer("pointermove", 1200);
+    });
+    expect(width()).toBe("320px");
+    await act(async () => pointer("pointermove", 550));
+    expect(width()).toBe("520px");
+    await act(async () => pointer("lostpointercapture", 550));
+    await act(async () => pointer("pointermove", 840));
+    expect(width()).toBe("520px");
+
+    await setWindowWidth(850);
+    expect(width()).toBe("350px");
+    expect(divider().getAttribute("aria-valuemax")).toBe("350");
+    await toggle();
+    expect(width()).toBe("");
+    await setWindowWidth(1200);
+    await toggle();
+    expect(width()).toBe("520px");
+  } finally {
+    await act(async () => root.unmount());
+    await setWindowWidth(previousWindowWidth);
+    viewport.remove();
+  }
+});
+
 test("page history restores scroll positions and clears the page filter across visits", async () => {
   const { default: App } = await import("../src/App");
   const { AudioSettingsProvider } = await import("../src/hooks/AudioSettingsContext");
