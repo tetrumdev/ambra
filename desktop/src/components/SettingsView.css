@@ -1,6 +1,17 @@
 /* Settings, in the library's language: the same sidebar, serif page titles, pill buttons and
    the player's glass. The toggle switch itself lives in App.css. */
 
+/* The library's own colours: its grey text, the search bar's and pills' borders, the menus'
+   hairlines and their highlight for what's chosen. */
+:root {
+    --settings-muted: #a3a2a3;
+    --settings-line: #2f2f2f;
+    --settings-control-border: #535353;
+    --settings-field: #151515;
+    --settings-card: #121212;
+    --settings-selected: #303030;
+}
+
 /* ---------- Sidebar: the library sidebar's place, width and type. ---------- */
 .settingsSidebar {
     grid-column: 1;
@@ -93,7 +104,7 @@
 .settingsMuted,
 .settingsView p.settingsMuted {
     margin: 0;
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.85rem;
     line-height: 1.5;
 }
@@ -110,9 +121,12 @@
     margin-bottom: 36px;
 }
 
+/* Small caps over a hairline, as the queue labels its sections. */
 .settingsGroup > h2 {
-    margin: 0 0 4px;
-    color: #8f8f8f;
+    margin: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--settings-line);
+    color: var(--settings-muted);
     font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.06em;
@@ -126,7 +140,16 @@
     gap: 24px;
     min-height: 56px;
     padding: 8px 0;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--settings-line);
+}
+
+.settingRow:last-child {
+    border-bottom: 0;
+}
+
+/* A loading or error line under a group's heading. */
+.settingsView p.settingsGroupNote {
+    margin-top: 12px;
 }
 
 .settingRowText {
@@ -145,7 +168,7 @@
 
 .settingRowHint {
     margin-top: 2px;
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.8rem;
     overflow-wrap: anywhere;
 }
@@ -157,6 +180,98 @@
     gap: 12px;
 }
 
+/* ---------- Help ---------- */
+/* A quiet question mark after a heading that needs explaining, shown while the heading is
+   hovered (or the mark has focus); it opens the explanation in the app's glass. */
+.settingsHelp {
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    margin-left: 8px;
+    padding: 0;
+    border: 1px solid var(--settings-control-border);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--settings-muted);
+    font: 600 10px/1 "Stack Sans Text", sans-serif;
+    letter-spacing: 0;
+    text-transform: none;
+    vertical-align: middle;
+    opacity: 0;
+    transition: opacity var(--motion-hover), color var(--motion-hover), border-color var(--motion-hover);
+}
+
+.settingsTitle .settingsHelp {
+    width: 20px;
+    height: 20px;
+    margin-left: 12px;
+    font-size: 12px;
+}
+
+:is(.settingRow, .settingsGroup > h2, .serverSetup > h2, .settingsPageHeader, .dspSectionHeader):hover .settingsHelp,
+.settingsHelp:focus-visible,
+.settingsHelp[aria-expanded="true"] {
+    opacity: 1;
+}
+
+.settingsHelp:hover,
+.settingsHelp:focus-visible,
+.settingsHelp[aria-expanded="true"] {
+    border-color: white;
+    color: white;
+    outline: none;
+}
+
+.settingsHelpBackdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 13;
+}
+
+.settingsHelpPanel {
+    position: fixed;
+    display: grid;
+    gap: 6px;
+    box-sizing: border-box;
+    width: min(340px, calc(100vw - 16px));
+    padding: 14px 16px;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    outline: none;
+    background: rgba(29, 29, 29, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
+    color: white;
+    font: 400 0.85rem/1.5 "Stack Sans Text", sans-serif;
+    text-align: left;
+    animation: settingsSaveBarIn var(--motion-enter);
+}
+
+.settingsHelpPanel > strong {
+    font-weight: 600;
+}
+
+.settingsHelpText {
+    color: #d0d0d0;
+}
+
+.settingsHelpText p {
+    margin: 0;
+}
+
+.settingsHelpText p + p {
+    margin-top: 8px;
+}
+
+.settingsHelpText code {
+    color: white;
+}
+
+:root[data-reduce-motion] .settingsHelpPanel {
+    animation: none;
+}
 /* ---------- Controls ---------- */
 .settingsPill {
     display: inline-flex;
@@ -164,7 +279,7 @@
     gap: 8px;
     height: 34px;
     padding: 0 16px;
-    border: 1px solid #5a5a5a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 100px;
     background: transparent;
     color: white;
@@ -191,8 +306,8 @@
 }
 
 .settingsPillDone {
-    border-color: #333;
-    color: #8f8f8f;
+    border-color: var(--settings-line);
+    color: var(--settings-muted);
 }
 
 .settingsLink {
@@ -222,9 +337,9 @@
     justify-self: start;
     width: fit-content;
     padding: 3px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 100px;
-    background: #111;
+    background: var(--settings-field);
 }
 
 .settingsSegmented button {
@@ -258,10 +373,10 @@
     height: 34px;
     min-width: 0;
     padding: 0 12px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 10px;
     outline: none;
-    background: #111;
+    background: var(--settings-field);
     color: white;
     color-scheme: dark;
     font: inherit;
@@ -277,7 +392,7 @@
 .settingsChip {
     flex: none;
     padding: 3px 10px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 100px;
     color: #b3b3b3;
     font-size: 0.72rem;
@@ -292,30 +407,24 @@
 }
 
 /* ---------- Outputs ---------- */
+/* Every computer's outputs alike: a group per computer, a card per output, and in each card the
+   same rows as the rest of the page. */
 .settingsOutputs {
     display: grid;
-    gap: 14px;
-    margin-top: 16px;
-}
-
-.settingsShowInPlayer {
-    color: #8f8f8f;
-    font-size: 0.8rem;
+    gap: 12px;
+    margin-top: 14px;
 }
 
 .settingsOutput {
-    padding: 18px 20px 20px;
-    border: 1px solid #262626;
-    border-radius: 16px;
-    background: #0b0b0b;
+    padding: 0 18px;
+    border: 1px solid var(--settings-line);
+    border-radius: 12px;
+    background: var(--settings-card);
+    transition: border-color var(--motion-hover);
 }
 
 .settingsOutput[data-selected] {
-    border-color: #4a4a4a;
-}
-
-.settingsOutput[data-disconnected] .settingsOutputName {
-    color: #8f8f8f;
+    border-color: var(--settings-control-border);
 }
 
 .settingsOutputHeader {
@@ -323,51 +432,51 @@
     flex-wrap: wrap;
     align-items: center;
     gap: 10px;
-    margin-bottom: 18px;
+    min-height: 60px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--settings-line);
+}
+
+.settingsOutput .settingRow {
+    min-height: 52px;
 }
 
 .settingsView input.settingsOutputName {
     width: auto;
     min-width: 120px;
     max-width: 320px;
-    height: 32px;
-    margin-left: -8px;
+    height: 34px;
+    margin-left: -9px;
     padding: 0 8px;
     border-color: transparent;
     background: transparent;
-    font-size: 1.1rem;
+    font-size: 1rem;
     font-weight: 600;
     field-sizing: content;
 }
 
 .settingsView input.settingsOutputName:hover,
 .settingsView input.settingsOutputName:focus-visible {
-    border-color: #3a3a3a;
+    border-color: var(--settings-control-border);
+    background: var(--settings-field);
 }
 
 .settingsOutputSpacer {
     flex: 1;
 }
 
-.settingsOutputFields {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 20px;
-    align-items: start;
+/* "In player" names the switch beside it, which it also flips. */
+.settingsShowInPlayer {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--settings-muted);
+    font-size: 0.8rem;
 }
 
-.settingsField {
-    display: grid;
-    gap: 8px;
-    min-width: 0;
+.settingsOutput select {
+    width: 200px;
 }
-
-.settingsField > span:first-child {
-    color: #8f8f8f;
-    font-size: 0.75rem;
-    font-weight: 600;
-}
-
 .settingsFieldRow {
     display: flex;
     align-items: center;
@@ -375,18 +484,17 @@
     min-width: 0;
 }
 
-.settingsFieldRow select {
-    flex: 1;
-    width: 100%;
-}
-
 .settingsUnitInput input {
     width: 100px;
 }
 
-.settingsUnitInput small,
-.settingsFieldHint {
-    color: #8f8f8f;
+/* A number and its unit. */
+.settingsUnitInput {
+    gap: 8px;
+}
+
+.settingsUnitInput small {
+    color: var(--settings-muted);
     font-size: 0.75rem;
 }
 
@@ -397,7 +505,7 @@
     gap: 16px;
     max-width: 680px;
     padding: 16px 0;
-    border-bottom: 1px solid #222;
+    border-bottom: 1px solid var(--settings-line);
 }
 
 .settingsServiceIcon {
@@ -419,7 +527,7 @@
 
 .settingsServiceRow p {
     margin: 2px 0 0;
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.8rem;
 }
 
@@ -485,7 +593,7 @@
 }
 
 .dspPresetItem span {
-    color: #7d7d7d;
+    color: var(--settings-muted);
     font-size: 0.75rem;
 }
 
@@ -495,14 +603,14 @@
     font-style: normal;
 }
 
+/* Highlighted like a chosen row in the app's menus. */
 .dspPresetItem:hover {
     color: white;
-    background: #111;
+    background: #1c1c1c;
 }
 
 .dspPresetItem[aria-pressed="true"] {
-    border-color: #3a3a3a;
-    background: #151515;
+    background: var(--settings-selected);
     color: white;
 }
 
@@ -533,7 +641,7 @@
 
 .settingsView input.dspPresetName:hover,
 .settingsView input.dspPresetName:focus-visible {
-    border-color: #3a3a3a;
+    border-color: var(--settings-control-border);
 }
 
 .dspUsedBy {
@@ -557,19 +665,19 @@
     gap: 2px;
     min-width: 0;
     padding: 10px 10px 10px 20px;
-    border-top: 1px solid #2c2c2c;
-    border-bottom: 1px solid #2c2c2c;
-    background: #0d0d0d;
+    border-top: 1px solid var(--settings-line);
+    border-bottom: 1px solid var(--settings-line);
+    background: var(--settings-card);
 }
 
 .dspSignalPath li:first-child {
     padding-left: 14px;
-    border-left: 1px solid #2c2c2c;
+    border-left: 1px solid var(--settings-line);
     border-radius: 12px 0 0 12px;
 }
 
 .dspSignalPath li:last-child {
-    border-right: 1px solid #2c2c2c;
+    border-right: 1px solid var(--settings-line);
     border-radius: 0 12px 12px 0;
 }
 
@@ -581,14 +689,14 @@
     left: -6px;
     width: 10px;
     height: 10px;
-    border-top: 1px solid #444;
-    border-right: 1px solid #444;
-    background: #0d0d0d;
+    border-top: 1px solid #535353;
+    border-right: 1px solid #535353;
+    background: var(--settings-card);
     transform: translateY(-50%) rotate(45deg);
 }
 
 .dspSignalPath span {
-    color: #7d7d7d;
+    color: var(--settings-muted);
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -678,7 +786,7 @@
 /* ---------- EQ graph ---------- */
 .eqGraph {
     overflow: hidden;
-    border: 1px solid #262626;
+    border: 1px solid var(--settings-line);
     border-radius: 16px;
     background: radial-gradient(120% 140% at 50% 0%, #161616 0%, #070707 70%);
     touch-action: none;
@@ -768,12 +876,6 @@
     fill: #666;
 }
 
-.dspHint {
-    margin: 10px 0 14px;
-    color: #6f6f6f;
-    font-size: 0.75rem;
-}
-
 .dspBandChips {
     display: flex;
     flex-wrap: wrap;
@@ -807,7 +909,7 @@
 }
 
 .dspBandChip span {
-    color: #8f8f8f;
+    color: var(--settings-muted);
 }
 
 .dspBandChip[aria-selected="true"] {
@@ -828,9 +930,9 @@
     display: grid;
     gap: 14px;
     padding: 14px 16px;
-    border: 1px solid #262626;
+    border: 1px solid var(--settings-line);
     border-radius: 16px;
-    background: #0d0d0d;
+    background: var(--settings-card);
 }
 
 .dspBandNumber {
@@ -868,7 +970,7 @@
 }
 
 .dspNumber > span:first-child {
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.7rem;
     font-weight: 600;
 }
@@ -885,7 +987,7 @@
 }
 
 .dspNumberInput small {
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.75rem;
 }
 
@@ -902,9 +1004,9 @@
     align-items: center;
     gap: 14px;
     padding: 10px 14px;
-    border: 1px solid #262626;
+    border: 1px solid var(--settings-line);
     border-radius: 14px;
-    background: #0d0d0d;
+    background: var(--settings-card);
 }
 
 .dspImpulseRate {
@@ -927,7 +1029,7 @@
 .dspImpulseName small {
     display: block;
     margin-top: 2px;
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font-size: 0.75rem;
 }
 
@@ -945,11 +1047,6 @@
     font-family: "Source Serif 4", serif;
     font-size: 1.8rem;
     font-weight: 500;
-}
-
-.dspFootnote {
-    margin-top: 12px !important;
-    font-size: 0.75rem !important;
 }
 
 /* Unsaved changes wait in the player's glass, in the corner above it. */
@@ -984,7 +1081,6 @@
 }
 
 @media (max-width: 1050px) {
-    .settingsOutputFields,
     .dspGains {
         grid-template-columns: 1fr;
     }
@@ -1115,9 +1211,9 @@
     align-items: center;
     gap: 14px 24px;
     padding: 20px 22px;
-    border: 1px solid #262626;
+    border: 1px solid var(--settings-line);
     border-radius: 12px;
-    background: #151515;
+    background: var(--settings-card);
 }
 
 /* Everything but the heading and its button takes the card's full width. */
@@ -1138,7 +1234,7 @@
     align-items: center;
     gap: 6px;
     padding-top: 14px;
-    border-top: 1px solid #222;
+    border-top: 1px solid var(--settings-line);
 }
 
 .serverSetupTerminal .settingsLink {
@@ -1178,9 +1274,9 @@
     display: inline-flex;
     align-items: center;
     height: 34px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 100px;
-    background: #111;
+    background: var(--settings-field);
     transition: border-color var(--motion-hover), background-color var(--motion-hover);
 }
 
@@ -1210,7 +1306,7 @@
     border: 0;
     border-radius: 0 100px 100px 0;
     background: transparent;
-    color: #8f8f8f;
+    color: var(--settings-muted);
     font: inherit;
     font-size: 0.95rem;
     line-height: 1;
@@ -1224,7 +1320,7 @@
 .shortcutAdd {
     height: 34px;
     padding: 0 14px;
-    border: 1px solid #3a3a3a;
+    border: 1px solid var(--settings-control-border);
     border-radius: 100px;
     background: transparent;
     color: #b3b3b3;

@@ -3,7 +3,7 @@ import {
   bindingFromEvent, formatBinding, isModifierCode, sameBinding, shortcutBindings, shortcutCategories, shortcutDefinition,
   shortcutIds, shortcutsUsing, suspendShortcuts, type ShortcutBinding, type ShortcutId, type ShortcutOverrides,
 } from "../../utils/shortcuts";
-import { SettingRow } from "./SettingsControls";
+import { Help, SettingRow } from "./SettingsControls";
 
 type Recording = { id: ShortcutId; index: number | "new" };
 
@@ -60,10 +60,9 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
 
   return <>
     <header className="settingsPageHeader">
-      <h1 className="settingsTitle">Keyboard</h1>
+      <h1 className="settingsTitle">Keyboard<Help topic="Keyboard">Click a shortcut, then press the keys for it. Esc cancels. A shortcut can have several keys.</Help></h1>
       <button type="button" className="settingsPill" disabled={!customized} onClick={() => { onChange({}); setNotice(null); }}>Reset all</button>
     </header>
-    <p className="settingsMuted">Click a shortcut, then press the keys for it. Esc cancels.</p>
     {notice && <p className="settingsMuted" role="status">{notice}</p>}
     {shortcutCategories.map(category => <div className="settingsGroup" key={category}>
       <h2>{category}</h2>
@@ -71,7 +70,7 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
         const definition = shortcutDefinition(id);
         const bindings = shortcutBindings(id, overrides);
         const isRecording = (index: number | "new") => recording?.id === id && recording.index === index;
-        return <SettingRow key={id} label={definition.label} hint={definition.hint}>
+        return <SettingRow key={id} label={definition.label} help={definition.hint}>
           <span className="shortcutBindings">
             {bindings.map((binding, index) => <span className="shortcutBinding" key={index} data-recording={isRecording(index) || undefined}>
               <button type="button" className="shortcutBindingKeys" aria-label={`Change ${definition.label} shortcut`}
