@@ -37,6 +37,8 @@ AMBRA is an open-source music player for audiophiles, music lovers, and everyday
 - [ ] Mobile Apps
 - [ ] Server UI
 - [x] Home Page
+- [ ] Recommendations from services
+  - [ ] Be able to select recommendation engine
 
 <b>Future Features</b>
 
