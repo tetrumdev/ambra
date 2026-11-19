@@ -58,20 +58,16 @@
     padding: 0 16px 0 18px;
 }
 
-.playbackSidebarViews,
-.playbackSidebarClose {
-    box-sizing: border-box;
-    height: 38px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    background: rgb(22 22 22 / 40%);
-}
-
 .playbackSidebarViews {
     display: flex;
     align-items: center;
     gap: 2px;
+    box-sizing: border-box;
+    height: 38px;
     padding: 0 3px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    background: rgb(22 22 22 / 40%);
 }
 
 .playbackSidebarViews button {
@@ -100,7 +96,10 @@
     flex: none;
     place-items: center;
     width: 38px;
+    height: 38px;
     padding: 0;
+    border: 0;
+    background: transparent;
 }
 
 .playbackSidebarClose img {
