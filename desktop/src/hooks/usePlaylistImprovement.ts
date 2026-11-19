@@ -30,7 +30,12 @@ function lastScans(): Record<string, number> {
 function rememberScan(playlistId: string, playlists: Playlist[]) {
   const scans = lastScans();
   const kept = Object.fromEntries(playlists.filter(playlist => playlist.id in scans).map(playlist => [playlist.id, scans[playlist.id]]));
-  try { localStorage.setItem(SCANS_KEY, JSON.stringify({ ...kept, [playlistId]: Date.now() })); } catch { /* Rescanned on the next check. */ }
+  try {
+    localStorage.setItem(SCANS_KEY, JSON.stringify({ ...kept, [playlistId]: Date.now() }));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** A song upgraded twice reads as one change, from the first copy to the latest. */
@@ -76,16 +81,19 @@ export function usePlaylistImprovement(
       const found = await findPlaylistUpgrades(tracks, done => {
         if (requested) setProgress({ playlistId, done, total: tracks.length });
       }, controller.signal, playlist.packages);
+      controller.signal.throwIfAborted();
       const upgrades = [...found].map(([from, to]) => ({ from: tracks.find(track => track.globalId === from)!, to }));
       if (upgrades.length && !latest.current.replaceTracks(playlistId, found)) {
         if (requested) report(playlistId, [], "Could not save the improved playlist. Please try again.");
-        return;
+        return false;
       }
-      rememberScan(playlistId, latest.current.playlists);
+      const remembered = rememberScan(playlistId, latest.current.playlists);
       // An empty report still tells someone who asked that nothing better exists.
       if (upgrades.length || requested) report(playlistId, upgrades);
+      return remembered;
     } catch {
       if (requested && !controller.signal.aborted) report(playlistId, [], "Could not reach your music services. Please try again.");
+      return false;
     } finally {
       if (running.current?.controller === controller) running.current = null;
       if (requested) setProgress(null);
@@ -95,17 +103,20 @@ export function usePlaylistImprovement(
   // Background scans take the stalest playlist first and leave the rest for later checks.
   useEffect(() => {
     if (!enabled) return;
+    let disposed = false;
     const check = () => {
-      if (running.current) return;
+      if (disposed || running.current) return;
       const scans = lastScans();
       const due = latest.current.playlists
         .filter(playlist => playlist.trackIds.length > 0 && Date.now() - (scans[playlist.id] ?? 0) >= RESCAN_AFTER_MS)
         .sort((a, b) => (scans[a.id] ?? 0) - (scans[b.id] ?? 0))[0];
-      if (due) void scan(due.id, false).then(check);
+      // A failed scan is still due. Leave it for the next scheduled check.
+      if (due) void scan(due.id, false).then(scanned => { if (scanned) check(); });
     };
     const first = window.setTimeout(check, FIRST_CHECK_MS);
     const interval = window.setInterval(check, CHECK_EVERY_MS);
     return () => {
+      disposed = true;
       window.clearTimeout(first);
       window.clearInterval(interval);
       running.current?.controller.abort();

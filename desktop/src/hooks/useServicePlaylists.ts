@@ -1,7 +1,7 @@
 import { getServerConnection, subscribeServerConnection, serverBaseUrl } from "../api/serverConnection";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { serviceAuthStatus, type StreamingProvider } from "../api/server";
-import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, servicePlaylists } from "../api/playlists";
+import { changeServicePlaylist, deleteServicePlaylist, servicePlaylistContents, servicePlaylists, type ServicePlaylist } from "../api/playlists";
 import type { Playlist, Track } from "../types/music";
 import { musicProviderName } from "../utils/musicProviderName";
 import { loadServicePlaylistCache, outdatedContents, saveServicePlaylistCache, TRACK_DETAILS_VERSION, type CachedPlaylistContents } from "../utils/servicePlaylistCache";
@@ -29,6 +29,13 @@ function needsFetch(cached: CachedPlaylistContents | undefined, playlist: Playli
   if (!cached || mode === "force" || outdatedContents(cached)) return true;
   if (cached.playlist.name !== playlist.name || cached.playlist.trackCount !== playlist.trackCount) return true;
   return mode === "open" && Date.now() - cached.fetchedAt > OPEN_REVALIDATE_MS;
+}
+
+function samePlaylistListing(previous: Playlist[], next: ServicePlaylist[]) {
+  return previous.length === next.length && next.every(({ id, name, editable, trackCount }, index) => {
+    const old = previous[index];
+    return old.remoteId === id && old.name === name && old.editable === editable && old.trackCount === trackCount;
+  });
 }
 
 export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
@@ -108,19 +115,31 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
         try {
           const remote = await servicePlaylists(provider, signal);
           if (!alive.current || signal?.aborted || !isTrackAvailable(`${provider}:`)) return;
-          const playlists: Playlist[] = remote.map(playlist => ({ ...playlist, id: playlistId(provider, playlist.id), remoteId: playlist.id, provider, trackIds: [] }));
+          const toPlaylist = (playlist: ServicePlaylist): Playlist => ({
+            ...playlist, id: playlistId(provider, playlist.id), remoteId: playlist.id, provider, trackIds: [],
+          });
           setGroups(current => {
+            const old = current.find(group => group.provider === provider);
+            const unchanged = old && samePlaylistListing(old.playlists, remote);
+            if (unchanged && old.error === null) return current;
+            const playlists = unchanged ? old.playlists : remote.map(toPlaylist);
             const next = [...current.filter(group => group.provider !== provider), { provider, playlists, error: null }];
             currentGroups.current = next;
             return next;
           });
-          const active = playlists.find(playlist => playlist.id === selection.current);
-          if (active && !mutations.current.has(active.id)) void load(active);
+          const selected = selection.current;
+          const prefix = playlistId(provider, "");
+          if (selected?.startsWith(prefix) && !mutations.current.has(selected)) {
+            const active = remote.find(playlist => playlist.id === selected.slice(prefix.length));
+            if (active) void load(toPlaylist(active));
+          }
         } catch (reason) {
           if (!alive.current || signal?.aborted || !isTrackAvailable(`${provider}:`)) return;
           setGroups(current => {
             const old = current.find(group => group.provider === provider);
-            const next = [...current.filter(group => group.provider !== provider), { provider, playlists: old?.playlists ?? [], error: message(reason) }];
+            const error = message(reason);
+            if (old?.error === error) return current;
+            const next = [...current.filter(group => group.provider !== provider), { provider, playlists: old?.playlists ?? [], error }];
             currentGroups.current = next;
             return next;
           });
@@ -129,6 +148,7 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
       if (!alive.current || signal?.aborted) return;
       setGroups(current => {
         const next = current.filter(group => connected[group.provider] && isTrackAvailable(`${group.provider}:`));
+        if (next.length === current.length) return current;
         currentGroups.current = next;
         return next;
       });
@@ -242,7 +262,13 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     const result = contents[playlist.id];
     return result ? { ...playlist, trackIds: [...new Set(result.tracks.map(track => track.globalId))] } : playlist;
   }), [groups, contents]);
-  const tracks = useMemo(() => [...new Map(Object.values(contents).flatMap(result => result.tracks).map(track => [track.globalId, track])).values()], [contents]);
+  const tracks = useMemo(() => {
+    const byId = new Map<string, Track>();
+    for (const { tracks } of Object.values(contents)) {
+      for (const track of tracks) byId.set(track.globalId, track);
+    }
+    return [...byId.values()];
+  }, [contents]);
 
   async function change(id: string, track?: Track, trackIds?: string[]): Promise<boolean> {
     const playlist = playlists.find(item => item.id === id);

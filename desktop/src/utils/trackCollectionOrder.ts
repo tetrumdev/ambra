@@ -60,10 +60,10 @@ export function sortCollectionTracks<T extends Track>(
   const direction = sort.direction === "descending" ? 1 : -1;
 
   return tracks
-    .map((track, index) => ({ track, index }))
+    .map((track, index) => ({ track, index, value: value(track) }))
     .sort((left, right) => {
-      const leftValue = value(left.track);
-      const rightValue = value(right.track);
+      const leftValue = left.value;
+      const rightValue = right.value;
       const comparison =
         typeof leftValue === "number" && typeof rightValue === "number"
           ? leftValue - rightValue

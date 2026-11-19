@@ -131,7 +131,7 @@ export function useAudioPlayer(
 
   const reportPlay = useCallback(() => {
     if (reportedPlayRef.current) return;
-    const track = tracksRef.current.find(track => track.globalId === currentTrackIdRef.current);
+    const track = tracksRef.current[trackPosition(tracksRef.current, currentTrackIdRef.current)];
     if (!track) return;
     reportedPlayRef.current = true;
     onTrackPlayedRef.current(track);
@@ -154,9 +154,7 @@ export function useAudioPlayer(
   tracksRef.current = tracks;
   queueNavigationRef.current = queueNavigation;
   const usesNativeAudio = isTauri();
-  const currentTrack = tracks.find(
-    (track) => track.globalId === currentTrackId,
-  );
+  const currentTrack = tracks[trackPosition(tracks, currentTrackId)];
 
   const audioForDeck = useCallback(
     (deck: Deck) =>
@@ -1166,7 +1164,7 @@ export function useAudioPlayer(
       } else { releaseDeck(0); releaseDeck(1); }
     },
     reclaim: () => {
-      const track = tracksRef.current.find(item => item.globalId === currentTrackIdRef.current);
+      const track = tracksRef.current[trackPosition(tracksRef.current, currentTrackIdRef.current)];
       setIsPlaying(false);
       if (track && usesNativeAudio) loadNativeTrack(track, clock.get(), false);
     },

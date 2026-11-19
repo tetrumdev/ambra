@@ -37,9 +37,14 @@ const frames = new Map<number, FrameRequestCallback>();
 let frameId = 0;
 let now = 0;
 let wordSplits = 0;
+let segmenters = 0;
 const Segmenter = Intl.Segmenter;
 const observers: ResizeObserverCallback[] = [];
 Object.defineProperty(Intl, "Segmenter", { configurable: true, value: class extends Segmenter {
+  constructor(...args: ConstructorParameters<typeof Segmenter>) {
+    super(...args);
+    segmenters++;
+  }
   segment(text: string) { wordSplits++; return super.segment(text); }
 } });
 const { LyricsView } = await import("../src/components/LyricsView");
@@ -152,7 +157,9 @@ test("unrelated player updates do not split every lyric into letters again", asy
   const clock = clockAt(0.5);
   const seek = mock();
   try {
+    const before = segmenters;
     await act(async () => root.render(<LyricsView track={track} clock={clock} playing onSeek={seek} autoSync={false} />));
+    expect(segmenters - before).toBe(data.lines.length);
     const splits = wordSplits;
     expect(splits).toBeGreaterThan(0);
     const observerCount = observers.length;
@@ -162,6 +169,27 @@ test("unrelated player updates do not split every lyric into letters again", asy
     const line = container.querySelector<HTMLButtonElement>('[data-row="1"]')!;
     await act(async () => line.click());
     expect(seek).toHaveBeenCalledWith(4);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+  }
+});
+
+test("frozen lyrics stay idle on clock updates and catch up when shown", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const clock = clockAt(0.5);
+  try {
+    await act(async () => root.render(<LyricsView track={track} clock={clock} playing shown={false} autoSync={false} />));
+    await paint(clock, 0.5);
+    expect(container.querySelector('[data-row="0"]')?.getAttribute("aria-current")).toBe("true");
+    await act(async () => clock.set(200.5));
+    expect(frames.size).toBe(0);
+    await act(async () => root.render(<LyricsView track={track} clock={clock} playing autoSync={false} />));
+    expect(frames.size).toBe(1);
+    await paint(clock, 200.5);
+    expect(container.querySelector('[data-row="50"]')?.getAttribute("aria-current")).toBe("true");
   } finally {
     await act(async () => root.unmount());
     container.remove();

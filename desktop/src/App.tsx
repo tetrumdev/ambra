@@ -152,27 +152,30 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const library = useMusicLibrary(localOnly, sharedPlayback);
   const search = useTrackSearch(localOnly ? "" : searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
-    const tracksById = new Map<string, Track>(
-      [...listeningHistory.tracks, ...browseTracks, ...playlistStore.tracks, ...servicePlaylistStore.tracks, ...library.catalogTracks].map((track) => [track.globalId, track]),
-    );
-    for (const track of search.knownTracks) {
-      tracksById.set(track.globalId, track);
+    const tracksById = new Map<string, Track>();
+    for (const tracks of [listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]) {
+      for (const track of tracks) tracksById.set(track.globalId, track);
     }
-    return [...tracksById.values()].filter(track => !sharedPlayback || !isDeviceTrack(track));
+    const tracks = [...tracksById.values()];
+    return sharedPlayback ? tracks.filter(track => !isDeviceTrack(track)) : tracks;
   }, [sharedPlayback, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   // Root restores the playback mode and remounts when its queue authority changes.
   const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
   const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
   const playbackTracks = useMemo(() => {
-    const tracksById = new Map(
-      availableTracks.map((track) => [track.globalId, track]),
-    );
-    for (const entry of [...queue.historyEntries, ...queue.entries]) {
-      tracksById.set(entry.track.globalId, entry.track);
+    if (usingCore) return availableTracks;
+    let tracks = availableTracks;
+    if (queue.historyEntries.length || queue.entries.length) {
+      const tracksById = new Map<string, Track>();
+      for (const track of availableTracks) tracksById.set(track.globalId, track);
+      for (const entries of [queue.historyEntries, queue.entries]) {
+        for (const { track } of entries) tracksById.set(track.globalId, track);
+      }
+      tracks = [...tracksById.values()];
     }
-    return [...tracksById.values()].filter(track => !localOnly || isDeviceTrack(track));
-  }, [availableTracks, queue.entries, queue.historyEntries, localOnly]);
+    return localOnly ? tracks.filter(isDeviceTrack) : tracks;
+  }, [availableTracks, queue.entries, queue.historyEntries, localOnly, usingCore]);
   // Which way the queue last moved, so the player cover slides in from that side.
   const skipDirectionRef = useRef({ direction: 1, at: 0 });
   const skipDirection = useCallback(() =>
@@ -327,14 +330,16 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     [selectedPlaylist, availableTracks, library.tracks],
   );
   const collectionPackages = selectedPlaylist?.packages;
+  const collectionStats = collectionSort?.key === "plays" || collectionSort?.key === "lastPlayed"
+    ? listeningHistory.stats : undefined;
   const collection = useMemo(() => {
     if (!selectedPlaylist) {
-      return { playlist: null, tracks: sortCollectionTracks(library.tracks, collectionSort, listeningHistory.stats) };
+      return { playlist: null, tracks: sortCollectionTracks(library.tracks, collectionSort, collectionStats) };
     }
     // Packaged songs stay together, in their own order, however the playlist is sorted.
-    const sorted = sortCollectionTracks(baseCollectionTracks, collectionSort, listeningHistory.stats);
+    const sorted = sortCollectionTracks(baseCollectionTracks, collectionSort, collectionStats);
     return { playlist: selectedPlaylist, tracks: groupPackagedTracks(sorted, collectionPackages ?? []) };
-  }, [selectedPlaylist, library.tracks, baseCollectionTracks, collectionSort, collectionPackages, listeningHistory.stats]);
+  }, [selectedPlaylist, library.tracks, baseCollectionTracks, collectionSort, collectionPackages, collectionStats]);
   const collectionTracks = collection.tracks;
   // Built when a song is played or queued from the page, not on every render.
   const activeCollectionContext = () => collection.playlist

@@ -65,7 +65,15 @@ let state: DownloadState = { local: new Map(), server: new Set(), jobs: [] };
 const listeners = new Set<() => void>();
 const DOWNLOADABLE = new Set(["tidal", "qobuz", "spotify"]);
 
+function sameDownloads(previous: ReadonlySet<GlobalTrackId>, next: ReadonlySet<GlobalTrackId>) {
+  if (previous.size !== next.size) return false;
+  for (const id of next) if (!previous.has(id)) return false;
+  return true;
+}
+
 function publish(next: Partial<DownloadState>) {
+  // Job progress can change without changing which tracks are playable.
+  if (next.server && sameDownloads(state.server, next.server)) next.server = state.server;
   state = { ...state, ...next };
   for (const listener of listeners) listener();
 }
@@ -75,8 +83,16 @@ function subscribe(listener: () => void) {
   return () => { listeners.delete(listener); };
 }
 
-export function useDownloads() {
-  return useSyncExternalStore(subscribe, () => state);
+export function useLocalDownloads() {
+  return useSyncExternalStore(subscribe, () => state.local);
+}
+
+export function useServerDownloads() {
+  return useSyncExternalStore(subscribe, () => state.server);
+}
+
+export function useDownloadJobs() {
+  return useSyncExternalStore(subscribe, () => state.jobs);
 }
 
 /** This device's player source for the song, when it's downloaded here. */

@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Track } from "../types/music";
-import { downloadQualities, useDownloads, type DownloadJob } from "../utils/offlineDownloads";
+import { downloadQualities, useDownloadJobs, type DownloadJob } from "../utils/offlineDownloads";
 import { DropdownChevron } from "./DropdownChevron";
 import "./DownloadActivity.css";
 
@@ -12,7 +12,7 @@ const processed = (job: DownloadJob) => Math.min(job.total, job.done + job.faile
  * keeps it mounted out of sight (the big screen and lyrics), so it returns as it was left.
  */
 export function DownloadActivity({ tracks = [], hidden = false }: { tracks?: Pick<Track, "globalId" | "name" | "artist">[]; hidden?: boolean }) {
-  const { jobs } = useDownloads();
+  const jobs = useDownloadJobs();
   const id = useId();
   const trigger = useRef<HTMLButtonElement>(null);
   const [expanded, setExpanded] = useState(false);
