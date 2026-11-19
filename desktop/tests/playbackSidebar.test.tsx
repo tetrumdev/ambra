@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { TrackLyrics } from "../src/types/lyrics";
 import type { QueueItem, Track } from "../src/types/music";
+import { parsePlaylistSnapshot, PLAYLIST_STORAGE_KEY } from "../src/utils/playlistStorage";
 import { queueSnapshot } from "../src/utils/queueStorage";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -80,11 +81,17 @@ function queueSong(track: Track, entryId: number): QueueItem {
 
 test("the windowed sidebar edits the live queue, displays lyrics and history, and hides in fullscreen", async () => {
   const current = song("Current");
-  const next = [song("First"), song("Second"), song("Third")];
+  const next = [song("First"), song("Second"), song("Third"), song("Fourth")];
   const recent = [song("Older"), song("Latest")];
   localStorage.setItem("ambra.playback.v1", JSON.stringify({ trackId: current.globalId, positionSeconds: 0 }));
   localStorage.setItem("ambra.queue.v1", JSON.stringify(queueSnapshot([], queueSong(current, 0), next.map(queueSong))));
   localStorage.setItem("ambra.listening-history.v1", JSON.stringify({ version: 1, entries: recent.map((track, index) => ({ track, lastPlayedAt: index + 1 })) }));
+  localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify({
+    version: 1, tracks: [], playlists: [
+      { id: "sidebar-song", name: "Sidebar song", trackIds: [] },
+      { id: "sidebar-history", name: "Sidebar history", trackIds: [] },
+    ],
+  }));
 
   const { default: App } = await import("../src/App");
   const viewport = document.createElement("div");
@@ -100,7 +107,17 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
   const press = (key: string, code = key) => act(async () => {
     window.dispatchEvent(new dom.KeyboardEvent("keydown", { key, code, bubbles: true, cancelable: true }) as unknown as KeyboardEvent);
   });
-  const upcoming = () => [...viewport.querySelectorAll('[aria-label="Upcoming tracks"] button.playbackSidebarTrack')].map(button => button.getAttribute("aria-label"));
+  const trackPlays = (label: string) => [...viewport.querySelectorAll(`[aria-label="${label}"] .trackPlayButton`)]
+    .map(button => button.getAttribute("aria-label"));
+  const upcoming = () => trackPlays("Upcoming tracks");
+  const menu = () => viewport.querySelector("#trackMenuBackdrop");
+  const menuAction = async (label: string) => {
+    const button = [...menu()!.querySelectorAll("button")].find(button => button.textContent?.trim() === label);
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+  };
+  const savedPlaylist = (id: string) => parsePlaylistSnapshot(localStorage.getItem(PLAYLIST_STORAGE_KEY))
+    .playlists.find(playlist => playlist.id === id)?.trackIds;
   const savedQueue = () => JSON.parse(localStorage.getItem("ambra.queue.v1")!);
 
   try {
@@ -110,14 +127,24 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
     await click("#queueBtn");
     expect(viewport.querySelector("main.appScreen")).toBe(main);
     expect(pane()?.querySelector('[aria-current="true"]')?.textContent).toContain("Current");
-    expect(upcoming()).toEqual(["Play First", "Play Second", "Play Third"]);
+    expect(upcoming()).toEqual(["Play First", "Play Second", "Play Third", "Play Fourth"]);
+    expect(pane()?.querySelector('[aria-current="true"] .trackPlayButton')).not.toBeNull();
 
-    await click('[aria-label="Queue options for Second"]');
-    await click('#trackCollectionMenu button:has(> img[src="/play-next.svg"])');
-    expect(upcoming()).toEqual(["Play Second", "Play First", "Play Third"]);
+    await click('[aria-label="Library options for Second"].trackCollectionMenuTrigger');
+    expect(menu()?.textContent).toContain("Credits");
+    expect(menu()?.textContent).not.toContain("Move to front");
+    await menuAction("Add to Playlist");
+    await menuAction("Sidebar song");
+    expect(savedPlaylist("sidebar-song")).toEqual([next[1].globalId]);
 
-    const dragFrom = pane()!.querySelector('[aria-label="Play Third"]')!.parentElement!;
-    const dragTo = pane()!.querySelector('[aria-label="Play First"]')!.parentElement!;
+    await click('[aria-label="Playback options for Second"]');
+    expect(menu()?.textContent).toContain("Play from Here");
+    await menuAction("Move to front");
+    expect(upcoming()).toEqual(["Play Second", "Play First", "Play Third", "Play Fourth"]);
+
+    const row = (name: string) => pane()!.querySelector(`[aria-label="Play ${name}"]`)!.closest(".libraryItem")!;
+    const dragFrom = row("Third");
+    const dragTo = row("First");
     const scroll = pane()!.querySelector(".playbackSidebarScroll")!;
     const hit = document.elementFromPoint;
     document.elementFromPoint = () => dragTo;
@@ -129,28 +156,49 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
     }) as unknown as PointerEvent;
     try {
       await act(async () => {
-        dragFrom.querySelector(".playbackSidebarGrip")!.dispatchEvent(pointer("pointerdown", 250));
+        dragFrom.querySelector("[data-playback-menu-trigger]")!.dispatchEvent(pointer("pointerdown", 250));
         window.dispatchEvent(pointer("pointermove", 190));
         window.dispatchEvent(pointer("pointerup", 190));
       });
     } finally {
       document.elementFromPoint = hit;
     }
-    expect(upcoming()).toEqual(["Play Second", "Play Third", "Play First"]);
+    expect(upcoming()).toEqual(["Play Second", "Play Third", "Play First", "Play Fourth"]);
 
-    await click('[aria-label="Queue options for Third"]');
-    await click('#trackCollectionMenu button:has(> img[src="/delete.svg"])');
-    expect(upcoming()).toEqual(["Play Second", "Play First"]);
+    await act(async () => {
+      row("Third").dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as MouseEvent);
+    });
+    await act(async () => {
+      row("First").dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, shiftKey: true }) as unknown as MouseEvent);
+    });
+    expect(pane()?.querySelectorAll('.libraryItem[data-selected="true"]')).toHaveLength(2);
+    expect(pane()?.querySelector('[aria-label="Deselect Third"]')?.getAttribute("aria-pressed")).toBe("true");
+    await click(".playbackSidebarSelection .selectionRemoveAction");
+    expect(upcoming()).toEqual(["Play Second", "Play Fourth"]);
     await click('[aria-label="Play Second"]');
     expect(savedQueue().current.globalTrackId).toBe(next[1].globalId);
-    expect(upcoming()).toEqual(["Play First"]);
+    expect(upcoming()).toEqual(["Play Fourth"]);
 
     await click('.playbackSidebarViews button:nth-child(2)');
     expect(pane()?.querySelector("button.lyricLine")?.textContent).toBe("An actual line");
     await click('.playbackSidebarViews button:nth-child(3)');
-    const recentTracks = pane()!.querySelector('[aria-label="Recently played tracks"]');
-    const previousPlays = [...recentTracks!.querySelectorAll("button")].map(button => button.getAttribute("aria-label"));
-    expect(previousPlays).toEqual(["Play Latest", "Play Older"]);
+    expect(trackPlays("Recently played tracks")).toEqual(["Play Latest", "Play Older"]);
+    await click('[aria-label="Playback options for Latest"]');
+    expect(menu()?.textContent).toContain("Standalone Play");
+    expect(menu()?.textContent).toContain("Add to Queue");
+    await menuAction("Play Next");
+    await click('.playbackSidebarViews button:nth-child(1)');
+    expect(upcoming()).toEqual(["Play Latest", "Play Fourth"]);
+    await click('.playbackSidebarViews button:nth-child(3)');
+    await click('[aria-label="Library options for Latest"]');
+    await menuAction("Select tracks");
+    await click('[aria-label="Select Older"]');
+    expect(pane()?.querySelectorAll('.libraryItem[data-selected="true"]')).toHaveLength(2);
+    await click(".playbackSidebarSelection button:first-child");
+    await menuAction("Sidebar history");
+    expect(savedPlaylist("sidebar-history")).toEqual([recent[1].globalId, recent[0].globalId]);
+    await press("Escape");
+    expect(pane()?.querySelector(".playbackSidebarSelection")).toBeNull();
 
     await press("f", "KeyF");
     expect(viewport.querySelector('#bottomInfoBar[data-variant="expanded"]')).not.toBeNull();
@@ -180,6 +228,7 @@ test("the windowed sidebar edits the live queue, displays lyrics and history, an
   } finally {
     await act(async () => root.unmount());
     viewport.remove();
+    localStorage.removeItem(PLAYLIST_STORAGE_KEY);
   }
 });
 
