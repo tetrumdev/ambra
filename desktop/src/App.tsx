@@ -89,7 +89,7 @@ import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
 
 function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
   // Rerenders when a service connects or drops, so what the pages offer stays current.
-  useServiceAvailability();
+  const services = useServiceAvailability();
   const [preferences, setPreferences] = useState(loadPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
@@ -141,14 +141,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   useEffect(() => {
     if (localOnly) return;
     refreshSearchProviders();
-    window.addEventListener("focus", refreshSearchProviders);
-    window.addEventListener("online", refreshSearchProviders);
-    return () => {
-      searchProvidersRequest.current++;
-      window.removeEventListener("focus", refreshSearchProviders);
-      window.removeEventListener("online", refreshSearchProviders);
-    };
-  }, [refreshSearchProviders, localOnly]);
+    return () => { searchProvidersRequest.current++; };
+  }, [refreshSearchProviders, localOnly, services]);
   const library = useMusicLibrary(localOnly, sharedPlayback);
   const search = useTrackSearch(localOnly ? "" : searchQuery, searchProvider);
   const availableTracks = useMemo(() => {
@@ -195,21 +189,23 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   );
 
   useEffect(() => {
-    void cachePlaylistArtwork(playlistStore.tracks);
+    const controller = new AbortController();
+    void cachePlaylistArtwork(playlistStore.tracks, controller.signal);
+    return () => controller.abort();
   }, [playlistStore.tracks]);
 
   useEffect(() => {
-    void preloadUpcomingBigscreenArtwork(
-      queue.upcomingEntries.map((entry) => entry.track),
-    );
+    void preloadUpcomingBigscreenArtwork(queue.upcomingEntries);
   }, [queue.upcomingEntries]);
 
   useEffect(() => {
     if (localOnly) return;
     const tracks = queue.upcomingEntries.slice(0, 2).map((entry) => entry.track);
     if (player.currentTrack) tracks.unshift(player.currentTrack);
-    void preloadLyrics(tracks);
-    if (preferences.ui.autoSyncLyrics && isTauri()) void prepareLyricSync(tracks);
+    const controller = new AbortController();
+    void preloadLyrics(tracks, controller.signal);
+    if (preferences.ui.autoSyncLyrics && isTauri()) void prepareLyricSync(tracks, controller.signal);
+    return () => controller.abort();
   }, [player.currentTrack, queue.upcomingEntries, localOnly, preferences.ui.autoSyncLyrics]);
 
   useEffect(() => {
@@ -589,10 +585,9 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             registerScrollElement={registerScrollElement}
             onRescanLocalMusic={library.rescanLocalMusic}
             onServiceConnected={() => {
-              refreshSearchProviders();
               void servicePlaylistStore.refresh();
               search.retry();
-              void library.refreshStreamingMusic();
+              void library.refreshStreamingMusic().catch(() => {});
             }}
             onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },

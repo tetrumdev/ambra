@@ -246,12 +246,14 @@ export function detectLyricOffset(track: Track, lyrics: TrackLyrics, background 
  * Analyzes songs ahead of playback, in queue order, so their lyrics open already in sync.
  * Songs the listener has retimed or unsynced themselves are left alone.
  */
-export async function prepareLyricSync(tracks: Track[]): Promise<void> {
+export async function prepareLyricSync(tracks: Track[], signal?: AbortSignal): Promise<void> {
   for (const track of tracks) {
+    if (signal?.aborted) return;
     try {
       const override = lyricSyncOverride(track.globalId);
       if (override?.correctionMs !== undefined || override?.unsynced) continue;
-      const lyrics = await loadLyrics(track);
+      const lyrics = await loadLyrics(track, signal);
+      if (signal?.aborted) return;
       if (lyrics.status !== "lyrics" || lyrics.sync === "none") continue;
       await detectLyricOffset(track, lyrics, true);
     } catch {

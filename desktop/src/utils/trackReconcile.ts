@@ -52,3 +52,27 @@ export function reconcileServerLibrary<T extends { globalId: string }>(
   );
   return reconcileTracks(previous, [...loaded, ...kept]);
 }
+
+/** Applies a streaming delta. Added or reimported tracks go to the end in server order. */
+export function applyServerLibraryDelta<T extends { globalId: string }>(
+  previous: T[],
+  loaded: T[],
+  removedIds: readonly string[],
+  updatedIds: readonly string[] = [],
+): T[] {
+  if (!loaded.length && !removedIds.length) return previous;
+  const updated = new Set(updatedIds);
+  const replacements = new Map(loaded.filter(track => updated.has(track.globalId)).map(track => [track.globalId, track]));
+  const moved = loaded.filter(track => !updated.has(track.globalId));
+  const removed = new Set([...removedIds, ...moved.map(track => track.globalId)]);
+  return reconcileTracks(previous, [
+    ...previous.filter(track => !removed.has(track.globalId)).map(track => {
+      const replacement = replacements.get(track.globalId);
+      replacements.delete(track.globalId);
+      return replacement ?? track;
+    }),
+    ...moved,
+    // A track that was previously unavailable can enter the library on a metadata update.
+    ...replacements.values(),
+  ]);
+}

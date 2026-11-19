@@ -68,11 +68,11 @@ export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, en
   useEffect(() => {
     setLyrics(enabled && track ? cachedLyrics(track) : undefined);
     if (!enabled || !track) return;
-    let cancelled = false;
-    void loadLyrics(track)
-      .then((result) => { if (!cancelled) setLyrics(result); })
+    const controller = new AbortController();
+    void loadLyrics(track, controller.signal)
+      .then((result) => { if (!controller.signal.aborted) setLyrics(result); })
       .catch(() => {});
-    return () => { cancelled = true; };
+    return () => controller.abort();
   }, [track, enabled]);
   // Shares the lyrics view's auto-sync analysis, which also measures where the vocals end.
   const [detected, setDetected] = useState<DetectedOffset>();

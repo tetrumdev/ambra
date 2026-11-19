@@ -3,6 +3,7 @@ mod discover;
 mod downloads;
 mod playlists;
 
+use crate::library_sync::{Change, Events, Journal};
 use crate::loudness::Loudness;
 use crate::browser_auth::{PendingLogin, SpotifyLogin};
 use crate::media_cache::MediaCache;
@@ -83,7 +84,9 @@ struct AppState {
     pending_spotify_login: Arc<Mutex<Option<PendingLogin<SpotifyLogin>>>>,
     http_client: reqwest::Client,
     download_http_client: reqwest::Client,
-    library_entries: Arc<RwLock<Vec<LibraryEntry>>>,
+    library: Arc<RwLock<StreamingLibrary>>,
+    library_events: Events,
+    lyrics: Arc<crate::lyrics::Lookups>,
     search_cache: Arc<RwLock<HashMap<SearchCacheKey, CachedSearchPage>>>,
     catalog_cache:
         Arc<RwLock<HashMap<SearchCacheKey, (Instant, crate::models::CatalogSearchPage)>>>,
@@ -142,6 +145,50 @@ struct LibraryEntry {
     provider_track_id: String,
 }
 
+impl LibraryEntry {
+    fn id(&self) -> String {
+        format!("{}:{}", provider_slug(self.provider), self.provider_track_id)
+    }
+}
+
+#[derive(Default)]
+struct StreamingLibrary {
+    entries: Vec<LibraryEntry>,
+    changes: Journal<Change<LibraryEntry>>,
+}
+
+impl AppState {
+    fn publish_library_version(&self, library: &StreamingLibrary) {
+        self.library_events.send_modify(|versions| versions.streaming = library.changes.cursor());
+    }
+
+    async fn change_streaming_service(&self, change: impl FnOnce()) {
+        let mut library = self.library.write().await;
+        change();
+        library.changes.reset();
+        self.publish_library_version(&library);
+    }
+
+    async fn refresh_library_tracks(&self, ids: &HashSet<String>) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut library = self.library.write().await;
+        self.record_library_refresh(&mut library, ids);
+    }
+
+    fn record_library_refresh(&self, library: &mut StreamingLibrary, ids: &HashSet<String>) {
+        let keys: HashSet<_> = ids.iter().filter_map(|id| id.split_once(':')).collect();
+        let changed: Vec<_> = library.entries.iter()
+            .filter(|entry| keys.contains(&(provider_slug(entry.provider), entry.provider_track_id.as_str())))
+            .cloned().map(Change::Refresh).collect();
+        if !changed.is_empty() {
+            library.changes.record(changed);
+            self.publish_library_version(library);
+        }
+    }
+}
+
 /// `bind` (from the command line) overrides the saved setting; `AMBRA_SERVER_ADDRESS` overrides both.
 pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     let (providers_ready_tx, providers_ready) = watch::channel(false);
@@ -158,6 +205,11 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     let qobuz_cell = Arc::new(ProviderSlot::new());
     let spotify_cell = Arc::new(SyncRwLock::new(None));
     let user_state = Arc::new(crate::user_state::UserState::new());
+    let library_changes = Journal::default();
+    let library_events = Events::new(crate::library_sync::Versions {
+        streaming: library_changes.cursor(),
+        local: String::new(),
+    });
     let state = AppState {
         tidal: tidal_cell,
         qobuz: qobuz_cell,
@@ -174,7 +226,12 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         )),
         http_client,
         download_http_client: downloads::http_client()?,
-        library_entries: Arc::new(RwLock::new(initial_library_entries())),
+        library: Arc::new(RwLock::new(StreamingLibrary {
+            entries: initial_library_entries(),
+            changes: library_changes,
+        })),
+        library_events: library_events.clone(),
+        lyrics: Arc::default(),
         search_cache: Arc::new(RwLock::new(HashMap::new())),
         catalog_cache: Arc::new(RwLock::new(HashMap::new())),
         search_fetches: Arc::new(Mutex::new(HashMap::new())),
@@ -216,7 +273,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .merge(crate::soloist::router(state.soloist.clone()))
         .merge(crate::impulses::router())
         .merge(crate::remote::router())
-        .merge(crate::local_music::router(user_state.clone()))
+        .merge(crate::local_music::router(user_state.clone(), library_events))
         .merge(crate::user_state::router(user_state.clone()))
         .merge(downloads::routes())
         .route("/api/health", get(health))
@@ -227,6 +284,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route("/api/auth/{provider}/cancel", post(cancel_auth))
         .route("/api/auth/{provider}/disconnect", post(disconnect_auth))
         .route("/api/library", get(library))
+        .route("/api/library/events", get(library_events_stream))
         .route("/api/providers/{provider}/playlists", get(playlists::list))
         .route("/api/providers/{provider}/playlists/{playlist_id}", get(playlists::contents).post(playlists::change).delete(playlists::delete))
         .route("/api/library/tracks", post(add_track))
@@ -397,6 +455,7 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
             .unwrap_or_else(|error| error.into_inner()) = Some(provider);
     }
     let _ = ready.send(true);
+    state.library_events.send_modify(|_| {});
     if env::var_os("AMBRA_PERF").is_some() {
         eprintln!(
             "[ambra:perf] providers restored in {} ms",
@@ -411,6 +470,7 @@ fn path_needs_providers(path: &str) -> bool {
     path != "/api/health"
         && path != "/api/state"
         && path != "/api/lyrics"
+        && path != "/api/library/events"
         && path != "/api/recommendations/discover"
         && !path.starts_with("/api/artwork/")
         // Pairing, settings and other devices' playback never involve a music service.
@@ -432,15 +492,12 @@ async fn lyrics(
     State(state): State<AppState>,
     Query(request): Query<crate::lyrics::LyricsRequest>,
 ) -> Response {
-    let result = if let Err(message) = request.validate() {
-        Err(ApiError::bad_request(message))
+    let mut response = if let Err(message) = request.validate() {
+        ApiError::bad_request(message).into_response()
     } else {
-        crate::lyrics::fetch(&state.http_client, &request)
-            .await
-            .map(Json)
-            .map_err(ApiError::upstream)
+        let lyrics = state.lyrics.fetch(&state.http_client, request).await;
+        Json(lyrics.as_ref()).into_response()
     };
-    let mut response = result.into_response();
     response
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
@@ -503,7 +560,7 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AuthStatusResponse {
     tidal: bool,
@@ -572,21 +629,23 @@ struct AuthStatusQuery {
     live: bool,
 }
 
-/// Apps poll this, so only Settings asks for the slower live check.
-async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStatusQuery>) -> Json<AuthStatusResponse> {
-    let spotify = match current_spotify(&state) {
-        Some(provider) if query.live => tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
-            .await
-            .unwrap_or_else(|_| provider.is_connected()),
-        // A dropped session is replaced on the next request, so it's still signed in.
-        Some(provider) => provider.is_connected() || provider.needs_reconnect(),
-        None => false,
-    };
-    Json(AuthStatusResponse {
+fn known_auth_status(state: &AppState) -> AuthStatusResponse {
+    AuthStatusResponse {
         tidal: state.tidal.get().is_some(),
         qobuz: state.qobuz.get().is_some(),
-        spotify,
-    })
+        spotify: current_spotify(state).is_some_and(|provider| provider.is_connected() || provider.needs_reconnect()),
+    }
+}
+
+/// Only an explicit live check asks Spotify whether its session still works.
+async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStatusQuery>) -> Json<AuthStatusResponse> {
+    let mut status = known_auth_status(&state);
+    if query.live && let Some(provider) = current_spotify(&state) {
+        status.spotify = tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
+            .await
+            .unwrap_or_else(|_| provider.is_connected());
+    }
+    Json(status)
 }
 
 async fn start_auth(
@@ -681,21 +740,23 @@ async fn complete_auth(
             let provider = TidalProvider::complete_login(login, &request.callback_url)
                 .await
                 .map_err(ApiError::upstream)?;
-            let _ = state.tidal.set(provider);
+            state.change_streaming_service(|| { let _ = state.tidal.set(provider); }).await;
         }
         "qobuz" => {
             let login = take_login(&mut *state.pending_qobuz_login.lock().await, &caller, &request)?;
             let provider = QobuzProvider::complete_login(login, &request.callback_url)
                 .await
                 .map_err(ApiError::upstream)?;
-            let _ = state.qobuz.set(provider);
+            state.change_streaming_service(|| { let _ = state.qobuz.set(provider); }).await;
         }
         "spotify" => {
             let _spotify = state.spotify_login.lock().await;
             let login = take_login(&mut *state.pending_spotify_login.lock().await, &caller, &request)?;
             let provider = SpotifyProvider::complete_browser_login(login, &request.callback_url).await.map_err(ApiError::upstream)?;
-            state.soloist.set_account(Some(provider.account_id()));
-            *state.spotify.write().unwrap_or_else(|error| error.into_inner()) = Some(provider);
+            state.change_streaming_service(|| {
+                state.soloist.set_account(Some(provider.account_id()));
+                *state.spotify.write().unwrap_or_else(|error| error.into_inner()) = Some(provider);
+            }).await;
             state.search_cache.write().await.retain(|key, _| key.provider != MusicProvider::Spotify);
             state.catalog_cache.write().await.retain(|key, _| key.provider != MusicProvider::Spotify);
         }
@@ -731,7 +792,8 @@ async fn disconnect_auth(
     if provider == "tidal" { state.pending_tidal_login.lock().await.take(); }
     if provider == "qobuz" { state.pending_qobuz_login.lock().await.take(); }
     if provider == "spotify" { state.pending_spotify_login.lock().await.take(); }
-    {
+    let mut library = state.library.write().await;
+    let cleanup = (|| -> Result<(), ApiError> {
         let _credentials = crate::service_auth::credentials_guard();
         // Mark first: in-flight requests must not restore credentials after sign-out.
         crate::service_auth::set_disconnected(&provider, true).map_err(ApiError::internal)?;
@@ -754,7 +816,12 @@ async fn disconnect_auth(
             }
             _ => unreachable!(),
         }
-    }
+        Ok(())
+    })();
+    library.changes.reset();
+    state.publish_library_version(&library);
+    drop(library);
+    cleanup?;
     if provider == "spotify" { state.soloist.disconnect().await.map_err(ApiError::upstream)?; }
     state.search_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
     state.catalog_cache.write().await.retain(|key, _| provider_slug(key.provider) != provider);
@@ -993,30 +1060,121 @@ async fn probe_artwork_dimensions(client: &reqwest::Client, url: &str) -> Option
     None
 }
 
-async fn library(State(state): State<AppState>) -> Result<Json<LibraryResponse>, ApiError> {
-    let entries = state.library_entries.read().await.clone();
-    let disconnected = entries.iter().filter(|entry| !provider_is_configured(&state, entry.provider)).cloned().collect::<Vec<_>>();
-    let available_entries = entries
-        .into_iter()
-        .filter(|entry| provider_is_configured(&state, entry.provider))
-        .collect::<Vec<_>>();
-    let (tracks, mut unavailable) =
-        load_available_tracks(&state, &available_entries, LIBRARY_LOAD_CONCURRENCY).await;
-    unavailable.extend(disconnected);
+#[derive(Deserialize)]
+struct LibraryQuery {
+    since: Option<String>,
+}
 
-    Ok(Json(LibraryResponse {
-        tracks,
-        unavailable_track_ids: unavailable
-            .iter()
-            .map(|entry| {
-                format!(
-                    "{}:{}",
-                    provider_slug(entry.provider),
-                    entry.provider_track_id
-                )
-            })
-            .collect(),
-    }))
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LibrarySync {
+    #[serde(flatten)]
+    library: LibraryResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reset: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    removed_track_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    updated_track_ids: Vec<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    retry: bool,
+}
+
+#[derive(Default)]
+struct StreamingDelta {
+    entries: Vec<LibraryEntry>,
+    removed: Vec<String>,
+    updated: Vec<String>,
+}
+
+fn streaming_delta<'a>(changes: impl DoubleEndedIterator<Item = &'a Change<LibraryEntry>>) -> StreamingDelta {
+    // The last membership operation wins. Metadata-only updates keep a track in place.
+    let mut membership = HashSet::new();
+    let mut refreshed = HashSet::new();
+    let mut updates = Vec::new();
+    let mut delta = StreamingDelta::default();
+    for change in changes.rev() {
+        match change {
+            Change::Upsert(entry) if membership.insert(entry.id()) => delta.entries.push(entry.clone()),
+            Change::Remove(id) if membership.insert(id.clone()) => delta.removed.push(id.clone()),
+            Change::Refresh(entry) if refreshed.insert(entry.id()) => updates.push(entry),
+            _ => {}
+        }
+    }
+    delta.entries.reverse();
+    for entry in updates.into_iter().rev() {
+        let id = entry.id();
+        if !membership.contains(&id) {
+            delta.updated.push(id);
+            delta.entries.push(entry.clone());
+        }
+    }
+    delta
+}
+
+async fn library(State(state): State<AppState>, Query(query): Query<LibraryQuery>) -> Json<LibrarySync> {
+    let (delta, cursor, reset) = {
+        let library = state.library.read().await;
+        let delta = query.since.as_deref().and_then(|since| library.changes.since(since));
+        let reset = query.since.as_ref().map(|_| delta.is_none());
+        let cursor = query.since.as_ref().map(|_| library.changes.cursor());
+        let delta = match delta {
+            Some(changes) => streaming_delta(changes),
+            None => StreamingDelta { entries: library.entries.clone(), ..StreamingDelta::default() },
+        };
+        (delta, cursor, reset)
+    };
+    let connected = known_auth_status(&state);
+    let spotify_configured = provider_is_configured(&state, MusicProvider::Spotify);
+    let (available, disconnected): (Vec<_>, Vec<_>) = delta.entries.into_iter().partition(|entry| match entry.provider {
+        MusicProvider::Tidal => connected.tidal,
+        MusicProvider::Qobuz => connected.qobuz,
+        MusicProvider::Spotify => spotify_configured,
+    });
+    let (tracks, mut unavailable) =
+        load_available_tracks(&state, &available, LIBRARY_LOAD_CONCURRENCY).await;
+    let retry = cursor.is_some() && !unavailable.is_empty();
+    unavailable.extend(disconnected);
+    Json(LibrarySync {
+        library: LibraryResponse {
+            tracks,
+            unavailable_track_ids: unavailable.iter().map(LibraryEntry::id).collect(),
+        },
+        cursor,
+        reset,
+        removed_track_ids: delta.removed,
+        updated_track_ids: delta.updated,
+        retry,
+    })
+}
+
+async fn library_events_stream(State(state): State<AppState>) -> Response {
+    let receiver = state.library_events.subscribe();
+    let lines = stream::unfold(
+        (state, receiver, true, None),
+        |(state, mut receiver, first, previous_services)| async move {
+            let changed = first || tokio::select! {
+                changed = receiver.changed() => { changed.ok()?; true }
+                () = tokio::time::sleep(Duration::from_secs(10)) => false,
+            };
+            // A live Spotify request can also discover revoked credentials.
+            // Use the existing heartbeat to surface that change without another HTTP request.
+            let services = (*state.providers_ready.borrow()).then(|| known_auth_status(&state));
+            let mut line = if changed || services != previous_services {
+                let versions = receiver.borrow_and_update();
+                serde_json::to_vec(&serde_json::json!({
+                    "local": versions.local, "streaming": versions.streaming, "services": services,
+                })).unwrap()
+            } else {
+                Vec::new()
+            };
+            line.push(b'\n');
+            Some((Ok::<_, std::convert::Infallible>(line), (state, receiver, false, services)))
+        },
+    );
+    ([(CONTENT_TYPE, "application/x-ndjson"), (CACHE_CONTROL, "no-store")], Body::from_stream(lines)).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1357,12 +1515,14 @@ async fn add_track(
     };
     let tracks = load_tracks(&state, std::slice::from_ref(&entry)).await?;
 
-    let mut library_entries = state.library_entries.write().await;
-    if !library_entries.contains(&entry) {
-        library_entries.push(entry);
-        if let Err(error) = save_library_entries(&library_entries) {
+    let mut library = state.library.write().await;
+    if !library.entries.contains(&entry) {
+        library.entries.push(entry.clone());
+        if let Err(error) = save_library_entries(&library.entries) {
             eprintln!("Could not persist the streaming library cache: {error}");
         }
+        library.changes.record(vec![Change::Upsert(entry)]);
+        state.publish_library_version(&library);
     }
 
     Ok(Json(LibraryResponse::new(tracks)))
@@ -1378,11 +1538,14 @@ async fn remove_tracks(
     Json(request): Json<RemoveTracksRequest>,
 ) -> Result<StatusCode, ApiError> {
     let removed = request.tracks.into_iter().collect::<HashSet<_>>();
-    let mut library_entries = state.library_entries.write().await;
-    let before = library_entries.len();
-    library_entries.retain(|entry| !removed.contains(entry));
-    if library_entries.len() != before {
-        save_library_entries(&library_entries).map_err(ApiError::internal)?;
+    let mut library = state.library.write().await;
+    let (removed, kept): (Vec<_>, Vec<_>) = library.entries.iter().cloned()
+        .partition(|entry| removed.contains(entry));
+    if !removed.is_empty() {
+        save_library_entries(&kept).map_err(ApiError::internal)?;
+        library.entries = kept;
+        library.changes.record(removed.iter().map(|entry| Change::Remove(entry.id())).collect());
+        state.publish_library_version(&library);
     }
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1690,12 +1853,16 @@ async fn import_album(
     let entries = entries
         .into_iter()
         .filter(|entry| !unavailable.contains(entry))
-        .collect();
+        .collect::<Vec<_>>();
 
-    let mut library_entries = state.library_entries.write().await;
-    move_entries_to_end(&mut library_entries, entries);
-    if let Err(error) = save_library_entries(&library_entries) {
-        eprintln!("Could not persist the streaming library cache: {error}");
+    let mut library = state.library.write().await;
+    if !library.entries.ends_with(&entries) {
+        move_entries_to_end(&mut library.entries, entries.clone());
+        if let Err(error) = save_library_entries(&library.entries) {
+            eprintln!("Could not persist the streaming library cache: {error}");
+        }
+        library.changes.record(entries.into_iter().map(Change::Upsert).collect());
+        state.publish_library_version(&library);
     }
 
     Ok(Json(LibraryResponse::new(tracks)))
@@ -1729,19 +1896,15 @@ async fn load_available_tracks(
     concurrency: usize,
 ) -> (Vec<TrackMetadata>, Vec<LibraryEntry>) {
     let results = stream::iter(entries.iter().cloned())
-        .map(|entry| {
-            let state = state.clone();
-            async move {
-                let result = load_track(&state, &entry).await;
-                (entry, result)
-            }
+        .map(|entry| async move {
+            let result = load_track(state, &entry).await;
+            (entry, result)
         })
-        .buffered(concurrency)
-        .collect::<Vec<_>>()
-        .await;
-    let mut tracks = Vec::with_capacity(results.len());
+        .buffered(concurrency);
+    futures_util::pin_mut!(results);
+    let mut tracks = Vec::with_capacity(entries.len());
     let mut failed = Vec::new();
-    for (entry, result) in results {
+    while let Some((entry, result)) = results.next().await {
         match result {
             Ok(track) => tracks.push(track),
             Err(error) => {
@@ -2667,6 +2830,52 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn streaming_library_reports_only_changes_after_the_clients_cursor() {
+        use super::*;
+        let dir = std::env::temp_dir().join(format!("ambra-library-{}", crate::server_config::random_hex(8)));
+        let state = discover::tests::state(&dir);
+        let entry = |id: &str| LibraryEntry { provider: MusicProvider::Tidal, provider_track_id: id.into() };
+        let initial_cursor = {
+            let mut library = state.library.write().await;
+            library.entries = vec![entry("a"), entry("b")];
+            library.changes.cursor()
+        };
+
+        let Json(snapshot) = library(State(state.clone()), Query(LibraryQuery { since: Some(String::new()) })).await;
+        assert_eq!(snapshot.reset, Some(true));
+        assert_eq!(snapshot.library.unavailable_track_ids, ["tidal:a", "tidal:b"]);
+        assert_eq!(snapshot.cursor.as_deref(), Some(initial_cursor.as_str()));
+
+        let event_stream = library_events_stream(State(state.clone())).await;
+        let mut events = event_stream.into_body().into_data_stream();
+        assert!(events.next().await.is_some());
+        {
+            let mut library = state.library.write().await;
+            library.entries = vec![entry("b"), entry("c")];
+            library.changes.record(vec![Change::Remove("tidal:a".into()), Change::Upsert(entry("c"))]);
+            library.changes.record(vec![Change::Refresh(entry("c")), Change::Refresh(entry("b"))]);
+            state.publish_library_version(&library);
+        }
+        let event = tokio::time::timeout(Duration::from_secs(1), events.next()).await.unwrap().unwrap().unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&event).unwrap();
+        let Json(delta) = library(State(state.clone()), Query(LibraryQuery { since: Some(initial_cursor.clone()) })).await;
+        assert_eq!(delta.reset, Some(false));
+        assert_eq!(delta.removed_track_ids, ["tidal:a"]);
+        assert_eq!(delta.updated_track_ids, ["tidal:b"]);
+        assert_eq!(delta.library.unavailable_track_ids, ["tidal:c", "tidal:b"]);
+        assert_eq!(event["streaming"], delta.cursor.as_deref().unwrap());
+        let Json(unchanged) = library(State(state.clone()), Query(LibraryQuery { since: delta.cursor })).await;
+        assert_eq!(unchanged.reset, Some(false));
+        assert!(unchanged.library.unavailable_track_ids.is_empty());
+        assert!(unchanged.removed_track_ids.is_empty());
+        state.change_streaming_service(|| {}).await;
+        let Json(reset) = library(State(state), Query(LibraryQuery { since: Some(initial_cursor) })).await;
+        assert_eq!(reset.reset, Some(true));
+        assert_eq!(reset.library.unavailable_track_ids, ["tidal:b", "tidal:c"]);
+        let _ = tokio::fs::remove_dir_all(dir).await;
+    }
+
     #[test]
     fn artwork_failures_keep_usable_images_and_do_not_settle_the_quality_cache() {
         let source_url = "https://resources.tidal.com/images/cover/1280x1280.jpg";

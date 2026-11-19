@@ -1154,7 +1154,7 @@ export function LyricsView({
     setLyrics(track ? cachedLyrics(track) ?? null : null);
     setError(false);
     if (track) {
-      void loadLyrics(track)
+      void loadLyrics(track, controller.signal)
         .then((result) => {
           if (!controller.signal.aborted) setLyrics(result);
         })

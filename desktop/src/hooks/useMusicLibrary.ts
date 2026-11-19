@@ -1,13 +1,14 @@
-import { getServerConnection, subscribeServerConnection, serverBaseUrl } from "../api/serverConnection";
+import { getServerConnection, subscribeServerConnection, serverUrl, serverConnectionSignal } from "../api/serverConnection";
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { setPersistentItem } from "../utils/persistentStorage";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { isTrackAvailable } from "./useServiceAvailability";
+import { isTrackAvailable, setServiceEventsAvailable, updateServiceAvailability } from "./useServiceAvailability";
+import { followLibraryEvents, type LibraryVersions } from "../api/libraryEvents";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { mark } from "../utils/perf";
 import { localCoverSources } from "../utils/localArtwork";
-import { reconcileServerLibrary, reconcileTracks } from "../utils/trackReconcile";
+import { applyServerLibraryDelta, reconcileServerLibrary, reconcileTracks } from "../utils/trackReconcile";
 import type {
   GlobalTrackId,
   LibraryTrack,
@@ -22,15 +23,16 @@ import {
   type SearchProvider,
 } from "../api/server";
 import {
-  loadCachedServerTracks,
+  loadCachedServerLibrary,
+  type CachedServerLibrary,
   loadRemovedLibraryTrackIds,
   loadStreamingCache,
-  saveCachedServerTracks,
+  saveCachedServerLibrary,
   saveRemovedLibraryTrackIds,
 } from "../utils/libraryCache";
 import { moveAlbumToEndInOrder } from "../utils/trackOrder";
 import { appendLibraryOrder, loadLibraryOrder, orderLibraryTracks, reorderLibraryTracks } from "../utils/libraryOrder";
-import { loadLocalMusic, localMusicTrack } from "../api/localMusic";
+import { loadLocalMusic, localMusicSnapshot, localMusicTrack, mergeLocalMusic } from "../api/localMusic";
 import { offlineTrack, useLocalDownloads } from "../utils/offlineDownloads";
 
 type MusicLibrary = {
@@ -103,8 +105,9 @@ function appendUniqueTracks(currentTracks: Track[], incomingTracks: Track[]) {
 
 export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): MusicLibrary {
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
-  const serverKey = connection?.baseUrl ?? serverBaseUrl;
-  const loadedServer = useRef(serverKey);
+  const serverKey = `${connection?.server?.publicKey ?? ""}:${serverUrl("/api/library")}`;
+  const cachedServerLibrary = useRef<{ key: string; library: CachedServerLibrary } | null>(null);
+  const refreshServer = useRef<() => Promise<number>>(async () => 0);
   const [libraryOrder, setLibraryOrder] = useState(loadLibraryOrder);
   const savedLibraryOrder = useRef(libraryOrder);
   useEffect(() => {
@@ -115,10 +118,15 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     catch (error) { console.warn("Could not save library ordering:", error); }
   }, [libraryOrder]);
   const [localTracks, setLocalTracks] = useState<Track[]>([]);
-  const [sharedLocalTracks, setSharedLocalTracks] = useState<Track[]>([]);
-  const lastSharedListing = useRef<Track[] | null>(null);
+  const [sharedLocalTracks, setSharedLocalTracks] = useState<Track[]>(
+    () => localOnly ? [] : localMusicSnapshot()?.tracks ?? [],
+  );
   const [serverTracks, setServerTracks] = useState<Track[]>(
-    () => localOnly ? [] : loadCachedServerTracks(),
+    () => {
+      const library = localOnly ? { tracks: [] } : loadCachedServerLibrary();
+      cachedServerLibrary.current = { key: serverKey, library };
+      return library.tracks;
+    },
   );
   const [removedTrackIds, setRemovedTrackIds] = useState(
     loadRemovedLibraryTrackIds,
@@ -152,25 +160,8 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   );
   const isLoading = isLocalLoading && isServerLoading;
 
-  // Only persist what changed since it was loaded. On a normal launch the cached
-  // library is restored and confirmed unchanged, so nothing is re-serialized.
   const serverTracksRef = useRef(serverTracks);
   serverTracksRef.current = serverTracks;
-  const savedServerTracks = useRef(serverTracks);
-  useEffect(() => {
-    if (loadedServer.current !== serverKey || savedServerTracks.current === serverTracks) return;
-    savedServerTracks.current = serverTracks;
-    saveCachedServerTracks(serverTracks);
-  }, [serverTracks, serverKey]);
-
-  useEffect(() => {
-    if (loadedServer.current === serverKey) return;
-    loadedServer.current = serverKey;
-    const empty: Track[] = [];
-    savedServerTracks.current = empty;
-    setServerTracks(empty); setSharedLocalTracks([]); setIsServerReachable(false);
-    setError(null); setAddAlbumError(null);
-  }, [serverKey]);
 
   const savedRemovedTrackIds = useRef(removedTrackIds);
   useEffect(() => {
@@ -181,23 +172,6 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
 
   useEffect(() => {
     let cancelled = false;
-    const controller = new AbortController();
-
-    // Show the cached streaming library immediately; the server sync below is
-    // only a refresh. Ignored if the server (or a legacy copy) already answered.
-    if (!localOnly) void loadStreamingCache()
-      .then((cached) => {
-        if (cancelled || cached.length === 0) return;
-        setServerTracks((current) => {
-          if (current.length > 0) return current;
-          // Adopted as-is from storage, so the save effect must not rewrite it.
-          savedServerTracks.current = cached;
-          mark("streaming-cache-loaded");
-          return cached;
-        });
-      })
-      .catch((reason) => console.warn("Could not load the streaming library cache:", reason));
-
     // Thumbnails are generated in the background after a scan; pick them up as
     // they land without rescanning the disk.
     let stopListening: (() => void) | undefined;
@@ -259,67 +233,153 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
         if (!cancelled) setIsLocalLoading(false);
       });
 
-    if (!localOnly) void loadServerLibrary(controller.signal)
-      .then(({ tracks: loadedTracks, unavailableTrackIds }) => {
-        if (!cancelled) {
-          // A successful response is authoritative. Keeping cached tracks from
-          // disconnected providers leaves playable-looking rows whose stream
-          // endpoints can only return 503.
-          setServerTracks((current) =>
-            reconcileServerLibrary(current, loadedTracks, unavailableTrackIds),
-          );
-          setIsServerReachable(true);
-          mark("server-synced");
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!cancelled) {
-          setIsServerReachable(false);
-          console.warn("Could not load streaming providers:", reason);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setIsServerLoading(false);
-      });
-
     return () => {
       cancelled = true;
-      controller.abort();
       stopListening?.();
     };
-  }, [localOnly, serverKey]);
+  }, []);
 
   useEffect(() => {
     if (localOnly) return;
-    lastSharedListing.current = null;
-    let disposed = false;
-    let refreshing = false;
     const controller = new AbortController();
-    const refresh = async () => {
-      if (refreshing) return;
-      refreshing = true;
-      try {
-        const tracks = await loadLocalMusic(controller.signal);
-        // The loader returns the same array for an unchanged listing, even if reconciliation
-        // kept older track objects. Skip both the state update and the full comparison.
-        if (!disposed && tracks !== lastSharedListing.current) {
-          lastSharedListing.current = tracks;
-          setSharedLocalTracks(current => reconcileTracks(current, tracks));
-        }
-      } catch { /* The device library stays available while the server is away. */ }
-      finally { refreshing = false; }
+    const signal = AbortSignal.any([controller.signal, serverConnectionSignal()]);
+    const remembered = cachedServerLibrary.current;
+    let snapshot = remembered && remembered.key === serverKey ? remembered.library : loadCachedServerLibrary();
+    setServerTracks(snapshot.tracks);
+    setSharedLocalTracks(localMusicSnapshot()?.tracks ?? []);
+    setIsServerReachable(false);
+    setIsServerLoading(true);
+    const ready = snapshot.cursor ? Promise.resolve() : loadStreamingCache().then(cached => {
+      if (signal.aborted || snapshot.cursor || snapshot.tracks.length) return;
+      if (cached.cursor || cached.tracks.length) {
+        snapshot = cached;
+        cachedServerLibrary.current = { key: serverKey, library: snapshot };
+        setServerTracks(cached.tracks);
+        mark("streaming-cache-loaded");
+      }
+    }).catch(reason => console.warn("Could not load the streaming library cache:", reason));
+
+    let versions: LibraryVersions | undefined;
+    let legacy = false;
+    let streaming: Promise<number> | undefined;
+    let local: Promise<void> | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let poll: ReturnType<typeof setInterval> | undefined;
+
+    const retryChanges = () => {
+      if (retry || signal.aborted || !versions) return;
+      retry = setTimeout(() => {
+        retry = undefined;
+        void syncStreaming().catch(() => {});
+        void syncLocal();
+      }, 3000);
     };
-    void refresh();
-    const timer = setInterval(() => void refresh(), 5000);
-    return () => { disposed = true; controller.abort(); clearInterval(timer); };
-  }, [localOnly, serverKey]);
+
+    const syncStreaming = (refresh = false): Promise<number> => {
+      if (streaming) return streaming;
+      if (signal.aborted || (!legacy && !versions?.services)) return Promise.resolve(snapshot.tracks.length);
+      const wanted = versions?.streaming;
+      streaming = (async () => {
+        await ready;
+        signal.throwIfAborted();
+        const takeSnapshot = refresh && snapshot.retry;
+        if (!legacy && wanted === snapshot.cursor && !takeSnapshot) {
+          setIsServerReachable(true);
+          return snapshot.tracks.length;
+        }
+        const result = await loadServerLibrary(signal, legacy ? undefined : takeSnapshot ? "" : snapshot.cursor ?? "");
+        signal.throwIfAborted();
+        const apply = (current: Track[]) => result.cursor && !result.reset
+          ? applyServerLibraryDelta(current, result.tracks, result.removedTrackIds ?? [], result.updatedTrackIds)
+          : reconcileServerLibrary(current, result.tracks, result.unavailableTrackIds);
+        const previous = snapshot.tracks;
+        const tracks = apply(previous);
+        // A lookup failure remains retryable on the next reconnect or explicit refresh.
+        const retry = Boolean(result.retry || (result.cursor && !result.reset && snapshot.retry));
+        const cursor = result.cursor;
+        const changed = tracks !== snapshot.tracks || retry !== Boolean(snapshot.retry);
+        if (changed || cursor !== snapshot.cursor) {
+          const save = changed || !snapshot.cursor;
+          snapshot = { tracks, cursor, retry };
+          cachedServerLibrary.current = { key: serverKey, library: snapshot };
+          if (save) saveCachedServerLibrary(snapshot);
+          setServerTracks(current => current === previous ? tracks : apply(current));
+        }
+        setIsServerReachable(true);
+        mark("server-synced");
+        return tracks.length;
+      })().catch(reason => {
+        if (!signal.aborted) {
+          setIsServerReachable(false);
+          retryChanges();
+        }
+        throw reason;
+      }).finally(() => {
+        streaming = undefined;
+        if (signal.aborted) return;
+        setIsServerLoading(false);
+        // A notification may arrive while the request is still being resolved.
+        if (versions?.streaming !== wanted) void syncStreaming().catch(() => {});
+      });
+      return streaming;
+    };
+
+    const syncLocal = () => {
+      if (local || signal.aborted || (!legacy && !versions)) return;
+      const wanted = versions?.local;
+      if (!legacy && wanted === localMusicSnapshot()?.tag) return;
+      local = loadLocalMusic(signal, !legacy).then(({ tracks }) => {
+        if (!signal.aborted) setSharedLocalTracks(tracks);
+      }).catch(retryChanges).finally(() => {
+        local = undefined;
+        if (versions?.local !== wanted) syncLocal();
+      });
+    };
+
+    refreshServer.current = () => syncStreaming(true);
+    const onOnline = () => {
+      if (legacy) {
+        void syncStreaming().catch(() => {});
+        void syncLocal();
+      }
+    };
+    window.addEventListener("online", onOnline);
+    followLibraryEvents(signal, next => {
+      setServiceEventsAvailable(true);
+      if (next.services) updateServiceAvailability(next.services);
+      const reconnected = !versions?.services;
+      versions = next;
+      void syncStreaming(reconnected).catch(() => {});
+      syncLocal();
+    }, () => {
+      versions = undefined;
+      setIsServerReachable(false);
+      setIsServerLoading(false);
+    }, () => {
+      legacy = true;
+      setServiceEventsAvailable(false);
+      void syncStreaming().catch(() => {});
+      syncLocal();
+      poll = setInterval(syncLocal, 5000);
+    });
+    return () => {
+      controller.abort();
+      clearTimeout(retry);
+      clearInterval(poll);
+      window.removeEventListener("online", onOnline);
+      refreshServer.current = async () => 0;
+      setServiceEventsAvailable(false);
+    };
+  }, [localOnly, serverKey, connection]);
 
   const addAlbum = useCallback(async (url: string) => {
     setIsAddingAlbum(true);
     setAddAlbumError(null);
 
+    const signal = serverConnectionSignal();
     try {
       const albumTracks = await addServerAlbum(url);
+      signal.throwIfAborted();
       const albumTrackIds = new Set(
         albumTracks.map((track) => track.globalId),
       );
@@ -348,8 +408,10 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
   const addTrack = useCallback(
     async (provider: SearchProvider, providerTrackId: string) => {
       if (!isTrackAvailable(`${provider}:`)) return false;
+      const signal = serverConnectionSignal();
       try {
         const [track] = await addServerTrack(provider, providerTrackId);
+        signal.throwIfAborted();
         if (!track) return false;
         const restoring = removedTrackIds.has(track.globalId);
         const alreadyKnown = catalogTracks.some(item => item.globalId === track.globalId);
@@ -421,32 +483,19 @@ export function useMusicLibrary(localOnly: boolean, sharedPlayback = false): Mus
     if (!isTauri()) throw new Error("Add music from the desktop app.");
     // Shared playback lists only the server's music, so dropped songs are copied there too.
     const upload = !localOnly && sharedPlayback;
+    const signal = serverConnectionSignal();
     const result = await invoke<{ tracks: ScannedTrack[]; imported: number; server: Track[] | null }>(
       "import_dropped_music", { paths, upload },
     );
     setLocalTracks((current) => reconcileTracks(current, result.tracks.map(localTrack)));
-    if (result.server) {
+    if (result.server && !signal.aborted) {
       const shared = result.server.map(localMusicTrack);
-      lastSharedListing.current = null;
-      setSharedLocalTracks((current) => reconcileTracks(current, shared));
+      setSharedLocalTracks(current => reconcileTracks(current, mergeLocalMusic(current, shared)));
     }
     return result.imported;
   }, [localOnly, sharedPlayback]);
 
-  const refreshStreamingMusic = useCallback(async () => {
-    if (localOnly) return 0;
-    try {
-      const { tracks: loadedTracks, unavailableTrackIds } = await loadServerLibrary();
-      setServerTracks((current) =>
-        reconcileServerLibrary(current, loadedTracks, unavailableTrackIds),
-      );
-      setIsServerReachable(true);
-      return loadedTracks.length;
-    } catch (reason) {
-      setIsServerReachable(false);
-      throw reason;
-    }
-  }, [localOnly, serverKey]);
+  const refreshStreamingMusic = useCallback(() => refreshServer.current(), []);
 
   return {
     tracks,

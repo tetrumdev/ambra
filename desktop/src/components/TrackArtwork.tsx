@@ -40,6 +40,7 @@ export function TrackArtwork({ track, preferProviderThumbnail = false, onError, 
       const cached = preferProviderThumbnail ? null : await cachedPlaylistArtwork(thumbnail);
       const sources = cached ? [cached, ...candidates] : candidates;
       for (const candidate of sources) {
+        if (cancelled) return;
         try {
           await preloadArtwork(candidate, false, {
             fetchPriority: imageProps.fetchPriority,
@@ -52,6 +53,7 @@ export function TrackArtwork({ track, preferProviderThumbnail = false, onError, 
         }
       }
 
+      if (cancelled) return;
       const artwork = await highestQualityArtwork(track);
       if (!artwork?.url || cancelled) return;
       try {

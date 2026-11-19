@@ -32,7 +32,13 @@ beforeAll(() => {
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement,
     Image: ArtworkImage, IS_REACT_ACT_ENVIRONMENT: true,
-    fetch: () => { calls++; return Promise.resolve(respond()); },
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom),
+    cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
+    fetch: (input: RequestInfo) => {
+      if (String(input).includes("/api/artwork/palette?")) return Promise.resolve(new Response(null, { status: 404 }));
+      calls++;
+      return Promise.resolve(respond());
+    },
     setTimeout: (callback: () => void, delay: number) => {
       const id = ++timerId;
       timers.set(id, { delay, run: callback });

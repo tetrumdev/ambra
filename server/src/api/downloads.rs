@@ -358,9 +358,16 @@ struct RemoveRequest {
 
 async fn remove(State(state): State<AppState>, Json(request): Json<RemoveRequest>) -> Result<StatusCode, ApiError> {
     let store = state.downloads.store()?;
-    for id in &request.ids {
-        store.remove(id).map_err(ApiError::internal)?;
-    }
+    let mut library = state.library.write().await;
+    let mut changed = HashSet::new();
+    let result = request.ids.into_iter().try_for_each(|id| {
+        if store.remove(&id)? {
+            changed.insert(id);
+        }
+        Ok::<(), std::io::Error>(())
+    });
+    state.record_library_refresh(&mut library, &changed);
+    result.map_err(ApiError::internal)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -602,7 +609,7 @@ async fn save_on_server(state: &AppState, track: &TrackRef, quality: Quality) ->
     let produced = produce(state, store, track, quality, &file_stem(&id), Some(metadata.duration_seconds)).await?;
     store
         .record(Entry {
-            id,
+            id: id.clone(),
             provider: provider_slug(track.provider).into(),
             provider_track_id: track.provider_track_id.clone(),
             file: produced.file,
@@ -617,7 +624,9 @@ async fn save_on_server(state: &AppState, track: &TrackRef, quality: Quality) ->
             metadata: serde_json::to_value(&metadata).map_err(|error| error.to_string())?,
             cover_file: None,
         })
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state.refresh_library_tracks(&HashSet::from([id])).await;
+    Ok(())
 }
 
 struct Produced {

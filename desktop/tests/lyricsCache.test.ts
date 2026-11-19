@@ -39,3 +39,40 @@ test("a cached song's lyrics are one object, however often they are read", async
   expect(await loadLyrics(track)).toBe(loaded);
   expect(requests).toBe(1);
 });
+
+test("lyrics requests are shared until their last consumer leaves", async () => {
+  setServerForTesting("http://selected:38147", null);
+  let requests = 0;
+  let cancellations = 0;
+  let finish: (() => void) | undefined;
+  globalThis.fetch = (async (_input, init) => {
+    requests++;
+    return new Promise<Response>((resolve, reject) => {
+      finish = () => resolve(Response.json({
+        status: "unavailable", instrumental: null, sync: "none", hasWordSync: false, plainLyrics: null,
+        source: null, originalFormat: null, offsetMs: 0, language: null, singers: [], lines: [], failedProviders: [],
+      }));
+      init?.signal?.addEventListener("abort", () => { cancellations++; reject(init.signal?.reason); }, { once: true });
+    });
+  }) as typeof fetch;
+  const track = { globalId: "tidal:shared", name: "Shared", artist: "Artist", album: "Album",
+    durationSeconds: 200, provider: "tidal", providerTrackId: "shared" } as Track;
+
+  const view = new AbortController();
+  const preload = new AbortController();
+  const first = loadLyrics(track, view.signal);
+  const second = loadLyrics(track, preload.signal);
+  expect(requests).toBe(1);
+  view.abort();
+  await expect(first).rejects.toThrow();
+  expect(cancellations).toBe(0);
+  preload.abort();
+  await expect(second).rejects.toThrow();
+  await Promise.resolve();
+  expect(cancellations).toBe(1);
+
+  const retried = loadLyrics(track);
+  expect(requests).toBe(2);
+  finish!();
+  expect((await retried).status).toBe("unavailable");
+});

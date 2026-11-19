@@ -1,6 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { serverBaseUrl, serverUrl } from "./serverConnection";
 import type { Track } from "../types/music";
+import { reconcileTracks } from "../utils/trackReconcile";
 
 /** Resolve the server's permanent media paths for this device, including its access token. */
 export function localMusicTrack(track: Track): Track {
@@ -17,23 +18,43 @@ export function localMusicTrack(track: Track): Track {
 /** The server's list as last received, for the server and access it was received with. */
 let listing: { from: string; tag: string; tracks: Track[] } | null = null;
 
-/**
- * The server's local music. Asked for every few seconds, so the server is told which list
- * this app has and answers with only its tag while the library is still that one; the same
- * array is then returned again.
- */
-export async function loadLocalMusic(signal?: AbortSignal): Promise<Track[]> {
+/** Merge changed tracks in the server's content ID order. */
+export function mergeLocalMusic(previous: Track[], changed: Track[]): Track[] {
+  if (changed.length === 0) return previous;
+  const tracks: Track[] = [];
+  let next = 0;
+  for (const track of previous) {
+    while (next < changed.length && changed[next].globalId < track.globalId) {
+      tracks.push(changed[next++]);
+    }
+    tracks.push(changed[next]?.globalId === track.globalId ? changed[next++] : track);
+  }
+  while (next < changed.length) tracks.push(changed[next++]);
+  return tracks;
+}
+
+/** Current servers return a delta. Older servers retain the conditional full-list API. */
+export async function loadLocalMusic(signal: AbortSignal, incremental = false): Promise<{ tracks: Track[]; cursor?: string }> {
   const from = serverUrl("/api/music/local/tracks");
   const known = listing?.from === from ? listing : null;
-  const response = await fetch(`${serverBaseUrl}/api/music/local/tracks?known=${encodeURIComponent(known?.tag ?? "")}`, { signal: signal ?? AbortSignal.timeout(10_000), cache: "no-store" });
+  const query = new URLSearchParams(incremental ? { since: known?.tag ?? "" } : { known: known?.tag ?? "" });
+  const response = await fetch(`${serverBaseUrl}/api/music/local/tracks?${query}`, {
+    signal, cache: "no-store",
+  });
   if (!response.ok) throw new Error(`Could not load local music (${response.status})`);
-  const body = await response.json() as Track[] | { tag: string; tracks?: Track[] };
-  // Older servers answer with the bare list every time.
-  if (Array.isArray(body)) return body.map(localMusicTrack);
-  if (!body.tracks && known) return known.tracks;
-  const tracks = (body.tracks ?? []).map(localMusicTrack);
-  listing = { from, tag: body.tag, tracks };
-  return tracks;
+  const body = await response.json() as Track[] | { tag?: string; cursor?: string; reset?: boolean; tracks?: Track[] };
+  signal.throwIfAborted();
+  if (Array.isArray(body)) return { tracks: body.map(localMusicTrack) };
+  const cursor = body.cursor ?? body.tag;
+  const changed = body.tracks?.map(localMusicTrack) ?? [];
+  const tracks = known && body.cursor && !body.reset ? mergeLocalMusic(known.tracks, changed)
+    : !body.tracks && known ? known.tracks : reconcileTracks(known?.tracks ?? [], changed);
+  if (cursor) listing = { from, tag: cursor, tracks };
+  return { tracks, cursor: body.cursor };
+}
+
+export function localMusicSnapshot() {
+  return listing?.from === serverUrl("/api/music/local/tracks") ? listing : null;
 }
 
 export async function importLocalMusic(): Promise<Track[]> {

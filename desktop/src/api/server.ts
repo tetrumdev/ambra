@@ -7,7 +7,7 @@ import type {
   TrackArtist,
 } from "../types/music";
 import { remoteTrack } from "../utils/remoteTrack";
-import { fetchWhenServerReady } from "../utils/serverReadiness";
+import { fetchWhenServerReady, waitForRetry } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
 import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
 import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection, serverConnectionSignal } from "./serverConnection";
@@ -53,11 +53,16 @@ export type RemoteTrack = {
 
 type LibraryResponse = {
   tracks: RemoteTrack[];
+  cursor?: string;
+  reset?: boolean;
+  retry?: boolean;
+  removedTrackIds?: GlobalTrackId[];
+  updatedTrackIds?: GlobalTrackId[];
   /** Saved tracks the server could not load this time; keep cached copies. */
   unavailableTrackIds?: GlobalTrackId[];
 };
 
-export type ServerLibrary = {
+export type ServerLibrary = Omit<LibraryResponse, "tracks" | "unavailableTrackIds"> & {
   tracks: Track[];
   unavailableTrackIds: Set<GlobalTrackId>;
 };
@@ -104,7 +109,7 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   for (let attempt = 0; ; attempt++) {
     // Give temporary connection/upstream failures one automatic retry before
     // asking the listener to retry. Each attempt gets its own timeout.
-    if (attempt > 0) await new Promise(resolve => setTimeout(resolve, retryDelay));
+    if (attempt > 0) await waitForRetry(retryDelay, signal);
     signal.throwIfAborted();
     let response: Response;
     try {
@@ -407,13 +412,16 @@ async function libraryResponse(response: Response): Promise<LibraryResponse> {
   return (await response.json()) as LibraryResponse;
 }
 
-export async function loadServerLibrary(signal?: AbortSignal): Promise<ServerLibrary> {
-  const library = await libraryResponse(
-    await fetchWhenServerReady(`${serverBaseUrl}/api/library`, signal),
+export async function loadServerLibrary(signal?: AbortSignal, since?: string): Promise<ServerLibrary> {
+  const query = since === undefined ? "" : `?${new URLSearchParams({ since })}`;
+  const { tracks, unavailableTrackIds, ...changes } = await libraryResponse(
+    await fetchWhenServerReady(`${serverBaseUrl}/api/library${query}`, signal),
   );
+  signal?.throwIfAborted();
   return {
-    tracks: library.tracks.map(playableTrack),
-    unavailableTrackIds: new Set(library.unavailableTrackIds ?? []),
+    ...changes,
+    tracks: tracks.map(playableTrack),
+    unavailableTrackIds: new Set(unavailableTrackIds ?? []),
   };
 }
 

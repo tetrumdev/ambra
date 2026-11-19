@@ -84,20 +84,43 @@ fn metadata(track: &crate::Track, file: &str, artwork: Option<&str>, migrate: bo
     })
 }
 
-/// Copies scanned tracks to the server's library and returns the server's whole list.
-fn upload_tracks(app: &tauri::AppHandle, connection: &Connection, tracks: impl IntoIterator<Item = crate::Track>) -> Result<Vec<Value>, String> {
+/// Copies scanned tracks, checking a shared cover once per import.
+fn upload_tracks(
+    app: &tauri::AppHandle,
+    connection: &Connection,
+    tracks: impl IntoIterator<Item = crate::Track>,
+    full_list: bool,
+) -> Result<Vec<Value>, String> {
     let client = Client::builder().timeout(Duration::from_secs(30 * 60)).build().map_err(|e| e.to_string())?;
     let cache_path = crate::cache_directory(app)?.join("server-imports.v1.json");
     let mut cache: BTreeMap<String, CachedFile> = std::fs::read(&cache_path).ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+    let mut covers = BTreeMap::new();
+    let mut imported = BTreeMap::new();
     for track in tracks {
         let file = upload_file(&client, connection, Path::new(&track.audio), &mut cache)?;
-        let artwork = track.cover.as_deref().map(|cover| upload_artwork(&client, connection, cover, &mut cache)).transpose()?;
-        let details = metadata(&track, &file, artwork.as_deref(), connection.mode == Mode::Host || connection.fallback);
-        check(authorize(client.post(format!("{}/api/music/local/tracks", connection.base_url)), connection)
+        let artwork = match track.cover {
+            Some(ref cover) => Some(match covers.entry(cover.clone()) {
+                std::collections::btree_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::btree_map::Entry::Vacant(entry) => {
+                    entry.insert(upload_artwork(&client, connection, cover, &mut cache)?)
+                }
+            }.as_str()),
+            None => None,
+        };
+        let details = metadata(&track, &file, artwork, connection.mode == Mode::Host || connection.fallback);
+        let response = check(authorize(client.post(format!("{}/api/music/local/tracks", connection.base_url)), connection)
             .json(&details).send().map_err(|e| e.to_string())?)?;
+        if !full_list {
+            let track: Value = response.json().map_err(|e| e.to_string())?;
+            let id = track["globalId"].as_str().ok_or("Server returned a track without an ID")?;
+            imported.insert(id.to_owned(), track);
+        }
     }
     crate::write_file_atomic(&cache_path, &serde_json::to_vec(&cache).map_err(|e| e.to_string())?)?;
+    if !full_list {
+        return Ok(imported.into_values().collect());
+    }
     check(authorize(client.get(format!("{}/api/music/local/tracks", connection.base_url)), connection)
         .send().map_err(|e| e.to_string())?)?.json().map_err(|e| e.to_string())
 }
@@ -107,7 +130,7 @@ pub async fn import_local_music(app: tauri::AppHandle) -> Result<Vec<Value>, Str
     let connection = app.state::<ServerLink>().connection();
     tauri::async_runtime::spawn_blocking(move || {
         let tracks = crate::scan_music_blocking(&app)?;
-        upload_tracks(&app, &connection, tracks)
+        upload_tracks(&app, &connection, tracks, true)
     }).await.map_err(|e| e.to_string())?
 }
 
@@ -157,7 +180,7 @@ pub struct DroppedMusic {
     tracks: Vec<crate::Track>,
     /// How many dropped songs are now in the library.
     imported: usize,
-    /// The server's whole list, when the songs were also copied there.
+    /// The tracks copied to the server, when upload was requested.
     server: Option<Vec<Value>>,
 }
 
@@ -179,7 +202,7 @@ pub async fn import_dropped_music(app: tauri::AppHandle, paths: Vec<String>, upl
         }
         let entries = crate::scan_music_entries(&app)?;
         let imported: Vec<_> = entries.iter().filter(|entry| added.contains(&entry.path)).map(|entry| entry.track.clone()).collect();
-        let server = if upload && !imported.is_empty() { Some(upload_tracks(&app, &connection, imported.iter().cloned())?) } else { None };
+        let server = if upload && !imported.is_empty() { Some(upload_tracks(&app, &connection, imported.iter().cloned(), false)?) } else { None };
         Ok(DroppedMusic { imported: imported.len(), tracks: entries.into_iter().map(|entry| entry.track).collect(), server })
     }).await.map_err(|e| e.to_string())?
 }

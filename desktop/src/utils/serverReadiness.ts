@@ -1,4 +1,4 @@
-function waitForRetry(milliseconds: number, signal?: AbortSignal) {
+export function waitForRetry(milliseconds: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
     const abort = () => {
       clearTimeout(timer);
