@@ -40,14 +40,33 @@
     visibility: visible;
 }
 
-/* The swirl is drawn in the cover's own colors, so the cover is lifted off it by whichever suits its rim
-   (coverShadowShare): a soft shadow under a light rim, a soft halo around a dark one. */
-#albumCover:not([data-empty="true"]) {
-    box-shadow:
-        0 4px 16px rgba(0, 0, 0, calc(0.28 * var(--cover-shadow, 1))),
-        0 18px 60px rgba(0, 0, 0, calc(0.42 * var(--cover-shadow, 1))),
-        0 0 18px rgba(255, 255, 255, calc(0.16 * (1 - var(--cover-shadow, 1)))),
-        0 0 70px rgba(255, 255, 255, calc(0.14 * (1 - var(--cover-shadow, 1))));
+/* The swirl is drawn in the cover's own colors, so each stretch of the cover's rim is lifted off it by
+   whichever suits it (coverShadowShares): a soft shadow under a light stretch, a soft halo around a dark
+   one. Each layer is masked by angle around the cover, so the two blend where the rim changes. */
+.coverGlow {
+    position: absolute;
+    inset: -120px;
+    pointer-events: none;
+    -webkit-mask-image: var(--rim-mask);
+    mask-image: var(--rim-mask);
+}
+
+.coverGlow::before {
+    content: "";
+    position: absolute;
+    inset: 120px;
+}
+
+.coverGlow[data-tone="shadow"]::before {
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), 0 18px 60px rgba(0, 0, 0, 0.42);
+}
+
+.coverGlow[data-tone="halo"]::before {
+    box-shadow: 0 0 18px rgba(255, 255, 255, 0.16), 0 0 70px rgba(255, 255, 255, 0.14);
+}
+
+#albumCover[data-empty="true"] .coverGlow {
+    display: none;
 }
 
 /* Opening and closing the player is instant. */
