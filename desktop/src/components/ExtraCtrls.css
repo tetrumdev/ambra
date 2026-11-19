@@ -25,6 +25,7 @@
     box-sizing: border-box;
     flex-direction: column;
     display: flex;
+    overflow-y: auto;
     gap: 4px;
     padding: 10px;
     border: 1px solid #2f2f2f;
@@ -36,6 +37,7 @@
 }
 
 .audioDeviceList {
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -150,6 +152,7 @@
 
 /* Taller than it looks, so the thin bar is easy to catch; the margins give back the extra height. */
 .volumeSlider {
+    flex-shrink: 0;
     width: 100%;
     height: 24px;
     margin: 0 0 -4px;

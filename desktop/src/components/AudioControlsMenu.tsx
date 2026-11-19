@@ -30,7 +30,7 @@ export function AudioControlsMenu({
 }: AudioControlsMenuProps) {
   const panel = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(panel);
-  const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
+  const [position, setPosition] = useState<{ left: number; bottom: number; maxHeight: number }>();
 
   useLayoutEffect(() => {
     const anchorElement = anchor.current;
@@ -39,27 +39,23 @@ export function AudioControlsMenu({
 
     const reposition = () => {
       const anchorBounds = anchorElement.getBoundingClientRect();
-      const menuBounds = panelElement.getBoundingClientRect();
+      const width = panelElement.offsetWidth;
       const left = Math.max(
         4,
         Math.min(
           align === "center"
-            ? anchorBounds.left + anchorBounds.width / 2 - menuBounds.width / 2
-            : anchorBounds.right - menuBounds.width,
-          window.innerWidth - menuBounds.width - 4,
+            ? anchorBounds.left + anchorBounds.width / 2 - width / 2
+            : anchorBounds.right - width,
+          window.innerWidth - width - 4,
         ),
       );
-      const top = Math.max(
-        4,
-        Math.min(
-          anchorBounds.top - menuBounds.height - 10,
-          window.innerHeight - menuBounds.height - 4,
-        ),
-      );
+      // Keep the bottom edge anchored while the contents resize or animate.
+      const bottom = Math.max(4, window.innerHeight - anchorBounds.top + 10);
+      const maxHeight = Math.max(0, window.innerHeight - bottom - 4);
       setPosition((current) =>
-        current.left === left && current.top === top && current.ready
+        current?.left === left && current.bottom === bottom && current.maxHeight === maxHeight
           ? current
-          : { left, top, ready: true },
+          : { left, bottom, maxHeight },
       );
     };
 
@@ -101,11 +97,9 @@ export function AudioControlsMenu({
         aria-label={label}
         tabIndex={-1}
         style={{
-          left: position.left,
-          top: position.top,
-          // It opens above its button, aligned to its right edge or centre.
+          ...position,
           transformOrigin: align === "center" ? "center bottom" : "right bottom",
-          visibility: position.ready ? "visible" : "hidden",
+          visibility: position ? "visible" : "hidden",
         }}
         onClick={(event) => event.stopPropagation()}
       >
