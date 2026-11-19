@@ -30,7 +30,10 @@ export function AudioControlsMenu({
 }: AudioControlsMenuProps) {
   const panel = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(panel);
-  const [position, setPosition] = useState<{ left: number; bottom: number; maxHeight: number }>();
+  const [layout, setLayout] = useState<{
+    position: { left: number; bottom: number; maxHeight: number };
+    backdropClip: string;
+  }>();
 
   useLayoutEffect(() => {
     const anchorElement = anchor.current;
@@ -52,16 +55,22 @@ export function AudioControlsMenu({
       // Keep the bottom edge anchored while the contents resize or animate.
       const bottom = Math.max(4, window.innerHeight - anchorBounds.top + 10);
       const maxHeight = Math.max(0, window.innerHeight - bottom - 4);
-      setPosition((current) =>
-        current?.left === left && current.bottom === bottom && current.maxHeight === maxHeight
+      // Cut the anchor out of the backdrop so it still receives native press feedback.
+      const { left: x1, top: y1, right: x2, bottom: y2 } = anchorBounds;
+      const backdropClip = `polygon(evenodd, 0 0, 100% 0, 100% 100%, 0 100%, 0 0,
+        ${x1}px ${y1}px, ${x2}px ${y1}px, ${x2}px ${y2}px, ${x1}px ${y2}px, ${x1}px ${y1}px)`;
+      setLayout((current) =>
+        current?.position.left === left && current.position.bottom === bottom
+          && current.position.maxHeight === maxHeight && current.backdropClip === backdropClip
           ? current
-          : { left, bottom, maxHeight },
+          : { position: { left, bottom, maxHeight }, backdropClip },
       );
     };
 
     reposition();
     const observer = new ResizeObserver(reposition);
     observer.observe(panelElement);
+    observer.observe(anchorElement);
     window.addEventListener("resize", reposition);
     return () => {
       observer.disconnect();
@@ -82,7 +91,6 @@ export function AudioControlsMenu({
     <div
       className="clickMenuBackdrop"
       data-click-menu-backdrop
-      onClick={onClose}
       onKeyDown={(event) => {
         if (!isUnmodifiedKey(event, "Escape")) return;
         event.preventDefault();
@@ -90,6 +98,7 @@ export function AudioControlsMenu({
         onClose();
       }}
     >
+      <div className="clickMenuDismiss" style={{ clipPath: layout?.backdropClip }} onClick={onClose} />
       <div
         ref={panel}
         className={className ? `devAudioControls ${className}` : "devAudioControls"}
@@ -97,9 +106,9 @@ export function AudioControlsMenu({
         aria-label={label}
         tabIndex={-1}
         style={{
-          ...position,
+          ...layout?.position,
           transformOrigin: align === "center" ? "center bottom" : "right bottom",
-          visibility: position ? "visible" : "hidden",
+          visibility: layout ? "visible" : "hidden",
         }}
         onClick={(event) => event.stopPropagation()}
       >

@@ -16,7 +16,17 @@
     inset: 0;
     /* Above the now-playing bar's content (z-index 12), so menus open over it. */
     z-index: 13;
-    background: transparent;
+    pointer-events: none;
+}
+
+.clickMenuDismiss {
+    position: absolute;
+    inset: 0;
+}
+
+.clickMenuDismiss,
+.clickMenuBackdrop > .devAudioControls {
+    pointer-events: auto;
 }
 
 .devAudioControls {
