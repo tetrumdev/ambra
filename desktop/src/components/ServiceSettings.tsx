@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import { serviceAuthStatus, type ServiceAuthStatus, type StreamingProvider } from "../api/server";
+import type { StreamingProvider } from "../api/server";
 import { getServerConnection, subscribeServerConnection } from "../api/serverConnection";
 import { signInService } from "../utils/serviceSignIn";
-import { updateServiceAvailability } from "../hooks/useServiceAvailability";
+import { markServiceConnected, useServiceStatus } from "../hooks/useServiceAvailability";
 import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { SpotifyPlaybackSettings } from "./SpotifyPlaybackSettings";
 
@@ -14,8 +14,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
   const callback = useRef(onServiceConnected);
   callback.current = onServiceConnected;
-  const previous = useRef<ServiceAuthStatus | null>(null);
-  const [status, setStatus] = useState<ServiceAuthStatus | null>(null);
+  const status = useServiceStatus(active && connected);
   const [busy, setBusy] = useState<StreamingProvider | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -25,19 +24,8 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
   const pending = useRef<AbortController | null>(null);
   useEffect(() => {
     pending.current?.abort(); pending.current = null;
-    previous.current = null; setStatus(null); setBusy(null); setError(null); setMessage(null); setManualSubmit(null); setCallbackUrl(""); setSubmitting(false);
-    if (!active || !connected) return;
-    let disposed = false;
-    const refresh = () => void serviceAuthStatus().then(value => {
-      if (disposed) return;
-      const changed = !previous.current || (["tidal", "qobuz", "spotify"] as const).some(provider => previous.current![provider] !== value[provider]);
-      if (!changed) return;
-      previous.current = value;
-      setStatus(value); updateServiceAvailability(value); callback.current();
-    }).catch(() => {});
-    refresh();
-    const timer = setInterval(refresh, 15_000);
-    return () => { disposed = true; clearInterval(timer); pending.current?.abort(); };
+    setBusy(null); setError(null); setMessage(null); setManualSubmit(null); setCallbackUrl(""); setSubmitting(false);
+    return () => { pending.current?.abort(); };
   }, [active, connected, connection]);
   const cancel = () => {
     pending.current?.abort(); pending.current = null;
@@ -52,8 +40,7 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
         if (pending.current === controller) setManualSubmit(() => submit);
       });
       if (pending.current !== controller || controller.signal.aborted) return;
-      const next = { tidal: false, qobuz: false, spotify: false, ...previous.current, [provider]: true };
-      previous.current = next; setStatus(next); updateServiceAvailability(next); callback.current();
+      markServiceConnected(provider); callback.current();
       setMessage(`${provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"} connected.`);
     } catch (reason) {
       if (pending.current === controller && !controller.signal.aborted) setError(String(reason));

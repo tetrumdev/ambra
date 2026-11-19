@@ -36,13 +36,21 @@ function isCachedTrack(value: unknown): value is CachedTrack {
   );
 }
 
-export function parseCachedServerTracks(value: string | null): Track[] {
-  if (value === null) return [];
+export type CachedServerLibrary = { tracks: Track[]; cursor?: string; retry?: boolean };
+
+export function parseCachedServerLibrary(value: string | null): CachedServerLibrary {
+  if (value === null) return { tracks: [] };
 
   try {
-    return normalizeCachedTracks(JSON.parse(value));
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return { tracks: normalizeCachedTracks(parsed) };
+    const tracks = normalizeCachedTracks(parsed.tracks);
+    // A cursor is valid only with the complete snapshot it describes.
+    const cursor = Array.isArray(parsed.tracks) && parsed.tracks.length === tracks.length
+      && typeof parsed.cursor === "string" ? parsed.cursor : undefined;
+    return { tracks, cursor, retry: parsed.retry === true };
   } catch {
-    return [];
+    return { tracks: [] };
   }
 }
 
@@ -82,15 +90,15 @@ export function normalizeCachedTracks(parsed: unknown): Track[] {
     : [];
 }
 
-export function loadCachedServerTracks(): Track[] {
-  if (typeof localStorage === "undefined") return [];
+export function loadCachedServerLibrary(): CachedServerLibrary {
+  if (typeof localStorage === "undefined") return { tracks: [] };
 
   try {
-    return parseCachedServerTracks(
+    return parseCachedServerLibrary(
       fromStorage(getPersistentItem(serverCacheKey(STREAMING_LIBRARY_CACHE_KEY))),
     );
   } catch {
-    return [];
+    return { tracks: [] };
   }
 }
 
@@ -110,8 +118,8 @@ async function desktopInvoke<T>(command: string, args?: Record<string, unknown>)
  * after upgrading it migrates the old localStorage copy into the backend file and
  * deletes it, which frees storage quota and stops syncing a redundant copy.
  */
-export async function loadStreamingCache(): Promise<Track[]> {
-  if (!inDesktop()) return [];
+export async function loadStreamingCache(): Promise<CachedServerLibrary> {
+  if (!inDesktop()) return { tracks: [] };
   const signal = serverConnectionSignal();
   const key = serverCacheKey(STREAMING_LIBRARY_CACHE_KEY);
   const serverIdentity = serverConnection?.server?.publicKey;
@@ -125,23 +133,23 @@ export async function loadStreamingCache(): Promise<Track[]> {
     signal.throwIfAborted();
   }
   if (legacy !== null) removePersistentItem(key);
-  return encoded === null ? [] : parseCachedServerTracks(encoded);
+  return parseCachedServerLibrary(encoded);
 }
 
-let pendingStreamingTracks: Track[] | null = null;
+let pendingStreamingLibrary: CachedServerLibrary | null = null;
 let streamingSaveTimer: ReturnType<typeof setTimeout> | undefined;
 
 subscribeServerConnection(() => {
   clearTimeout(streamingSaveTimer);
-  pendingStreamingTracks = null;
+  pendingStreamingLibrary = null;
 });
 
 function flushStreamingCache() {
   streamingSaveTimer = undefined;
-  const tracks = pendingStreamingTracks;
-  pendingStreamingTracks = null;
-  if (tracks === null) return;
-  const json = forStorage(JSON.stringify(tracks.filter((track) => track.provider !== "local")));
+  const library = pendingStreamingLibrary;
+  pendingStreamingLibrary = null;
+  if (library === null) return;
+  const json = forStorage(encodeLibrary(library));
   const key = serverCacheKey(STREAMING_LIBRARY_CACHE_KEY);
   void desktopInvoke("save_streaming_cache", { json, serverIdentity: serverConnection?.server?.publicKey })
     .then(() => {
@@ -152,10 +160,15 @@ function flushStreamingCache() {
     .catch((error) => console.warn("Could not save the streaming library cache:", error));
 }
 
-export function saveCachedServerTracks(tracks: Track[]) {
+function encodeLibrary({ tracks, cursor, retry }: CachedServerLibrary) {
+  const streaming = tracks.filter(track => track.provider !== "local");
+  return JSON.stringify(cursor === undefined ? streaming : { tracks: streaming, cursor, retry });
+}
+
+export function saveCachedServerLibrary(library: CachedServerLibrary) {
   if (inDesktop()) {
     // Coalesce bursts (e.g. adding an album track by track) into one write.
-    pendingStreamingTracks = tracks;
+    pendingStreamingLibrary = library;
     clearTimeout(streamingSaveTimer);
     streamingSaveTimer = setTimeout(flushStreamingCache, STREAMING_CACHE_SAVE_DELAY_MS);
     return;
@@ -165,7 +178,7 @@ export function saveCachedServerTracks(tracks: Track[]) {
   try {
     setPersistentItem(
       serverCacheKey(STREAMING_LIBRARY_CACHE_KEY),
-      JSON.stringify(tracks.filter((track) => track.provider !== "local")),
+      forStorage(encodeLibrary(library)),
     );
   } catch {
     // A storage quota or privacy setting should not prevent library playback.

@@ -14,7 +14,7 @@ type CachedArtwork = {
 
 let databasePromise: Promise<IDBDatabase | null> | undefined;
 const objectUrls = new Map<string, string>();
-const cacheRequests = new Map<string, Promise<string | null>>();
+const cacheRequests = new Map<string, Promise<CachedArtwork | null>>();
 
 function openDatabase(): Promise<IDBDatabase | null> {
   if (databasePromise) return databasePromise;
@@ -75,48 +75,41 @@ export async function cachedPlaylistArtwork(url: string): Promise<string | null>
   const existing = objectUrls.get(url);
   if (existing) return existing;
 
-  const pending = cacheRequests.get(url);
-  if (pending) return pending;
-
-  const entry = await storedArtwork(url);
+  const entry = await (cacheRequests.get(url) ?? storedArtwork(url));
   return entry ? displayUrl(url, entry.blob) : null;
 }
 
-async function cacheArtwork(url: string): Promise<string | null> {
-  if (!url || url === whiteArtwork || url.startsWith("data:") || url.startsWith("blob:")) {
-    return url || null;
+function cacheArtwork(url: string): Promise<CachedArtwork | null> {
+  if (!url || url === whiteArtwork || url.startsWith("data:") || url.startsWith("blob:") || objectUrls.has(url)) {
+    return Promise.resolve(null);
   }
-
-  const existing = await cachedPlaylistArtwork(url);
-  if (existing) return existing;
 
   const pending = cacheRequests.get(url);
   if (pending) return pending;
 
-  const request = fetch(url, { cache: "force-cache" })
-    .then(async (response) => {
-      if (!response.ok) throw new Error(`Artwork returned HTTP ${response.status}`);
-      const blob = await response.blob();
-      if (!blob.type.startsWith("image/")) throw new Error("Artwork response was not an image");
-      return (await storeArtwork({ url, blob, savedAt: Date.now() }))
-        ? displayUrl(url, blob)
-        : null;
-    })
-    .catch(() => null)
-    .finally(() => {
-      if (cacheRequests.get(url) === request) cacheRequests.delete(url);
-    });
+  const request = (async () => {
+    if (!await openDatabase()) return null;
+    const existing = await storedArtwork(url);
+    if (existing) return existing;
+    const response = await fetch(url, { cache: "force-cache", signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`Artwork returned HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith("image/")) throw new Error("Artwork response was not an image");
+    const entry = { url, blob, savedAt: Date.now() };
+    return await storeArtwork(entry) ? entry : null;
+  })().catch(() => null).finally(() => {
+    if (cacheRequests.get(url) === request) cacheRequests.delete(url);
+  });
   cacheRequests.set(url, request);
   return request;
 }
 
-export async function cachePlaylistArtwork(tracks: Track[]): Promise<void> {
+export async function cachePlaylistArtwork(tracks: Track[], signal?: AbortSignal): Promise<void> {
   const urls = [...new Set(tracks.map(thumbnailArtwork))];
   let next = 0;
   const workers = Array.from({ length: Math.min(4, urls.length) }, async () => {
-    while (next < urls.length) {
-      const url = urls[next++];
-      await cacheArtwork(url);
+    while (!signal?.aborted && next < urls.length) {
+      await cacheArtwork(urls[next++]);
     }
   });
   await Promise.all(workers);

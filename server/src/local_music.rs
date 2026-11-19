@@ -16,16 +16,30 @@ use sha2::{Digest, Sha256};
 use tokio::{io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::Mutex};
 use tokio_util::io::ReaderStream;
 
+use crate::library_sync::{Events, Journal};
+
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 
 struct Library {
     root: PathBuf,
-    lock: Mutex<()>,
+    changes: Mutex<Journal<Value>>,
+    events: Events,
     state: Arc<crate::user_state::UserState>,
 }
 
-pub fn router<S: Clone + Send + Sync + 'static>(state: Arc<crate::user_state::UserState>) -> Router<S> {
-    routes(Arc::new(Library { root: crate::storage::data_path("local-music"), lock: Mutex::new(()), state }))
+pub fn router<S: Clone + Send + Sync + 'static>(
+    state: Arc<crate::user_state::UserState>,
+    events: Events,
+) -> Router<S> {
+    routes(Arc::new(Library::new(crate::storage::data_path("local-music"), state, events)))
+}
+
+impl Library {
+    fn new(root: PathBuf, state: Arc<crate::user_state::UserState>, events: Events) -> Self {
+        let changes = Journal::default();
+        events.send_modify(|versions| versions.local = changes.cursor());
+        Self { root, changes: Mutex::new(changes), events, state }
+    }
 }
 
 fn routes<S: Clone + Send + Sync + 'static>(library: Arc<Library>) -> Router<S> {
@@ -72,7 +86,8 @@ async fn artwork_palette(State(library): State<Arc<Library>>, Path(id): Path<Str
 
 async fn read_index(library: &Library) -> Result<BTreeMap<String, Value>, String> {
     match tokio::fs::read(library.root.join("library.json")).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|error| error.to_string()),
+        Ok(bytes) => tokio::task::spawn_blocking(move || serde_json::from_slice(&bytes))
+            .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
         Err(error) => Err(error.to_string()),
     }
@@ -80,8 +95,8 @@ async fn read_index(library: &Library) -> Result<BTreeMap<String, Value>, String
 
 /// Names the saved library as it is now: every save replaces the file, so its identity,
 /// size and time change with its contents.
-async fn index_tag(library: &Library) -> String {
-    let Ok(saved) = tokio::fs::metadata(library.root.join("library.json")).await else { return "none".into() };
+async fn index_tag(root: &std::path::Path) -> String {
+    let Ok(saved) = tokio::fs::metadata(root.join("library.json")).await else { return "none".into() };
     let modified = saved.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |since| since.as_nanos());
     #[cfg(unix)]
     let file = { use std::os::unix::fs::MetadataExt; saved.ino() };
@@ -96,11 +111,32 @@ struct ListQuery {
     /// list with its tag, or the tag alone while the library is still that one: they ask
     /// every few seconds, and a library of thousands of songs is megabytes each time.
     known: Option<String>,
+    since: Option<String>,
 }
 
 async fn list(State(library): State<Arc<Library>>, Query(query): Query<ListQuery>) -> Response {
-    let _guard = library.lock.lock().await;
-    let tag = index_tag(&library).await;
+    let changes = library.changes.lock().await;
+    if let Some(since) = query.since {
+        #[derive(serde::Serialize)]
+        struct Listing<T> {
+            cursor: String,
+            reset: bool,
+            tracks: Vec<T>,
+        }
+        let cursor = changes.cursor();
+        let headers = [(header::CACHE_CONTROL, "no-store")];
+        if let Some(delta) = changes.since(&since) {
+            let latest: BTreeMap<_, _> = delta.filter_map(|track| {
+                Some((track["globalId"].as_str()?, track))
+            }).collect();
+            return (headers, Json(Listing { cursor, reset: false, tracks: latest.into_values().collect() })).into_response();
+        }
+        return match read_index(&library).await {
+            Ok(index) => (headers, Json(Listing { cursor, reset: true, tracks: index.into_values().collect() })).into_response(),
+            Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
+        };
+    }
+    let tag = index_tag(&library.root).await;
     if query.known.as_deref() == Some(tag.as_str()) {
         return ([(header::CACHE_CONTROL, "no-store")], Json(json!({ "tag": tag }))).into_response();
     }
@@ -119,6 +155,7 @@ async fn add(State(library): State<Arc<Library>>, request: Request) -> Response 
         Ok(bytes) => bytes,
         Err(_) => return error(StatusCode::BAD_REQUEST, "Track metadata exceeds 1 MB"),
     };
+    let weight = bytes.len().div_ceil(1024).max(1);
     let mut track: Value = match serde_json::from_slice(&bytes) {
         Ok(Value::Object(object)) => Value::Object(object),
         _ => return error(StatusCode::BAD_REQUEST, "Invalid track metadata"),
@@ -155,20 +192,28 @@ async fn add(State(library): State<Arc<Library>>, request: Request) -> Response 
     if !crate::user_state::track(&track) {
         return error(StatusCode::BAD_REQUEST, "Invalid track metadata");
     }
-    let _guard = library.lock.lock().await;
-    let mut index = match read_index(&library).await {
-        Ok(index) => index,
-        Err(message) => return error(StatusCode::INTERNAL_SERVER_ERROR, message),
+    // Finish the disk commit and publish its cursor even if the importing client disconnects.
+    let commit = {
+        let library = library.clone();
+        let track = track.clone();
+        tokio::spawn(async move {
+            let mut changes = library.changes.lock().await;
+            let mut index = read_index(&library).await?;
+            if index.get(&id) == Some(&track) {
+                return Ok(());
+            }
+            index.insert(id, track.clone());
+            let path = library.root.join("library.json");
+            tokio::task::spawn_blocking(move || {
+                crate::server_config::write_private(&path, &serde_json::to_vec(&index).map_err(|e| e.to_string())?)
+            }).await.map_err(|error| error.to_string())??;
+            changes.record_weighted(vec![track], weight);
+            library.events.send_modify(|versions| versions.local = changes.cursor());
+            Ok::<_, String>(())
+        })
     };
-    if index.get(&id) != Some(&track) {
-        index.insert(id, track.clone());
-        let path = library.root.join("library.json");
-        let saved = tokio::task::spawn_blocking(move || {
-            crate::server_config::write_private(&path, &serde_json::to_vec(&index).map_err(|e| e.to_string())?)
-        }).await;
-        if !matches!(saved, Ok(Ok(()))) {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the local library");
-        }
+    if !matches!(commit.await, Ok(Ok(()))) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save the local library");
     }
     if let Some(legacy) = legacy {
         if let Err(message) = library.state.migrate_local_track(legacy, track.clone()).await {
@@ -275,7 +320,7 @@ mod tests {
         });
         let policy = crate::access::AccessPolicy::from_env(crate::network::Network::new(config));
         // With no ConnectInfo these requests take the paired-device path, even on loopback.
-        let app: Router = routes(Arc::new(Library { root, state, lock: Mutex::new(()) }))
+        let app: Router = routes(Arc::new(Library::new(root, state, Events::default())))
             .layer(axum::middleware::from_fn_with_state(policy, crate::access::enforce))
             .layer(axum::Extension(ambra_net::transport::RemotePeer { public_key: ambra_net::Identity::generate().unwrap().public_key(), address: "192.0.2.2:1".parse().unwrap(), session: std::sync::Arc::new(ambra_net::transport::Session::default()) }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -322,6 +367,20 @@ mod tests {
         let tagged = |known: String| { let (client, base) = (other_device.clone(), base.clone()); async move {
             client.get(format!("{base}/api/music/local/tracks?known={known}")).send().await.unwrap().json::<Value>().await.unwrap()
         } };
+        let incremental = |since: String| {
+            let client = other_device.clone();
+            let base = base.clone();
+            async move {
+                client.get(format!("{base}/api/music/local/tracks")).query(&[("since", since)])
+                    .send().await.unwrap().json::<Value>().await.unwrap()
+            }
+        };
+        let snapshot = incremental(String::new()).await;
+        assert_eq!(snapshot["reset"], true);
+        assert_eq!(snapshot["tracks"], json!([track]));
+        let cursor = snapshot["cursor"].as_str().unwrap().to_owned();
+        let unchanged = incremental(cursor.clone()).await;
+        assert_eq!(unchanged, json!({ "cursor": cursor, "reset": false, "tracks": [] }));
         let first = tagged(String::new()).await;
         assert_eq!(first["tracks"], json!([track]));
         let tag = first["tag"].as_str().unwrap().to_owned();
@@ -332,6 +391,12 @@ mod tests {
         let changed = tagged(tag.clone()).await;
         assert_ne!(changed["tag"], tag);
         assert_eq!(changed["tracks"][0]["name"], "Renamed");
+        let delta = incremental(cursor.clone()).await;
+        assert_eq!(delta["reset"], false);
+        assert_eq!(delta["tracks"].as_array().unwrap().len(), 1);
+        assert_eq!(delta["tracks"][0]["name"], "Renamed");
+        assert_ne!(delta["cursor"], cursor);
+
         assert_eq!(other_device.post(format!("{base}/api/music/local/tracks")).json(&metadata).send().await.unwrap().status(), StatusCode::OK);
         let url = format!("{base}/api/music/local/files/{id}");
         let response = other_device.get(&url).send().await.unwrap();
@@ -349,7 +414,88 @@ mod tests {
         assert_eq!(unpaired.get(&url).send().await.unwrap().status(), StatusCode::UNAUTHORIZED);
         assert_eq!(unpaired.get(format!("{url}?access_token=test-token")).send().await.unwrap().status(), StatusCode::OK);
         server.abort();
-        // Keep test artifacts in the OS temporary directory; no user library is touched.
+        let (base, server) = harness(root.clone()).await;
+        let recovered: Value = other_device.get(format!("{base}/api/music/local/tracks"))
+            .query(&[("since", cursor)]).send().await.unwrap().json().await.unwrap();
+        assert_eq!(recovered["reset"], true);
+        assert_eq!(recovered["tracks"], json!([track]));
+        server.abort();
+        let _ = tokio::fs::remove_dir_all(root).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "50,000-track loopback performance benchmark"]
+    async fn library_sync_benchmark() {
+        let root = directory();
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        let mut index = BTreeMap::new();
+        const COUNT: usize = 50_000;
+        for number in 0..COUNT {
+            let file = format!("{number:064x}.flac");
+            let id = format!("local:{number:064x}");
+            index.insert(id.clone(), json!({
+                "globalId": id, "provider": "local", "providerTrackId": file, "playbackKind": "direct",
+                "name": format!("Song {number}"), "artist": "Recording Artist", "album": "Album Title",
+                "durationSeconds": 180, "audio": format!("/api/music/local/files/{file}"),
+                "cover": "/white.svg", "fullCover": "/white.svg", "nativeCover": null,
+                "artists": [{ "providerId": "Recording Artist", "name": "Recording Artist", "imageUrl": null }],
+                "albumArtists": [], "quality": null, "isrc": null, "genres": [],
+                "trackNumber": 1, "discNumber": null, "upc": null,
+            }));
+        }
+        tokio::fs::write(root.join("library.json"), serde_json::to_vec(&index).unwrap()).await.unwrap();
+        drop(index);
+        let (base, server) = harness(root.clone()).await;
+        let client = paired_client();
+        let url = format!("{base}/api/music/local/tracks");
+        let initial: Value = client.get(&url).query(&[("since", "")]).send().await.unwrap().json().await.unwrap();
+        assert_eq!(initial["tracks"].as_array().unwrap().len(), COUNT);
+        let cursor = initial["cursor"].as_str().unwrap().to_owned();
+        drop(initial);
+        let known = index_tag(&root).await;
+        let file = format!("{:064x}.flac", 1);
+        tokio::fs::write(root.join(&file), b"fixture").await.unwrap();
+        let details = json!({
+            "file": file, "name": "Renamed Song", "artist": "Recording Artist", "album": "Album Title",
+            "durationSeconds": 180, "artists": [], "albumArtists": [],
+        });
+        assert_eq!(client.post(&url).json(&details).send().await.unwrap().status(), StatusCode::OK);
+
+        let measure = |query: (&str, &str)| {
+            let request = client.get(&url).query(&[query]);
+            async move {
+                let start = std::time::Instant::now();
+                let bytes = request.send().await.unwrap().error_for_status().unwrap().bytes().await.unwrap();
+                (start.elapsed(), bytes)
+            }
+        };
+        let mut full_times = Vec::new();
+        let mut delta_times = Vec::new();
+        for iteration in 0..6 {
+            let (full_time, full) = measure(("known", &known)).await;
+            let (delta_time, delta) = measure(("since", &cursor)).await;
+            if iteration == 0 {
+                let body: Value = serde_json::from_slice(&delta).unwrap();
+                assert_eq!(body["tracks"].as_array().unwrap().len(), 1);
+                assert_eq!(body["tracks"][0]["name"], "Renamed Song");
+                let gzip = |body: &[u8]| {
+                    use std::io::Write;
+                    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                    encoder.write_all(body).unwrap();
+                    encoder.finish().unwrap().len()
+                };
+                println!("50,000 tracks, one rename: {} vs {} JSON bytes, {} vs {} gzip bytes",
+                    full.len(), delta.len(), gzip(&full), gzip(&delta));
+            } else {
+                full_times.push(full_time);
+                delta_times.push(delta_time);
+            }
+        }
+        full_times.sort();
+        delta_times.sort();
+        println!("loopback median (five warm requests): {:?} full, {:?} delta", full_times[2], delta_times[2]);
+        server.abort();
+        tokio::fs::remove_dir_all(root).await.unwrap();
     }
 
     #[tokio::test]

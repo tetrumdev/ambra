@@ -24,11 +24,11 @@ export function useLyricsAvailability(track: Track | undefined, enabled: boolean
   const [loaded, setLoaded] = useState<{ key: string; value: LyricsAvailability } | null>(null);
   useEffect(() => {
     if (!track || !key || !enabled || cachedLyrics(track)) return;
-    let live = true;
-    void loadLyrics(track)
+    const controller = new AbortController();
+    void loadLyrics(track, controller.signal)
       .then((lyrics) => availability(lyrics), () => "lyrics" as const)
-      .then((value) => { if (live) setLoaded({ key, value }); });
-    return () => { live = false; };
+      .then((value) => { if (!controller.signal.aborted) setLoaded({ key, value }); });
+    return () => controller.abort();
   }, [key, enabled]);
   if (!track) return "none";
   if (!enabled) return "pending";

@@ -1,3 +1,4 @@
+import { readJsonLines } from "../utils/jsonLines";
 import { forStorage, fromStorage, serverBaseUrl, serverConnectionSignal, subscribeServerConnection } from "./serverConnection";
 import type { QueueState } from "../utils/queueNavigation";
 import { parseQueueSnapshot, queueSnapshot, resolveQueueSnapshot, type PersistedQueue } from "../utils/queueStorage";
@@ -310,20 +311,10 @@ async function followStream(requestSignal: AbortSignal, signal: AbortSignal): Pr
     if (response.status === 404 && asked !== MAIN_SESSION) { setCoreSession(MAIN_SESSION); return true; }
     if (response.status === 404) return false;
     if (!response.ok || !response.body) throw new Error(`The server answered ${response.status}`);
-    const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-    let buffered = "";
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) return true;
-      heard();
-      buffered += value;
-      let end: number;
-      while ((end = buffered.indexOf("\n")) >= 0) {
-        const line = buffered.slice(0, end).trim();
-        buffered = buffered.slice(end + 1);
-        if (line && !requestSignal.aborted) accept(JSON.parse(line) as ArrivingView, signal);
-      }
-    }
+    await readJsonLines<ArrivingView>(response.body, view => {
+      if (!requestSignal.aborted) accept(view, signal);
+    }, heard);
+    return true;
   } catch (error) {
     // Gone quiet: it is opened again, like one the server ended.
     if (silence.signal.aborted && !requestSignal.aborted) return true;

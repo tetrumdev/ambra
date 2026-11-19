@@ -5,10 +5,11 @@ mod ttml;
 
 pub use model::LyricsResponse;
 use providers::{Provider, ProviderClient};
-use serde::Deserialize;
-use std::io;
+use futures_util::{FutureExt, future::{BoxFuture, Shared, WeakShared}};
+use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, future::Future, sync::{Arc, Mutex}};
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsRequest {
     track_name: String,
@@ -80,12 +81,31 @@ impl LyricsRequest {
     }
 }
 
-/// Only rate-limit state is retained. Lyrics, misses and track metadata are never cached.
-pub async fn fetch(
-    client: &reqwest::Client,
-    request: &LyricsRequest,
-) -> Result<LyricsResponse, io::Error> {
-    Ok(fetch_with(&ProviderClient::new(client), request).await)
+type Lookup = Shared<BoxFuture<'static, Arc<LyricsResponse>>>;
+
+/// Shares overlapping requests without retaining lyrics or misses after delivery.
+#[derive(Default)]
+pub struct Lookups(Mutex<HashMap<String, WeakShared<BoxFuture<'static, Arc<LyricsResponse>>>>>);
+
+impl Lookups {
+    pub async fn fetch(&self, client: &reqwest::Client, request: LyricsRequest) -> Arc<LyricsResponse> {
+        let key = serde_json::to_string(&request).expect("validated lyrics request");
+        let client = client.clone();
+        self.join(key, async move {
+            Arc::new(fetch_with(&ProviderClient::new(&client), &request).await)
+        }).await
+    }
+
+    fn join(&self, key: String, work: impl Future<Output = Arc<LyricsResponse>> + Send + 'static) -> Lookup {
+        let mut active = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(pending) = active.get(&key).and_then(WeakShared::upgrade) {
+            return pending;
+        }
+        active.retain(|_, pending| pending.upgrade().is_some());
+        let lookup = work.boxed().shared();
+        active.insert(key, lookup.downgrade().unwrap());
+        lookup
+    }
 }
 
 async fn fetch_with(client: &ProviderClient<'_>, request: &LyricsRequest) -> LyricsResponse {
@@ -155,5 +175,35 @@ impl Selection {
             lyrics.failed_providers = self.failed;
         }
         lyrics
+    }
+}
+
+
+#[cfg(test)]
+mod lookup_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[tokio::test]
+    async fn overlapping_lyrics_requests_run_one_lookup_without_retaining_the_result() {
+        let lookups = Lookups::default();
+        let count = Arc::new(AtomicUsize::new(0));
+        let request = || {
+            let count = count.clone();
+            lookups.join("same request".into(), async move {
+                count.fetch_add(1, Ordering::Relaxed);
+                tokio::task::yield_now().await;
+                Arc::new(LyricsResponse::empty(None))
+            })
+        };
+        let results = futures_util::future::join_all((0..20).map(|_| request())).await;
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+        assert!(results.iter().all(|result| Arc::ptr_eq(result, &results[0])));
+        request().await;
+        assert_eq!(count.load(Ordering::Relaxed), 2);
+        // The weak registry does not keep a cancelled request running.
+        drop(request());
+        request().await;
+        assert_eq!(count.load(Ordering::Relaxed), 3);
     }
 }

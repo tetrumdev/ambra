@@ -175,11 +175,10 @@ export function preloadBigscreenArtwork(track: Track, background = false) {
 }
 
 export async function preloadUpcomingBigscreenArtwork(
-  tracks: Track[],
+  entries: readonly { track: Track }[],
 ): Promise<void> {
   await Promise.all(
-    tracks
-      .slice(0, UPCOMING_BIGSCREEN_ARTWORK_COUNT)
-      .map((track) => preloadBigscreenArtwork(track, true)),
+    entries.slice(0, UPCOMING_BIGSCREEN_ARTWORK_COUNT)
+      .map(({ track }) => preloadBigscreenArtwork(track, true)),
   );
 }

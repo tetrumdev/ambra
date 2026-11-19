@@ -12,6 +12,7 @@ mod flac_remux;
 mod http_client;
 mod impulses;
 mod loudness;
+mod library_sync;
 mod local_music;
 mod lyrics;
 mod media_cache;

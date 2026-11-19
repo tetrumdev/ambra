@@ -158,9 +158,10 @@ async fn inputs(state: &AppState) -> Result<Inputs, String> {
         Err(e) => return Err(e.to_string()),
     };
     let library = state
-        .library_entries
+        .library
         .read()
         .await
+        .entries
         .iter()
         .map(|entry| {
             format!(

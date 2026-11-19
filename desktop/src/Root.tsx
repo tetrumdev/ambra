@@ -53,8 +53,9 @@ export function Root() {
   // Transport availability does not change the selected playback owner. Remounting
   // App on each failed retry resets navigation, layout and open controls. Only an
   // explicit mode or server change should hand an established shared player back.
+  const terminalFailure = network.state === "Failed" || (network.state === "Offline" && !!network.error);
   const recoveringSharedPlayback = sharedPlayback && !!connection?.server
-    && networkServer === connection.baseUrl;
+    && networkServer === connection.baseUrl && !terminalFailure;
   // Keep the selected server's cached UI through outages. Requests still use the
   // actual reachability below, so unavailable remote tracks cannot start playing.
   const reachable = connected || settling;

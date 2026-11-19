@@ -1,4 +1,5 @@
 import { trackLyrics } from "../api/server";
+import { serverConnectionSignal } from "../api/serverConnection";
 import { needsLyricsRetry, type TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
 import { SearchCache } from "./searchCache";
@@ -7,7 +8,8 @@ import { SearchCache } from "./searchCache";
 // song's every letter from them and compares them by identity, so a copy per read would have it
 // rebuild all of them each time it asks. Nothing changes lyrics in place.
 const lyricsCache = new SearchCache<TrackLyrics>(30 * 60_000, 12, lyrics => lyrics);
-const requests = new Map<string, Promise<TrackLyrics>>();
+type Lookup = { controller: AbortController; signal: AbortSignal; users: number; result: Promise<TrackLyrics> };
+const requests = new Map<string, Lookup>();
 const listeners = new Set<() => void>();
 let revision = 0;
 
@@ -39,29 +41,47 @@ export function cachedLyrics(track: Track): TrackLyrics | undefined {
   return lyricsCache.get(lyricsKey(track));
 }
 
-export function loadLyrics(track: Track): Promise<TrackLyrics> {
+export async function loadLyrics(track: Track, signal?: AbortSignal): Promise<TrackLyrics> {
+  signal?.throwIfAborted();
   const key = lyricsKey(track);
   const cached = lyricsCache.get(key);
-  if (cached) return Promise.resolve(cached);
+  if (cached) return cached;
 
-  const pending = requests.get(key);
-  if (pending) return pending;
-
-  // A view unmount must not cancel a request shared with queue preloading.
-  // Bound its lifetime independently, including the API's automatic retry.
-  const request = trackLyrics(track, AbortSignal.timeout(60_000))
-    .then((lyrics) => {
-      if (!needsLyricsRetry(lyrics))
-        lyricsCache.set(key, lyrics);
+  let pending = requests.get(key);
+  if (!pending || pending.signal.aborted) {
+    const controller = new AbortController();
+    const active = AbortSignal.any([controller.signal, serverConnectionSignal(), AbortSignal.timeout(60_000)]);
+    const result = trackLyrics(track, active).then(lyrics => {
+      active.throwIfAborted();
+      if (!needsLyricsRetry(lyrics)) lyricsCache.set(key, lyrics);
       revision++;
       for (const listener of listeners) listener();
       return lyrics;
-    })
-    .finally(() => requests.delete(key));
-  requests.set(key, request);
-  return request;
+    }).finally(() => {
+      if (requests.get(key)?.controller === controller) requests.delete(key);
+    });
+    pending = { controller, signal: active, users: 0, result };
+    requests.set(key, pending);
+  }
+
+  const lookup = pending;
+  lookup.users++;
+  try {
+    if (!signal) return await lookup.result;
+    return await new Promise<TrackLyrics>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      lookup.result.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort));
+    });
+  } finally {
+    lookup.users--;
+    // React can replace subscribers for the same song in one commit.
+    if (lookup.users === 0) queueMicrotask(() => {
+      if (lookup.users === 0 && requests.get(key) === lookup) lookup.controller.abort();
+    });
+  }
 }
 
-export async function preloadLyrics(tracks: Track[]): Promise<void> {
-  await Promise.allSettled(tracks.slice(0, 3).map(loadLyrics));
+export async function preloadLyrics(tracks: Track[], signal?: AbortSignal): Promise<void> {
+  await Promise.allSettled(tracks.slice(0, 3).map(track => loadLyrics(track, signal)));
 }

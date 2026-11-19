@@ -40,7 +40,7 @@ const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve));
 
 test("upcoming covers are decoded in a painted layer instead of by decode()", async () => {
   const upcoming = track("upcoming");
-  const preloaded = preloadUpcomingBigscreenArtwork([upcoming]);
+  const preloaded = preloadUpcomingBigscreenArtwork([{ track: upcoming }]);
   await flush();
   const image = images.at(-1)!;
   image.onload!(new dom.Event("load") as unknown as Event);
