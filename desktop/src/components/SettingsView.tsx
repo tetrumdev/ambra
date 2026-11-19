@@ -163,8 +163,8 @@ export function SettingsView({
       </header>
       <div className="settingsGroup">
         <h2>{serverConnection?.clientName ?? "This computer"}</h2>
-        {!audio.native && <p className="settingsMuted settingsGroupNote">Choosing devices needs the desktop app.</p>}
-        {audio.loading ? <p className="settingsMuted settingsGroupNote" role="status">Loading outputs…</p> : <div className="settingsOutputs">
+        {!audio.native && <p className="settingsMuted">Choosing devices needs the desktop app.</p>}
+        {audio.loading ? <p className="settingsMuted" role="status">Loading outputs…</p> : <div className="settingsOutputs">
           {enabledOutputsFirst(audio.settings.outputs).filter(output => output.id === "" || audio.devices.some(device => device.id === output.id)).map(output => <LocalOutputCard key={output.id} output={output}
             onEditPreset={id => { setPresetId(id); setTab("dsp"); }} />)}
         </div>}
@@ -344,8 +344,8 @@ function RemoteEndpointOutputs({ endpoint }: { endpoint: RemoteEndpoint }) {
   };
   return <div className="settingsGroup">
     <h2>{endpoint.name}</h2>
-    {error && <p className="settingsError settingsGroupNote" role="alert">{error}</p>}
-    {outputs === null && !error && <p className="settingsMuted settingsGroupNote" role="status">Loading outputs…</p>}
+    {error && <p className="settingsError" role="alert">{error}</p>}
+    {outputs === null && !error && <p className="settingsMuted" role="status">Loading outputs…</p>}
     {outputs !== null && <div className="settingsOutputs">
       {enabledOutputsFirst(outputs).filter(output => connected.has(output.id)).map(output => <OutputCard key={output.id}
         output={output} presets={presets} on={endpoint.name} playing={playingOn(endpoint.id, output.id)} canPlay

@@ -109,7 +109,7 @@ function FindServers({ onConnected }: { onConnected: () => void }) {
     </SettingRow>)}
     {!servers.length && !searching && <p className="settingsMuted">No Ambra servers answered on this network.</p>}
     <SettingRow label="Server address or pairing link" help="An IP address, a hostname, or the ambra://pair/ link from the server's QR code.">
-      <span className="settingsFieldRow">
+      <span className="settingsActions">
         <input className="serverAddressInput" aria-label="Server address or pairing link" placeholder="ambra://pair/… or music.local" value={address}
           onChange={event => setAddress(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter") join(); }} />
         <button type="button" className="settingsPill" disabled={!address.trim()} onClick={join}>Connect</button>
@@ -146,17 +146,17 @@ function SavedServers({ saved, changing, onChange }: {
 }) {
   const others = saved.filter(server => !server.selected);
   if (!others.length) return null;
-  return <>
+  return <div className="settingsGroup">
     <h2>Saved servers</h2>
     {others.map(server => <SettingRow key={server.publicKey ?? server.id} label={server.name} hint={server.address}>
-      <span className="serverJoinActions">
+      <span className="settingsActions">
         <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
           onClick={() => onChange("connect_saved_server", { publicKey: server.publicKey })}>Connect</button>
         <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
           onClick={() => onChange("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
       </span>
     </SettingRow>)}
-  </>;
+  </div>;
 }
 
 function describeSession(session: CoreSession) {
@@ -193,10 +193,10 @@ function PlaybackSessions() {
       setNaming(null);
     });
   };
-  return <>
+  return <div className="settingsGroup">
     <h2>Sessions<Help topic="Sessions">Each session has its own queue and plays on its own outputs, so different rooms can play different music at once. This device controls the one it follows.</Help></h2>
     {sessions.map(session => <SettingRow key={session.id} label={session.name} hint={describeSession(session)}>
-      <span className="serverJoinActions">
+      <span className="settingsActions">
         {session.id === current
           ? <span className="settingsChip" data-state="connected">Following</span>
           : <button type="button" className="settingsPill" onClick={() => setCoreSession(session.id)}>Follow</button>}
@@ -206,7 +206,7 @@ function PlaybackSessions() {
       </span>
     </SettingRow>)}
     {naming ? <SettingRow label={naming.id ? "Rename session" : "New session"}>
-      <span className="settingsFieldRow">
+      <span className="settingsActions">
         <input type="text" aria-label="Session name" value={naming.name} maxLength={60} autoFocus
           onChange={event => setNaming({ ...naming, name: event.target.value })}
           onKeyDown={event => { if (event.key === "Enter") save(); else if (event.key === "Escape") setNaming(null); }} />
@@ -215,7 +215,7 @@ function PlaybackSessions() {
       </span>
     </SettingRow> : <button type="button" className="settingsPill" onClick={() => setNaming({ id: null, name: "" })}>New session</button>}
     {error && <p className="settingsError" role="alert">{error}</p>}
-  </>;
+  </div>;
 }
 
 type ServerCommand = { path: string; installed: boolean; available: boolean };
@@ -237,7 +237,7 @@ function ServerCommandInstall() {
     catch (reason) { setError(String(reason)); }
     finally { setInstalling(false); }
   };
-  return <>
+  return <div className="settingsGroup">
     <SettingRow label="Run a server on this computer"
       hint={command.installed ? `Installed at ${command.path}` : undefined}
       help="Downloads the ambra-server command for this computer and adds it to your PATH.">
@@ -247,7 +247,7 @@ function ServerCommandInstall() {
     </SettingRow>
     {done && <p className="settingsMuted" role="status">Installed. Open a new terminal and run <code>ambra-server start</code>.</p>}
     {error && <p className="settingsError" role="alert">{error}</p>}
-  </>;
+  </div>;
 }
 
 export function ServerSettings({ active }: { active: boolean }) {
@@ -287,39 +287,41 @@ export function ServerSettings({ active }: { active: boolean }) {
   return <>
     <header className="settingsPageHeader"><h1 className="settingsTitle">Server</h1></header>
     {error && <p className="settingsError" role="alert">{error}</p>}
-    {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <div className="settingsGroup">
-      <SettingRow label="Connection type" hint={`Current: ${connectionType}.`}
-        help="Automatic chooses the best available connection. A manual type never falls back to another. Changing the type reconnects and turns off shared playback.">
-        <select aria-label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} disabled={!server || changing || !isTauri()}
-          onChange={event => void change("set_connection_method", { method: event.currentTarget.value || null })}>
-          <option value="">Automatic</option>
-          {connectionMethods.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
-        </select>
-      </SettingRow>
-      {server ? <>
-        <SettingRow label={server.name} hint={server.address}>
-          <span className="settingsChip" data-state={connected ? "connected" : "away"}>{connected ? "Connected" : "Disconnected"}</span>
+    {setup && active ? <ServerSetup onBack={() => setSetup(false)} /> : <>
+      <div className="settingsGroup">
+        <SettingRow label="Connection type" hint={`Current: ${connectionType}.`}
+          help="Automatic chooses the best available connection. A manual type never falls back to another. Changing the type reconnects and turns off shared playback.">
+          <select aria-label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} disabled={!server || changing || !isTauri()}
+            onChange={event => void change("set_connection_method", { method: event.currentTarget.value || null })}>
+            <option value="">Automatic</option>
+            {connectionMethods.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
+          </select>
         </SettingRow>
-        {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
-        <SettingRow label="Shared playback session" help="Controls the server's queue and shares this device's outputs with it. Turn it off to play your own local queue.">
-          <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
-        </SettingRow>
-        {sharedPlayback && connected && <PlaybackSessions />}
-        <div className="serverJoinActions">
-          <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
-          <button type="button" className="settingsPill" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
-          <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
-            onClick={() => void change("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
-          <button type="button" className="settingsPill" onClick={() => {
-            void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
-          }}>Add a server</button>
-        </div>
-      </> : <>
-        <p className="settingsMuted">No server connected. Local music, playlists, queues, and settings stay on this device.</p>
-        <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
-      </>}
+        {server ? <>
+          <SettingRow label={server.name} hint={server.address}>
+            <span className="settingsChip" data-state={connected ? "connected" : "away"}>{connected ? "Connected" : "Disconnected"}</span>
+          </SettingRow>
+          {network.error && <p className="settingsMuted" role="status">{network.error}</p>}
+          <SettingRow label="Shared playback session" help="Controls the server's queue and shares this device's outputs with it. Turn it off to play your own local queue.">
+            <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
+          </SettingRow>
+          <div className="settingsActions">
+            <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
+            <button type="button" className="settingsPill" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
+            <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+              onClick={() => void change("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
+            <button type="button" className="settingsPill" onClick={() => {
+              void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
+            }}>Add a server</button>
+          </div>
+        </> : <>
+          <p className="settingsMuted">No server connected. Local music, playlists, queues, and settings stay on this device.</p>
+          <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
+        </>}
+      </div>
+      {server && sharedPlayback && connected && <PlaybackSessions />}
       <SavedServers saved={saved} changing={changing} onChange={(command, args) => void change(command, args)} />
       <ServerCommandInstall />
-    </div>}
+    </>}
   </>;
 }
