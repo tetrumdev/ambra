@@ -102,9 +102,84 @@ struct Transport {
     /// A skip the output hasn't been told of: it pauses the song being left before anything
     /// else, so a slow or failing load of the next one can't leave the old one playing on.
     silence_skipped: bool,
+    /// Outputs on other computers playing in step with `output`, which leads the group.
+    followers: Vec<Follower>,
+    /// Where the group's synced start stands, while there are followers.
+    sync: SyncPhase,
+    /// Counts synced starts, so each output knows which start a command belongs to.
+    sync_epoch: u64,
 }
 
+/// An output playing in step with the session's own (`Transport::output`).
+#[derive(Clone, Debug)]
+struct Follower {
+    output: Output,
+    /// What the core loaded there, as for the leading output.
+    loaded: Option<Loaded>,
+    queued_next: Option<Option<String>>,
+    /// The synced start it was last prepared for, and the last one it was given.
+    held: u64,
+    started: u64,
+    /// When a command to it last failed; it isn't asked again at once.
+    failed_at: Option<Instant>,
+}
+
+impl Follower {
+    fn new(output: Output) -> Self {
+        Self { output, loaded: None, queued_next: None, held: 0, started: 0, failed_at: None }
+    }
+}
+
+/// How a group of outputs starts together. Every output prepares, holding its first sample,
+/// and reports when it's ready; then every one is told when the group hears which position, on
+/// the server's clock. That time leaves the longest resync delay any of them needs, so none
+/// cuts the start of a song short to keep up with the rest.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum SyncPhase {
+    /// Paused, or not yet started.
+    #[default]
+    Idle,
+    /// Every output prepares to play from `position`, sought there or resumed (`seek`), and holds.
+    Preparing { epoch: u64, position: f64, since: Instant, seek: bool },
+    /// Song position `position` is heard at `at_ms`, on the clock `/api/session/clock` reads.
+    /// `resync_ms` is the longest resync delay in the group, which every output waits out
+    /// alike when a song in another format makes them all reopen their devices.
+    Running { epoch: u64, at_ms: f64, position: f64, resync_ms: u64 },
+}
+
+/// How long the group waits for its slowest output before starting without it; that one
+/// joins in step once it's ready.
+const SYNC_READY_TIMEOUT: Duration = Duration::from_secs(8);
+/// Time for the start to reach every output, on top of the resync delays.
+const SYNC_START_MARGIN_MS: f64 = 300.0;
+/// An output joining a playing group prepares from where the group will be this much later.
+const SYNC_JOIN_LEAD_MS: f64 = 1500.0;
+/// A follower whose command failed is asked again after this long.
+const FOLLOWER_RETRY: Duration = Duration::from_secs(5);
+/// A paused follower within this of the group's position resumes from its own; one further off
+/// is sought, so it never waits out or drops a long stretch to line up.
+const RESUME_IN_PLACE_SECONDS: f64 = 1.0;
+
 impl Transport {
+    fn synced(&self) -> bool {
+        !self.followers.is_empty()
+    }
+
+    /// A new synced start: every output prepares to play from `position` and holds.
+    fn begin_sync(&mut self, position: f64, seek: bool) -> u64 {
+        self.sync_epoch += 1;
+        self.sync = SyncPhase::Preparing { epoch: self.sync_epoch, position, since: Instant::now(), seek };
+        self.sync_epoch
+    }
+
+    /// Every output, the leading one first.
+    fn outputs(&self) -> Vec<Output> {
+        self.output.iter().cloned().chain(self.followers.iter().map(|follower| follower.output.clone())).collect()
+    }
+
+    fn follower(&mut self, endpoint: &str) -> Option<&mut Follower> {
+        self.followers.iter_mut().find(|follower| follower.output.endpoint_id == endpoint)
+    }
     fn position_now(&self) -> f64 {
         let running = self.playing && !self.buffering && self.loaded.is_some();
         let elapsed = match (running, self.position_at) {
@@ -134,6 +209,9 @@ impl Transport {
 struct SavedTransport {
     output: Option<Output>,
     position: f64,
+    /// Outputs playing in step with `output`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    followers: Vec<Output>,
 }
 
 pub struct Core {
@@ -374,7 +452,9 @@ impl Core {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
-        let transport = Transport { output: saved.output, position: saved.position, ..Transport::default() };
+        // Followers play in step with an output; with none saved, neither are they.
+        let followers = if saved.output.is_some() { saved.followers.into_iter().map(Follower::new).collect() } else { Vec::new() };
+        let transport = Transport { output: saved.output, position: saved.position, followers, ..Transport::default() };
         let core = Arc::new(Self {
             state,
             endpoints: sessions.endpoints.clone(),
@@ -448,7 +528,8 @@ impl Core {
         self.changed();
     }
 
-    /// Another session took this session's output; this one keeps its song and position.
+    /// Another session took this session's output; this one keeps its song and position. The
+    /// outputs that played in step with it stop too.
     fn drop_output(&self) {
         let mut transport = self.transport();
         transport.position = transport.position_now();
@@ -461,8 +542,31 @@ impl Core {
         transport.queued_next = None;
         transport.pending_play = None;
         transport.pending_seek = None;
+        transport.sync = SyncPhase::Idle;
+        let followers: Vec<String> = transport.followers.drain(..)
+            .filter(|follower| follower.loaded.is_some())
+            .map(|follower| follower.output.endpoint_id)
+            .collect();
         drop(transport);
         self.commands.send_modify(|revision| *revision += 1);
+        self.save_transport();
+        self.changed();
+        let endpoints = self.endpoints.clone();
+        tokio::spawn(async move {
+            for endpoint in followers {
+                let _ = endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+            }
+        });
+    }
+
+    /// Another session took one of the outputs playing in step with this session's own.
+    fn drop_follower(&self, endpoint: &str) {
+        let mut transport = self.transport();
+        let before = transport.followers.len();
+        transport.followers.retain(|follower| follower.output.endpoint_id != endpoint);
+        if transport.followers.len() == before { return; }
+        if transport.followers.is_empty() { transport.sync = SyncPhase::Idle; }
+        drop(transport);
         self.save_transport();
         self.changed();
     }
@@ -487,7 +591,9 @@ impl Core {
         let playing = status["control"]["playing"].as_bool().unwrap_or(transport.playing);
         let engine_playing = status["isPlaying"].as_bool().unwrap_or(false);
         transport.playing = playing;
-        transport.pending_play = None;
+        // In a synced group the rest follow: a pause pauses them, and anything else starts the
+        // group again together from where this output is.
+        transport.pending_play = transport.synced().then_some(playing);
         transport.pending_seek = None;
         transport.buffering = playing && (status["buffering"] == true || !engine_playing);
         if let Some(position) = status["currentTime"].as_f64() {
@@ -522,6 +628,7 @@ impl Core {
         transport.pending_play = None;
         transport.pending_seek = None;
         transport.report_after = None;
+        transport.sync = SyncPhase::Idle;
         drop(transport);
         if changed {
             self.save_transport();
@@ -559,7 +666,11 @@ impl Core {
     pub(crate) fn save_transport(&self) {
         let saved = {
             let transport = self.transport();
-            SavedTransport { output: transport.output.clone(), position: transport.position_now() }
+            SavedTransport {
+                output: transport.output.clone(),
+                position: transport.position_now(),
+                followers: transport.followers.iter().map(|follower| follower.output.clone()).collect(),
+            }
         };
         let Ok(bytes) = serde_json::to_vec(&saved) else { return };
         // Asked for every few seconds: a paused or idle session has nothing new to write.
@@ -732,6 +843,8 @@ struct SessionView {
     audio_quality: Value,
     output: Option<Output>,
     output_online: bool,
+    /// Every output playing, in step: `output` first, then those following it.
+    outputs: Vec<Output>,
     /// The queue revision this view goes with.
     queue_revision: u64,
     /// Left out when the app already has this revision: a long queue is large, and play,
@@ -798,16 +911,27 @@ async fn view(core: &Core, known_queue: Option<u64>, detail: QueueDetail) -> Ses
         audio_quality: transport.audio_quality.clone(),
         output: transport.output.clone(),
         output_online,
+        outputs: transport.outputs(),
         queue: (known_queue != Some(queue_revision) && queue_patch.is_none() && detail != QueueDetail::PatchedOrLeftOut).then(|| Kept(queue.clone())),
         queue_patch: queue_patch.map(Kept),
         queue_revision,
     }
 }
 
+/// Where `server_time_ms` counts from.
+fn server_clock_start() -> Instant {
+    static START: OnceLock<Instant> = OnceLock::new();
+    *START.get_or_init(Instant::now)
+}
+
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
 fn server_time_ms() -> f64 {
-    static START: OnceLock<Instant> = OnceLock::new();
-    START.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+    server_clock_start().elapsed().as_secs_f64() * 1000.0
+}
+
+/// When `ms`, on `server_time_ms`'s clock, comes (or came).
+fn server_instant(ms: f64) -> Instant {
+    server_clock_start() + Duration::from_secs_f64(ms.max(0.0) / 1000.0)
 }
 
 /// Answered at once, so an app can time the round trip and line its clock up with this one.
@@ -1003,12 +1127,14 @@ enum Command {
     Previous,
     Stop,
     Output { output: Option<Output> },
+    /// Plays on all of these in step, the first leading; at most one output per computer.
+    Outputs { outputs: Vec<Output> },
     Volume { volume: f64 },
 }
 
 async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
     let retry_live = matches!(&command, Command::Play | Command::Toggle | Command::Seek { .. }) && core.transport().error.is_some();
-    let interrupts_live = retry_live || matches!(&command, Command::Pause | Command::Stop | Command::Seek { .. } | Command::Next | Command::Previous | Command::PlayTrack { .. } | Command::Output { .. })
+    let interrupts_live = retry_live || matches!(&command, Command::Pause | Command::Stop | Command::Seek { .. } | Command::Next | Command::Previous | Command::PlayTrack { .. } | Command::Output { .. } | Command::Outputs { .. })
         || matches!(&command, Command::Toggle) && core.transport().playing;
     if interrupts_live && let Some(manager) = core.soloist(false) { manager.interrupt(); }
     let guard = core.operation.lock().await;
@@ -1086,36 +1212,31 @@ async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Jso
             Ok(())
         }
         Command::Output { output } => {
-            let previous = {
-                let mut transport = core.transport();
-                let previous = transport.output.clone();
-                if previous != output {
-                    transport.position = transport.position_now();
-                    transport.position_at = Some(Instant::now());
-                    transport.output = output.clone();
-                    transport.loaded = None;
-                    transport.orphaned = None;
-                    transport.queued_next = None;
-                    transport.error = None;
-                }
-                previous
-            };
             drop(operation.operation.take());
-            // An output plays for one session: any other session using it lets it go.
-            if let (Some(output), Some(sessions)) = (&output, core.sessions.upgrade()) {
-                for other in sessions.cores() {
-                    if other.id != core.id && other.transport().output.as_ref().is_some_and(|theirs| theirs.endpoint_id == output.endpoint_id) {
-                        other.drop_output();
+            set_outputs(&core, output.into_iter().collect()).await;
+            Ok(())
+        }
+        Command::Outputs { outputs } => {
+            drop(operation.operation.take());
+            // Only apps that keep time with the others join a group (`syncV1` in their reports).
+            let mut unable = None;
+            if outputs.len() > 1 {
+                for output in &outputs {
+                    if let Some((status, ..)) = core.endpoints.status(&output.endpoint_id).await
+                        && status["syncV1"] != true
+                    {
+                        unable = Some(output.endpoint_name.clone());
+                        break;
                     }
                 }
             }
-            // The song moves: the old output stops, and the driver loads it on the new one.
-            if let Some(previous) = previous.filter(|previous| Some(previous) != output.as_ref()) {
-                let _ = core.endpoints.call(&previous.endpoint_id, "pause_native_audio", json!({})).await;
+            match unable {
+                Some(name) => Err(format!("{name} can't play in step with other outputs. Update Ambra there first.")),
+                None => {
+                    set_outputs(&core, outputs).await;
+                    Ok(())
+                }
             }
-            core.save_transport();
-            core.changed();
-            Ok(())
         }
         Command::Volume { volume } => {
             let output = core.transport().output.clone();
@@ -1130,6 +1251,67 @@ async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Jso
         Ok(()) => Json(view(&core, query.queue, QueueDetail::of(query.patches)).await).into_response(),
         Err(message) => error(StatusCode::BAD_REQUEST, message),
     }
+}
+
+/// Plays on `outputs` from now on, in step, the first leading the rest. A computer plays one
+/// output at a time, so only the first output named on each counts.
+async fn set_outputs(core: &Core, outputs: Vec<Output>) {
+    let mut computers = std::collections::HashSet::new();
+    let mut outputs: Vec<Output> = outputs.into_iter().filter(|output| computers.insert(output.endpoint_id.clone())).collect();
+    let leader = (!outputs.is_empty()).then(|| outputs.remove(0));
+    let stopped = {
+        let mut transport = core.transport();
+        let previous = transport.output.clone();
+        let mut stopped = Vec::new();
+        if previous != leader {
+            transport.position = transport.position_now();
+            transport.position_at = Some(Instant::now());
+            transport.output = leader.clone();
+            transport.loaded = None;
+            transport.orphaned = None;
+            transport.queued_next = None;
+            transport.error = None;
+            // The song moves: the old output stops, and the driver loads it on the new one.
+            if let Some(previous) = previous { stopped.push(previous.endpoint_id); }
+        }
+        let was_synced = transport.synced();
+        let mut kept = std::mem::take(&mut transport.followers);
+        transport.followers = outputs.into_iter().map(|output| match kept.iter().position(|follower| follower.output == output) {
+            Some(index) => kept.remove(index),
+            None => Follower::new(output),
+        }).collect();
+        let leader_endpoint = leader.as_ref().map(|leader| leader.endpoint_id.as_str());
+        stopped.extend(kept.into_iter()
+            .filter(|follower| follower.loaded.is_some() && Some(follower.output.endpoint_id.as_str()) != leader_endpoint)
+            .map(|follower| follower.output.endpoint_id));
+        stopped.retain(|endpoint| !transport.outputs().iter().any(|output| &output.endpoint_id == endpoint));
+        if !transport.synced() {
+            transport.sync = SyncPhase::Idle;
+        } else if !was_synced && transport.playing && transport.loaded.is_some() && transport.sync == SyncPhase::Idle {
+            // A song playing on one output starts again on the whole group, together.
+            transport.pending_play = Some(true);
+        }
+        stopped
+    };
+    // An output plays for one session: any other session using it lets it go.
+    let ours = core.transport().outputs();
+    if let Some(sessions) = core.sessions.upgrade() {
+        for other in sessions.cores() {
+            if other.id == core.id { continue; }
+            for output in &ours {
+                if other.transport().output.as_ref().is_some_and(|theirs| theirs.endpoint_id == output.endpoint_id) {
+                    other.drop_output();
+                } else {
+                    other.drop_follower(&output.endpoint_id);
+                }
+            }
+        }
+    }
+    for endpoint in stopped {
+        let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
+    }
+    core.save_transport();
+    core.changed();
 }
 
 /// Next: the queue moves on and the new song plays from its start.
@@ -1245,9 +1427,12 @@ async fn step(core: &Core) -> Result<(), String> {
         return Ok(());
     };
     let endpoint = output.endpoint_id.clone();
+    // Outputs following this one play in step with it, each starting with the others.
+    let synced = core.transport().synced();
 
     let Some((track, canonical_source)) = current else {
         stop_soloist!();
+        pause_followers(core, &mut io, true).await?;
         // Nothing to play: the output stops if it was playing something.
         let was_loaded = core.transport().loaded.take().is_some();
         if was_loaded {
@@ -1275,6 +1460,7 @@ async fn step(core: &Core) -> Result<(), String> {
             let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({})));
             core.changed();
         }
+        pause_followers(core, &mut io, true).await?;
         return Err("This song's service is disconnected. Reconnect it or replace the song with Improve Playlist.".into());
     }
     // Identical consecutive sources cannot be distinguished by a source-only engine report.
@@ -1287,6 +1473,7 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         core.pause_disconnected_output();
         stop_soloist!();
+        pause_followers(core, &mut io, false).await?;
         return Err(format!("Audio output {} is offline", output.endpoint_name));
     };
 
@@ -1322,6 +1509,7 @@ async fn step(core: &Core) -> Result<(), String> {
     if let Some(loaded_endpoint) = silence {
         // Without `control`, so a play the output made just before can't keep the old song going.
         let _ = remote!(core.endpoints.call(&loaded_endpoint, "pause_native_audio", json!({})));
+        pause_followers(core, &mut io, false).await?;
         let mut transport = core.transport();
         // A previous that restarts the song is only a seek: play on after it, as before.
         if transport.playing && transport.pending_play.is_none() { transport.pending_play = Some(true); }
@@ -1354,7 +1542,8 @@ async fn step(core: &Core) -> Result<(), String> {
         };
         // Renderer changes only at a track, seek, resume, or output initialization boundary.
         // A failed live stream retries through the existing session at its saved position.
-        live = track["provider"] == "spotify" && !failed && pinned.unwrap_or_else(|| status["livePcmV1"] == true && manager.readiness().is_ok());
+        // Spotify's lossless stream goes to one output; a synced group plays it as High.
+        live = !synced && track["provider"] == "spotify" && !failed && pinned.unwrap_or_else(|| status["livePcmV1"] == true && manager.readiness().is_ok());
         if live && !playing {
             let was_loaded = core.transport().loaded.take().is_some();
             if was_loaded { let _ = remote!(core.endpoints.call(&endpoint, "pause_native_audio", json!({}))); }
@@ -1410,8 +1599,16 @@ async fn step(core: &Core) -> Result<(), String> {
             remote!(core.endpoints.call(&endpoint, "select_native_audio_device", json!({ "deviceId": output.device_id })))?;
         }
         let duration = track["durationSeconds"].as_f64().unwrap_or(0.0);
+        // In a synced group, every output prepares the song and holds it for their start.
+        let hold = {
+            let mut transport = core.transport();
+            if synced && autoplay { Some(transport.begin_sync(position, true)) } else {
+                if synced { transport.sync = SyncPhase::Idle; }
+                None
+            }
+        };
         if let Err(error) = remote!(core.endpoints
-            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay, "control": known() }))) {
+            .call(&endpoint, "load_native_audio", json!({ "source": source, "nextSource": next, "positionSeconds": position, "autoplay": autoplay, "control": known(), "sync": sync_args(hold) }))) {
             if live {
                 if let Some(manager) = core.soloist(false) { provider!(manager.stop_playback()); }
                 core.transport().failed_live_load = Some(wanted);
@@ -1428,20 +1625,24 @@ async fn step(core: &Core) -> Result<(), String> {
             if track["provider"] == "spotify" { manager.report_renderer(live); }
             else { manager.clear_effective_renderer(); }
         }
-        let mut transport = core.transport();
-        transport.loaded = Some(wanted);
-        transport.orphaned = None;
-        transport.queued_next = Some(next.clone());
-        transport.pending_play = None;
-        transport.pending_seek = None;
-        transport.duration = duration;
-        // The output plays as its own latest change says, if it made one while this loaded.
-        transport.buffering = transport.playing;
-        transport.error = None;
-        transport.set_position(position);
-        transport.report_after = Some(Instant::now());
-        drop(transport);
+        {
+            let mut transport = core.transport();
+            transport.loaded = Some(wanted);
+            transport.orphaned = None;
+            transport.queued_next = Some(next.clone());
+            transport.pending_play = None;
+            transport.pending_seek = None;
+            transport.duration = duration;
+            // The output plays as its own latest change says, if it made one while this loaded.
+            transport.buffering = transport.playing;
+            transport.error = None;
+            transport.set_position(position);
+            transport.report_after = Some(Instant::now());
+        }
         core.changed();
+        if synced {
+            drive_followers(core, &mut io, &source, &next).await?;
+        }
         return Ok(());
     }
 
@@ -1449,12 +1650,32 @@ async fn step(core: &Core) -> Result<(), String> {
         let transport = core.transport();
         (transport.pending_play, transport.pending_seek, transport.queued_next.clone())
     };
+    // In a synced group a seek or play while playing is a new start: every output prepares
+    // from there and holds; a pause or a seek while paused goes to each at once.
+    let hold = {
+        let mut transport = core.transport();
+        let starts = pending_play == Some(true) || pending_seek.is_some() && transport.playing && pending_play != Some(false);
+        if synced && starts {
+            let position = pending_seek.unwrap_or_else(|| transport.position_now());
+            Some(transport.begin_sync(position, pending_seek.is_some()))
+        } else {
+            if synced && (pending_play == Some(false) || pending_seek.is_some()) { transport.sync = SyncPhase::Idle; }
+            None
+        }
+    };
     if let Some(seek) = pending_seek {
-        remote!(core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek, "control": known() })))?;
+        remote!(core.endpoints.call(&endpoint, "seek_native_audio", json!({ "positionSeconds": seek, "control": known(), "sync": sync_args(hold) })))?;
     }
     if let Some(playing) = pending_play {
         let command = if playing { "play_native_audio" } else { "pause_native_audio" };
-        remote!(core.endpoints.call(&endpoint, command, json!({ "control": known() })))?;
+        remote!(core.endpoints.call(&endpoint, command, json!({ "control": known(), "sync": sync_args(hold) })))?;
+    }
+    if synced && hold.is_none() {
+        if pending_play == Some(false) {
+            pause_followers(core, &mut io, false).await?;
+        } else if let Some(seek) = pending_seek {
+            seek_followers(core, &mut io, seek).await?;
+        }
     }
     if pending_seek.is_some() || pending_play.is_some() {
         let mut transport = core.transport();
@@ -1465,6 +1686,10 @@ async fn step(core: &Core) -> Result<(), String> {
     if queued_next.as_ref() != Some(&next) {
         remote!(core.endpoints.call(&endpoint, "queue_native_audio", json!({ "source": next, "expectedSource": source })))?;
         core.transport().queued_next = Some(next.clone());
+    }
+    if synced {
+        drive_followers(core, &mut io, &source, &next).await?;
+        start_together(core, &mut io).await?;
     }
 
     let Some((status, reported_at, sampled_at, reported_instance)) = core.endpoints.status(&endpoint).await else {
@@ -1574,6 +1799,227 @@ async fn step(core: &Core) -> Result<(), String> {
     Ok(())
 }
 
+// ---------- Playing on several outputs in step ----------
+
+fn sync_args(epoch: Option<u64>) -> Value {
+    epoch.map_or(Value::Null, |epoch| json!({ "epoch": epoch }))
+}
+
+/// The group's start, as each output is told it: song position `position` is heard at `at_ms`.
+fn start_args(epoch: u64, at_ms: f64, position: f64, resync_ms: u64) -> Value {
+    json!({ "epoch": epoch, "atServerMs": at_ms, "positionSeconds": position, "sentAtServerMs": server_time_ms(), "groupResyncMs": resync_ms })
+}
+
+/// A command to a following output. Its failure is that output's alone: it never stops the
+/// group, and the output is tried again a little later. False when it failed.
+async fn follower_call(core: &Core, io: &mut OutputOperation<'_>, endpoint: &str, command: &str, args: Value) -> Result<bool, String> {
+    match io.interruptible(core.endpoints.call(endpoint, command, args)).await? {
+        Ok(_) => Ok(true),
+        Err(error) => {
+            eprintln!("A synced output couldn't {command}: {error}");
+            if let Some(follower) = core.transport().follower(endpoint) {
+                follower.loaded = None;
+                follower.held = 0;
+                follower.started = 0;
+                follower.failed_at = Some(Instant::now());
+            }
+            Ok(false)
+        }
+    }
+}
+
+/// Pauses the following outputs; `unload` also forgets what they had, for nothing to play.
+async fn pause_followers(core: &Core, io: &mut OutputOperation<'_>, unload: bool) -> Result<(), String> {
+    let playing: Vec<String> = {
+        let mut transport = core.transport();
+        if transport.followers.is_empty() { return Ok(()); }
+        transport.sync = SyncPhase::Idle;
+        transport.followers.iter_mut().filter_map(|follower| {
+            follower.held = 0;
+            follower.started = 0;
+            let loaded = if unload { follower.queued_next = None; follower.loaded.take().is_some() } else { follower.loaded.is_some() };
+            loaded.then(|| follower.output.endpoint_id.clone())
+        }).collect()
+    };
+    if playing.is_empty() { return Ok(()); }
+    let pauses = playing.iter().map(|endpoint| core.endpoints.call(endpoint, "pause_native_audio", json!({})));
+    let _ = io.interruptible(futures_util::future::join_all(pauses)).await?;
+    Ok(())
+}
+
+/// A seek while paused goes to every following output as it is.
+async fn seek_followers(core: &Core, io: &mut OutputOperation<'_>, position: f64) -> Result<(), String> {
+    let loaded: Vec<String> = core.transport().followers.iter()
+        .filter(|follower| follower.loaded.is_some())
+        .map(|follower| follower.output.endpoint_id.clone())
+        .collect();
+    for endpoint in loaded {
+        follower_call(core, io, &endpoint, "seek_native_audio", json!({ "positionSeconds": position })).await?;
+    }
+    Ok(())
+}
+
+/// The group's timeline as the leading output keeps it, while it plays `source`: when it
+/// hears which song position, on the server's clock.
+async fn leader_anchor(core: &Core, source: &str) -> Option<(f64, f64)> {
+    let endpoint = core.transport().output.as_ref()?.endpoint_id.clone();
+    let (status, ..) = core.endpoints.status(&endpoint).await?;
+    if status["currentSource"].as_str() != Some(source) { return None; }
+    let anchor = &status["syncAnchor"];
+    Some((anchor["atServerMs"].as_f64()?, anchor["positionSeconds"].as_f64()?))
+}
+
+/// Brings each following output to what the group plays: the song, prepared and held for the
+/// group's start, or joined in step when the group already plays; paused with it otherwise.
+async fn drive_followers(core: &Core, io: &mut OutputOperation<'_>, source: &str, next: &Option<String>) -> Result<(), String> {
+    let followers: Vec<Output> = core.transport().followers.iter().map(|follower| follower.output.clone()).collect();
+    for output in followers {
+        let endpoint = output.endpoint_id.as_str();
+        let Some((status, _, _, instance)) = core.endpoints.status(endpoint).await else {
+            // Out of reach: it starts afresh when it's back.
+            if let Some(follower) = core.transport().follower(endpoint) {
+                follower.loaded = None;
+                follower.queued_next = None;
+                follower.held = 0;
+                follower.started = 0;
+            }
+            continue;
+        };
+        // An app from before synced playback can't keep time with the rest.
+        if status["syncV1"] != true { continue; }
+        let (phase, generation, position_now, follower) = {
+            let mut transport = core.transport();
+            let (phase, generation, position) = (transport.sync, transport.generation, transport.position_now());
+            let Some(follower) = transport.follower(endpoint) else { continue };
+            if follower.failed_at.is_some_and(|at| at.elapsed() < FOLLOWER_RETRY) { continue; }
+            // It moved on to the queued song by itself, without a gap, as the others did.
+            let advanced = follower.loaded.as_ref().is_some_and(|loaded| loaded.track_source != source && loaded.generation == generation && loaded.endpoint_instance == instance)
+                && status["currentSource"].as_str() == Some(source)
+                && follower.queued_next.as_ref().is_some_and(|queued| queued.as_deref() == Some(source));
+            if advanced {
+                if let Some(loaded) = follower.loaded.as_mut() {
+                    loaded.source = source.to_owned();
+                    loaded.track_source = source.to_owned();
+                }
+                follower.queued_next = None;
+            }
+            (phase, generation, position, follower.clone())
+        };
+        let wanted = Loaded { endpoint_id: endpoint.to_owned(), endpoint_instance: instance.clone(), device_id: output.device_id.clone(), source: source.to_owned(), track_source: source.to_owned(), live: false, generation };
+        let needs_device = follower.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_instance != instance || loaded.device_id != output.device_id);
+        let needs_load = follower.loaded.as_ref() != Some(&wanted);
+        let load = |position: f64, autoplay: bool, epoch: Option<u64>| json!({ "source": source, "nextSource": next, "positionSeconds": position.max(0.0), "autoplay": autoplay, "sync": sync_args(epoch) });
+        macro_rules! call {
+            ($command:expr, $args:expr) => { if !follower_call(core, io, endpoint, $command, $args).await? { continue; } };
+        }
+        let select = json!({ "deviceId": output.device_id });
+        let (held, started) = match phase {
+            SyncPhase::Preparing { epoch, position, seek, .. } if needs_load || follower.held != epoch => {
+                if needs_device { call!("select_native_audio_device", select); }
+                if needs_load {
+                    call!("load_native_audio", load(position, true, Some(epoch)));
+                } else if seek || (status["currentTime"].as_f64().unwrap_or(position) - position).abs() > RESUME_IN_PLACE_SECONDS {
+                    call!("seek_native_audio", json!({ "positionSeconds": position, "sync": sync_args(Some(epoch)) }));
+                } else {
+                    // Resumes from where it paused; the start lines that up with the rest.
+                    call!("play_native_audio", json!({ "sync": sync_args(Some(epoch)) }));
+                }
+                (epoch, follower.started)
+            }
+            SyncPhase::Running { epoch, resync_ms, .. } if needs_load || follower.started != epoch => {
+                // Prepares from where the group will be once it's ready, then lines up with it.
+                let Some((at_ms, position)) = leader_anchor(core, source).await else { continue };
+                let join = position + (server_time_ms() + SYNC_JOIN_LEAD_MS - at_ms) / 1000.0;
+                if needs_device { call!("select_native_audio_device", select); }
+                if needs_load {
+                    call!("load_native_audio", load(join, true, Some(epoch)));
+                } else {
+                    call!("seek_native_audio", json!({ "positionSeconds": join.max(0.0), "sync": sync_args(Some(epoch)) }));
+                }
+                call!("sync_native_audio", start_args(epoch, at_ms, position, resync_ms));
+                (epoch, epoch)
+            }
+            SyncPhase::Idle if needs_load => {
+                if needs_device { call!("select_native_audio_device", select); }
+                call!("load_native_audio", load(position_now, false, None));
+                (0, 0)
+            }
+            _ => (follower.held, follower.started),
+        };
+        let queued = {
+            let mut transport = core.transport();
+            let Some(follower) = transport.follower(endpoint) else { continue };
+            if needs_load {
+                follower.loaded = Some(wanted);
+                follower.queued_next = Some(next.clone());
+            }
+            follower.held = held;
+            follower.started = started;
+            follower.failed_at = None;
+            follower.loaded.is_some().then(|| follower.queued_next.clone())
+        };
+        // The song after this one, ready to follow on without a gap like the others.
+        if let Some(queued) = queued && queued.as_ref() != Some(next) {
+            call!("queue_native_audio", json!({ "source": next, "expectedSource": source }));
+            if let Some(follower) = core.transport().follower(endpoint) { follower.queued_next = Some(next.clone()); }
+        }
+    }
+    Ok(())
+}
+
+/// Starts the group once every output is ready (or the slowest has had long enough): each is
+/// told when the group hears the start position. That leaves the longest resync delay any of
+/// them needs, so none skips the start of the song to keep up with the others.
+async fn start_together(core: &Core, io: &mut OutputOperation<'_>) -> Result<(), String> {
+    let (epoch, position, since, members) = {
+        let transport = core.transport();
+        let SyncPhase::Preparing { epoch, position, since, .. } = transport.sync else { return Ok(()) };
+        let mut members: Vec<String> = transport.loaded.iter().map(|loaded| loaded.endpoint_id.clone()).collect();
+        members.extend(transport.followers.iter()
+            .filter(|follower| follower.loaded.is_some() && follower.held == epoch)
+            .map(|follower| follower.output.endpoint_id.clone()));
+        (epoch, position, since, members)
+    };
+    let (mut needed, mut longest, mut waiting) = (0_u64, 0_u64, false);
+    for endpoint in &members {
+        let Some((status, ..)) = core.endpoints.status(endpoint).await else { continue };
+        if status["syncReady"].as_u64() == Some(epoch) {
+            needed = needed.max(status["syncResyncDelayMs"].as_u64().unwrap_or(0));
+            longest = longest.max(status["resyncDelayMs"].as_u64().unwrap_or(0));
+        } else if status["error"].is_null() {
+            // A failed output doesn't hold up the rest.
+            waiting = true;
+        }
+    }
+    if waiting && since.elapsed() < SYNC_READY_TIMEOUT { return Ok(()); }
+    let (needed, longest) = (needed.min(10_000), longest.min(10_000));
+    let at_ms = server_time_ms() + SYNC_START_MARGIN_MS + needed as f64;
+    let args = start_args(epoch, at_ms, position, longest);
+    let starts = members.iter().map(|endpoint| core.endpoints.call(endpoint, "sync_native_audio", args.clone()));
+    let results = io.interruptible(futures_util::future::join_all(starts)).await?;
+    let mut transport = core.transport();
+    if !matches!(transport.sync, SyncPhase::Preparing { epoch: current, .. } if current == epoch) { return Ok(()); }
+    transport.sync = SyncPhase::Running { epoch, at_ms, position, resync_ms: longest };
+    // Heard from the start time on; until then the position stays where the group starts.
+    transport.position = position;
+    transport.position_at = Some(server_instant(at_ms));
+    let leader = transport.output.as_ref().map(|output| output.endpoint_id.clone());
+    for (endpoint, result) in members.iter().zip(results) {
+        if result.is_ok() {
+            if let Some(follower) = transport.follower(endpoint) { follower.started = epoch; }
+        } else if Some(endpoint) == leader.as_ref() {
+            // The leading output missed its start: it loads again and the group starts anew.
+            transport.loaded = None;
+        } else if let Some(follower) = transport.follower(endpoint) {
+            // It joins the playing group instead.
+            follower.started = 0;
+        }
+    }
+    drop(transport);
+    core.changed();
+    Ok(())
+}
+
 // ---------- Sessions ----------
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1670,7 +2116,7 @@ impl Sessions {
                 "title": track["title"], "artist": track["artist"], "album": track["album"], "cover": track["cover"],
             }));
             let transport = core.transport();
-            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), track });
+            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), outputs: transport.outputs(), track });
         }
         summaries
     }
@@ -1683,6 +2129,8 @@ struct SessionSummary {
     name: String,
     playing: bool,
     output: Option<Output>,
+    /// Every output the session plays on, in step: `output` first.
+    outputs: Vec<Output>,
     /// The current song, for showing what each session is playing.
     track: Option<Value>,
 }
@@ -1758,8 +2206,13 @@ async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Pa
         let _ = manager.stop_playback().await;
         manager.clear_effective_renderer();
     }
-    let loaded = core.transport().loaded.as_ref().map(|loaded| loaded.endpoint_id.clone());
-    if let Some(endpoint) = loaded {
+    let loaded: Vec<String> = {
+        let transport = core.transport();
+        transport.loaded.iter().map(|loaded| loaded.endpoint_id.clone())
+            .chain(transport.followers.iter().filter(|follower| follower.loaded.is_some()).map(|follower| follower.output.endpoint_id.clone()))
+            .collect()
+    };
+    for endpoint in loaded {
         let _ = core.endpoints.call(&endpoint, "pause_native_audio", json!({})).await;
     }
     let _ = core.state.update(&core.queue_key, |_| Ok((None, ()))).await;
@@ -2018,6 +2471,146 @@ mod driver_tests {
     /// The commands the output received after the first `skip` of them.
     fn received_after(h: &Harness, skip: usize) -> Vec<(String, Value)> {
         h.received.lock().unwrap()[skip..].to_vec()
+    }
+
+    /// Another output app, one that plays in synced groups. Prepares at once whatever it's
+    /// asked to hold, then reports itself ready for that start, needing `resync_ms` first.
+    struct SyncedOutput {
+        received: Arc<SyncMutex<Vec<(String, Value)>>>,
+        workers: Vec<tokio::task::JoinHandle<()>>,
+    }
+
+    impl SyncedOutput {
+        fn start(base: &str, id: &'static str, resync_ms: u64) -> Self {
+            let http = reqwest::Client::new();
+            let status = Arc::new(SyncMutex::new(json!({ "syncV1": true, "currentSource": null, "buffering": false, "ended": false, "error": null })));
+            let received: Arc<SyncMutex<Vec<(String, Value)>>> = Arc::default();
+            let mut workers = Vec::new();
+            let (presence_base, presence_http, presence_status) = (base.to_owned(), http.clone(), status.clone());
+            workers.push(tokio::spawn(async move {
+                loop {
+                    let status = presence_status.lock().unwrap().clone();
+                    let _ = presence_http.post(format!("{presence_base}/api/endpoints/{id}/presence"))
+                        .json(&json!({ "name": id, "instanceId": id, "devices": [{ "id": "spk", "name": "Speakers" }], "status": status })).send().await;
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }));
+            let (base, recorded) = (base.to_owned(), received.clone());
+            workers.push(tokio::spawn(async move {
+                loop {
+                    let Ok(response) = http.get(format!("{base}/api/endpoints/{id}/commands?wait=5")).send().await else { continue };
+                    for command in response.json::<Vec<Value>>().await.unwrap_or_default() {
+                        let (name, args) = (command["command"].as_str().unwrap().to_owned(), command["args"].clone());
+                        recorded.lock().unwrap().push((name.clone(), args.clone()));
+                        {
+                            let mut status = status.lock().unwrap();
+                            if name == "load_native_audio" {
+                                status["currentSource"] = args["source"].clone();
+                                status["currentTime"] = args["positionSeconds"].clone();
+                            }
+                            if let Some(epoch) = args["sync"]["epoch"].as_u64() {
+                                status["buffering"] = json!(true);
+                                status["syncReady"] = json!(epoch);
+                                status["syncResyncDelayMs"] = json!(resync_ms);
+                                status["resyncDelayMs"] = json!(resync_ms);
+                            }
+                            if name == "sync_native_audio" {
+                                status.as_object_mut().unwrap().remove("syncReady");
+                            }
+                        }
+                        let _ = http.post(format!("{base}/api/endpoints/{id}/results"))
+                            .json(&json!({ "id": command["id"], "ok": true, "value": null })).send().await;
+                    }
+                }
+            }));
+            Self { received, workers }
+        }
+
+        fn commands(&self, name: &str) -> Vec<Value> {
+            self.received.lock().unwrap().iter().filter(|(command, _)| command == name).map(|(_, args)| args.clone()).collect()
+        }
+    }
+
+    impl Drop for SyncedOutput {
+        fn drop(&mut self) {
+            for worker in &self.workers { worker.abort(); }
+        }
+    }
+
+    fn commands(h: &Harness, name: &str) -> Vec<Value> {
+        h.received.lock().unwrap().iter().filter(|(command, _)| command == name).map(|(_, args)| args.clone()).collect()
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_synced_group_waits_for_every_output_then_starts_them_together_after_the_longest_resync() {
+        let h = Harness::start().await;
+        h.report(json!({ "syncV1": true })).await;
+        let den = SyncedOutput::start(&h.base, "den", 1500);
+        eventually!("the second output to report", h.core.endpoints.online("den").await);
+        let outputs = json!([
+            { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" },
+            { "endpointId": "den", "deviceId": "spk", "endpointName": "Den", "deviceName": "Speakers" },
+        ]);
+        let view = h.post("/api/session/command", json!({ "action": "outputs", "outputs": outputs })).await;
+        assert_eq!(view["outputs"].as_array().unwrap().len(), 2);
+        h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [item("b")], "tracks": [track("a"), track("b")] } })).await;
+        h.wait_for_command("load_native_audio").await;
+        eventually!("the second output to load", !den.commands("load_native_audio").is_empty());
+        let epoch = commands(&h, "load_native_audio")[0]["sync"]["epoch"].as_u64().expect("the leading output holds its start");
+        let den_load = &den.commands("load_native_audio")[0];
+        assert_eq!(den_load["sync"]["epoch"].as_u64(), Some(epoch), "both hold for the same start");
+        assert_eq!(den_load["source"], source("a"));
+        assert_eq!(den_load["autoplay"], true);
+
+        // The leading output isn't ready yet: nobody starts.
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert!(den.commands("sync_native_audio").is_empty() && commands(&h, "sync_native_audio").is_empty());
+
+        h.report(json!({ "currentSource": source("a"), "currentTime": 0.0, "isPlaying": false, "buffering": true, "ended": false, "syncReady": epoch, "syncResyncDelayMs": 0, "resyncDelayMs": 0 })).await;
+        h.wait_for_command("sync_native_audio").await;
+        eventually!("the second output's start", !den.commands("sync_native_audio").is_empty());
+        let (desk_start, den_start) = (commands(&h, "sync_native_audio")[0].clone(), den.commands("sync_native_audio")[0].clone());
+        assert_eq!(desk_start["atServerMs"], den_start["atServerMs"], "one start time for the group");
+        assert_eq!(desk_start["epoch"].as_u64(), Some(epoch));
+        assert_eq!(desk_start["positionSeconds"], 0.0);
+        assert_eq!(desk_start["groupResyncMs"], 1500);
+        let lead = desk_start["atServerMs"].as_f64().unwrap() - desk_start["sentAtServerMs"].as_f64().unwrap();
+        assert!(lead >= 1500.0 + SYNC_START_MARGIN_MS - 50.0, "the start leaves the longest resync delay: {lead}");
+        assert!(matches!(h.core.transport().sync, SyncPhase::Running { .. }));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn pausing_a_synced_group_pauses_every_output_and_choosing_one_output_releases_the_rest() {
+        let h = Harness::start().await;
+        h.report(json!({ "syncV1": true })).await;
+        let den = SyncedOutput::start(&h.base, "den", 0);
+        eventually!("the second output to report", h.core.endpoints.online("den").await);
+        h.post("/api/session/command", json!({ "action": "outputs", "outputs": [
+            { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" },
+            { "endpointId": "den", "deviceId": "spk", "endpointName": "Den", "deviceName": "Speakers" },
+        ] })).await;
+        h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [track("a")] } })).await;
+        eventually!("the second output to load", !den.commands("load_native_audio").is_empty());
+        h.post("/api/session/command", json!({ "action": "pause" })).await;
+        eventually!("the second output to pause", !den.commands("pause_native_audio").is_empty());
+        let view = h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
+        assert_eq!(view["outputs"].as_array().unwrap().len(), 1);
+        assert!(h.core.transport().followers.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_output_that_cannot_keep_time_is_refused_a_place_in_a_group() {
+        let h = Harness::start().await;
+        let den = SyncedOutput::start(&h.base, "den", 0);
+        eventually!("the second output to report", h.core.endpoints.online("den").await);
+        let refused = h.http.post(format!("{}/api/session/command", h.base)).json(&json!({ "action": "outputs", "outputs": [
+            { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" },
+            { "endpointId": "den", "deviceId": "spk", "endpointName": "Den", "deviceName": "Speakers" },
+        ] })).send().await.unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+        assert!(refused.json::<Value>().await.unwrap()["error"].as_str().unwrap().contains("Desk"));
+        assert!(h.core.transport().followers.is_empty());
+        drop(den);
     }
 
     #[tokio::test(flavor = "multi_thread")]

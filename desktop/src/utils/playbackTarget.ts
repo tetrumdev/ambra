@@ -6,7 +6,8 @@ import type { NativeAudioDevice } from "./audioSettings";
  * The computers using this server and their outputs. The server's core decides which output
  * plays (api/core.ts); these are for choosing one and setting it up, on any computer.
  */
-export type RemoteEndpoint = { id: string; name: string; devices: NativeAudioDevice[]; availableDevices?: NativeAudioDevice[]; selectedDeviceId: string | null };
+/** `syncs`: the app there can play in step with other outputs (a synced group). */
+export type RemoteEndpoint = { id: string; name: string; devices: NativeAudioDevice[]; availableDevices?: NativeAudioDevice[]; selectedDeviceId: string | null; syncs: boolean };
 export type EndpointRef = { endpointId: string; endpointName: string };
 
 /** Runs one of the setup commands another computer takes (`COMMANDS` in the server's endpoints.rs). */
@@ -39,9 +40,9 @@ export function useEndpoints(active: boolean, othersOnly = false) {
       try {
         const response = await fetch(`${serverBaseUrl}/api/endpoints`, { cache: "no-store", signal: AbortSignal.any([abort.signal, serverConnectionSignal(), AbortSignal.timeout(5000)]) });
         if (!response.ok) return;
-        const list = await response.json() as RemoteEndpoint[];
+        const list = await response.json() as (Omit<RemoteEndpoint, "syncs"> & { status?: { syncV1?: boolean } | null })[];
         const next = list.filter(endpoint => (endpoint.availableDevices ?? endpoint.devices).length > 0 && !(othersOnly && endpoint.id === connection.clientId))
-          .map(({ id, name, devices, availableDevices, selectedDeviceId }) => ({ id, name, devices, availableDevices, selectedDeviceId }));
+          .map(({ id, name, devices, availableDevices, selectedDeviceId, status }) => ({ id, name, devices, availableDevices, selectedDeviceId, syncs: status?.syncV1 === true }));
         if (!disposed) setEndpoints(current => JSON.stringify(current) === JSON.stringify(next) ? current : next);
       } catch { /* Offline: keep the last list until the server answers. */ }
       finally { running = false; }

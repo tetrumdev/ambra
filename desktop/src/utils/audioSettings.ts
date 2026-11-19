@@ -3,7 +3,13 @@ import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 export type EqBand = { enabled: boolean; kind: "peak" | "lowShelf" | "highShelf"; frequency: number; gainDb: number; q: number };
 export type ImpulseFile = { id: string; name: string; sampleRate: number; channels: number; frames: number };
 export type DspPreset = { id: string; name: string; enabled: boolean; headroomDb: number; bands: EqBand[]; convolution: ImpulseFile[] };
-export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; presetId: string | null; volume: number };
+/**
+ * `latencyMs`: delay inside the device that the app can't measure, such as Bluetooth. Playing in
+ * a synced group, the output sends its audio that much earlier so the group stays together.
+ */
+export type OutputSettings = { id: string; name: string; enabled: boolean; exclusiveMode: boolean; resyncDelayMs: number; latencyMs: number; presetId: string | null; volume: number };
+/** The longest output latency the engine accepts (native_audio/settings.rs). */
+export const MAX_OUTPUT_LATENCY_MS = 2000;
 /** One constant gain per song or album; never compression or limiting. */
 export type NormalizationMode = "off" | "track" | "album";
 export type AudioSettings = { version: 1; selectedOutputId: string; outputs: OutputSettings[]; presets: DspPreset[]; normalization: NormalizationMode; normalizationTargetLufs: number };
@@ -16,7 +22,7 @@ export const MIN_TARGET_LUFS = -30;
 export const MAX_TARGET_LUFS = -6;
 
 export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selectedOutputId: "", presets: [], normalization: "off", normalizationTargetLufs: REFERENCE_LUFS, outputs: [
-  { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, presetId: null, volume: 100 },
+  { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, latencyMs: 0, presetId: null, volume: 100 },
 ] });
 const storageKey = "ambra.audio-settings.v1";
 export function loadAudioSettings(): AudioSettings {
@@ -39,11 +45,13 @@ export function loadAudioSettings(): AudioSettings {
       for (const output of value.outputs) {
         // Existing device settings predate resync delay; don't discard their DSP.
         if (output && output.resyncDelayMs === undefined) output.resyncDelayMs = 0;
+        if (output && output.latencyMs === undefined) output.latencyMs = 0;
         if (output && output.volume === undefined) output.volume = 100;
         if (!output || typeof output.id !== "string" || outputs.has(output.id)
           || typeof output.name !== "string" || !output.name.trim()
           || typeof output.enabled !== "boolean" || typeof output.exclusiveMode !== "boolean"
           || !Number.isInteger(output.resyncDelayMs) || output.resyncDelayMs < 0 || output.resyncDelayMs > 10000
+          || !Number.isInteger(output.latencyMs) || output.latencyMs < 0 || output.latencyMs > MAX_OUTPUT_LATENCY_MS
           || !Number.isFinite(output.volume) || output.volume < 0 || output.volume > 100
           || (output.presetId !== null && !presets.has(output.presetId))) throw new Error("Invalid output");
         outputs.add(output.id);

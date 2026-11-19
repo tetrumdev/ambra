@@ -6,8 +6,8 @@ Each server owns its shared queue, playback position, shared listening history, 
 output. Desktop clients normally keep their own local queue and playback. Enable **Shared
 playback session** in Settings → Server to control the shared session and expose this device's
 output. Mobile's Server tab retains the existing shared player; Local music uses its own queue.
-Choosing another shared output moves the server's song and position there. This supports one
-selected shared output, rather than synchronized playback across several outputs at once.
+Choosing another shared output moves the server's song and position there. A session can also
+play on several outputs at once, in sync; see [Synced outputs](#synced-outputs).
 
 A server runs several **sessions**, each with its own queue, position and output, so different
 rooms can play different music at once. Every server has a `Main` session, which can be renamed
@@ -35,6 +35,35 @@ Connect through Settings → Server → Connect to Ambra Server. LAN discovery, 
 and server-generated `ambra://pair/` links use encrypted pairing. Approve the code with
 `ambra-server pair approve <code>` on the server machine. Joining, switching, and disconnecting
 preserve device files, playlists, history, and settings. See [ownership and migration](local-clients.md).
+
+## Synced outputs
+
+In the volume menu, the box beside an output (or a right-click on it) adds that output to the
+ones playing, or takes it away; clicking the output itself plays there alone. A computer plays one
+of its outputs at a time, so ticking another output of the same computer takes the first one's
+place. Phones and apps from before synced playback can't join a group yet.
+
+The first output chosen leads the group; the core follows its reports, as with a single output.
+Every start (a new song, a resume, a seek) is coordinated: each output prepares the audio and
+holds its first sample, then the core tells all of them when the group hears which position, on
+the server's clock. That moment leaves room for the longest resync delay any output in the group
+needs, so no output cuts the start of a song short to keep up with the others. A pause or stop
+goes to every output at once.
+
+Each output lines itself up on its own (`desktop/src-tauri/src/native_audio/sync.rs`). Outputs
+follow the server's clock through `/api/session/clock`, trusting the quickest of recent round
+trips. Before its first sample an output writes exactly as much silence as puts that sample on
+time, or drops what it's already too late for. While playing it compares the position it is
+heard at with the group's timeline and drops or doubles single frames, spread out (at most one in
+200, usually one in 1000), so its sound card's clock can't drift from the others'. A stall of
+more than 150 ms lines it up again. Gapless song changes keep every output together; a change of
+format, which reopens each device, starts the next song later by the group's longest resync
+delay on every output alike.
+
+Delay inside a device that the app can't measure, such as Bluetooth, is set per output as
+**Sync latency** in Settings → Outputs; that output then sends its audio that much earlier.
+An output joining a group that already plays prepares from where the group will be and joins
+in step. Spotify's lossless stream reaches one output, so a group plays Spotify as High.
 
 ## Install and start the independent server
 

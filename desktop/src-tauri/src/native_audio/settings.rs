@@ -14,10 +14,17 @@ pub struct OutputSettings {
     pub exclusive_mode: bool,
     #[serde(default)]
     pub resync_delay_ms: u32,
+    /// Delay inside the device that Ambra can't measure (Bluetooth, a receiver's processing).
+    /// Playing in a synced group, this output sends its audio that much earlier.
+    #[serde(default)]
+    pub latency_ms: u32,
     pub preset_id: Option<String>,
     #[serde(default = "default_volume")]
     pub volume: f64,
 }
+
+/// Bluetooth adds a few hundred milliseconds at most.
+pub const MAX_LATENCY_MS: u32 = 2_000;
 
 fn default_volume() -> f64 {
     100.0
@@ -52,6 +59,7 @@ impl Default for AudioSettings {
                 enabled: true,
                 exclusive_mode: false,
                 resync_delay_ms: 0,
+                latency_ms: 0,
                 preset_id: None,
                 volume: default_volume(),
             }],
@@ -93,6 +101,9 @@ impl AudioSettings {
             }
             if output.resync_delay_ms > 10_000 {
                 return Err("Resync delay must be between 0 and 10000 ms".into());
+            }
+            if output.latency_ms > MAX_LATENCY_MS {
+                return Err(format!("Output latency must be between 0 and {MAX_LATENCY_MS} ms"));
             }
             if !output.volume.is_finite() || !(0.0..=100.0).contains(&output.volume) {
                 return Err("Output volume must be between 0 and 100".into());
@@ -162,6 +173,7 @@ impl AudioSettings {
                     enabled: false,
                     exclusive_mode: false,
                     resync_delay_ms: 0,
+                    latency_ms: 0,
                     preset_id: None,
                     volume: default_volume(),
                 });

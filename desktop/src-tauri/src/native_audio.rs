@@ -22,6 +22,7 @@ pub mod lyric_offset;
 mod output;
 mod resync;
 pub mod settings;
+mod sync;
 
 use decoder::DecodedSource;
 use dither::Dither;
@@ -31,6 +32,7 @@ use loudness::{LoudnessInfo, NormalizationMode, NormalizationStage};
 use output::{AudioOutput, PlatformOutput};
 use resync::ResyncDelay;
 use settings::AudioSettings;
+use sync::{Anchor, SyncState};
 
 const LOCAL_PREBUFFER_MILLISECONDS: usize = 150;
 const LOCAL_MAX_BUFFER_MILLISECONDS: usize = 750;
@@ -89,6 +91,17 @@ struct PlaybackStatus {
     ended: bool,
     error: Option<String>,
     audio_quality: Option<AudioQuality>,
+    /// The synced start this output is held for, once it's ready to make it.
+    sync_ready: Option<u64>,
+    /// The resync delay this output's device needs before that start: its own, if the device
+    /// was opened for it, or none when it's already running.
+    sync_resync_delay_ms: u32,
+    /// This output's own resync delay, which a group waits out alike when every device reopens.
+    resync_delay_ms: u32,
+    /// When the group hears which song position, while this output plays in sync.
+    sync_anchor: Option<(Instant, f64)>,
+    /// How far ahead of the group this output plays, averaged.
+    sync_error_ms: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -127,6 +140,33 @@ pub struct NativeAudioStatus {
     ended: bool,
     error: Option<String>,
     audio_quality: Option<AudioQuality>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_ready: Option<u64>,
+    sync_resync_delay_ms: u32,
+    resync_delay_ms: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_anchor: Option<SyncAnchorReport>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_error_ms: Option<f64>,
+}
+
+/// The group's timeline as this output keeps it: song position `position_seconds` is heard
+/// `in_ms` from when the status was read (negative once it has passed).
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncAnchorReport {
+    pub in_ms: f64,
+    pub position_seconds: f64,
+}
+
+/// What the server's core asks of an output playing in a synced group (`remote_endpoint.rs`).
+pub(crate) enum SyncCommand {
+    /// Prepare what comes next (a load, seek or play) but hold it for the group's start.
+    Hold { epoch: u64 },
+    /// The group's start: song position `position` is heard at `at`.
+    Start { epoch: u64, at: Instant, position: f64, group_resync: Duration },
+    /// Play on alone, as soon as ready.
+    Clear,
 }
 
 #[derive(Clone, Serialize)]
@@ -167,9 +207,6 @@ enum WorkerCommand {
     SkipToNext {
         reply: Sender<Result<bool, String>>,
     },
-    ListDevices {
-        reply: Sender<Result<Vec<NativeAudioDevice>, String>>,
-    },
     SelectDevice {
         device_id: Option<String>,
         reply: Sender<Result<(), String>>,
@@ -188,7 +225,10 @@ enum WorkerCommand {
         volume: f64,
         reply: Sender<Result<(), String>>,
     },
+    /// `devices` is enumerated by the caller: walking the system's audio endpoints can take
+    /// tens of milliseconds, too long to keep the playback thread from refilling the output.
     GetAudioSettings {
+        devices: Result<Vec<NativeAudioDevice>, String>,
         reply: Sender<Result<AudioSettings, String>>,
     },
     SetAudioSettings {
@@ -198,6 +238,7 @@ enum WorkerCommand {
     GetDspStatus {
         reply: Sender<Result<DspStatus, String>>,
     },
+    Sync(SyncCommand),
     Shutdown,
 }
 
@@ -207,7 +248,6 @@ impl WorkerCommand {
         matches!(
             self,
             Self::Warm { .. }
-                | Self::ListDevices { .. }
                 | Self::GetExclusiveMode { .. }
                 | Self::GetVolume { .. }
                 | Self::GetAudioSettings { .. }
@@ -223,7 +263,10 @@ pub fn setup(app: &mut App) {
     let worker_app = app.handle().clone();
     let worker = thread::Builder::new()
         .name("ambra-native-audio".to_owned())
-        .spawn(move || PlaybackWorker::new(command_rx, worker_status, Some(worker_app)).run())
+        .spawn(move || {
+            output::register_playback_thread();
+            PlaybackWorker::new(command_rx, worker_status, Some(worker_app)).run()
+        })
         .expect("could not start the native audio worker");
     app.manage(NativeAudioPlayer {
         command_tx,
@@ -266,6 +309,16 @@ pub(crate) fn dispatch_remote_seek(player: &NativeAudioPlayer, position_seconds:
     let position_seconds = valid_position(position_seconds)?;
     let (reply, _) = bounded(1);
     player.command_tx.send(WorkerCommand::Seek { position_seconds, reply })
+        .map_err(|_| "The native audio worker is unavailable".to_owned())
+}
+
+/// Takes part in a synced group, or leaves it. Sent ahead of the load, seek or play it
+/// concerns, and handled in order with them.
+pub(crate) fn dispatch_sync(player: &NativeAudioPlayer, command: SyncCommand) -> Result<(), String> {
+    if let SyncCommand::Start { position, .. } = &command {
+        valid_position(*position)?;
+    }
+    player.command_tx.send(WorkerCommand::Sync(command))
         .map_err(|_| "The native audio worker is unavailable".to_owned())
 }
 
@@ -355,17 +408,23 @@ pub async fn native_audio_status(
         ended: status.ended,
         error: status.error,
         audio_quality: status.audio_quality,
+        sync_ready: status.sync_ready,
+        sync_resync_delay_ms: status.sync_resync_delay_ms,
+        resync_delay_ms: status.resync_delay_ms,
+        sync_anchor: status.sync_anchor.map(|(at, position_seconds)| SyncAnchorReport {
+            in_ms: sync::signed_seconds(at, Instant::now()) * 1000.0,
+            position_seconds,
+        }),
+        sync_error_ms: status.sync_error_ms,
     })
 }
 
 #[tauri::command]
-pub async fn list_native_audio_devices(
-    player: State<'_, NativeAudioPlayer>,
-) -> Result<Vec<NativeAudioDevice>, String> {
-    request_async(player.command_tx.clone(), |reply| {
-        WorkerCommand::ListDevices { reply }
-    })
-    .await
+pub async fn list_native_audio_devices() -> Result<Vec<NativeAudioDevice>, String> {
+    // Enumerated here rather than on the playback thread, which this would stall mid-song.
+    tauri::async_runtime::spawn_blocking(PlatformOutput::list_devices)
+        .await
+        .map_err(|error| format!("The native audio device listing failed: {error}"))?
 }
 
 #[tauri::command]
@@ -428,10 +487,13 @@ pub async fn set_native_audio_volume(
 pub async fn native_audio_settings(
     player: State<'_, NativeAudioPlayer>,
 ) -> Result<AudioSettings, String> {
-    request_async(player.command_tx.clone(), |reply| {
-        WorkerCommand::GetAudioSettings { reply }
+    let command_tx = player.command_tx.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let devices = PlatformOutput::list_devices();
+        request(&command_tx, |reply| WorkerCommand::GetAudioSettings { devices, reply })
     })
     .await
+    .map_err(|error| format!("The native audio command task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -569,6 +631,12 @@ struct PlaybackEngine<O: AudioOutput> {
     gain_buffer_offset: usize,
     dither: Dither,
     event_app: Option<AppHandle>,
+    /// This output's part in a synced group, if it plays in one (`sync.rs`).
+    sync: Option<SyncState>,
+    /// The device was opened and hasn't played a song sample yet, so it may need its resync delay.
+    fresh_output: bool,
+    /// Zeros written ahead of a synced start.
+    silence: Vec<f64>,
 }
 
 struct QueuedSource {
@@ -740,6 +808,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             gain_buffer_offset: 0,
             dither: Dither::default(),
             event_app,
+            sync: None,
+            fresh_output: false,
+            silence: Vec::new(),
         };
         if let Some(app) = worker.event_app.as_ref() {
             if let Ok(directory) = crate::persistent_data_directory(app) {
@@ -902,9 +973,6 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 }
                 let _ = reply.send(result);
             }
-            WorkerCommand::ListDevices { reply } => {
-                let _ = reply.send(O::list_devices());
-            }
             WorkerCommand::SelectDevice { device_id, reply } => {
                 let result = self.select_device(device_id);
                 let _ = reply.send(result);
@@ -932,8 +1000,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 let result = self.apply_audio_settings(settings);
                 let _ = reply.send(result);
             }
-            WorkerCommand::GetAudioSettings { reply } => {
-                let result = O::list_devices().map(|devices| {
+            WorkerCommand::GetAudioSettings { devices, reply } => {
+                let result = devices.map(|devices| {
                     self.audio_settings.discover(&devices);
                     self.audio_settings.clone()
                 });
@@ -950,6 +1018,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     .map(|d| d.status.clone())
                     .unwrap_or_default()));
             }
+            WorkerCommand::Sync(command) => self.apply_sync(command),
             WorkerCommand::Shutdown => return true,
         }
         false
@@ -1184,6 +1253,175 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.output = Some(output);
         self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
         self.rendering = false;
+        self.fresh_output = true;
+    }
+
+    fn apply_sync(&mut self, command: SyncCommand) {
+        match command {
+            SyncCommand::Clear => {
+                if self.sync.take().is_some() {
+                    self.publish_sync();
+                }
+            }
+            SyncCommand::Hold { epoch } => {
+                // Anything the device still holds comes back, so the group's start can place it.
+                if let Err(error) = self.take_back_queued() {
+                    self.fail(error);
+                    return;
+                }
+                self.sync = Some(SyncState::hold(epoch));
+                self.publish_sync();
+            }
+            SyncCommand::Start { epoch, at, position, group_resync } => {
+                let Some(sync) = self.sync.as_mut().filter(|sync| sync.epoch == epoch) else { return };
+                sync.start(Anchor { at, position, group_resync });
+                self.publish_sync();
+                // Started anew while playing: what the device holds is placed again.
+                if self.rendering
+                    && let Err(error) = self.take_back_queued()
+                {
+                    self.fail(error);
+                    return;
+                }
+                if !self.desired_playing
+                    && self.current_source.is_some()
+                    && let Err(error) = self.play()
+                    && error != AUDIO_SUPERSEDED
+                {
+                    self.fail(error);
+                }
+            }
+        }
+    }
+
+    /// Publishes the group's timeline as this output keeps it.
+    fn publish_sync(&self) {
+        let anchor = self.sync.as_ref().and_then(|sync| sync.anchor).map(|anchor| (anchor.at, anchor.position));
+        let holding = self.sync.as_ref().is_some_and(|sync| sync.anchor.is_none());
+        update_status(&self.status, |status| {
+            status.sync_anchor = anchor;
+            if !holding {
+                status.sync_ready = None;
+            }
+            if anchor.is_none() {
+                status.sync_error_ms = None;
+            }
+        });
+    }
+
+    /// Prepared and waiting for the group's start: the device stays quiet meanwhile.
+    fn hold_for_start(&mut self, spec: StreamSpec) -> Result<(), String> {
+        if self.output.is_none() && self.output_retry.is_none() {
+            self.open_output(spec)?;
+        }
+        if self.rendering {
+            if let Some(output) = self.output.as_mut() {
+                output.pause()?;
+            }
+            self.rendering = false;
+        }
+        let ready = self.output.is_some();
+        let epoch = self.sync.as_ref().map(|sync| sync.epoch);
+        let configured = self.audio_settings.selected().resync_delay_ms;
+        let resync = if self.fresh_output { configured } else { 0 };
+        update_status(&self.status, |status| {
+            status.is_playing = false;
+            status.buffering = true;
+            status.sync_ready = epoch.filter(|_| ready);
+            status.sync_resync_delay_ms = resync;
+            status.resync_delay_ms = configured;
+        });
+        thread::sleep(Duration::from_millis(1));
+        Ok(())
+    }
+
+    /// Puts the next song sample out exactly when the group hears it: silence first while it's
+    /// early, or what it's too late for dropped. True while that is still under way.
+    fn align_to(&mut self, anchor: Anchor, spec: StreamSpec) -> Result<bool, String> {
+        let rate = f64::from(spec.sample_rate);
+        let channels = spec.channels;
+        let latency = Duration::from_millis(u64::from(self.audio_settings.selected().latency_ms));
+        if self.pcm.is_empty() && self.decoder_ended {
+            if let Some(sync) = self.sync.as_mut() { sync.aligned = true; }
+            return Ok(false);
+        }
+        let output = self
+            .output
+            .as_mut()
+            .ok_or_else(|| "The native audio output is unavailable".to_owned())?;
+        output.set_gain(self.gain.amplitude())?;
+        if !self.rendering {
+            output.start()?;
+            self.rendering = true;
+        }
+        let queued = output.queued_frames()?;
+        let head = self.position_base + self.rendered_frames as f64 / rate;
+        let lead = sync::lead_frames(&anchor, head, Instant::now(), latency, queued, spec.sample_rate);
+        if lead > 0 {
+            let frames = (lead as usize).min(GAIN_BLOCK_FRAMES);
+            if self.silence.len() < GAIN_BLOCK_FRAMES * channels {
+                self.silence.resize(GAIN_BLOCK_FRAMES * channels, 0.0);
+            }
+            let written = output.write(&self.silence[..frames * channels], &[])?;
+            update_status(&self.status, |status| {
+                status.is_playing = false;
+                status.buffering = true;
+                status.sync_ready = None;
+            });
+            if written == 0 {
+                thread::sleep(Duration::from_millis(1));
+            }
+            return Ok(true);
+        }
+        if lead < -1 {
+            let late = lead.unsigned_abs() as usize;
+            let dropped = late.min(self.pcm.len() / channels);
+            if dropped > 0 {
+                // A partly written block can't be split; its samples are processed again.
+                self.gain_buffer.clear();
+                self.gain_buffer_offset = 0;
+                self.pcm.drain(..dropped * channels);
+                self.position_base += dropped as f64 / rate;
+            }
+            if dropped < late && !self.decoder_ended {
+                // More must decode before the output catches up with the group.
+                update_status(&self.status, |status| {
+                    status.is_playing = false;
+                    status.buffering = true;
+                });
+                thread::sleep(Duration::from_millis(1));
+                return Ok(true);
+            }
+        }
+        if let Some(sync) = self.sync.as_mut() {
+            sync.aligned = true;
+            sync.trim = sync::DriftTrim::default();
+            sync.pending = 0;
+        }
+        Ok(false)
+    }
+
+    /// Takes what the device holds but hasn't played back into the song buffer, so the
+    /// position is the audible one and nothing is lost or heard twice.
+    fn take_back_queued(&mut self) -> Result<(), String> {
+        let (Some(spec), Some(output)) = (self.spec, self.output.as_mut()) else {
+            return Ok(());
+        };
+        let queued_frames = output.queued_frames()? as u64;
+        let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
+        let position_seconds =
+            self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
+        output.reset()?;
+        self.rendering = false;
+        let queued_samples = (queued_frames as usize).saturating_mul(spec.channels).min(self.output_history.len());
+        let mut pending = self.output_history.split_off(self.output_history.len() - queued_samples);
+        pending.append(&mut self.pcm);
+        self.pcm = pending;
+        self.reset_gain_buffer();
+        self.position_base = position_seconds;
+        self.rendered_frames = 0;
+        update_status(&self.status, |status| status.current_time = position_seconds);
+        Ok(())
     }
 
     /// Tries a pending exclusive open when it is due. True while the device is still being waited for.
@@ -1238,7 +1476,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                         self.desired_playing = true;
                         let _ = reply.send(Ok(()));
                     }
-                    Ok(command) if command.only_reads() || matches!(&command, WorkerCommand::Queue { .. } | WorkerCommand::SetVolume { .. }) => {
+                    // A synced start for this load is kept for when it's ready.
+                    Ok(command) if command.only_reads() || matches!(&command, WorkerCommand::Queue { .. } | WorkerCommand::SetVolume { .. } | WorkerCommand::Sync(SyncCommand::Start { .. })) => {
                         self.handle_command(command);
                     }
                     Ok(command) => {
@@ -1446,6 +1685,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     fn pause(&mut self) -> Result<(), String> {
         self.desired_playing = false;
+        // A synced group starts again together, from a new start.
+        if self.sync.take().is_some() {
+            self.publish_sync();
+        }
         // Pausing gives up waiting for a busy exclusive device; playing again starts afresh.
         self.output_retry = None;
         if let Some(output) = self.output.as_mut() {
@@ -1466,6 +1709,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn seek(&mut self, position_seconds: f64) -> Result<(), String> {
+        // Held for a synced start: the seek prepares to play from there.
+        if self.sync.as_ref().is_some_and(|sync| sync.anchor.is_none()) && self.current_source.is_some() {
+            self.desired_playing = true;
+        }
         if self.current_source.is_some() && !self.desired_playing && self.output.is_none() {
             self.defer_stream(position_seconds);
             update_status(&self.status, |status| {
@@ -1542,7 +1789,19 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             return Ok(());
         }
 
-        if self.resync.is_active() {
+        // In a synced group the group's start, not this device's own resync delay, decides when
+        // the first sample goes out; the start already leaves the longest delay in the group.
+        if let Some(sync) = self.sync.as_ref() {
+            match sync.anchor {
+                None => return self.hold_for_start(spec),
+                Some(anchor) if !sync.aligned || !self.rendering => {
+                    if self.align_to(anchor, spec)? {
+                        return Ok(());
+                    }
+                }
+                Some(_) => {}
+            }
+        } else if self.resync.is_active() {
             let output = self
                 .output
                 .as_mut()
@@ -1698,6 +1957,17 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             status.buffering = false;
         });
 
+        // Keeping step with the group: a frame dropped or doubled here and there, only where no
+        // processed block is part written.
+        if self.gain_buffer_offset >= self.gain_buffer.len()
+            && let Some(sync) = self.sync.as_mut()
+            && sync.pending != 0
+        {
+            let applied = sync::adjust_frames(&mut self.pcm, spec.channels, sync.pending, GAIN_BLOCK_FRAMES);
+            sync.pending -= applied;
+            self.position_base += applied as f64 / f64::from(spec.sample_rate);
+        }
+
         if !self.pcm.is_empty() {
             let using_gain_buffer = self.dsp.as_ref().is_some_and(DspEngine::active)
                 || !self.normalization.is_unity()
@@ -1749,6 +2019,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                     }
                 }
                 self.rendered_frames = self.rendered_frames.saturating_add(frames as u64);
+                self.fresh_output = false;
+                if let Some(sync) = self.sync.as_mut().filter(|sync| sync.aligned) {
+                    sync.pending += sync.trim.frames(frames);
+                }
             }
             let queued_frames = output.queued_frames()? as u64;
             if frames > 0 {
@@ -1762,7 +2036,35 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
             let current_time =
                 self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
-            update_status(&self.status, |status| status.current_time = current_time);
+            // In a synced group: how far this output is from the group, once the silence
+            // ahead of its first sample has played out.
+            let mut realign = false;
+            let mut sync_error_ms = None;
+            if let Some(sync) = self.sync.as_mut().filter(|sync| sync.aligned)
+                && let Some(anchor) = sync.anchor
+                && self.rendered_frames > queued_frames
+            {
+                let now = Instant::now();
+                let latency = f64::from(self.audio_settings.selected().latency_ms) / 1000.0;
+                let error = current_time - latency - anchor.position_at(now);
+                sync.trim.observe(error, now);
+                realign = error.abs() > sync::REALIGN_ABOVE;
+                sync_error_ms = sync.trim.error().map(|error| error * 1000.0);
+            }
+            update_status(&self.status, |status| {
+                status.current_time = current_time;
+                if sync_error_ms.is_some() {
+                    status.sync_error_ms = sync_error_ms;
+                }
+            });
+            if realign {
+                // Too far out to trim (a stall): placed on the group's timeline again.
+                self.take_back_queued()?;
+                if let Some(sync) = self.sync.as_mut() {
+                    sync.aligned = false;
+                }
+                return Ok(());
+            }
         }
 
         self.drain_decoder()?;
@@ -1841,6 +2143,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             return Ok(false);
         }
         let (source, prepared) = self.ready_next.take().expect("ready source disappeared");
+        // A skip made here alone leaves any synced group.
+        if self.sync.take().is_some() {
+            self.publish_sync();
+        }
         if let Some(output) = self.output.as_mut() {
             output.reset()?;
         }
@@ -1856,6 +2162,20 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         let next_spec = prepared.decoder.spec();
         let duration = prepared.decoder.duration_seconds();
         let format_changed = self.spec != Some(next_spec);
+        // A synced group moves on together. The song that ended went out to its last frame, so
+        // the next one's start follows straight on in the group's timeline, or, where the device
+        // must change format, a fixed margin later on every output alike.
+        if let Some(rate) = self.spec.map(|spec| f64::from(spec.sample_rate))
+            && let Some(sync) = self.sync.as_mut()
+            && let Some(anchor) = sync.anchor
+        {
+            let ended_at = self.position_base + self.rendered_frames as f64 / rate;
+            let delay = if format_changed { anchor.group_resync.max(sync::REOPEN_MARGIN) } else { Duration::ZERO };
+            sync.anchor = Some(anchor.carried_over(ended_at, delay));
+            if format_changed || self.output.is_none() {
+                sync.aligned = false;
+            }
+        }
         if format_changed || self.output.is_none() {
             if let Some(output) = self.output.as_mut() {
                 output.reset()?;
@@ -1885,6 +2205,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             status.ended = false;
             status.error = None;
         });
+        self.publish_sync();
         if let Some(app) = self.event_app.as_ref() {
             let _ = app.emit(SOURCE_CHANGED_EVENT, event_source);
         }
@@ -1949,34 +2270,16 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         if self.desired_playing || self.output.is_none() {
             return Ok(());
         }
-        let spec = self
-            .spec
-            .ok_or_else(|| "The native audio format is unavailable".to_owned())?;
-        let queued_frames = self
-            .output
-            .as_mut()
-            .ok_or_else(|| "The native audio output is unavailable".to_owned())?
-            .queued_frames()? as u64;
-        let audible_frames = self.rendered_frames.saturating_sub(queued_frames);
-        let position_seconds =
-            self.position_base + audible_frames as f64 / f64::from(spec.sample_rate);
-
-        if let Some(mut output) = self.output.take() {
-            output.reset()?;
-            output.hand_back();
+        if self.spec.is_none() {
+            return Err("The native audio format is unavailable".to_owned());
         }
-        self.rendering = false;
         // Give up the device without re-downloading or seeking the song. Samples
         // still queued in its ring return ahead of the decoder's existing PCM.
-        let queued_samples = (queued_frames as usize).saturating_mul(spec.channels).min(self.output_history.len());
-        let mut pending = self.output_history.split_off(self.output_history.len() - queued_samples);
-        pending.append(&mut self.pcm);
-        self.pcm = pending;
-        self.reset_gain_buffer();
-        self.position_base = position_seconds;
-        self.rendered_frames = 0;
+        self.take_back_queued()?;
+        if let Some(output) = self.output.take() {
+            output.hand_back();
+        }
         update_status(&self.status, |status| {
-            status.current_time = position_seconds;
             status.is_playing = false;
             status.buffering = false;
         });
@@ -2001,6 +2304,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     fn fail(&mut self, error: String) {
         self.desired_playing = false;
         self.output_retry = None;
+        if self.sync.take().is_some() {
+            self.publish_sync();
+        }
         if let Some(mut output) = self.output.take() {
             let _ = output.pause();
             output.hand_back();
@@ -2547,7 +2853,7 @@ mod tests {
             commands.send(WorkerCommand::Queue { source: None, expected_source: None, reply }).unwrap();
             result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
             let (reply, result) = bounded(1);
-            commands.send(WorkerCommand::GetAudioSettings { reply }).unwrap();
+            commands.send(WorkerCommand::GetAudioSettings { devices: TestOutput::list_devices(), reply }).unwrap();
             result.recv_timeout(Duration::from_secs(1)).unwrap().unwrap();
             if release.recv_timeout(Duration::from_millis(20)).is_ok() {
                 released = true;
