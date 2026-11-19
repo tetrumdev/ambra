@@ -12,6 +12,7 @@ import { LibraryView, type LibrarySection } from "./components/LibraryView";
 import { HomeView } from "./components/HomeView";
 import { Sidebar } from "./components/Sidebar";
 import { Queue } from "./components/Queue";
+import { PlaybackSidebar, type PlaybackSidebarView } from "./components/PlaybackSidebar";
 import { AppScrollbar } from "./components/AppScrollbar";
 import { NavigationSwipe } from "./components/NavigationSwipe";
 import { AlbumArtwork, BackgroundArtwork } from "./components/BigscreenArtwork";
@@ -114,7 +115,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   setMaxAnimationFps(preferences.ui.maxAnimationFps);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const playlistStore = usePlaylists();
-  const listeningHistory = useListeningHistory();
+  const listeningHistory = useListeningHistory(sharedPlayback);
   useAutomaticUpdateChecks();
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(preferences.ui.navigation?.entity ?? null);
   const browseCache = useRef(new Map<string, EntityPage>());
@@ -323,6 +324,13 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
   const isQueueView = libraryScreen === "queue";
   const isSettingsView = libraryScreen === "settings";
+  const [playbackSidebarView, setPlaybackSidebarView] = useState<PlaybackSidebarView | null>(null);
+  const canShowPlaybackSidebar = isFullscreen !== true && !isPlayerView && !isQueueView;
+  const sidebarView = canShowPlaybackSidebar ? playbackSidebarView : null;
+  const closePlaybackSidebar = useCallback(() => {
+    if (document.activeElement?.closest("#playbackSidebar")) document.getElementById("queueBtn")?.focus();
+    setPlaybackSidebarView(null);
+  }, []);
   const isHomeView = libraryScreen === "home" && !browseEntity;
   const isSearchView = libraryScreen === "search" && !browseEntity;
   if (screen === "home" || screen === "library" || screen === "search") {
@@ -706,6 +714,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       if (document.querySelector("#trackMenuBackdrop, [data-click-menu-backdrop]")
         || (event.target instanceof Element && event.target.closest("#searchBar")))
         return;
+      if (sidebarView && !isTypingTarget(event.target)) {
+        if (!event.repeat) closePlaybackSidebar();
+        return;
+      }
       // Settings is a place you visit rather than a page of its own, so Escape returns from it too.
       if (screen === "settings") {
         // A text field in settings keeps Escape for itself.
@@ -747,7 +759,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       window.removeEventListener("mouseup", handleMouseNavigation, true);
       window.removeEventListener("auxclick", handleMouseNavigation, true);
     };
-  }, [screen, goBack, goForward, navigate]);
+  }, [screen, goBack, goForward, navigate, sidebarView, closePlaybackSidebar]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1147,10 +1159,16 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     );
   };
 
-  // The queue and player replace Settings rather than opening over it.
+  // The full queue and player replace Settings.
   const openQueue = () => {
     if (screen === "settings") leaveSettings();
     changeScreen("queue");
+  };
+  const toggleQueue = () => {
+    if (sidebarView) closePlaybackSidebar();
+    else if (canShowPlaybackSidebar) setPlaybackSidebarView("queue");
+    else if (screen === "queue") closeCurrentScreen();
+    else openQueue();
   };
   const openPlayer = useStableCallback(() => {
     if (!player.currentTrack) return;
@@ -1180,7 +1198,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     changeScreen("settings");
   };
 
-  // Q opens the queue and closes it again; Cmd/Ctrl+comma opens settings.
+  // Q toggles the queue; Cmd/Ctrl+comma opens settings.
   const handleScreenShortcut = useStableCallback((event: KeyboardEvent) => {
     if (wasKeyHandled(event) || event.repeat) return;
     if (matchesShortcut(event, "openSettings")) {
@@ -1188,8 +1206,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       if (!isSettingsView) openSettings();
     } else if (matchesShortcut(event, "toggleQueue") && !isTypingTarget(event.target)) {
       event.preventDefault();
-      if (isQueueView) closeCurrentScreen();
-      else openQueue();
+      toggleQueue();
     }
   });
   useEffect(() => {
@@ -1208,6 +1225,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     if (!id) return;
     const main = mainRef.current;
     const focused = document.activeElement;
+    if (focused?.closest("#playbackSidebar")) return;
     const inSidebar = focused instanceof Element && focused.closest(SIDEBAR_ROOT) !== null;
     // The sidebar is a list too: once it has the keyboard, the list keys move through it.
     const sidebarStep = id === "sidebarNext" || (inSidebar && id === "listNext") ? 1
@@ -1594,9 +1612,31 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         onNext={player.next}
         onSeek={player.seek}
         onOpenBigscreen={openPlayer}
-        onOpenQueue={openQueue}
+        onToggleQueue={toggleQueue}
+        queueSidebarOpen={canShowPlaybackSidebar ? sidebarView !== null : undefined}
         direction={skipDirection}
       />
+
+      {sidebarView && <PlaybackSidebar
+        view={sidebarView}
+        onChangeView={setPlaybackSidebarView}
+        onClose={closePlaybackSidebar}
+        currentTrack={player.currentTrack}
+        upcoming={queue.upcomingEntries}
+        onJumpTo={jumpToQueueEntry}
+        onRemove={deleteQueueEntries}
+        onReorder={ids => queue.reorderEntries(
+          queue.historyEntries.map(({ historyId }) => ({ historyId })),
+          ids.map(queueId => ({ queueId })),
+        )}
+        onOpenFullQueue={openQueue}
+        lyrics={<LyricsView key={player.currentTrack?.globalId} compact
+          track={player.currentTrack} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
+          motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} globalOffsetMs={preferences.ui.lyricsOffsetMs} />}
+        recent={listeningHistory.entries}
+        recentError={listeningHistory.error}
+        onPlayRecent={track => onEntityAction("standalone", [track], track.globalId)}
+      />}
 
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
       <ShortcutToast />

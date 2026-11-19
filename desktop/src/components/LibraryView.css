@@ -58,6 +58,31 @@
         var(--library-duration-column) 40px;
 }
 
+.appViewport:has(> .playbackSidebar) .libraryView {
+    container: library-tracks / inline-size;
+}
+
+@container library-tracks (width < 700px) {
+    .libraryView :is(.columnInfo, .libraryItem) {
+        grid-template-columns: var(--library-leading-width) minmax(0, 2fr)
+            var(--library-artist-column) var(--library-duration-fixed) 40px;
+    }
+
+    .libraryView :is(.albumColumn, .albumName, .extraColumn, .extraCell, .columnResizeHandle) {
+        display: none;
+    }
+}
+
+@container library-tracks (width < 460px) {
+    .libraryView :is(.columnInfo, .libraryItem) {
+        grid-template-columns: var(--library-leading-width) minmax(0, 1fr) var(--library-duration-fixed) 40px;
+    }
+
+    .libraryView :is(.artistColumn, .artistName) {
+        display: none;
+    }
+}
+
 .libraryView::after,
 .searchView::after {
     display: block;

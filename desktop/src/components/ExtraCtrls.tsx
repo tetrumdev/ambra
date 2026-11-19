@@ -36,10 +36,11 @@ function volumeLevel(volume: number) {
 }
 
 type ExtraCtrlsProps = {
-  onOpenQueue?: () => void;
+  onToggleQueue?: () => void;
+  queueSidebarOpen?: boolean;
 };
 
-export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
+export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
   const audio = useAudioSettings();
   const selectedOutput = audio?.settings.outputs.find(
@@ -381,10 +382,14 @@ export function ExtraCtrls({ onOpenQueue }: ExtraCtrlsProps) {
       <button
         id="queueBtn"
         type="button"
-        onClick={onOpenQueue}
-        data-tooltip="Queue"
+        aria-label={queueSidebarOpen === undefined ? "Queue" : "Playback sidebar"}
+        aria-expanded={queueSidebarOpen}
+        aria-controls={queueSidebarOpen ? "playbackSidebar" : undefined}
+        onClick={onToggleQueue}
+        onKeyDown={event => { if (event.key === " ") event.stopPropagation(); }}
+        data-tooltip={queueSidebarOpen === undefined ? "Queue" : "Playback sidebar"}
       >
-        <img src="/queue.svg" alt="Queue" id="queueImg" />
+        <img src="/queue.svg" alt="" id="queueImg" />
       </button>
     </div>
   );

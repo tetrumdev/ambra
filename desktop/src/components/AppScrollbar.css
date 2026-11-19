@@ -1,7 +1,7 @@
 .appScrollbar {
     position: fixed;
     top: var(--library-titlebar-height);
-    right: 0;
+    right: var(--playback-sidebar-width, 0px);
     bottom: var(--player-height);
     width: var(--scrollbar-column-width);
     background: var(--surface-black);

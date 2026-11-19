@@ -1,29 +1,32 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { fromStorage } from "../api/serverConnection";
 import type { Track } from "../types/music";
 import { getPersistentItem, setPersistentItem } from "../utils/persistentStorage";
 import { isSavedTrack } from "../utils/playlistStorage";
 import { parseQueueSnapshot } from "../utils/queueStorage";
+import { getServerItem, subscribeServerState } from "../utils/serverState";
 
 const storageKey = "ambra.listening-history.v1";
 /** `playCount` started being kept after listening history did; older entries count one play. */
 export type ListeningEntry = { track: Track; lastPlayedAt: number; playCount?: number };
 export type TrackPlayStats = { plays: number; lastPlayedAt: number };
 
+function parseHistory(raw: string): ListeningEntry[] {
+  const saved = JSON.parse(raw);
+  const ids = new Set<string>();
+  if (saved?.version !== 1 || !Array.isArray(saved.entries)
+    || !saved.entries.every((entry: ListeningEntry) => entry && isSavedTrack(entry.track)
+      && entry.track.globalId.length > 0 && !ids.has(entry.track.globalId) && ids.add(entry.track.globalId)
+      && Number.isSafeInteger(entry.lastPlayedAt) && entry.lastPlayedAt > 0 && entry.lastPlayedAt <= 8.64e15
+      && (entry.playCount === undefined || (Number.isSafeInteger(entry.playCount) && entry.playCount > 0)))) {
+    throw new Error("Invalid listening history");
+  }
+  return saved.entries;
+}
+
 function loadHistory(): ListeningEntry[] {
   const raw = getPersistentItem(storageKey);
-  if (raw !== null) {
-    const saved = JSON.parse(raw);
-    const ids = new Set<string>();
-    if (saved?.version !== 1 || !Array.isArray(saved.entries)
-      || !saved.entries.every((entry: ListeningEntry) => entry && isSavedTrack(entry.track)
-        && entry.track.globalId.length > 0 && !ids.has(entry.track.globalId) && ids.add(entry.track.globalId)
-        && Number.isSafeInteger(entry.lastPlayedAt) && entry.lastPlayedAt > 0 && entry.lastPlayedAt <= 8.64e15
-        && (entry.playCount === undefined || (Number.isSafeInteger(entry.playCount) && entry.playCount > 0)))) {
-      throw new Error("Invalid listening history");
-    }
-    return saved.entries;
-  }
-
+  if (raw !== null) return parseHistory(raw);
   // Preserve the latest known plays from the server's existing queue history.
   const queue = parseQueueSnapshot(getPersistentItem("ambra.queue.v1"));
   const tracks = new Map(queue?.tracks?.map(track => [track.globalId, track]));
@@ -39,20 +42,32 @@ function loadHistory(): ListeningEntry[] {
   return [...entries.values()];
 }
 
-export function useListeningHistory() {
+const serverHistory = () => fromStorage(getServerItem(storageKey));
+const emptyHistory = () => null;
+const loadError = "Listening history could not be loaded. Saved history has been left untouched.";
+
+export function useListeningHistory(sharedPlayback = false) {
+  const remoteRaw = useSyncExternalStore(subscribeServerState, sharedPlayback ? serverHistory : emptyHistory);
+  const remote = useMemo(() => {
+    try {
+      return { entries: remoteRaw === null ? [] : parseHistory(remoteRaw), error: null };
+    } catch {
+      return { entries: [], error: loadError };
+    }
+  }, [remoteRaw]);
   const [initial] = useState(() => {
     try {
-      return { entries: loadHistory(), error: null };
+      return { entries: sharedPlayback ? [] : loadHistory(), error: null };
     } catch {
-      return { entries: [] as ListeningEntry[], error: "Listening history could not be loaded. Saved history has been left untouched." };
+      return { entries: [] as ListeningEntry[], error: loadError };
     }
   });
-  const [entries, setEntries] = useState(initial.entries);
-  const current = useRef(entries);
+  const [localEntries, setEntries] = useState(initial.entries);
+  const current = useRef(localEntries);
   const [error, setError] = useState(initial.error);
 
   const save = useCallback((next: ListeningEntry[]) => {
-    if (initial.error) return;
+    if (sharedPlayback || initial.error) return;
     try {
       setPersistentItem(storageKey, JSON.stringify({ version: 1, entries: next }));
       current.current = next;
@@ -61,10 +76,10 @@ export function useListeningHistory() {
     } catch {
       setError("Could not save listening history. Check available device storage and retry playback.");
     }
-  }, [initial.error]);
+  }, [sharedPlayback, initial.error]);
 
   useEffect(() => {
-    if (getPersistentItem(storageKey) === null && initial.entries.length > 0) save(initial.entries);
+    if (initial.entries.length > 0 && getPersistentItem(storageKey) === null) save(initial.entries);
   }, [initial.entries, save]);
 
   const recordPlay = useCallback((track: Track) => {
@@ -74,9 +89,10 @@ export function useListeningHistory() {
       ...current.current.filter(entry => entry !== previous),
     ]);
   }, [save]);
+  const entries = sharedPlayback ? remote.entries : localEntries;
   const tracks = useMemo(() => entries.map(entry => entry.track), [entries]);
   const stats = useMemo(() => new Map<string, TrackPlayStats>(entries.map(entry => [
     entry.track.globalId, { plays: entry.playCount ?? 1, lastPlayedAt: entry.lastPlayedAt },
   ])), [entries]);
-  return { entries, tracks, stats, error, recordPlay };
+  return { entries, tracks, stats, error: sharedPlayback ? remote.error : error, recordPlay };
 }

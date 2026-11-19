@@ -68,6 +68,10 @@ body,
     contain: layout;
 }
 
+.appViewport:has(> .playbackSidebar) {
+    --playback-sidebar-width: min(100%, clamp(280px, 27vw, 360px));
+}
+
 .stateStartup {
     height: 100%;
     display: flex;
@@ -257,7 +261,7 @@ button img {
 }
 
 .appScreen {
-    inset: var(--library-titlebar-height) var(--scrollbar-column-width) 0 0;
+    inset: var(--library-titlebar-height) calc(var(--scrollbar-column-width) + var(--playback-sidebar-width, 0px)) 0 0;
     width: auto;
     height: auto;
 }
