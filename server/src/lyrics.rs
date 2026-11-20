@@ -2,14 +2,16 @@ mod formats;
 mod model;
 mod providers;
 mod ttml;
+mod vocal;
 
 pub use model::LyricsResponse;
+pub use vocal::refine as refine_with_vocals;
 use providers::{Provider, ProviderClient};
 use futures_util::{FutureExt, future::{BoxFuture, Shared, WeakShared}};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, future::Future, sync::{Arc, Mutex}};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LyricsRequest {
     track_name: String,
@@ -22,12 +24,25 @@ pub struct LyricsRequest {
     apple_music_id: Option<String>,
     #[serde(default)]
     version: String,
+    /// The recording the lyrics are for, so the server can analyze its vocals.
+    pub provider: Option<String>,
+    pub track_id: Option<String>,
+    /// Asked ahead of playback; its analysis waits behind songs playing now.
+    #[serde(default)]
+    pub prefetch: bool,
 }
 
 impl LyricsRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.track_name.trim().is_empty() || self.artist_name.trim().is_empty() {
             return Err("Track title and artist are required");
+        }
+        if self.provider.as_deref().is_some_and(|provider| !["tidal", "qobuz", "spotify", "local"].contains(&provider))
+            || self.track_id.as_deref().is_some_and(|id| {
+                id.is_empty() || id.len() > 200 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || b"._:-".contains(&c))
+            })
+        {
+            return Err("Invalid track reference");
         }
         if [
             &self.track_name,

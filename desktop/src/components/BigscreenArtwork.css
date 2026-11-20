@@ -41,8 +41,9 @@
 }
 
 /* The swirl is drawn in the cover's own colors, so each stretch of the cover's rim is lifted off it by
-   whichever suits it (coverShadowShares): a soft shadow under a light stretch, a soft halo around a dark
-   one. Each layer is masked by angle around the cover, so the two blend where the rim changes. */
+   whichever suits it (coverRim): a soft shadow under a light stretch, a soft halo around a dark one, both
+   tinted with the field's hue. Each layer is masked by angle around the cover, so the two blend where the
+   rim changes, and fades where the rim's color already stands apart. */
 .coverGlow {
     position: absolute;
     inset: -120px;
@@ -58,11 +59,11 @@
 }
 
 .coverGlow[data-tone="shadow"]::before {
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), 0 18px 60px rgba(0, 0, 0, 0.42);
+    box-shadow: 0 4px 16px rgb(var(--rim-tint) / 0.3), 0 18px 60px rgb(var(--rim-tint) / 0.42);
 }
 
 .coverGlow[data-tone="halo"]::before {
-    box-shadow: 0 0 18px rgba(255, 255, 255, 0.16), 0 0 70px rgba(255, 255, 255, 0.14);
+    box-shadow: 0 0 16px rgb(var(--rim-tint) / 0.1), 0 0 60px rgb(var(--rim-tint) / 0.08);
 }
 
 #albumCover[data-empty="true"] .coverGlow {

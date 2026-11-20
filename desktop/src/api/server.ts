@@ -94,7 +94,59 @@ async function responseError(response: Response) {
 
 export type { LyricSegment as LyricWord, LyricLine, TrackLyrics } from "../types/lyrics";
 
-export async function trackLyrics(track: Track, signal: AbortSignal): Promise<TrackLyrics> {
+/** The recording as the server knows it, so it can analyze the vocals; null for a file only this device has. */
+export function vocalTrackRef(track: Track): { provider: string; trackId: string } | null {
+  if (track.provider !== "local") return { provider: track.provider, trackId: track.providerTrackId };
+  const file = track.audio.match(/\/api\/music\/local\/files\/([a-f0-9]{64}\.[a-z0-9]{1,8})(?:[?#]|$)/)?.[1];
+  return file ? { provider: "local", trackId: file } : null;
+}
+
+/**
+ * The isolated vocals' power per lyric-sync frame, measured by the server's vocal model;
+ * "pending" while it is measuring them, null when vocal timing is off or failed.
+ */
+export async function vocalCurve(track: Track, prefetch = false): Promise<number[] | "pending" | null> {
+  const ref = vocalTrackRef(track);
+  if (!ref) return null;
+  const response = await fetch(`${serverBaseUrl}/api/vocal-timing/tracks/${encodeURIComponent(ref.provider)}/${encodeURIComponent(ref.trackId)}${prefetch ? "?prefetch=true" : ""}`, {
+    signal: AbortSignal.timeout(20_000),
+    cache: "no-store",
+  });
+  if (response.status === 202) return "pending";
+  if (!response.ok) return null;
+  return Array.from(new Float32Array(await response.arrayBuffer()));
+}
+
+export type VocalTimingStatus = {
+  enabled: boolean;
+  model:
+    | { state: "off" }
+    | { state: "downloading"; received: number; total: number }
+    | { state: "ready" }
+    | { state: "failed"; error: string };
+  modelBytes: number;
+  pending: number;
+};
+
+export async function vocalTimingStatus(): Promise<VocalTimingStatus> {
+  const response = await fetch(`${serverBaseUrl}/api/vocal-timing`, { signal: AbortSignal.timeout(10_000), cache: "no-store" });
+  if (!response.ok) throw new Error(await responseError(response));
+  return await response.json() as VocalTimingStatus;
+}
+
+export async function setVocalTiming(enabled: boolean): Promise<VocalTimingStatus> {
+  const response = await fetch(`${serverBaseUrl}/api/vocal-timing`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  return await response.json() as VocalTimingStatus;
+}
+
+/** `prefetch` asks ahead of playback, so the server analyzes this song after any playing now. */
+export async function trackLyrics(track: Track, signal: AbortSignal, prefetch = false): Promise<TrackLyrics> {
   const query = new URLSearchParams({
     trackName: track.name,
     artistName: track.artist,
@@ -104,6 +156,12 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   if (track.isrc) query.set("isrc", track.isrc);
   if (track.version) query.set("version", track.version);
   if (track.provider === "spotify") query.set("spotifyId", track.providerTrackId);
+  const ref = vocalTrackRef(track);
+  if (ref) {
+    query.set("provider", ref.provider);
+    query.set("trackId", ref.trackId);
+    if (prefetch) query.set("prefetch", "true");
+  }
   let retryDelay = 1000;
   let partial: TrackLyrics | undefined;
   for (let attempt = 0; ; attempt++) {

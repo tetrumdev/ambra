@@ -39,6 +39,9 @@ export type TrackLyrics = {
   language: string | null;
   singers: { id: string; name: string | null }[];
   failedProviders: string[];
+  /** `aligned` once the server placed line endings from the song's isolated vocals, `pending`
+   * while it is still analyzing them; absent when vocal timing is off or unavailable. */
+  vocalTiming?: "aligned" | "pending" | null;
 };
 
 /** A failed provider may still have synced lyrics that the fallback did not supply. */
@@ -87,6 +90,7 @@ export function parseTrackLyrics(value: unknown): TrackLyrics {
     || !optionalText(value.language) || !Array.isArray(value.singers)
     || !value.singers.every(item => object(item) && typeof item.id === "string" && optionalText(item.name))
     || !Array.isArray(value.failedProviders) || !value.failedProviders.every(item => typeof item === "string")
+    || ![undefined, null, "aligned", "pending"].includes(value.vocalTiming as string | null | undefined)
   ) throw new Error("Invalid lyrics response");
   return value as TrackLyrics;
 }

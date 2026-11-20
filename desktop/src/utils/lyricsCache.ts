@@ -1,4 +1,4 @@
-import { trackLyrics } from "../api/server";
+import { trackLyrics, vocalCurve } from "../api/server";
 import { serverConnectionSignal } from "../api/serverConnection";
 import { needsLyricsRetry, type TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
@@ -41,7 +41,8 @@ export function cachedLyrics(track: Track): TrackLyrics | undefined {
   return lyricsCache.get(lyricsKey(track));
 }
 
-export async function loadLyrics(track: Track, signal?: AbortSignal): Promise<TrackLyrics> {
+/** `prefetch` loads ahead of playback, so the server analyzes the song's vocals after any playing now. */
+export async function loadLyrics(track: Track, signal?: AbortSignal, prefetch = false): Promise<TrackLyrics> {
   signal?.throwIfAborted();
   const key = lyricsKey(track);
   const cached = lyricsCache.get(key);
@@ -51,9 +52,10 @@ export async function loadLyrics(track: Track, signal?: AbortSignal): Promise<Tr
   if (!pending || pending.signal.aborted) {
     const controller = new AbortController();
     const active = AbortSignal.any([controller.signal, serverConnectionSignal(), AbortSignal.timeout(60_000)]);
-    const result = trackLyrics(track, active).then(lyrics => {
+    const result = trackLyrics(track, active, prefetch).then(lyrics => {
       active.throwIfAborted();
       if (!needsLyricsRetry(lyrics)) lyricsCache.set(key, lyrics);
+      if (lyrics.vocalTiming === "pending") watchVocalTiming(track, key);
       revision++;
       for (const listener of listeners) listener();
       return lyrics;
@@ -83,5 +85,35 @@ export async function loadLyrics(track: Track, signal?: AbortSignal): Promise<Tr
 }
 
 export async function preloadLyrics(tracks: Track[], signal?: AbortSignal): Promise<void> {
-  await Promise.allSettled(tracks.slice(0, 3).map(track => loadLyrics(track, signal)));
+  await Promise.allSettled(tracks.slice(0, 3).map(track => loadLyrics(track, signal, true)));
+}
+
+const VOCAL_POLL_MS = 5_000;
+/** A song the server is still analyzing is checked on for at most this long. */
+const VOCAL_WATCH_MS = 30 * 60_000;
+const watched = new Set<string>();
+
+/**
+ * While the server analyzes a song's vocals, checks back until it is done, then loads the
+ * lyrics again so their endings come from the vocals. Songs left the cache are dropped.
+ */
+function watchVocalTiming(track: Track, key: string) {
+  if (watched.has(key)) return;
+  watched.add(key);
+  const until = Date.now() + VOCAL_WATCH_MS;
+  const check = async () => {
+    if (Date.now() > until || !lyricsCache.get(key)) return watched.delete(key);
+    let curve: Awaited<ReturnType<typeof vocalCurve>> = "pending";
+    try {
+      curve = await vocalCurve(track);
+    } catch {
+      // The server may be briefly unreachable; check again later.
+    }
+    if (curve === "pending") return void setTimeout(check, VOCAL_POLL_MS);
+    watched.delete(key);
+    if (curve === null) return;
+    lyricsCache.delete(key);
+    void loadLyrics(track).catch(() => undefined);
+  };
+  setTimeout(check, VOCAL_POLL_MS);
 }

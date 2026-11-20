@@ -5,6 +5,7 @@ import { loadLyrics } from "./lyricsCache";
 import { bestCorrection, type OffsetEvidence, trustedCorrection } from "./lyricsAutoTuning";
 import { lyricSyncOverride } from "./lyricsSyncOverrides";
 import { nativeAudioSource } from "./nativeAudioSource";
+import { vocalCurve } from "../api/server";
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
 
 type LyricWindow = { startMs: number; endMs: number };
@@ -38,8 +39,9 @@ function lyricWindows(lyrics: TrackLyrics): LyricWindow[] {
 
 /** Identifies one lyric timing, so a saved result is dropped if the lyrics change. */
 function timingKey(lyrics: TrackLyrics, windows: LyricWindow[]): string {
+  // Lyrics aligned by the server's vocal model are matched again, against its vocal curve.
   return JSON.stringify([lyrics.source, lyrics.offsetMs, windows.length,
-    windows[0]?.startMs, windows[windows.length - 1]?.endMs]);
+    windows[0]?.startMs, windows[windows.length - 1]?.endMs, lyrics.vocalTiming === "aligned"]);
 }
 
 export type DetectedOffset = {
@@ -76,7 +78,7 @@ function readStoredOffsets(): StoredOffsets {
     const offsets: StoredOffsets = {};
     for (const [trackId, entry] of Object.entries(value)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { timing, bestMs, prominence, margin, vocalEndMs, ending } = entry as Record<string, unknown>;
+      const { timing, bestMs, prominence, margin, vocalEndMs, ending, vocal } = entry as Record<string, unknown>;
       if (typeof timing !== "string" || typeof prominence !== "number" || !Number.isFinite(prominence)) continue;
       // Analyzed before vocal endings were measured, so the song is analyzed again once.
       if (!("vocalEndMs" in entry)) continue;
@@ -87,6 +89,7 @@ function readStoredOffsets(): StoredOffsets {
         prominence,
         margin: typeof margin === "number" && Number.isFinite(margin) ? margin : null,
         vocalEndMs: typeof vocalEndMs === "number" && Number.isFinite(vocalEndMs) ? vocalEndMs : null,
+        ...(vocal === true ? { vocal } : {}),
         ...(typeof ending === "number" ? { ending } : {}),
       };
     }
@@ -155,6 +158,9 @@ type Analysis = {
   trackId: string;
   timing: string;
   args: { source: string; windows: LyricWindow[] };
+  track: Track;
+  /** The server has measured this song's isolated vocals, which are matched instead of the mix. */
+  aligned: boolean;
   background: boolean;
   /** Set when a foreground analysis cut this background one off, so it is queued again. */
   preempted: boolean;
@@ -173,7 +179,13 @@ function start(analysis: Analysis) {
   if (running?.background) running.preempted = true;
   running = analysis;
   analysis.preempted = false;
-  invoke<OffsetEvidence>("detect_lyric_offset", analysis.args)
+  const run = async (): Promise<OffsetEvidence> => {
+    const curve = analysis.aligned ? await vocalCurve(analysis.track).catch(() => null) : null;
+    const vocalPower = Array.isArray(curve) ? curve : null;
+    const evidence = await invoke<OffsetEvidence>("detect_lyric_offset", { ...analysis.args, vocalPower });
+    return vocalPower ? { ...evidence, vocal: true } : evidence;
+  };
+  run()
     .then(
       (evidence) => {
         storeOffset(analysis.trackId, analysis.timing, evidence);
@@ -229,7 +241,7 @@ export function detectLyricOffset(track: Track, lyrics: TrackLyrics, background 
     reject = onReject;
   });
   const analysis: Analysis = {
-    key, trackId: track.globalId, timing, args: { source, windows },
+    key, trackId: track.globalId, timing, args: { source, windows }, track, aligned: lyrics.vocalTiming === "aligned",
     background, preempted: false, promise, resolve, reject,
   };
   analyses.set(key, analysis);
