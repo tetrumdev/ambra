@@ -26,6 +26,9 @@ export type LyricLine = {
   key: string | null;
 };
 
+export const lyricsSources = ["amll", "lrc.red", "lrclib"] as const;
+export type LyricsSource = (typeof lyricsSources)[number];
+
 export type TrackLyrics = {
   status: "lyrics" | "instrumental" | "unavailable";
   instrumental: boolean | null;
@@ -33,7 +36,7 @@ export type TrackLyrics = {
   hasWordSync: boolean;
   plainLyrics: string | null;
   lines: LyricLine[];
-  source: "amll" | "lrc.red" | "lrclib" | null;
+  source: LyricsSource | null;
   originalFormat: "ttml" | "lyricsfile" | "lrc" | "plain" | null;
   offsetMs: number;
   language: string | null;
@@ -42,6 +45,8 @@ export type TrackLyrics = {
   /** `aligned` once the server placed line endings from the song's isolated vocals, `pending`
    * while it is still analyzing them; absent when vocal timing is off or unavailable. */
   vocalTiming?: "aligned" | "pending" | null;
+  /** Word timing placed by a model rather than a person. */
+  machineTimed?: boolean;
 };
 
 /** A failed provider may still have synced lyrics that the fallback did not supply. */
@@ -91,6 +96,7 @@ export function parseTrackLyrics(value: unknown): TrackLyrics {
     || !value.singers.every(item => object(item) && typeof item.id === "string" && optionalText(item.name))
     || !Array.isArray(value.failedProviders) || !value.failedProviders.every(item => typeof item === "string")
     || ![undefined, null, "aligned", "pending"].includes(value.vocalTiming as string | null | undefined)
+    || ![undefined, true, false].includes(value.machineTimed as boolean | undefined)
   ) throw new Error("Invalid lyrics response");
   return value as TrackLyrics;
 }

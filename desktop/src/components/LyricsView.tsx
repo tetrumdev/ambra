@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { isTauri } from "@tauri-apps/api/core";
-import type { LyricAnnotation, LyricLine, TrackLyrics } from "../types/lyrics";
-import { needsLyricsRetry } from "../types/lyrics";
+import type { LyricAnnotation, LyricLine, LyricsSource, TrackLyrics } from "../types/lyrics";
+import { lyricsSources, needsLyricsRetry } from "../types/lyrics";
 import type { Track } from "../types/music";
 import type { PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
@@ -18,7 +18,7 @@ import {
 } from "../utils/lyricsSyncOverrides";
 import {
   detailedLine,
-  focusLyric,
+  lineHandoffs,
   lyricActive,
   sweepSegments,
 } from "../utils/lyricsTiming";
@@ -458,6 +458,7 @@ function SyncedLyrics({
     // rows' order: read straight off the tree, where a search per line would walk the whole
     // song's letters for each of them.
     const groups = linesElement.children;
+    const handoffs = lineHandoffs(lyrics.lines);
     const layout = blocks.map((block, blockIndex) => {
       const listed = groups[blockIndex] as HTMLElement | undefined;
       const blockElement = listed?.dataset.block === block.id
@@ -495,6 +496,7 @@ function SyncedLyrics({
                     };
                   },
                 ),
+                until: handoffs[block.line],
                 active: false,
                 snap: true,
               };
@@ -540,11 +542,6 @@ function SyncedLyrics({
     });
     const rows = layout.flatMap((block) => block.rows);
     const animatingRows = new Set<(typeof rows)[number]>();
-    const lineBlocks = new Map(
-      layout.flatMap(({ block }, index) =>
-        block.kind === "lines" ? [[block.line, index] as const] : [],
-      ),
-    );
     // Skip style writes that would not change anything.
     const setStyle = <Key extends string>(
       element: HTMLElement,
@@ -697,7 +694,7 @@ function SyncedLyrics({
       }
       if (time !== lastTime || measured) {
         for (const row of rows) {
-          const active = lyricActive(row.line, time);
+          const active = lyricActive(row.line, time) && time < row.until;
           const changed = active !== row.active;
           if (changed || discontinuity) {
             row.element.dataset.active = String(active);
@@ -719,8 +716,11 @@ function SyncedLyrics({
             block.kind === "pause" && time >= block.startMs && time < block.endMs,
         );
         if (next < 0) {
-          const line = focusLyric(lyrics.lines, time);
-          next = line >= 0 ? (lineBlocks.get(line) ?? -1) : -1;
+          // Prefer lead vocals; background-only activity still keeps its group in view.
+          next = layout.findIndex(({ rows }) =>
+            rows.some((row) => row.kind === "lead" && row.active && row.line.text.trim()));
+          if (next < 0) next = layout.findIndex(({ rows }) =>
+            rows.some((row) => row.kind === "background" && row.active));
         }
         if (next < 0) {
           // Hold the last block through short gaps; frame the first one before playback reaches it.
@@ -1003,10 +1003,49 @@ function formatCorrection(correctionMs: number) {
 }
 
 const nudges = [-500, -100, 100, 500];
+const sourceNames: Record<LyricsSource, string> = { amll: "AMLL", "lrc.red": "lrc.red", lrclib: "LRCLIB" };
+
+/** What one provider has for the song, in a few words. */
+function sourceSummary(lyrics: TrackLyrics | "failed" | undefined): string {
+  if (!lyrics) return "Checking…";
+  if (lyrics === "failed") return "Couldn't check";
+  if (lyrics.status === "instrumental") return "Instrumental";
+  if (lyrics.status !== "lyrics") return "None";
+  if (lyrics.hasWordSync) return lyrics.machineTimed ? "Words · AI" : "Words";
+  return lyrics.sync === "none" ? "Text only" : "Lines";
+}
+
+/** Each provider's lyrics for the song, looked up while the menu is open. */
+function useSourceProbes(track: Track, open: boolean) {
+  const [probes, setProbes] = useState<Partial<Record<LyricsSource, TrackLyrics | "failed">>>({});
+  useEffect(() => {
+    if (!open) return;
+    const controller = new AbortController();
+    const settle = (source: LyricsSource, result: TrackLyrics | "failed") => {
+      if (!controller.signal.aborted) setProbes((current) => ({ ...current, [source]: result }));
+    };
+    setProbes({});
+    for (const source of lyricsSources) {
+      const cached = cachedLyrics(track, source);
+      if (cached) settle(source, cached);
+      else void loadLyrics(track, controller.signal, false, source).then(
+        (result) => settle(source, needsLyricsRetry(result) ? "failed" : result),
+        () => settle(source, "failed"),
+      );
+    }
+    return () => controller.abort();
+  }, [open, track]);
+  return probes;
+}
 /** Playing this long with synced lyrics on screen, without retiming them, counts as the timing looking right. */
 const WATCHED_MS = 30_000;
 
 function SyncMenu({
+  track,
+  timed,
+  source,
+  using,
+  onSource,
   unsynced,
   correctionMs,
   edited,
@@ -1026,8 +1065,14 @@ function SyncMenu({
   onNudge: (deltaMs: number) => void;
   onReset: () => void;
   onToggleSync: () => void;
+  track: Track;
+  timed: boolean;
+  source: LyricsSource | undefined;
+  using: LyricsSource | null;
+  onSource: (source: LyricsSource | undefined) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const probes = useSourceProbes(track, open);
   const root = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   useFadeOutOnUnmount(panel);
@@ -1068,11 +1113,33 @@ function SyncMenu({
         <svg viewBox="0 0 20 20" aria-hidden="true">
           <path d="M10 3.5a6.5 6.5 0 1 0 6.5 6.5h-1.6A4.9 4.9 0 1 1 10 5.1V7l3-2.75L10 1.5Z" />
         </svg>
-        Sync
+        {timed ? "Sync" : "Source"}
       </button>
       {open && (
         <div ref={panel} className="lyricsSyncPanel" role="menu" aria-label="Lyric sync">
-          {unsynced ? (
+          <div className="lyricsSources" role="group" aria-label="Lyrics source">
+            <span className="lyricsSourcesLabel">Source</span>
+            {([undefined, ...lyricsSources] as const).map((option) => {
+              const probe = option && probes[option];
+              return (
+                <button
+                  key={option ?? "auto"}
+                  className="menuItem"
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={source === option}
+                  disabled={option !== undefined && typeof probe === "object" && probe.status !== "lyrics"}
+                  onClick={choose(() => onSource(option))}
+                >
+                  {option ? sourceNames[option] : "Automatic"}
+                  <strong>
+                    {option ? sourceSummary(probe) : !source && using ? sourceNames[using] : ""}
+                  </strong>
+                </button>
+              );
+            })}
+          </div>
+          {!timed ? null : unsynced ? (
             <button className="menuItem" type="button" role="menuitem" onClick={choose(onToggleSync)}>
               Turn sync back on
             </button>
@@ -1149,6 +1216,10 @@ export function LyricsView({
   const reducedMotion =
     motion === "reduced" || (motion === "system" && appReducedMotion);
 
+  // Lyric timing choices and analysis remain local to this device.
+  const [override, setOverride] = useState<LyricSyncOverride | undefined>(
+    () => track ? lyricSyncOverride(track.globalId) : undefined,
+  );
   useEffect(() => {
     const controller = new AbortController();
     setLyrics(track ? cachedLyrics(track) ?? null : null);
@@ -1174,13 +1245,10 @@ export function LyricsView({
     track?.provider,
     track?.providerTrackId,
     attempt,
+    override?.source,
   ]);
 
   const timed = lyrics?.status === "lyrics" && lyrics.sync !== "none";
-  // Lyric timing choices and analysis remain local to this device.
-  const [override, setOverride] = useState<LyricSyncOverride | undefined>(
-    () => track ? lyricSyncOverride(track.globalId) : undefined,
-  );
   const [remoteAnalyses, setRemoteAnalyses] = useState(0);
   useEffect(() => subscribeLocalStorage(key => {
     if (track && key === lyricSyncKey) setOverride(lyricSyncOverride(track.globalId));
@@ -1290,8 +1358,19 @@ export function LyricsView({
     () => lyrics && unsynced ? { ...lyrics, sync: "none" as const, hasWordSync: false } : lyrics,
     [lyrics, unsynced],
   );
-  const menu = timed && (
+  const chooseSource = (source: LyricsSource | undefined) => {
+    if (!track || source === override?.source) return;
+    // Another provider's lines are timed afresh, so this song's timing choices start over.
+    updateOverride(source ? { source } : {});
+    if (manual) recordSyncSample(track.globalId, null);
+  };
+  const menu = track && lyrics?.status === "lyrics" && (
     <SyncMenu
+      track={track}
+      timed={timed}
+      source={override?.source}
+      using={lyrics.source}
+      onSource={chooseSource}
       unsynced={unsynced}
       correctionMs={correctionMs}
       edited={manual}
@@ -1356,9 +1435,18 @@ export function LyricsView({
             Instrumental — this song has no lyrics.
           </p>
         ) : lyrics.status === "unavailable" ? (
-          <p className="lyricsMessage" role="status">
-            No lyrics available for this song.
-          </p>
+          override?.source ? (
+            <div className="lyricsMessage" role="status">
+              <p>No lyrics from {sourceNames[override.source]} for this song.</p>
+              <button type="button" onClick={() => chooseSource(undefined)}>
+                Use automatic source
+              </button>
+            </div>
+          ) : (
+            <p className="lyricsMessage" role="status">
+              No lyrics available for this song.
+            </p>
+          )
         ) : timed && !unsynced ? (
           <SyncedLyrics
             lyrics={syncedLyrics!}

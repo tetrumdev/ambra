@@ -445,6 +445,33 @@ button.lyricLine:hover {
 .lyricsSyncPanel .menuItem:disabled:hover {
     background-color: rgba(29, 29, 29, 0.7);
 }
+.lyricsSources {
+    display: flex;
+    flex-direction: column;
+    border-bottom: 1px solid #2f2f2f;
+}
+.lyricsSourcesLabel {
+    padding: 10px 15px 2px;
+    color: #b3b3b3;
+    font-size: 12px;
+    background-color: rgba(29, 29, 29, 0.7);
+}
+.lyricsSources .menuItem {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    height: 38px;
+    min-height: 38px;
+}
+.lyricsSources .menuItem[aria-checked="true"] {
+    font-weight: 600;
+}
+.lyricsSources .menuItem strong {
+    color: #b3b3b3;
+    font-size: 0.8rem;
+    font-weight: 400;
+}
 .lyricsSyncTiming {
     display: flex;
     flex-direction: column;

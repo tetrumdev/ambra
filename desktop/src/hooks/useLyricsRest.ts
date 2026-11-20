@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import type { TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
-import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
+import { cachedLyrics, loadLyrics, subscribeLyrics } from "../utils/lyricsCache";
 import { detectLyricOffset, MAX_LINE_MS, type DetectedOffset } from "../utils/lyricsOffset";
 import { lyricSyncOverride } from "../utils/lyricsSyncOverrides";
 import { usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
@@ -72,7 +72,15 @@ export function useLyricsRest(track: Track | undefined, clock: PlaybackClock, en
     void loadLyrics(track, controller.signal)
       .then((result) => { if (!controller.signal.aborted) setLyrics(result); })
       .catch(() => {});
-    return () => controller.abort();
+    // A source chosen in the lyrics view loads there; follow it.
+    const unsubscribe = subscribeLyrics(() => {
+      const cached = cachedLyrics(track);
+      if (cached) setLyrics(cached);
+    });
+    return () => {
+      controller.abort();
+      unsubscribe();
+    };
   }, [track, enabled]);
   // Shares the lyrics view's auto-sync analysis, which also measures where the vocals end.
   const [detected, setDetected] = useState<DetectedOffset>();

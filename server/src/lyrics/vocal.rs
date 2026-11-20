@@ -1,7 +1,7 @@
 //! Line endings placed by the recording's isolated vocals (`crate::vocal_timing`). Where a
 //! line's final word had no end timed by a person, the word ends where the singing stops,
 //! never past the next line.
-use super::model::{LyricLine, LyricsResponse, fit_line_end, has_detail, letters};
+use super::model::{LyricLine, LyricsResponse, Segment, fit_line_end, has_detail, letters};
 use ambra_lyric_sync::{FRAME_MS, LyricWindow};
 
 /// Line-only timings rarely carry ends; a line is assumed sung for at most this long.
@@ -132,5 +132,68 @@ pub fn refine(lyrics: &mut LyricsResponse, power: &[f64]) -> bool {
             line.words = line.segments.clone();
         }
     }
+    if lyrics.has_word_sync {
+        // Lines a word-timed song left timed only as a whole get their words placed across the
+        // stretch where the vocals are heard, each word's share set by its letters.
+        for line in &mut lyrics.lines {
+            let Some(start) = line.start_ms.filter(|_| !has_detail(line)) else { continue };
+            let limit = line.end_ms.unwrap_or(start + LINE_FALLBACK_MS).min(start + MAX_LINE_MS);
+            let first = frame_of(start as f64 - offset_ms);
+            let last_frame = frame_of(limit as f64 - offset_ms).min(frames);
+            let Some(onset) = (first..(first + ONSET_FRAMES).min(last_frame)).find(|frame| loud(*frame)) else {
+                continue;
+            };
+            // Breaths inside the line are skipped, not taken for its end; it ends with the last singing.
+            let sung: Vec<i64> = (onset..last_frame).filter(|frame| loud(*frame)).collect();
+            let silent_from = sung.last().map_or(last_frame, |frame| frame + 1);
+            let words = split_words(&line.text);
+            let weights: Vec<usize> = words.iter().map(|word| letters(word).max(1)).collect();
+            let total: usize = weights.iter().sum();
+            if sung.is_empty() || letters(&line.text) == 0 {
+                continue;
+            }
+            let at = |frame: i64| ((frame * FRAME_MS + shift) as f64 + offset_ms).max(0.0) as u64;
+            let end = at(silent_from).clamp(start + MIN_WORD_MS as u64, limit.max(start + MIN_WORD_MS as u64));
+            let mut before = 0;
+            let mut starts: Vec<u64> = weights
+                .iter()
+                .map(|weight| {
+                    let frame = sung[(sung.len() * before / total).min(sung.len() - 1)];
+                    before += weight;
+                    at(frame).clamp(start, end)
+                })
+                .collect();
+            // The line still begins where its timing says; only the words inside it move.
+            starts[0] = start;
+            let singer = line.segments.iter().find_map(|segment| segment.singer.clone());
+            line.segments = words
+                .into_iter()
+                .enumerate()
+                .map(|(index, word)| {
+                    let word_start = starts[index].max(starts[..index].iter().copied().max().unwrap_or(start));
+                    let word_end = starts.get(index + 1).copied().unwrap_or(end).max(word_start);
+                    let mut segment = Segment::new(word, Some(word_start), Some(word_end), "word");
+                    segment.singer = singer.clone();
+                    segment
+                })
+                .collect();
+            fit_line_end(line);
+            line.words = if has_detail(line) { line.segments.clone() } else { Vec::new() };
+        }
+    }
     true
+}
+
+/// A line's text as words, each carrying the whitespace after it, so they join back to the text.
+fn split_words(text: &str) -> Vec<String> {
+    let mut words: Vec<String> = Vec::new();
+    for character in text.chars() {
+        match words.last_mut() {
+            Some(word) if character.is_whitespace() || !word.ends_with(char::is_whitespace) || word.trim().is_empty() => {
+                word.push(character)
+            }
+            _ => words.push(character.to_string()),
+        }
+    }
+    words
 }

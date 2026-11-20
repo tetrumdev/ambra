@@ -9,7 +9,7 @@ import type {
 import { remoteTrack } from "../utils/remoteTrack";
 import { fetchWhenServerReady, waitForRetry } from "../utils/serverReadiness";
 import { SearchCache } from "../utils/searchCache";
-import { needsLyricsRetry, parseTrackLyrics, type TrackLyrics } from "../types/lyrics";
+import { needsLyricsRetry, parseTrackLyrics, type LyricsSource, type TrackLyrics } from "../types/lyrics";
 import { fromStorage, serverBaseUrl, serverUrl, subscribeServerConnection, serverConnectionSignal } from "./serverConnection";
 import { artworkPalettePath, parseArtworkPalette, type ArtworkPalette } from "../utils/artworkPalette";
 
@@ -146,7 +146,7 @@ export async function setVocalTiming(enabled: boolean): Promise<VocalTimingStatu
 }
 
 /** `prefetch` asks ahead of playback, so the server analyzes this song after any playing now. */
-export async function trackLyrics(track: Track, signal: AbortSignal, prefetch = false): Promise<TrackLyrics> {
+export async function trackLyrics(track: Track, signal: AbortSignal, prefetch = false, source?: LyricsSource): Promise<TrackLyrics> {
   const query = new URLSearchParams({
     trackName: track.name,
     artistName: track.artist,
@@ -156,6 +156,7 @@ export async function trackLyrics(track: Track, signal: AbortSignal, prefetch = 
   if (track.isrc) query.set("isrc", track.isrc);
   if (track.version) query.set("version", track.version);
   if (track.provider === "spotify") query.set("spotifyId", track.providerTrackId);
+  if (source) query.set("source", source);
   const ref = vocalTrackRef(track);
   if (ref) {
     query.set("provider", ref.provider);
