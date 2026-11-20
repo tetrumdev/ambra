@@ -8,6 +8,7 @@
 //! hear, so its sound card's clock can't drift away from the others'.
 use std::{
     collections::VecDeque,
+    sync::atomic::{AtomicI64, Ordering},
     time::{Duration, Instant},
 };
 
@@ -28,34 +29,81 @@ const ERROR_SMOOTHING: Duration = Duration::from_millis(400);
 /// After a format change mid-group, every output reopens its device: the next song starts this
 /// much later than gapless, the same on every output, so they stay together.
 pub const REOPEN_MARGIN: Duration = Duration::from_millis(250);
+/// A change in the server clock's offset beyond this isn't drift: the server restarted, or
+/// this is another server. Anchors placed before it stay where they were put.
+const CLOCK_FOLLOW_LIMIT_MS: f64 = 1000.0;
+
+/// The server's clock less this computer's, in microseconds, as last measured; `i64::MIN`
+/// until it is known. Every player in this process (the app's own and its spare ones) reads it.
+static SERVER_CLOCK_OFFSET_US: AtomicI64 = AtomicI64::new(i64::MIN);
+
+/// Records the latest estimate of the server's clock less this computer's, in milliseconds.
+pub fn set_server_clock_offset(offset_ms: Option<f64>) {
+    let micros = offset_ms
+        .filter(|offset| offset.is_finite())
+        .map_or(i64::MIN, |offset| (offset * 1000.0).round().clamp(i64::MIN as f64 + 1.0, i64::MAX as f64) as i64);
+    SERVER_CLOCK_OFFSET_US.store(micros, Ordering::Relaxed);
+}
+
+/// The latest estimate of the server's clock less this computer's, in milliseconds.
+pub fn server_clock_offset() -> Option<f64> {
+    let micros = SERVER_CLOCK_OFFSET_US.load(Ordering::Relaxed);
+    (micros != i64::MIN).then(|| micros as f64 / 1000.0)
+}
 
 /// When the group hears song position `position`: at `at`, on this computer's clock.
+///
+/// The group's timeline is set on the server's clock, and this computer's clock runs a little
+/// faster or slower than the server's (tens of parts per million, a few milliseconds a minute).
+/// `at` was placed with the server clock's offset `clock_offset_ms`; as that offset moves, the
+/// anchor moves with it, so outputs on different computers don't drift apart over a long
+/// gapless run.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Anchor {
     pub at: Instant,
     pub position: f64,
     /// The longest resync delay in the group, which a reopened output waits out with the others.
     pub group_resync: Duration,
+    /// The server clock's offset `at` was placed with; None for a timeline on this clock alone.
+    pub clock_offset_ms: Option<f64>,
 }
 
 impl Anchor {
     /// When song position `position` is heard.
     pub fn time_of(&self, position: f64) -> Instant {
-        offset(self.at, position - self.position)
+        offset(self.heard_at(), position - self.position)
     }
 
     /// The song position heard at `now`.
     pub fn position_at(&self, now: Instant) -> f64 {
-        self.position + signed_seconds(now, self.at)
+        self.position + signed_seconds(now, self.heard_at())
+    }
+
+    /// When `position` is heard, on this computer's clock as it now compares with the server's.
+    pub fn heard_at(&self) -> Instant {
+        self.heard_at_with(server_clock_offset())
+    }
+
+    /// `at`, moved by how far the server clock's offset has gone since it was placed: when the
+    /// server's clock gains on this one, its moments come sooner here.
+    fn heard_at_with(&self, current_offset_ms: Option<f64>) -> Instant {
+        match (self.clock_offset_ms, current_offset_ms) {
+            (Some(placed), Some(current)) if (current - placed).abs() < CLOCK_FOLLOW_LIMIT_MS => {
+                offset(self.at, (placed - current) / 1000.0)
+            }
+            _ => self.at,
+        }
     }
 
     /// The same timeline, carried over a song change: the song that ended at `ended_at` (its
     /// own position) hands over to the next one's start, later by `delay` when it can't be gapless.
     pub fn carried_over(&self, ended_at: f64, delay: Duration) -> Self {
         Self {
-            at: self.time_of(ended_at) + delay,
+            // From `at` as placed, so the carried timeline keeps following the server's clock.
+            at: offset(self.at, ended_at - self.position) + delay,
             position: 0.0,
             group_resync: self.group_resync,
+            clock_offset_ms: self.clock_offset_ms,
         }
     }
 }
@@ -206,7 +254,26 @@ mod tests {
     use super::*;
 
     fn anchor(at: Instant, position: f64) -> Anchor {
-        Anchor { at, position, group_resync: Duration::ZERO }
+        Anchor { at, position, group_resync: Duration::ZERO, clock_offset_ms: None }
+    }
+
+    #[test]
+    fn the_timeline_follows_the_server_clock_as_the_two_drift() {
+        let now = Instant::now();
+        let placed = Anchor { at: now, position: 10.0, group_resync: Duration::ZERO, clock_offset_ms: Some(5_000.0) };
+        assert_eq!(placed.heard_at_with(Some(5_000.0)), now);
+        // The server's clock gained 3 ms on this one: its moments come 3 ms sooner here.
+        assert_eq!(placed.heard_at_with(Some(5_003.0)), now - Duration::from_millis(3));
+        assert_eq!(placed.heard_at_with(Some(4_998.0)), now + Duration::from_millis(2));
+        // A jump that large is a restarted server, not drift.
+        assert_eq!(placed.heard_at_with(Some(9_000.0)), now);
+        assert_eq!(placed.heard_at_with(None), now);
+        // A timeline on this clock alone never moves.
+        assert_eq!(anchor(now, 10.0).heard_at_with(Some(5_003.0)), now);
+        // Carried over a song change, the timeline keeps its placement and still follows.
+        let next = placed.carried_over(12.0, Duration::ZERO);
+        assert_eq!(next.clock_offset_ms, Some(5_000.0));
+        assert_eq!(next.heard_at_with(Some(5_001.0)), now + Duration::from_millis(1_999));
     }
 
     #[test]
@@ -338,7 +405,7 @@ mod tests {
         let output = engine.output.as_ref().unwrap();
         assert_eq!(output.silence + output.music, 0);
         // A start for another epoch is stale and ignored.
-        engine.apply_sync(super::super::SyncCommand::Start { epoch: 6, at: Instant::now(), position: 5.0, group_resync: Duration::ZERO });
+        engine.apply_sync(super::super::SyncCommand::Start { epoch: 6, at: Instant::now(), position: 5.0, group_resync: Duration::ZERO, clock_offset_ms: None });
         engine.pump().unwrap();
         assert_eq!(engine.output.as_ref().unwrap().music, 0);
     }
@@ -347,7 +414,7 @@ mod tests {
     fn an_early_start_is_padded_with_exactly_the_silence_before_it() {
         let mut engine = held_engine(5.0);
         engine.pump().unwrap();
-        engine.apply_sync(super::super::SyncCommand::Start { epoch: 7, at: Instant::now() + Duration::from_millis(300), position: 5.0, group_resync: Duration::ZERO });
+        engine.apply_sync(super::super::SyncCommand::Start { epoch: 7, at: Instant::now() + Duration::from_millis(300), position: 5.0, group_resync: Duration::ZERO, clock_offset_ms: None });
         for _ in 0..20 {
             engine.pump().unwrap();
             if engine.output.as_ref().unwrap().music > 0 { break; }
@@ -362,7 +429,7 @@ mod tests {
     fn a_late_start_drops_what_the_group_already_played() {
         let mut engine = held_engine(5.0);
         engine.pump().unwrap();
-        engine.apply_sync(super::super::SyncCommand::Start { epoch: 7, at: Instant::now() - Duration::from_millis(200), position: 5.0, group_resync: Duration::ZERO });
+        engine.apply_sync(super::super::SyncCommand::Start { epoch: 7, at: Instant::now() - Duration::from_millis(200), position: 5.0, group_resync: Duration::ZERO, clock_offset_ms: None });
         engine.pump().unwrap();
         let output = engine.output.as_ref().unwrap();
         assert_eq!(output.silence, 0);

@@ -194,6 +194,8 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
     let mut instance = [0_u8; 16];
     getrandom::fill(&mut instance).expect("the operating system's random source is available");
     let instance_id = instance.iter().map(|byte| format!("{byte:02x}")).collect();
+    // Another server, or the same one again: its clock is measured anew.
+    native_audio::sync::set_server_clock_offset(None);
     let agent = std::sync::Arc::new(Agent {
         app, client, base_url, token, id, name, instance_id,
         sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), control: Mutex::new(Control::default()),
@@ -314,16 +316,17 @@ impl Agent {
         self.clock_offset_ms.lock().ok().and_then(|offset| *offset)
     }
 
-    /// When `server_ms`, on the server's clock, comes here. Before the clocks are compared,
-    /// `sent_ms` (when the server sent it) stands for now.
-    fn local_instant(&self, server_ms: f64, sent_ms: Option<f64>) -> Instant {
-        let (start, at_ms) = match (self.clock_offset(), sent_ms) {
+    /// When `server_ms`, on the server's clock, comes here, and the clock offset that placed
+    /// it. Before the clocks are compared, `sent_ms` (when the server sent it) stands for now.
+    fn local_instant(&self, server_ms: f64, sent_ms: Option<f64>) -> (Instant, Option<f64>) {
+        let offset = self.clock_offset();
+        let (start, at_ms) = match (offset, sent_ms) {
             (Some(offset), _) => (clock_start(), server_ms - offset),
             (None, Some(sent)) => (Instant::now(), server_ms - sent),
             (None, None) => (Instant::now(), 0.0),
         };
         let by = Duration::from_secs_f64((at_ms.abs() / 1000.0).min(1.0e6));
-        if at_ms >= 0.0 { start.checked_add(by) } else { start.checked_sub(by) }.unwrap_or(start)
+        (if at_ms >= 0.0 { start.checked_add(by) } else { start.checked_sub(by) }.unwrap_or(start), offset)
     }
 
     /// Tells this app's own screens where the engine is, so they follow it rather than the core.
@@ -542,6 +545,8 @@ async fn follow_clock(agent: std::sync::Arc<Agent>) {
             readings.push_back((Instant::now(), round_trip, offset));
             let best = readings.iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(_, _, offset)| *offset);
             if let Ok(mut known) = agent.clock_offset_ms.lock() { *known = best; }
+            // Players keep the group's timeline on the server's clock as the two drift apart.
+            native_audio::sync::set_server_clock_offset(best);
         }
         // A handful of quick readings first, then enough to follow the drift.
         let wait = if readings.len() < 5 { Duration::from_millis(200) } else { CLOCK_EVERY };
@@ -628,10 +633,11 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
         "seek_native_audio" => native_audio::dispatch_remote_seek(player, number("positionSeconds")?).map(|()| Value::Null),
         // The group's start: song position `positionSeconds` is heard at `atServerMs`.
         "sync_native_audio" => {
-            let at = agent.local_instant(number("atServerMs")?, args["sentAtServerMs"].as_f64());
+            let (at, clock_offset_ms) = agent.local_instant(number("atServerMs")?, args["sentAtServerMs"].as_f64());
             native_audio::dispatch_sync(player, native_audio::SyncCommand::Start {
                 epoch: args["epoch"].as_u64().ok_or("`epoch` is missing")?,
                 at,
+                clock_offset_ms,
                 position: number("positionSeconds")?,
                 group_resync: Duration::from_millis(args["groupResyncMs"].as_u64().unwrap_or(0).min(10_000)),
             }).map(|()| Value::Null)
