@@ -14,6 +14,10 @@ const MIN_PHRASES: usize = 8;
 /// Removes loudness changes between song sections while keeping phrase-scale contrast.
 const DETREND_FRAMES: usize = 7_500 / FRAME_MS as usize;
 const ONSET_FRAMES: i64 = 300 / FRAME_MS;
+/// Lyrics timed by line start alone run each line into the next, so their windows merge into
+/// a few long phrases. Their line starts are still where singing begins: a window starting
+/// this long after the previous one begins a new line rather than continuing a word-timed one.
+const LINE_START_GAP_MS: f64 = 1_500.0;
 /// Shifts within one second of the best one belong to the same peak.
 const PEAK_FRAMES: i64 = 1_000 / FRAME_MS;
 /// Vocal level is read through this much smoothing, so a breath or a gap between words isn't an ending.
@@ -89,6 +93,26 @@ pub fn phrases(windows: &[LyricWindow]) -> Vec<(i64, i64)> {
         .collect()
 }
 
+/// Where sung lines begin, in frames on the expected audio timeline: window starts at least
+/// `LINE_START_GAP_MS` after the previous window's start.
+pub fn line_starts(windows: &[LyricWindow]) -> Vec<i64> {
+    let mut starts: Vec<f64> = windows
+        .iter()
+        .map(|window| window.start_ms)
+        .filter(|start| start.is_finite() && *start >= 0.0 && *start <= 86_400_000.0)
+        .collect();
+    starts.sort_by(f64::total_cmp);
+    let mut lines: Vec<f64> = Vec::new();
+    let mut previous = f64::NEG_INFINITY;
+    for start in starts {
+        if start - previous >= LINE_START_GAP_MS {
+            lines.push(start);
+        }
+        previous = start;
+    }
+    lines.into_iter().map(|ms| (ms / FRAME_MS as f64).round() as i64).collect()
+}
+
 /// A vocal energy curve, read two ways.
 pub struct Envelope {
     /// Log energy of the vocals per frame.
@@ -137,13 +161,18 @@ pub fn analyze(power: Vec<f64>, windows: &[LyricWindow], label: &str) -> Result<
         return Ok(UNCERTAIN);
     }
     let envelope = envelope(power)?;
-    // Lines timed back to back merge into a few long phrases, too few to place a shift,
-    // but the ending can still be heard; lazily timed final lines are the ones that need it.
-    let mut offset = if phrases.len() < MIN_PHRASES {
-        eprintln!("[lyric-sync] {label}: uncertain, {} phrases (need {MIN_PHRASES})", phrases.len());
-        UNCERTAIN
-    } else {
+    // Lines timed back to back merge into a few long phrases, too few to contrast singing with
+    // gaps. Their starts still mark where singing begins, so those alone place the shift.
+    let mut offset = if phrases.len() >= MIN_PHRASES {
         best_offset(&envelope.standardized, &phrases, label)
+    } else {
+        let starts = line_starts(windows);
+        if starts.len() >= MIN_PHRASES {
+            best_onset_offset(&envelope.standardized, &starts, label)
+        } else {
+            eprintln!("[lyric-sync] {label}: uncertain, {} phrases and {} line starts (need {MIN_PHRASES})", phrases.len(), starts.len());
+            UNCERTAIN
+        }
     };
     // An untrusted shift still places the ending better than none, and the app checks
     // the result against the lyrics it applies.
@@ -252,23 +281,56 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
         contrast.push(inside / count as f64 - (total - inside) / (frames - count) as f64);
         onsets.push(rise / (rises as f64 * ONSET_FRAMES as f64));
     }
-    let standardize = |values: &mut Vec<f64>| {
-        let mean = values.iter().sum::<f64>() / values.len() as f64;
-        let deviation = (values
-            .iter()
-            .map(|value| (value - mean).powi(2))
-            .sum::<f64>()
-            / values.len() as f64)
-            .sqrt()
-            .max(1e-9);
-        for value in values.iter_mut() {
-            *value = (*value - mean) / deviation;
-        }
-    };
     standardize(&mut contrast);
     standardize(&mut onsets);
     let scores: Vec<f64> = contrast.iter().zip(&onsets).map(|(a, b)| a + b).collect();
+    evidence(&scores, &shifts, phrases.len(), label)
+}
 
+/// Scores every shift by the energy rise at each line start alone, for lyrics whose lines
+/// run into each other (`line_starts`).
+fn best_onset_offset(envelope: &[f64], starts: &[i64], label: &str) -> LyricOffset {
+    let frames = envelope.len() as i64;
+    let prefix = prefix_sums(envelope);
+    let sum = |from: i64, to: i64| prefix[to as usize] - prefix[from as usize];
+    let shifts: Vec<i64> = (-MAX_SHIFT_FRAMES..=MAX_SHIFT_FRAMES).collect();
+    let mut onsets = Vec::with_capacity(shifts.len());
+    for &shift in &shifts {
+        let (mut rise, mut rises) = (0.0, 0);
+        for &start in starts {
+            let onset = start - shift;
+            if onset - ONSET_FRAMES >= 0 && onset + ONSET_FRAMES <= frames {
+                rise += sum(onset, onset + ONSET_FRAMES) - sum(onset - ONSET_FRAMES, onset);
+                rises += 1;
+            }
+        }
+        if rises < MIN_PHRASES {
+            eprintln!("[lyric-sync] {label}: uncertain at shift {} ms, {rises} line starts", shift * FRAME_MS);
+            return UNCERTAIN;
+        }
+        onsets.push(rise / (rises as f64 * ONSET_FRAMES as f64));
+    }
+    standardize(&mut onsets);
+    evidence(&onsets, &shifts, starts.len(), label)
+}
+
+fn standardize(values: &mut [f64]) {
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let deviation = (values
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
+        / values.len() as f64)
+        .sqrt()
+        .max(1e-9);
+    for value in values.iter_mut() {
+        *value = (*value - mean) / deviation;
+    }
+}
+
+/// The best shift's score against the others: how far it stands above typical shifts, and how
+/// far it leads the strongest rival peak.
+fn evidence(scores: &[f64], shifts: &[i64], phrases: usize, label: &str) -> LyricOffset {
     let best = (0..scores.len())
         .max_by(|&a, &b| scores[a].total_cmp(&scores[b]))
         .unwrap();
@@ -309,7 +371,7 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
         shifts[best] * FRAME_MS,
         rival_shift.map_or("none".to_owned(), |shift| format!("{shift} ms")),
         margin.map_or("none".to_owned(), |margin| format!("{margin:.2}")),
-        phrases.len(),
+        phrases,
     );
     LyricOffset {
         best_ms: Some(shifts[best] * FRAME_MS),
@@ -319,3 +381,54 @@ fn best_offset(envelope: &[f64], phrases: &[(i64, i64)], label: &str) -> LyricOf
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A song whose lines are sung 2.4 s each, 4 s apart, from 20 s in, over a quiet bed.
+    fn sung_lines(lines: usize) -> (Vec<f64>, Vec<i64>) {
+        let frames = 4 * 60 * 1000 / FRAME_MS as usize;
+        let mut power = vec![0.01; frames];
+        let mut starts = Vec::new();
+        for line in 0..lines {
+            let start = (20_000 + line as i64 * 4_000) / FRAME_MS;
+            starts.push(start * FRAME_MS);
+            for (offset, frame) in (start..start + 2_400 / FRAME_MS).enumerate() {
+                // Syllables pulse within the line.
+                power[frame as usize] = 1.0 + 0.5 * ((offset as f64) * 0.9).sin().abs();
+            }
+        }
+        // A little deterministic texture, so no two shifts score exactly alike.
+        for (frame, value) in power.iter_mut().enumerate() {
+            *value *= 1.0 + 0.05 * ((frame * 7919 % 101) as f64 / 101.0);
+        }
+        (power, starts)
+    }
+
+    #[test]
+    fn lines_timed_by_start_alone_still_place_the_shift() {
+        let (power, starts) = sung_lines(24);
+        // Line-synced lyrics: each line runs until the next starts, so they merge into one phrase.
+        let late_ms = 1_240.0;
+        let windows: Vec<LyricWindow> = starts
+            .iter()
+            .zip(starts.iter().skip(1).map(|next| *next as f64).chain([starts[starts.len() - 1] as f64 + 4_000.0]))
+            .map(|(start, next)| LyricWindow { start_ms: *start as f64 + late_ms, end_ms: next + late_ms })
+            .collect();
+        assert!(phrases(&windows).len() < MIN_PHRASES);
+        assert_eq!(line_starts(&windows).len(), 24);
+        let offset = analyze(power, &windows, "test").unwrap();
+        assert_eq!(offset.best_ms, Some(1_240));
+        assert!(offset.prominence >= 4.0, "prominence {}", offset.prominence);
+    }
+
+    #[test]
+    fn word_timings_within_a_line_are_not_line_starts() {
+        let windows: Vec<LyricWindow> = (0..10)
+            .flat_map(|line| (0..5).map(move |word| line as f64 * 4_000.0 + word as f64 * 400.0))
+            .map(|start| LyricWindow { start_ms: start, end_ms: start + 300.0 })
+            .collect();
+        assert_eq!(line_starts(&windows).len(), 10);
+    }
+}
