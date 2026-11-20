@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
@@ -10,11 +10,14 @@ import { queueEntryKey } from "../utils/queueNavigation";
 import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { showTrackCredits } from "../utils/trackCredits";
-import { isKeyboardMenuClick, MENU_WIDTH } from "../utils/trackMenu";
+import {
+  isKeyboardMenuClick, MENU_WIDTH, SongContextMenu, playSongOnDoubleClick, songMenuPosition, suppressSongClick,
+  pauseTrackAction, trackPlaybackActions,
+} from "../utils/trackMenu";
 import { ArtistLinks } from "./ArtistLinks";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackArtwork } from "./TrackArtwork";
-import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
+import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionAction } from "./TrackCollectionMenu";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { VirtualSpacer } from "./VirtualSpacer";
 import "./LibraryView.css";
@@ -161,9 +164,9 @@ const VIRTUALIZE_AFTER_ROWS = 120;
 
 type SidebarEntry = { id: string; track: Track; queueId?: QueueId; historyId?: string; current?: boolean };
 type SidebarMenu =
-  | { kind: "playback" | "collection"; id: string; anchor: HTMLElement; x: number; y: number; flipY: number; keyboard: boolean }
+  | { kind: "playback" | "collection" | "combined"; id: string; anchor: HTMLElement; x: number; y: number; flipY: number; keyboard: boolean; extendSelection?: boolean; instant?: boolean }
   | { kind: "selection"; anchor: HTMLButtonElement; x: number; y: number; flipY: number };
-type RowAction = "play" | "playback" | "collection" | "select";
+type RowAction = "play" | "start" | "playback" | "collection" | "combined" | "select";
 type EntryAction = (action: RowAction, event: MouseEvent<HTMLElement>, entry: SidebarEntry) => void;
 
 function SidebarTracks({
@@ -172,10 +175,12 @@ function SidebarTracks({
   recent, recentError, onRecentAction, onOpenEntity, playlistOptions, savedTrackIds, addToLibrary,
 }: SidebarTracksProps & { view: "queue" | "recent" }) {
   const queueView = view === "queue";
+  const combinedMenu = useContext(SongContextMenu);
   const connected = useServiceAvailability();
   const scroller = useRef<HTMLDivElement>(null);
   const nowPlayingRef = useRef<HTMLElement>(null);
   const [menu, setMenu] = useState<SidebarMenu | null>(null);
+  useEffect(() => setMenu(null), [combinedMenu]);
   // Played songs start folded into one line above now playing, so the queue opens on what's playing.
   const [historyOpen, setHistoryOpen] = useState(false);
 
@@ -203,7 +208,7 @@ function SidebarTracks({
   const menuEntry = menuId === undefined ? undefined : allEntries.find(entry => entry.id === menuId);
   const menuAvailable = menuEntry !== undefined && isTrackAvailable(menuEntry.track, connected);
   const menuRemovable = menuEntry?.queueId !== undefined || menuEntry?.historyId !== undefined;
-  const menuCanOpen = menuAvailable || (menu?.kind === "collection" && menuRemovable);
+  const menuCanOpen = menuAvailable || ((menu?.kind === "collection" || menu?.kind === "combined") && menuRemovable);
   useEffect(() => { if (menuId && !menuCanOpen) setMenu(null); }, [menuId, menuCanOpen]);
   const selected = selection.isSelecting ? allEntries.filter(entry => selection.selectedIds.has(entry.id)) : [];
 
@@ -246,13 +251,42 @@ function SidebarTracks({
     onRecentAction(action, menuEntry.track);
   }
 
+  function queueActions(entry: SidebarEntry): TrackCollectionAction[] {
+    if (entry.queueId !== undefined) return [
+      { label: "Play from Here", icon: "/skip.svg", onSelect: () => playEntry(entry) },
+      { label: "Move to Front", icon: "/play-next.svg", whenUnavailable: true, disabled: upcoming[0] === entry, onSelect: () => moveToFront(entry) },
+      { label: "Remove from Queue", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
+    ];
+    if (entry.historyId !== undefined) return [
+      { label: "Play Again", icon: "/skip.svg", onSelect: () => playEntry(entry) },
+      { label: "Remove from History", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
+    ];
+    return [];
+  }
+
+  function combinedPlaybackActions(entry: SidebarEntry) {
+    if (entry.current) return isPlaying ? [pauseTrackAction(onTogglePlayback)] : [];
+    if (entry.queueId !== undefined || entry.historyId !== undefined) return queueActions(entry);
+    return trackPlaybackActions(entry.track.globalId, {
+      playStandalone: () => onRecentAction("standalone", entry.track),
+      playNext: () => onRecentAction("next", entry.track),
+      addToQueue: () => onRecentAction("queue", entry.track),
+    });
+  }
+
   // Stable, so the playback clock and menus re-render only the rows they change.
   const actions = useRef<EntryAction>(() => {});
   actions.current = (action, event, entry) => {
     const available = isTrackAvailable(entry.track, connected);
     // A click that ended a drag never opens or plays anything.
     if (!entry.current && suppressClick.current && event.detail !== 0) return;
-    if (action === "select" || (selection.isSelecting && !entry.current && action !== "collection")) {
+    if (action === "combined" || (action === "collection" && combinedMenu)) {
+      if (!available && entry.queueId === undefined && entry.historyId === undefined) return;
+      const keyboard = isKeyboardMenuClick(event);
+      setMenu({ kind: "combined", id: entry.id, anchor: event.currentTarget, keyboard, ...songMenuPosition(event), extendSelection: event.shiftKey });
+      return;
+    }
+    if (action === "select" || (!combinedMenu && selection.isSelecting && !entry.current && action !== "collection")) {
       const index = selectableIds.indexOf(entry.id);
       if (index < 0) return;
       event.preventDefault();
@@ -266,7 +300,8 @@ function SidebarTracks({
       return;
     }
     event.stopPropagation();
-    if (action === "play") {
+    if (action === "play" || action === "start") {
+      if (action === "start" && entry.current && isPlaying) return;
       if (available || entry.current) {
         setMenu(null);
         playEntry(entry);
@@ -312,41 +347,36 @@ function SidebarTracks({
 
   const rowProps = {
     selecting: selection.isSelecting, selectedIds: selection.selectedIds, menuId, menuKind: menu?.kind,
-    onAction, onOpenEntity, draggedId: draggedTrackId, dropTarget,
+    combinedMenu, onAction, onOpenEntity, draggedId: draggedTrackId, dropTarget,
   };
   const upcomingDuration = upcoming.reduce((total, entry) => total + entry.track.durationSeconds, 0);
+  const menuEntrySelected = menuEntry !== undefined && selection.selectedIds.has(menuEntry.id);
 
   return (
     <>
       {menu?.kind === "playback" && menuEntry && menuAvailable && (menuEntry.queueId !== undefined || menuEntry.historyId !== undefined
         ? <TrackCollectionMenu trackId={menuEntry.track.globalId} xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu}
-            actions={menuEntry.queueId !== undefined ? [
-              { label: "Play from Here", icon: "/skip.svg", onSelect: () => playEntry(menuEntry) },
-              { label: "Move to Front", icon: "/play-next.svg", disabled: upcoming[0] === menuEntry, onSelect: () => moveToFront(menuEntry) },
-              { label: "Remove from Queue", icon: "/delete.svg", onSelect: () => removeEntries([menuEntry]) },
-            ] : [
-              { label: "Play Again", icon: "/skip.svg", onSelect: () => playEntry(menuEntry) },
-              { label: "Remove from History", icon: "/delete.svg", onSelect: () => removeEntries([menuEntry]) },
-            ]} />
+            actions={queueActions(menuEntry)} />
         : <TrackPlaybackMenu trackId={menuEntry.track.globalId} xPos={menu.x} yPos={menu.y} onClose={() => setMenu(null)}
             openedWithKeyboard={menu.keyboard} playStandalone={() => recentAction("standalone")}
             playNext={() => recentAction("next")} addToQueue={() => recentAction("queue")} />)}
-      {menu?.kind === "collection" && menuEntry && menuCanOpen && <TrackCollectionMenu trackId={menuEntry.track.globalId}
-        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu} playlistOptions={menuAvailable ? playlistOptions : undefined}
+      {(menu?.kind === "collection" || menu?.kind === "combined") && menuEntry && menuCanOpen && <TrackCollectionMenu trackId={menuEntry.track.globalId}
+        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} instant={menu.instant} onClose={closeMenu}
+        playlistOptions={menuAvailable ? playlistOptions : undefined}
         actions={menuAvailable ? [
+          ...(menu.kind === "combined" ? combinedPlaybackActions(menuEntry) : []),
           ...(menuEntry.track.provider !== "local" && !savedTrackIds.has(menuEntry.track.globalId)
             ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => addToLibrary(menuEntry.track) }] : []),
-          { label: "Go to Album", icon: "/album.svg", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(menuEntry.track) }) },
-          { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuEntry.track) },
+          ...(menu.kind === "collection" ? [
+            { label: "Go to Album", icon: "/album.svg", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(menuEntry.track) }) },
+            { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuEntry.track) },
+          ] : []),
           ...(menuEntry.current ? [] : [{
-            label: "Select Songs", icon: "/no-select.svg", onSelect: () => selection.toggle(selectableIds.indexOf(menuEntry.id), false),
+            label: menu.kind === "collection" ? "Select Songs" : menuEntrySelected ? "Deselect Song" : "Select Song",
+            icon: menu.kind === "combined" && menuEntrySelected ? "/select.svg" : "/no-select.svg",
+            onSelect: () => selection.toggle(selectableIds.indexOf(menuEntry.id), Boolean(menu.extendSelection)),
           }]),
-        ] : [
-          ...(menuEntry.queueId !== undefined ? [{ label: "Move to Front", icon: "/play-next.svg", whenUnavailable: true,
-            disabled: upcoming[0] === menuEntry, onSelect: () => moveToFront(menuEntry) }] : []),
-          { label: menuEntry.historyId !== undefined ? "Remove from History" : "Remove from Queue", icon: "/delete.svg",
-            whenUnavailable: true, onSelect: () => removeEntries([menuEntry]) },
-        ]}
+        ] : queueActions(menuEntry).filter(action => action.whenUnavailable)}
       />}
       {menu?.kind === "selection" && selected.length > 0 && <TrackCollectionMenu trackId="" actions={[]}
         tracks={[...new Map(selected.map(({ track }) => [track.globalId, track])).values()]}
@@ -412,6 +442,7 @@ function SidebarTracks({
 
 type RowsProps = {
   selecting: boolean;
+  combinedMenu: boolean;
   selectedIds: ReadonlySet<string>;
   menuId?: string;
   menuKind?: SidebarMenu["kind"];
@@ -447,7 +478,7 @@ function SidebarRows({ id, label, entries, selectedIds, menuId, draggedId, dropT
 
 /** A song row with the same parts, classes and gestures as every other song list (TrackList.tsx). */
 const SidebarRow = memo(function SidebarRow({
-  entry, index, selecting: selectionActive, selected, menuOpen, menuKind, isPlaying = false, onAction, onOpenEntity,
+  entry, index, selecting: selectionActive, selected, menuOpen, menuKind, combinedMenu, isPlaying = false, onAction, onOpenEntity,
   onPointerDown, dragging, dropPosition,
 }: Omit<RowsProps, "selectedIds" | "menuId" | "draggedId" | "dropTarget"> & {
   entry: SidebarEntry;
@@ -462,7 +493,7 @@ const SidebarRow = memo(function SidebarRow({
   const { track } = entry;
   const available = isTrackAvailable(track, connected);
   const selecting = selectionActive && available && !entry.current;
-  const collectionOpen = menuOpen && menuKind === "collection";
+  const collectionOpen = menuOpen && (menuKind === "collection" || menuKind === "combined");
   const pausing = entry.current && isPlaying;
   return (
     <div className="libraryItem playbackSidebarRow" role="listitem" data-track-id={entry.id} data-virtual-item=""
@@ -473,11 +504,13 @@ const SidebarRow = memo(function SidebarRow({
       data-menu-open={menuOpen ? "true" : undefined} data-reorderable={onPointerDown && available ? "true" : undefined}
       data-dragging={dragging ? "true" : undefined} data-drop-position={dropPosition}
       onPointerDown={onPointerDown && available ? event => onPointerDown(event, index) : undefined}
-      onClickCapture={entry.current ? undefined : event => {
+      onClickCapture={combinedMenu ? suppressSongClick : entry.current ? undefined : event => {
         if (selecting || ((event.shiftKey || event.metaKey || event.ctrlKey) && available)) onAction("select", event, entry);
       }}
-      onClick={event => onAction("playback", event, entry)}
-      onContextMenu={entry.current ? undefined : event => onAction("select", event, entry)}
+      onClick={combinedMenu ? undefined : event => onAction("playback", event, entry)}
+      onContextMenu={combinedMenu ? event => onAction("combined", event, entry)
+        : entry.current ? undefined : event => onAction("select", event, entry)}
+      onDoubleClick={combinedMenu ? event => playSongOnDoubleClick(event, () => onAction("start", event, entry)) : undefined}
       onDragStart={event => event.preventDefault()} draggable={false}>
       <div className="trackLeading" inert={!available && !entry.current}>
         <button type="button" className="trackPlayButton" disabled={!available && !entry.current}
@@ -495,10 +528,10 @@ const SidebarRow = memo(function SidebarRow({
       </span>
       <button type="button" className="trackCollectionMenuTrigger"
         disabled={!available && entry.queueId === undefined && entry.historyId === undefined}
-        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
-        aria-pressed={selecting ? selected : undefined}
-        aria-haspopup={selecting ? undefined : "menu"}
-        aria-expanded={selecting ? undefined : collectionOpen}
+        aria-label={`${selecting && !combinedMenu ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
+        aria-pressed={selecting && !combinedMenu ? selected : undefined}
+        aria-haspopup={selecting && !combinedMenu ? undefined : "menu"}
+        aria-expanded={selecting && !combinedMenu ? undefined : collectionOpen}
         data-collection-menu-trigger data-collection-menu-open={collectionOpen && !selecting ? "true" : undefined}
         onClick={event => onAction("collection", event, entry)}>
         <img src={selecting ? selected ? "/select.svg" : "/no-select.svg" : "/menu.svg"}

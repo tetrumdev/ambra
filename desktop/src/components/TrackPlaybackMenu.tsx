@@ -3,18 +3,16 @@ import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAva
 import { useEffect, useRef, useState } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
-import { MENU_WIDTH } from "../utils/trackMenu";
+import { MENU_WIDTH, trackPlaybackActions, type TrackPlaybackActions } from "../utils/trackMenu";
+import { TrackMenuBackdrop } from "./TrackMenuBackdrop";
 
-type TrackPlaybackMenuProps = {
+type TrackPlaybackMenuProps = TrackPlaybackActions & {
   onClose: () => void;
   xPos: number;
   yPos: number;
   trackId: GlobalTrackId | null;
   openedWithKeyboard?: boolean;
-  playTrack?: (trackId: GlobalTrackId) => void;
-  playStandalone: (trackId: GlobalTrackId) => void;
-  addToQueue: (trackId: GlobalTrackId) => void;
-  playNext: (trackId: GlobalTrackId) => void;
+  instant?: boolean;
 };
 
 export function TrackPlaybackMenu({
@@ -23,15 +21,13 @@ export function TrackPlaybackMenu({
   yPos,
   trackId,
   openedWithKeyboard = false,
-  playTrack,
-  playStandalone,
-  addToQueue,
-  playNext,
+  instant = false,
+  ...playback
 }: TrackPlaybackMenuProps) {
   const connected = useServiceAvailability();
   const menu = useRef<HTMLDivElement>(null);
   const [keyboardNavigation, setKeyboardNavigation] = useState(openedWithKeyboard);
-  useFadeOutOnUnmount(menu);
+  useFadeOutOnUnmount(menu, !instant);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Pointer opens need focus for keyboard handling, but must not select an action.
@@ -40,8 +36,9 @@ export function TrackPlaybackMenu({
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
   if (trackId && !isTrackAvailable(trackId, connected)) return null;
+  const offset = instant ? "0" : "1%";
   return (
-    <div id="trackMenuBackdrop" onClick={onClose}>
+    <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose}>
       <div
         ref={menu}
         id="trackPlaybackMenu"
@@ -68,63 +65,24 @@ export function TrackPlaybackMenu({
           items[next]?.focus();
         }}
         style={{
+          animation: instant ? "none" : undefined,
           left: xPos,
           top: yPos,
           transform: `translate(
-            ${xPos >= window.innerWidth - MENU_WIDTH ? "-100%" : "1%"},
-            ${yPos >= window.innerHeight - 250 ? "-100%" : "1%"}
+            ${xPos >= window.innerWidth - MENU_WIDTH ? "-100%" : offset},
+            ${yPos >= window.innerHeight - 250 ? "-100%" : offset}
           )`,
           // The scale applies after the flip, so the box's own corner is always the clicked point.
           transformOrigin: "0 0",
         }}
       >
-        <button type="button" role="menuitem"
-          id="standalonePlay"
-          className="menuItem"
-          onClick={() => {
-            if (trackId !== null) playStandalone(trackId);
-          }}
-        >
-          <img id="menuPlayIcon" className="menuIcon" alt="" src="/play.svg" />
-          Standalone Play
-        </button>
-        {playTrack && (
-          <button type="button" role="menuitem"
-            id="normalPlay"
-            className="menuItem"
-            onClick={() => {
-              if (trackId !== null) playTrack(trackId);
-            }}
-          >
-            <img id="menuPlayFromIcon" className="menuIcon" alt="" src="/skip.svg" />
-            Play from Here
+        {trackPlaybackActions(trackId, playback).map(action => (
+          <button key={action.id} type="button" role="menuitem" id={action.id} className="menuItem" onClick={action.onSelect}>
+            <img id={action.iconId} className="menuIcon" alt="" src={action.icon} />
+            {action.label}
           </button>
-        )}
-        <button type="button" role="menuitem"
-          id="playNext"
-          className="menuItem"
-          onClick={() => {
-            if (trackId !== null) playNext(trackId);
-          }}
-        >
-          <img id="menuPlayNextIcon" className="menuIcon" alt="" src="/play-next.svg" />
-          Play Next
-        </button>
-        <button type="button" role="menuitem"
-          id="addToQueue"
-          className="menuItem"
-          onClick={() => {
-            if (trackId !== null) addToQueue(trackId);
-          }}
-        >
-          <img
-            id="menuAddToQueueIcon"
-            className="menuIcon" alt=""
-            src="/add-to-queue.svg"
-          />
-          Add to Queue
-        </button>
+        ))}
       </div>
-    </div>
+    </TrackMenuBackdrop>
   );
 }

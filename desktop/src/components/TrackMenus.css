@@ -9,6 +9,14 @@
     z-index: 13;
 }
 
+#trackMenuBackdrop[data-song-context-menu] {
+    pointer-events: none;
+}
+
+#trackMenuBackdrop[data-song-context-menu] > * {
+    pointer-events: auto;
+}
+
 #trackPlaybackMenu,
 #trackCollectionMenu {
     box-sizing: border-box;
@@ -58,6 +66,13 @@
 
 .menuItem:has(> .menuIcon) {
     grid-template-columns: 20px 1fr;
+}
+
+.menuItemLabel {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .menuItem:hover,

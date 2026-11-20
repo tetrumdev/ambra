@@ -30,6 +30,7 @@ export type AppPreferences = {
   ui: {
     screen: AppScreen;
     showAudioQuality: boolean;
+    songContextMenu: boolean;
     /** Instant transitions across the app; independent of the system's animation setting. */
     reduceMotion: boolean;
     animateSwirl: boolean;
@@ -75,6 +76,7 @@ export const defaultPreferences: AppPreferences = {
   ui: {
     screen: "home",
     showAudioQuality: false,
+    songContextMenu: false,
     reduceMotion: false,
     animateSwirl: true,
     lyricMotion: "system",
@@ -165,6 +167,7 @@ function migratePreferences(value: unknown): AppPreferences {
   const showAudioQuality = typeof ui.showAudioQuality === "boolean"
     ? ui.showAudioQuality
     : defaultPreferences.ui.showAudioQuality;
+  const songContextMenu = ui.songContextMenu === true;
   const reduceMotion = typeof ui.reduceMotion === "boolean"
     ? ui.reduceMotion
     : defaultPreferences.ui.reduceMotion;
@@ -214,7 +217,7 @@ function migratePreferences(value: unknown): AppPreferences {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -233,7 +236,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -258,6 +261,7 @@ function migratePreferences(value: unknown): AppPreferences {
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
+          songContextMenu,
           reduceMotion,
           animateSwirl,
           lyricMotion,
@@ -299,6 +303,7 @@ function migratePreferences(value: unknown): AppPreferences {
         ui: {
           screen: screen === "search" && !query.trim() ? "library" : screen,
           showAudioQuality,
+          songContextMenu,
           reduceMotion,
           animateSwirl,
           lyricMotion,

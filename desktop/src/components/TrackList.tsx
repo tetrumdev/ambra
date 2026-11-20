@@ -1,6 +1,6 @@
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { coreView, subscribeCore, warmCoreTrack } from "../api/core";
 import { ProviderIcon } from "./ProviderIcon";
 import type { GlobalTrackId, Track } from "../types/music";
@@ -9,7 +9,10 @@ import { useTrackReorder, type ReorderRules } from "../hooks/useTrackReorder";
 import { movePackaged, packageDrop, packageIndex } from "../utils/playlistPackages";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
-import { MENU_WIDTH, isKeyboardMenuClick } from "../utils/trackMenu";
+import {
+  MENU_WIDTH, SongContextMenu, isKeyboardMenuClick, playSongOnDoubleClick, songMenuPosition, suppressSongClick,
+  pauseTrackAction, trackPlaybackActions,
+} from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
@@ -37,11 +40,14 @@ type OpenMenu =
       y: number;
     }
   | {
-      kind: "collection";
+      kind: "collection" | "combined";
       trackId: GlobalTrackId;
       x: number;
       y: number;
       flipY: number;
+      returnFocusTo?: HTMLElement;
+      extendSelection?: boolean;
+      instant?: boolean;
     };
 
 export type TrackListProps = {
@@ -103,6 +109,7 @@ export function TrackList({
   sort = null,
   onSortChange,
 }: TrackListProps) {
+  const combinedMenu = useContext(SongContextMenu);
   const connected = useServiceAvailability();
   const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
   const nowPlaying = useNowPlaying();
@@ -114,6 +121,7 @@ export function TrackList({
     [allTracks, filtering],
   );
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
+  const menuTrack = openMenu ? tracks.find(track => track.globalId === openMenu.trackId) : undefined;
   const showDiscNumbers = useMemo(() => tracks.some(track => (track.discNumber ?? 1) > 1), [tracks]);
   const entityActions = useRef(onOpenEntity);
   entityActions.current = onOpenEntity;
@@ -125,6 +133,7 @@ export function TrackList({
   const selectableIds = useMemo(() => tracks.filter(track => isTrackAvailable(track, connected)).map(track => track.globalId), [tracks, connected]);
   const selection = useRangeSelection(selectableIds);
   useEffect(() => { selection.clear(); setOpenMenu(null); }, [connected]);
+  useEffect(() => setOpenMenu(null), [combinedMenu]);
   // Only the packaged songs this list shows; a song missing from it can't hold a package open.
   const shownPackages = useMemo(() => {
     const shown = new Set(trackIds);
@@ -248,6 +257,10 @@ export function TrackList({
     event: React.MouseEvent<HTMLDivElement>,
     trackId: GlobalTrackId,
   ) {
+    if (combinedMenu) {
+      showCombinedMenu(event, trackId);
+      return;
+    }
     event.stopPropagation();
     if (!removeTracks && !addToLibrary && !playlistOptions) {
       setOpenMenu({
@@ -273,16 +286,20 @@ export function TrackList({
     });
   }
 
+  function showCombinedMenu(event: React.MouseEvent<HTMLDivElement>, trackId: GlobalTrackId) {
+    setOpenMenu({ kind: "combined", trackId, ...songMenuPosition(event), extendSelection: event.shiftKey });
+  }
+
   // Stable event entry point lets playback clock updates skip every unchanged row.
   const actions = useRef<(action: RowAction, event: React.MouseEvent<HTMLDivElement>, index: number) => void>(() => {});
   actions.current = (action, event, index) => {
     const track = tracks[index];
     if (!track) return;
-    if (!isTrackAvailable(track, connected) && action !== "collection") return;
-    if (!isTrackAvailable(track, connected) && !removeTracks) return;
+    const available = isTrackAvailable(track, connected);
+    if (!available && (!removeTracks || (action !== "collection" && action !== "combined"))) return;
     if (
       suppressClick.current &&
-      ["select", "playback", "collection", "play"].includes(action)
+      ["select", "playback", "collection", "combined", "play", "start"].includes(action)
     ) {
       return;
     }
@@ -291,8 +308,12 @@ export function TrackList({
       case "playback": showPlaybackMenu(event, track.globalId); break;
       case "context": handleTrackContextMenu(event, index); break;
       case "collection": showCollectionMenu(event, track.globalId); break;
-      // The song already playing pauses or resumes where it is, rather than starting over.
-      case "play": if (track.globalId === nowPlaying.trackId) nowPlaying.togglePlayback(); else playTrack(track.globalId); break;
+      case "combined": showCombinedMenu(event, track.globalId); break;
+      case "play":
+      case "start":
+        if (track.globalId !== nowPlaying.trackId) playTrack(track.globalId);
+        else if (action === "play" || !nowPlaying.isPlaying) nowPlaying.togglePlayback();
+        break;
       case "cancelWarm": clearTimeout(warmTimer.current); break;
       case "warm":
         clearTimeout(warmTimer.current);
@@ -322,7 +343,7 @@ export function TrackList({
           playNext={playNext}
         />
       )}
-      {openMenu?.kind === "collection" && (
+      {openMenu && openMenu.kind !== "playback" && (
         <TrackCollectionMenu
           trackId={openMenu.trackId}
           playlistOptions={playlistOptions}
@@ -330,7 +351,18 @@ export function TrackList({
           xPos={openMenu.x}
           yPos={openMenu.y}
           flipY={openMenu.flipY}
+          returnFocusTo={openMenu.returnFocusTo}
+          instant={openMenu.instant}
           actions={[
+            ...(openMenu.kind === "combined" && menuTrack && isTrackAvailable(menuTrack, connected) ? [
+              ...(menuTrack.globalId === nowPlaying.trackId && nowPlaying.isPlaying ? [pauseTrackAction(nowPlaying.togglePlayback)] : []),
+              ...trackPlaybackActions(menuTrack.globalId, { playTrack, playStandalone, addToQueue, playNext }),
+              ...(removeTracks ? [{
+                label: selection.selectedIds.has(menuTrack.globalId) ? "Deselect Song" : "Select Song",
+                icon: selection.selectedIds.has(menuTrack.globalId) ? "/select.svg" : "/no-select.svg",
+                onSelect: () => selection.toggle(selectableIds.indexOf(menuTrack.globalId), Boolean(openMenu.extendSelection)),
+              }] : []),
+            ] : []),
             ...(removeTracks ? [{
               label: removalLabel,
               icon: "/delete.svg",
@@ -342,7 +374,7 @@ export function TrackList({
               icon: "/add.svg",
               onSelect: () => addToLibrary(openMenu.trackId),
             }] : []),
-            { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(tracks.find(track => track.globalId === openMenu.trackId) ?? null) },
+            ...(openMenu.kind === "collection" ? [{ label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuTrack ?? null) }] : []),
           ]}
         />
       )}
@@ -385,8 +417,9 @@ export function TrackList({
             onOpenEntity={onOpenEntity && isTrackAvailable(track, connected) ? openEntity : undefined} saved={savedTrackIds?.has(track.globalId)} showTrackNumbers={showTrackNumbers} showRank={showRank} showDiscNumbers={showDiscNumbers} showArtwork={showArtwork}
             selected={selection.selectedIds.has(track.globalId)}
             selecting={selection.isSelecting && isTrackAvailable(track, connected)}
+            combinedMenu={combinedMenu}
             menuOpen={openMenu?.trackId === track.globalId}
-            collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind === "collection"}
+            collectionMenuOpen={openMenu?.trackId === track.globalId && openMenu.kind !== "playback"}
             showProviderIcon={showProviderIcon}
             reorderable={Boolean(reorderTracks) && isTrackAvailable(track, connected)}
             dragging={draggedTrackId === track.globalId || Boolean(draggedPackage?.includes(track.globalId))}
@@ -410,8 +443,8 @@ export function TrackList({
   );
 }
 
-type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, position, available, removable, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, nowPlaying, onAction, onPointerDown }: {
+type RowAction = "select" | "playback" | "context" | "collection" | "combined" | "play" | "start" | "warm" | "cancelWarm";
+const TrackRow = memo(function TrackRow({ track, index, position, available, removable, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, combinedMenu, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, nowPlaying, onAction, onPointerDown }: {
   track: Track;
   available: boolean;
   removable: boolean;
@@ -426,6 +459,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
   showArtwork: boolean;
   selected: boolean;
   selecting: boolean;
+  combinedMenu: boolean;
   menuOpen: boolean;
   collectionMenuOpen: boolean;
   showProviderIcon: boolean;
@@ -463,9 +497,10 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
       data-track-id={track.globalId}
       data-virtual-item=""
       draggable={false}
-      onClickCapture={(event) => onAction("select", event, index)}
-      onClick={(event) => onAction("playback", event, index)}
-      onContextMenu={(event) => onAction("context", event, index)}
+      onClickCapture={combinedMenu ? suppressSongClick : event => onAction("select", event, index)}
+      onClick={combinedMenu ? undefined : event => onAction("playback", event, index)}
+      onContextMenu={event => onAction(combinedMenu ? "combined" : "context", event, index)}
+      onDoubleClick={combinedMenu ? event => playSongOnDoubleClick(event, () => onAction("start", event, index)) : undefined}
       onPointerDown={available ? (event) => onPointerDown(event, index) : undefined}
       onDragStart={(event) => event.preventDefault()}
     >
@@ -503,8 +538,8 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
         type="button"
         className="trackCollectionMenuTrigger"
         disabled={!available && !removable}
-        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
-        aria-expanded={selecting ? undefined : collectionMenuOpen}
+        aria-label={`${selecting && !combinedMenu ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
+        aria-expanded={selecting && !combinedMenu ? undefined : collectionMenuOpen}
         onClick={(event) => onAction("collection", event, index)}
         data-collection-menu-trigger
         data-collection-menu-open={collectionMenuOpen ? "true" : undefined}

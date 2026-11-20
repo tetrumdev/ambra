@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { HomeView } from "../src/components/HomeView";
 import { updateServiceAvailability } from "../src/hooks/useServiceAvailability";
 import type { Track } from "../src/types/music";
+import { SongContextMenu } from "../src/utils/trackMenu";
 
 const dom = new Window({ url: "http://localhost/" });
 const originalFetch = globalThis.fetch;
@@ -34,12 +35,12 @@ afterEach(async () => {
 });
 afterAll(() => { globalThis.fetch = originalFetch; dom.happyDOM.abort(); });
 
-async function mount() {
+async function mount(combinedMenu = false) {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => {
-    root.render(<HomeView entries={[]} tracks={[]} playlists={[]} error={null}
+    root.render(<SongContextMenu.Provider value={combinedMenu}><HomeView entries={[]} tracks={[]} playlists={[]} error={null}
       onAction={(action, tracks, id) => actions.push([action, tracks, id])} onSelectPlaylist={() => {}}
-      registerScrollElement={() => {}} />);
+      registerScrollElement={() => {}} /></SongContextMenu.Provider>);
   });
 }
 
@@ -83,6 +84,33 @@ test("keyboard menu supports playback, queue, next, standalone and Escape", asyn
   await act(async () => { trigger.click(); });
   await act(async () => { document.querySelector('[role="menu"]')!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", bubbles: true }) as unknown as KeyboardEvent); });
   expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
+test("combined song menu opens instantly on right-click and double-click plays the song card", async () => {
+  next = { ...next, tracks: [track], status: "ready" };
+  await mount(true);
+  const card = container.querySelector('section[aria-label="Discover"] .homeCardTitle')!;
+  const menu = () => document.querySelector<HTMLElement>("#trackPlaybackMenu");
+  const mouse = (type: string, detail: number, button = 0, clientX = 0, clientY = 0) => act(async () => {
+    card.dispatchEvent(new dom.MouseEvent(type, { detail, button, clientX, clientY, bubbles: true, cancelable: true }) as unknown as MouseEvent);
+  });
+  await mouse("click", 1);
+  expect(menu()).toBeNull();
+  await mouse("contextmenu", 0, 2, 65, 115);
+  expect(menu()?.textContent).toContain("Add to Queue");
+  expect(menu()?.style.animation).toBe("none");
+  expect([menu()?.style.left, menu()?.style.top]).toEqual(["65px", "115px"]);
+  await mouse("contextmenu", 0, 2, 220, 120);
+  expect([menu()?.style.left, menu()?.style.top]).toEqual(["220px", "120px"]);
+  expect(document.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
+  await act(async () => document.querySelector<HTMLElement>("#trackMenuBackdrop")!.click());
+  await mouse("click", 1);
+  await mouse("click", 2);
+  expect(actions).toHaveLength(0);
+  await mouse("dblclick", 2);
+  expect(menu()).toBeNull();
+  expect(actions.map(([action, tracks, id]) => [action, tracks.map(song => song.globalId), id]))
+    .toEqual([["play", [track.globalId], track.globalId]]);
 });
 
 test("rerenders avoid duplicate requests; reconnect refreshes the row", async () => {

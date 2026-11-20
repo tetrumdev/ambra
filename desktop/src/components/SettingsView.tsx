@@ -87,7 +87,7 @@ function usePlayingOn() {
 
 type SettingsPreferences = Pick<AppPreferences["ui"],
   "showAudioQuality" | "reduceMotion" | "animateSwirl" | "lyricMotion" | "maxAnimationFps"
-  | "autoSyncLyrics" | "lyricsOffsetMs" | "servicePlaylistVisibility" | "shortcuts"
+  | "autoSyncLyrics" | "lyricsOffsetMs" | "servicePlaylistVisibility" | "shortcuts" | "songContextMenu"
 >;
 
 type SettingsViewProps = {
@@ -109,7 +109,7 @@ export function SettingsView({
 }: SettingsViewProps) {
   const {
     showAudioQuality, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps,
-    autoSyncLyrics, lyricsOffsetMs, servicePlaylistVisibility, shortcuts,
+    autoSyncLyrics, lyricsOffsetMs, servicePlaylistVisibility, shortcuts, songContextMenu,
   } = preferences;
   const audio = useAudioSettings()!;
   const [presetId, setPresetId] = useState<string | null>(null);
@@ -182,6 +182,12 @@ export function SettingsView({
               }} />
             <small>ms</small>
           </span>
+        </SettingRow>
+      </div>
+      <div className="settingsGroup">
+        <h2>Song controls</h2>
+        <SettingRow label="Combined song menu" help="Right-click a song to open its menu instantly. Double-click to play it. A single left-click does nothing.">
+          <Toggle label="Combined song menu" checked={songContextMenu} onChange={songContextMenu => onPreferencesChange({ songContextMenu })} />
         </SettingRow>
       </div>
       <PreferredServiceSetting />

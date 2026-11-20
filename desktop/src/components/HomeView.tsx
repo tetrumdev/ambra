@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -12,7 +13,7 @@ import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
-import { isKeyboardMenuClick } from "../utils/trackMenu";
+import { SongContextMenu, isKeyboardMenuClick, playSongOnDoubleClick, songMenuPosition, suppressSongClick } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
@@ -105,7 +106,7 @@ function HomeRow({
 
 type OnAction = (action: EntityAction, tracks: Track[], id?: string) => void;
 
-/** Like a track row: the card opens the playback menu, and only its play button plays at once. */
+/** Song cards offer the same playback actions as track rows. */
 function SongCards({
   tracks,
   onAction,
@@ -114,13 +115,20 @@ function SongCards({
   onAction: OnAction;
 }) {
   const connected = useServiceAvailability();
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number; openedWithKeyboard: boolean } | null>(
+  const combinedMenu = useContext(SongContextMenu);
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; openedWithKeyboard: boolean; instant?: boolean } | null>(
     null,
   );
+  useEffect(() => setMenu(null), [combinedMenu]);
   return (
     <>
       {tracks.map((track) => (
-        <li className="homeCard" key={track.globalId} data-unavailable={!isTrackAvailable(track, connected) ? "true" : undefined}>
+        <li className="homeCard" key={track.globalId} data-unavailable={!isTrackAvailable(track, connected) ? "true" : undefined}
+          onClickCapture={combinedMenu ? suppressSongClick : undefined}
+          onContextMenu={combinedMenu && isTrackAvailable(track, connected) ? event =>
+            setMenu({ id: track.globalId, ...songMenuPosition(event), openedWithKeyboard: false }) : undefined}
+          onDoubleClick={combinedMenu && isTrackAvailable(track, connected) ? event =>
+            playSongOnDoubleClick(event, () => onAction("play", tracks, track.globalId)) : undefined}>
           <button
             className="homeCardButton"
             disabled={!isTrackAvailable(track, connected)}
@@ -169,6 +177,7 @@ function SongCards({
             yPos={menu.y}
             trackId={menu.id}
             openedWithKeyboard={menu.openedWithKeyboard}
+            instant={menu.instant}
             playTrack={(id) => onAction("play", tracks, id)}
             playStandalone={(id) => onAction("standalone", tracks, id)}
             addToQueue={(id) =>

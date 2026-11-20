@@ -290,6 +290,157 @@ test("the sidebar divider clamps drag and keyboard resizing and restores the cho
   }
 });
 
+test("General can combine song menus without triggering actions from single clicks", async () => {
+  const { default: App } = await import("../src/App");
+  const { AudioSettingsProvider } = await import("../src/hooks/AudioSettingsContext");
+  const { defaultAudioSettings } = await import("../src/utils/audioSettings");
+  const { loadPreferences, preferencesKey } = await import("../src/utils/preferences");
+  const audio = { native: false, load: async () => defaultAudioSettings(), devices: async () => [], save: async () => {} };
+  const tracks = [song("Combined first"), song("Combined second")];
+  const [first, second] = tracks;
+  const fixture = {
+    [preferencesKey]: { version: 4, ui: {} },
+    "ambra.device-view.v1": { version: 4, ui: { screen: "home" } },
+    "ambra.playback.v1": { trackId: first.globalId, positionSeconds: 0 },
+    "ambra.queue.v1": queueSnapshot([], queueSong(first, 0), [queueSong(second, 1)]),
+    [PLAYLIST_STORAGE_KEY]: { version: 1, tracks, playlists: [
+      { id: "combined", name: "Combined test playlist", trackIds: tracks.map(track => track.globalId) },
+    ] },
+  };
+  const previous = Object.keys(fixture).map(key => [key, localStorage.getItem(key)] as const);
+  for (const [key, value] of Object.entries(fixture)) localStorage.setItem(key, JSON.stringify(value));
+
+  const viewport = document.createElement("div");
+  viewport.className = "appViewport";
+  document.body.append(viewport);
+  const root = createRoot(viewport);
+  const find = (selector: string, parent: ParentNode = viewport) => {
+    const target = parent.querySelector<HTMLElement>(selector);
+    expect(target).not.toBeNull();
+    return target!;
+  };
+  const click = (selector: string) => act(async () => find(selector).click());
+  const mouse = (target: Element, type: string, detail: number, button = 0, clientX = 0, clientY = 0) => act(async () => {
+    target.dispatchEvent(new dom.MouseEvent(type, { button, detail, clientX, clientY, bubbles: true, cancelable: true }) as unknown as MouseEvent);
+  });
+  const row = (track: Track) => find(`main .libraryItem[data-track-id="${track.globalId}"]`);
+  const menu = () => viewport.querySelector("#trackMenuBackdrop");
+  const labels = () => [...menu()!.querySelectorAll("button")].map(button => button.textContent?.trim());
+  const removedActions = ["Go to Album", "Go to Artist", "Credits", "Resume"];
+  const selectAction = (label: string) => act(async () => {
+    const action = [...menu()!.querySelectorAll("button")].find(button => button.textContent?.trim() === label);
+    expect(action).toBeDefined();
+    action!.click();
+  });
+  const trigger = '[aria-label="Combined song menu"]';
+  const openPlaylist = () => click('[data-tooltip="Combined test playlist"].sidebarPlaylistName');
+
+  try {
+    await act(async () => root.render(<AudioSettingsProvider api={audio}><App localOnly /></AudioSettingsProvider>));
+    await openPlaylist();
+    await mouse(find(".trackName", row(second)), "click", 1);
+    expect(menu()?.querySelector("#trackPlaybackMenu")).not.toBeNull();
+    await click("#trackMenuBackdrop");
+
+    await click(".sidebarSettingsButton");
+    expect((find(trigger) as HTMLInputElement).checked).toBe(false);
+    await click(trigger);
+    expect(loadPreferences().ui.songContextMenu).toBe(true);
+    await click(".settingsBack");
+    await openPlaylist();
+
+    const nestedTrigger = find(".trackCollectionMenuTrigger", row(second));
+    await mouse(find(".trackPlayButton", row(second)), "click", 1);
+    await mouse(nestedTrigger, "click", 1);
+    expect(menu()).toBeNull();
+    expect(loadPreferences().playback.trackId).toBe(first.globalId);
+
+    await mouse(row(second), "contextmenu", 0, 2, 35, 40);
+    const combinedActions = labels();
+    expect(combinedActions).toEqual(expect.arrayContaining(["Play from Here", "Add to Queue", "Add to Playlist", "Select Song"]));
+    expect(combinedActions.filter(label => label && removedActions.includes(label))).toEqual([]);
+    expect(viewport.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
+    expect(menu()?.hasAttribute("data-song-context-menu")).toBe(true);
+    const panel = find("#trackCollectionMenu");
+    expect(panel.style.animation).toBe("none");
+    expect([panel.style.left, panel.style.top]).toEqual(["35px", "40px"]);
+    panel.getBoundingClientRect = () => new dom.DOMRect(0, 0, 220, 300);
+    await selectAction("Add to Playlist");
+    expect(menu()?.querySelector(".playlistMenuList")).not.toBeNull();
+    await mouse(row(first), "contextmenu", 0, 2, 310, 155);
+    const moved = find("#trackCollectionMenu");
+    expect([moved.style.left, moved.style.top]).toEqual(["310px", "155px"]);
+    expect(labels()).toContain("Play from Here");
+    expect(labels().filter(label => label && removedActions.includes(label))).toEqual([]);
+    expect(moved.style.animation).toBe("none");
+    expect(row(first).dataset.menuOpen).toBe("true");
+    expect(document.querySelector('#trackCollectionMenu[aria-hidden="true"]')).toBeNull();
+    await mouse(find(".sidebarSettingsButton"), "click", 1);
+    expect(menu()).toBeNull();
+    expect(viewport.querySelector(trigger)).toBeNull();
+
+    await act(async () => { nestedTrigger.focus(); nestedTrigger.click(); });
+    expect(labels()).toEqual(combinedActions);
+    expect(find("#trackCollectionMenu").style.animation).toBe("");
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new dom.KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }) as unknown as KeyboardEvent);
+    });
+    expect(menu()).toBeNull();
+    expect(document.activeElement).toBe(nestedTrigger);
+
+    await mouse(row(second), "contextmenu", 0, 2);
+    await selectAction("Select Song");
+    expect(row(second).dataset.selected).toBe("true");
+    await mouse(row(first), "click", 1);
+    expect(row(first).dataset.selected).toBeUndefined();
+    expect(menu()).toBeNull();
+
+    await click("#queueBtn");
+    const queued = find('#playbackSidebar [aria-label="Upcoming songs"] .libraryItem');
+    await mouse(row(second), "contextmenu", 0, 2, 35, 40);
+    await mouse(queued, "contextmenu", 0, 2);
+    expect(viewport.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
+    expect(labels()).toEqual(expect.arrayContaining(["Play from Here", "Move to Front", "Remove from Queue", "Add to Playlist"]));
+    expect(labels().filter(label => label && removedActions.includes(label))).toEqual([]);
+    await click("#trackMenuBackdrop");
+    await mouse(queued, "dblclick", 2);
+    expect(menu()).toBeNull();
+    expect(loadPreferences().playback.trackId).toBe(second.globalId);
+
+    const firstTrigger = find(".trackCollectionMenuTrigger", row(first));
+    await mouse(firstTrigger, "click", 1);
+    await mouse(firstTrigger, "click", 2);
+    expect(menu()).toBeNull();
+    expect(loadPreferences().playback.trackId).toBe(second.globalId);
+    await mouse(firstTrigger, "dblclick", 2);
+    expect(menu()).toBeNull();
+    expect(loadPreferences().playback.trackId).toBe(first.globalId);
+
+    const newQueued = find('#playbackSidebar [aria-label="Upcoming songs"] .libraryItem');
+    await mouse(newQueued, "contextmenu", 0, 2);
+    await selectAction("Remove from Queue");
+    expect(newQueued.isConnected).toBe(false);
+
+    await click(".sidebarSettingsButton");
+    await click(trigger);
+    expect(loadPreferences().ui.songContextMenu).toBe(false);
+    await click(".settingsBack");
+    await openPlaylist();
+    await mouse(find(".trackName", row(second)), "click", 1);
+    expect(menu()?.querySelector("#trackPlaybackMenu")).not.toBeNull();
+    await click("#trackMenuBackdrop");
+    await act(async () => find(".trackCollectionMenuTrigger", row(second)).click());
+    expect(labels()).toContain("Credits");
+  } finally {
+    await act(async () => root.unmount());
+    viewport.remove();
+    for (const [key, value] of previous) {
+      if (value === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, value);
+    }
+  }
+});
+
 test("page history restores scroll positions and clears the page filter across visits", async () => {
   const { default: App } = await import("../src/App");
   const { AudioSettingsProvider } = await import("../src/hooks/AudioSettingsContext");
