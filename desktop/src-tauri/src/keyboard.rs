@@ -106,6 +106,28 @@ unsafe extern "system" fn menu_focus_filter(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
+// A Force Touch trackpad taps back while the fingers are still on it, so a swipe can be
+// felt crossing its threshold. Synchronous commands run on the main thread, as AppKit expects.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+pub fn trackpad_haptic() {
+    use cocoa::base::id;
+    use objc::{class, msg_send, sel, sel_impl};
+
+    const ALIGNMENT: isize = 1; // NSHapticFeedbackPatternAlignment
+    const NOW: usize = 1; // NSHapticFeedbackPerformanceTimeNow
+    unsafe {
+        let performer: id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
+        if !performer.is_null() {
+            let _: () = msg_send![performer, performFeedbackPattern: ALIGNMENT performanceTime: NOW];
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+#[tauri::command]
+pub fn trackpad_haptic() {}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 pub fn native_function_modifier_pressed() -> bool {

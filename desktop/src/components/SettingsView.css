@@ -22,6 +22,9 @@
     border-right: 1px solid #535353;
     overflow-y: auto;
     font-family: "Stack Sans Text", sans-serif;
+    /* Above the page, which slides beneath it while a swipe drags it. */
+    z-index: 1;
+    background: var(--surface-black);
 }
 
 .settingsSidebar h2 {

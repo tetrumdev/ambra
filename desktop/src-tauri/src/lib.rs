@@ -1134,6 +1134,7 @@ pub fn run() {
             open_local_music_directory,
             scan_music,
             keyboard::native_function_modifier_pressed,
+            keyboard::trackpad_haptic,
             window_drag::set_window_drag_regions,
             window_drag::start_window_drag,
             native_audio::load_native_audio,

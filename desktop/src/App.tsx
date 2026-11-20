@@ -756,7 +756,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       <AppScrollbar scrollElement={activeScrollElement} hidden={isPlayerView} />
       <ShortcutToast />
       <MusicDropZone onImport={library.importFiles} />
-      <NavigationSwipe canNavigate={canNavigate} navigate={navigate} contextKey={`${screen}:${viewKey}:${settingsTab}`} />
+      <NavigationSwipe canNavigate={canNavigate} navigate={navigate} screenRef={mainRef} contextKey={`${screen}:${viewKey}:${settingsTab}`} />
     </>
   );
 }
