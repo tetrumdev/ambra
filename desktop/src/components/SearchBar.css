@@ -1,6 +1,7 @@
 #searchBar {
     position: absolute;
-    right: 20px;
+    /* The screen's right edge moves when the scrollbar column collapses. */
+    right: calc(34px - var(--scrollbar-column-width));
     z-index: 10;
     display: flex;
     top: 10px;
