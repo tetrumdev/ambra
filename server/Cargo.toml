@@ -41,7 +41,10 @@ tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["io", "rt"] }
-tract-onnx = "0.21"
+tract-onnx = "0.23"
+# Lets one chunk of vocal separation be split across threads (src/vocal_timing.rs).
+tract-linalg = { version = "0.23", features = ["multithread-mm"] }
+rayon = "1"
 tower-http = { version = "0.7.0", features = ["compression-gzip", "cors", "fs"] }
 urlencoding = "2"
 rusqlite = { version = "0.41.0", features = ["bundled"] }
@@ -60,7 +63,7 @@ windows = { version = "0.62", features = [
     "Win32_Devices_FunctionDiscovery", "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_JobObjects", "Win32_System_Diagnostics_ToolHelp", "Win32_Security",
 ] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_Graphics_Gdi", "Win32_System_Threading", "Win32_System_SystemInformation"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -76,6 +79,10 @@ librespot-core = { path = "vendor/librespot-core" }
 tokio = { version = "1", features = ["test-util"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+
+[target.'cfg(windows)'.dev-dependencies]
+# The vocal timing benchmark (src/vocal_timing.rs) reads the process's peak memory.
+windows-sys = { version = "0.61", features = ["Win32_System_ProcessStatus"] }
 
 # Development builds are what gets run day to day, often as the machine's own server. Left
 # unoptimized, one answered requests 5x slower (parsing and writing JSON, mostly). Light

@@ -17,6 +17,7 @@ import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { VirtualSpacer } from "./VirtualSpacer";
+import "./LibraryView.css";
 import "./PlaybackSidebar.css";
 
 const views = [
@@ -155,7 +156,7 @@ function PlaybackSidebarResize({ preferredWidth }: { preferredWidth: RefObject<n
   );
 }
 
-const ROW_HEIGHT = 56;
+const ROW_HEIGHT = 64;
 const VIRTUALIZE_AFTER_ROWS = 120;
 
 type SidebarEntry = { id: string; track: Track; queueId?: QueueId; historyId?: string; current?: boolean };
@@ -164,14 +165,6 @@ type SidebarMenu =
   | { kind: "selection"; anchor: HTMLButtonElement; x: number; y: number; flipY: number };
 type RowAction = "play" | "playback" | "collection" | "select";
 type EntryAction = (action: RowAction, event: MouseEvent<HTMLElement>, entry: SidebarEntry) => void;
-
-function formatDuration(durationSeconds: number) {
-  const seconds = Math.max(0, Math.floor(durationSeconds));
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = String(seconds % 60).padStart(2, "0");
-  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${rest}` : `${minutes}:${rest}`;
-}
 
 function SidebarTracks({
   view, currentTrack, isPlaying, onTogglePlayback, upcoming: upcomingEntries, history: historyEntries,
@@ -359,26 +352,23 @@ function SidebarTracks({
         tracks={[...new Map(selected.map(({ track }) => [track.globalId, track])).values()]}
         startWithPlaylistPicker playlistOptions={playlistOptions} xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu} />}
 
-      {selection.isSelecting && <div className="playbackSidebarSelection" role="group" aria-label="Selected songs">
-        <span className="playbackSidebarSelectionCount" aria-live="polite">{selected.length} selected</span>
-        {queueView && <button type="button" className="playbackSidebarPill" data-tone="danger" disabled={!selected.length}
+      {selection.isSelecting && <div className="selectionActionMenu playbackSidebarSelection" role="group" aria-label="Selected songs">
+        {queueView && <button type="button" className="selectionRemoveAction" disabled={!selected.length}
           onClick={() => removeEntries(selected)}>Remove</button>}
-        <button type="button" className="playbackSidebarPill" disabled={!selected.length} onClick={event => {
+        <button type="button" disabled={!selected.length} onClick={event => {
           const anchor = event.currentTarget;
           const rect = anchor.getBoundingClientRect();
           setMenu({ kind: "selection", anchor, x: Math.max(8, rect.right - MENU_WIDTH), y: rect.bottom + 4, flipY: rect.top - 4 });
         }}>Add to Playlist</button>
-        <button type="button" className="playbackSidebarPill" onClick={selection.clear}>Cancel</button>
+        <button type="button" onClick={selection.clear}>Cancel</button>
       </div>}
 
       <div className="playbackSidebarScroll" ref={scroller} data-selecting={selection.isSelecting || undefined}>
         {queueView ? <>
-          {history.length > 0 && <div className="playbackSidebarHistoryBar">
+          {history.length > 0 && <div className="playbackSidebarHeading playbackSidebarHistoryBar">
             <button type="button" className="playbackSidebarHistoryToggle" aria-expanded={historyOpen}
               aria-controls="playbackSidebarHistory" onClick={toggleHistory}>
-              <DropdownChevron />
-              <span>Played</span>
-              <span className="playbackSidebarCount">{history.length}</span>
+              <DropdownChevron />Played ({history.length})
             </button>
             {historyOpen && <button type="button" className="playbackSidebarTextButton"
               onClick={() => removeEntries(history)}>Clear</button>}
@@ -388,14 +378,16 @@ function SidebarTracks({
           <section className="playbackSidebarSection" ref={nowPlayingRef} aria-labelledby="playbackSidebarNowPlaying">
             <h2 className="playbackSidebarHeading" id="playbackSidebarNowPlaying">Now Playing</h2>
             {current
-              ? <NowPlayingCard entry={current} isPlaying={isPlaying} menuOpen={menuId === current.id}
-                  onAction={onAction} onOpenEntity={onOpenEntity} />
+              ? <div className="playbackSidebarRows" role="list" aria-label="Now playing">
+                  <SidebarRow entry={current} index={0} isPlaying={isPlaying} {...rowProps}
+                    selected={false} menuOpen={menuId === current.id} dragging={false} />
+                </div>
               : <p className="playbackSidebarMessage">Nothing is playing.</p>}
           </section>
 
           <section className="playbackSidebarSection" aria-labelledby="playbackSidebarUpNext">
-            <div className="playbackSidebarSectionHeader">
-              <h2 className="playbackSidebarHeading" id="playbackSidebarUpNext">Up Next</h2>
+            <div className="playbackSidebarHeading">
+              <h2 id="playbackSidebarUpNext">Up Next</h2>
               {upcoming.length > 0 && <>
                 <span className="playbackSidebarMeta">
                   {upcoming.length.toLocaleString()} {upcoming.length === 1 ? "song" : "songs"} · {formatTotalDuration(upcomingDuration)}
@@ -405,7 +397,7 @@ function SidebarTracks({
             </div>
             {upcoming.length > 0
               ? <SidebarRows label="Upcoming songs" entries={upcoming} onPointerDown={onPointerDown} {...rowProps} />
-              : <p className="playbackSidebarMessage">Songs you queue show up here. Add some with “Play Next” or “Add to Queue”.</p>}
+              : <p className="playbackSidebarMessage">Nothing up next.</p>}
           </section>
         </> : <section className="playbackSidebarSection" aria-label="Recently played songs">
           {recentError && <p className="playbackSidebarMessage" role="alert">{recentError}</p>}
@@ -453,26 +445,9 @@ function SidebarRows({ id, label, entries, selectedIds, menuId, draggedId, dropT
   );
 }
 
-/** Play or pause over a song's cover; shown on hover, and always for the song that is playing. */
-function ArtworkButton({ track, playing, label, disabled, onClick }: {
-  track: Track;
-  playing: boolean;
-  label: string;
-  disabled?: boolean;
-  onClick: (event: MouseEvent<HTMLButtonElement>) => void;
-}) {
-  return (
-    <div className="playbackSidebarArtwork">
-      <TrackArtwork track={track} alt="" className="playbackSidebarCover" draggable={false} />
-      <button type="button" className="playbackSidebarArtworkButton" aria-label={label} disabled={disabled} onClick={onClick}>
-        <img src={playing ? "/pause.svg" : "/play.svg"} alt="" />
-      </button>
-    </div>
-  );
-}
-
+/** A song row with the same parts, classes and gestures as every other song list (TrackList.tsx). */
 const SidebarRow = memo(function SidebarRow({
-  entry, index, selecting: selectionActive, selected, menuOpen, menuKind, onAction, onOpenEntity,
+  entry, index, selecting: selectionActive, selected, menuOpen, menuKind, isPlaying = false, onAction, onOpenEntity,
   onPointerDown, dragging, dropPosition,
 }: Omit<RowsProps, "selectedIds" | "menuId" | "draggedId" | "dropTarget"> & {
   entry: SidebarEntry;
@@ -480,82 +455,55 @@ const SidebarRow = memo(function SidebarRow({
   selected: boolean;
   menuOpen: boolean;
   dragging: boolean;
+  isPlaying?: boolean;
   dropPosition?: DropPosition;
 }) {
   const connected = useServiceAvailability();
   const { track } = entry;
   const available = isTrackAvailable(track, connected);
-  const selecting = selectionActive && available;
+  const selecting = selectionActive && available && !entry.current;
   const collectionOpen = menuOpen && menuKind === "collection";
-  const played = entry.historyId !== undefined;
+  const pausing = entry.current && isPlaying;
   return (
-    <div className="playbackSidebarRow" role="listitem" data-track-id={entry.id} data-virtual-item=""
-      data-unavailable={!available || undefined} data-played={played || undefined}
-      data-selecting={selecting || undefined} data-selected={selected || undefined}
-      data-menu-open={menuOpen || undefined} data-reorderable={(onPointerDown && available) || undefined}
-      data-dragging={dragging || undefined} data-drop-position={dropPosition}
+    <div className="libraryItem playbackSidebarRow" role="listitem" data-track-id={entry.id} data-virtual-item=""
+      data-unavailable={!available ? "true" : undefined} data-played={entry.historyId !== undefined ? "true" : undefined}
+      data-now-playing={entry.current ? isPlaying ? "playing" : "paused" : undefined}
+      aria-current={entry.current ? "true" : undefined}
+      data-selecting={selecting ? "true" : undefined} data-selected={selected ? "true" : undefined}
+      data-menu-open={menuOpen ? "true" : undefined} data-reorderable={onPointerDown && available ? "true" : undefined}
+      data-dragging={dragging ? "true" : undefined} data-drop-position={dropPosition}
       onPointerDown={onPointerDown && available ? event => onPointerDown(event, index) : undefined}
-      onClickCapture={event => {
+      onClickCapture={entry.current ? undefined : event => {
         if (selecting || ((event.shiftKey || event.metaKey || event.ctrlKey) && available)) onAction("select", event, entry);
       }}
       onClick={event => onAction("playback", event, entry)}
-      onContextMenu={event => onAction("select", event, entry)}
+      onContextMenu={entry.current ? undefined : event => onAction("select", event, entry)}
       onDragStart={event => event.preventDefault()} draggable={false}>
-      <ArtworkButton track={track} playing={false} disabled={!available}
-        label={`${played ? "Play again" : entry.queueId !== undefined ? "Play from" : "Play"} ${track.name}`}
-        onClick={event => onAction("play", event, entry)} />
-      <div className="playbackSidebarRowText" inert={!available}>
-        <button type="button" className="playbackSidebarRowTitle" data-playback-menu-trigger
-          aria-label={`Playback options for ${track.name}`} onClick={event => onAction("playback", event, entry)}>
-          {track.name}
+      <div className="trackLeading" inert={!available && !entry.current}>
+        <button type="button" className="trackPlayButton" disabled={!available && !entry.current}
+          aria-label={`${pausing ? "Pause" : entry.historyId !== undefined ? "Play again" : "Play"} ${track.name}`}
+          onClick={event => onAction("play", event, entry)}>
+          <img src={pausing ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
-        <span className="playbackSidebarRowArtists">
-          <ArtistLinks track={track} onOpenEntity={onOpenEntity} />
-        </span>
+        <div className="coverImgContainer" data-playback-menu-trigger>
+          <TrackArtwork track={track} alt="" className="coverImg" draggable={false} />
+        </div>
       </div>
-      <div className="playbackSidebarRowEnd">
-        <span className="playbackSidebarDuration" aria-hidden={selecting || undefined}>{formatDuration(track.durationSeconds)}</span>
-        <button type="button" className="playbackSidebarMenuButton"
-          disabled={!available && entry.queueId === undefined && entry.historyId === undefined}
-          aria-label={`${selecting ? selected ? "Deselect" : "Select" : "More options for"} ${track.name}`}
-          aria-pressed={selecting ? selected : undefined}
-          aria-haspopup={selecting ? undefined : "menu"}
-          aria-expanded={selecting ? undefined : collectionOpen}
-          data-collection-menu-trigger data-collection-menu-open={collectionOpen || undefined}
-          onClick={event => onAction("collection", event, entry)}>
-          <img src={selecting ? selected ? "/select.svg" : "/no-select.svg" : "/menu.svg"} alt="" />
-        </button>
-      </div>
-    </div>
-  );
-});
-
-function NowPlayingCard({ entry, isPlaying, menuOpen, onAction, onOpenEntity }: {
-  entry: SidebarEntry;
-  isPlaying: boolean;
-  menuOpen: boolean;
-  onAction: EntryAction;
-  onOpenEntity: (entity: BrowseEntity) => void;
-}) {
-  const { track } = entry;
-  return (
-    <div className="playbackSidebarNowPlaying" data-playing={isPlaying || undefined} data-menu-open={menuOpen || undefined}>
-      <ArtworkButton track={track} playing={isPlaying} label={`${isPlaying ? "Pause" : "Play"} ${track.name}`}
-        onClick={event => onAction("play", event, entry)} />
-      <div className="playbackSidebarNowPlayingText">
-        <span className="playbackSidebarNowPlayingTitle" title={track.name}>{track.name}</span>
-        <span className="playbackSidebarRowArtists"><ArtistLinks track={track} onOpenEntity={onOpenEntity} /></span>
-        <span className="playbackSidebarRowArtists">
-          <button type="button" className="entityLink" onClick={() => onOpenEntity({ kind: "album", album: albumForTrack(track) })}>
-            {track.album}
-          </button>
-        </span>
-      </div>
-      <button type="button" className="playbackSidebarMenuButton" aria-label={`More options for ${track.name}`}
-        aria-haspopup="menu" aria-expanded={menuOpen} data-collection-menu-open={menuOpen || undefined}
+      <span className="trackName playbackSidebarTrackText" data-playback-menu-trigger inert={!available}>
+        <span className="trackTitleText" title={track.name}>{track.name}</span>
+        <small className="playbackSidebarArtists"><ArtistLinks track={track} onOpenEntity={onOpenEntity} /></small>
+      </span>
+      <button type="button" className="trackCollectionMenuTrigger"
+        disabled={!available && entry.queueId === undefined && entry.historyId === undefined}
+        aria-label={`${selecting ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
+        aria-pressed={selecting ? selected : undefined}
+        aria-haspopup={selecting ? undefined : "menu"}
+        aria-expanded={selecting ? undefined : collectionOpen}
+        data-collection-menu-trigger data-collection-menu-open={collectionOpen && !selecting ? "true" : undefined}
         onClick={event => onAction("collection", event, entry)}>
-        <img src="/menu.svg" alt="" />
+        <img src={selecting ? selected ? "/select.svg" : "/no-select.svg" : "/menu.svg"}
+          alt="" className={selecting ? "selectionIndicator" : undefined} />
       </button>
     </div>
   );
-}
+});

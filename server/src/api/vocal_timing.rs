@@ -5,7 +5,7 @@
 //! songs playing now when the app asks ahead of playback. Lyrics asked for while it runs say
 //! so (`vocalTiming: "pending"`), and the app asks again once the curve is ready.
 use super::*;
-use crate::vocal_timing::{MODEL_BYTES, MODEL_URL, Separator, verify_model, vocal_power};
+use crate::vocal_timing::{Budget, MODEL_BYTES, MODEL_URL, Progress, Separator, verify_model, vocal_power};
 use ambra_vault::Store;
 use sha2::Digest;
 use std::{
@@ -36,6 +36,10 @@ struct Job {
     provider: String,
     track_id: String,
     background: bool,
+    /// What was finished before a song playing now cut this job off; it carries on from there.
+    progress: Progress,
+    /// The streamed song's scratch copy (file, container), kept while the job waits to resume.
+    copy: Option<(String, String)>,
 }
 
 impl Job {
@@ -137,7 +141,7 @@ impl VocalTiming {
         if !self.ready() {
             return Err(());
         }
-        let job = Job { provider: provider.to_owned(), track_id: track_id.to_owned(), background };
+        let job = Job { provider: provider.to_owned(), track_id: track_id.to_owned(), background, progress: Progress::default(), copy: None };
         let key = job.key();
         if let Some(curve) = self.cached(&key) {
             return Ok(Some(curve));
@@ -311,7 +315,7 @@ async fn install(state: AppState) {
 async fn run(state: AppState) {
     let timing = state.vocal_timing.clone();
     loop {
-        let job = loop {
+        let mut job = loop {
             if timing.ready()
                 && let Some(job) = lock(&timing.queue).pop_front()
             {
@@ -322,7 +326,7 @@ async fn run(state: AppState) {
         let key = job.key();
         let cancel = Arc::new(AtomicBool::new(false));
         *lock(&timing.running) = Some((key.clone(), job.background, cancel.clone()));
-        let result = analyze(&state, &job, cancel.clone()).await;
+        let result = analyze(&state, &mut job, cancel.clone()).await;
         *lock(&timing.running) = None;
         match result {
             Ok(power) => {
@@ -332,9 +336,12 @@ async fn run(state: AppState) {
                 lock(&timing.pending).remove(&key);
             }
             Err(_) if cancel.load(Ordering::Relaxed) => {
-                // Gave way to a song playing now, or vocal timing was turned off.
+                // Gave way to a song playing now, or vocal timing was turned off. It keeps what
+                // it finished, and waits at the front of the songs to come.
                 if lock(&timing.pending).contains(&key) {
-                    lock(&timing.queue).push_back(job);
+                    let mut queue = lock(&timing.queue);
+                    let at = queue.iter().position(|queued| queued.background).unwrap_or(queue.len());
+                    queue.insert(at, job);
                 }
             }
             Err(error) => {
@@ -346,7 +353,7 @@ async fn run(state: AppState) {
     }
 }
 
-async fn analyze(state: &AppState, job: &Job, cancel: Arc<AtomicBool>) -> Result<Vec<f64>, String> {
+async fn analyze(state: &AppState, job: &mut Job, cancel: Arc<AtomicBool>) -> Result<Vec<f64>, String> {
     let separator = {
         let timing = state.vocal_timing.clone();
         tokio::task::spawn_blocking(move || timing.separator()).await.map_err(|error| error.to_string())??
@@ -365,21 +372,48 @@ async fn analyze(state: &AppState, job: &Job, cancel: Arc<AtomicBool>) -> Result
             (Box::new(file), job.track_id.rsplit('.').next().map(str::to_owned), None)
         } else {
             let scratch = state.vocal_timing.scratch.as_ref().map_err(Clone::clone)?;
-            let (reader, container, file) =
-                downloads::analysis_copy(state, scratch, &job.provider, &job.track_id).await?;
+            // A job resuming reads the copy it made before, rather than fetching the song again.
+            let kept = job.copy.take().and_then(|(file, container)| {
+                scratch.open_file(&file).ok().map(|reader| (reader, container, Some(file)))
+            });
+            let (reader, container, file) = match kept {
+                Some(kept) => kept,
+                None => downloads::analysis_copy(state, scratch, &job.provider, &job.track_id).await?,
+            };
             (Box::new(VaultSource(reader)), Some(container), file)
         };
-    // Half the cores, so playback and the rest of the server stay responsive.
-    let threads = std::thread::available_parallelism().map_or(1, |cores| (cores.get() / 2).max(1));
-    let result = tokio::task::spawn_blocking(move || {
-        vocal_power(&separator, source, extension.as_deref(), threads, &cancel)
+    let budget = budget(job.background);
+    let mut progress = std::mem::take(&mut job.progress);
+    let stopped = cancel.clone();
+    let container = extension.clone();
+    let (result, progress) = tokio::task::spawn_blocking(move || {
+        let result = vocal_power(&separator, source, extension.as_deref(), budget, &cancel, &mut progress);
+        (result, progress)
     })
     .await
     .map_err(|error| error.to_string())?;
+    job.progress = progress;
     if let (Some(file), Ok(scratch)) = (scratch_file, state.vocal_timing.scratch.as_ref()) {
-        let _ = fs::remove_file(scratch.path(&file));
+        if result.is_err() && stopped.load(Ordering::Relaxed) {
+            job.copy = container.map(|container| (file, container));
+        } else {
+            let _ = fs::remove_file(scratch.path(&file));
+        }
     }
     result
+}
+
+/// Separation is heavy and never urgent enough to take over the machine, so it runs at the
+/// lowest priority, in efficiency mode (`crate::vocal_timing`), on a few cores. The song playing
+/// now gets a quarter of them, at most six; songs coming up have the songs before them to
+/// finish in, so they get one or two. Each chunk in flight holds the model's activations (about
+/// 250 MB), so there is one per 4 GB installed; with fewer chunks than threads, each chunk is
+/// split across threads instead.
+fn budget(background: bool) -> Budget {
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    let threads = if background { (cores / 8).clamp(1, 2) } else { (cores / 4).clamp(2, 6) };
+    let chunks = crate::vocal_timing::installed_memory().map_or(1, |bytes| (bytes >> 32) as usize);
+    Budget { threads, chunks: chunks.clamp(1, threads) }
 }
 
 /// The vocal curve for the app's own auto-sync: little-endian f32 power per

@@ -46,7 +46,11 @@ export async function loadLyrics(track: Track, signal?: AbortSignal, prefetch = 
   signal?.throwIfAborted();
   const key = lyricsKey(track);
   const cached = lyricsCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    // Loaded ahead of playback and now wanted for real: its analysis moves ahead of songs to come.
+    if (!prefetch) watched.get(key)?.foreground();
+    return cached;
+  }
 
   let pending = requests.get(key);
   if (!pending || pending.signal.aborted) {
@@ -55,7 +59,7 @@ export async function loadLyrics(track: Track, signal?: AbortSignal, prefetch = 
     const result = trackLyrics(track, active, prefetch).then(lyrics => {
       active.throwIfAborted();
       if (!needsLyricsRetry(lyrics)) lyricsCache.set(key, lyrics);
-      if (lyrics.vocalTiming === "pending") watchVocalTiming(track, key);
+      if (lyrics.vocalTiming === "pending") watchVocalTiming(track, key, prefetch);
       revision++;
       for (const listener of listeners) listener();
       return lyrics;
@@ -91,21 +95,28 @@ export async function preloadLyrics(tracks: Track[], signal?: AbortSignal): Prom
 const VOCAL_POLL_MS = 5_000;
 /** A song the server is still analyzing is checked on for at most this long. */
 const VOCAL_WATCH_MS = 30 * 60_000;
-const watched = new Set<string>();
+const watched = new Map<string, { foreground: () => void }>();
 
 /**
  * While the server analyzes a song's vocals, checks back until it is done, then loads the
  * lyrics again so their endings come from the vocals. Songs left the cache are dropped.
+ * A song loaded ahead of playback is checked on as one: asking for it as if it were playing
+ * would move it ahead of the song that is, and cut that song's analysis off.
  */
-function watchVocalTiming(track: Track, key: string) {
-  if (watched.has(key)) return;
-  watched.add(key);
+function watchVocalTiming(track: Track, key: string, prefetch: boolean) {
+  const existing = watched.get(key);
+  if (existing) {
+    if (!prefetch) existing.foreground();
+    return;
+  }
+  let ahead = prefetch;
+  watched.set(key, { foreground: () => { ahead = false; } });
   const until = Date.now() + VOCAL_WATCH_MS;
   const check = async () => {
     if (Date.now() > until || !lyricsCache.get(key)) return watched.delete(key);
     let curve: Awaited<ReturnType<typeof vocalCurve>> = "pending";
     try {
-      curve = await vocalCurve(track);
+      curve = await vocalCurve(track, ahead);
     } catch {
       // The server may be briefly unreachable; check again later.
     }

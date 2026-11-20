@@ -663,6 +663,8 @@ button.lyricLine:hover {
     display: flex;
     flex: 1;
     min-height: 0;
+    /* Lines scale with the sidebar's width, as the player's scale with the window's. */
+    container-type: inline-size;
 }
 
 .lyricsView[data-compact] .lyricsStage {
@@ -676,23 +678,23 @@ button.lyricLine:hover {
 }
 
 .lyricsView[data-compact] :is(.lyricsLines, .lyricsSyncNote) {
-    padding-inline: 16px;
+    padding-inline: 22px;
 }
 
 .lyricsView[data-compact] .lyricGroup {
-    margin-bottom: 18px;
+    margin-bottom: 24px;
 }
 
 .lyricsView[data-compact] .lyricLine {
-    font-size: 22px;
+    font-size: clamp(26px, 8.5cqi, 38px);
 }
 
 .lyricsView[data-compact] .lyricRow-background .lyricLine {
-    font-size: 17px;
+    font-size: clamp(19px, 6cqi, 27px);
 }
 
 .lyricsView[data-compact] .lyricRow-romanization .lyricLine {
-    font-size: 14px;
+    font-size: clamp(15px, 4.4cqi, 19px);
 }
 
 .lyricsView[data-compact] .lyricsControls {
