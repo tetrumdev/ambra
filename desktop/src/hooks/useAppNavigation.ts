@@ -22,23 +22,19 @@ type AppNavigationOptions = {
   selectedPlaylistId: string | null;
   setSelectedPlaylistId: Dispatch<SetStateAction<string | null>>;
   hasCurrentTrack: boolean;
-  isFullscreen: boolean | null;
   localOnly: boolean;
 };
 
 export function useAppNavigation({
   preferences, setPreferences, selectedPlaylistId, setSelectedPlaylistId,
-  hasCurrentTrack, isFullscreen, localOnly,
+  hasCurrentTrack, localOnly,
 }: AppNavigationOptions) {
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(preferences.ui.navigation?.settingsTab ?? "general");
   const [browseEntity, setBrowseEntity] = useState<BrowseEntity | null>(preferences.ui.navigation?.entity ?? null);
   const [librarySection, setLibrarySection] = useState<LibrarySection>(preferences.ui.navigation?.section ?? "overview");
   const screen = preferences.ui.screen;
   const isPlayerView = isPlayerScreen(screen);
-  // Settings is a separate place, never a page the queue or player sits over or returns to.
-  const queueReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "queue" | "settings">>(
-    withoutSettings(preferences.ui.navigation?.queueReturnScreen ?? (screen === "home" || screen === "search" ? screen : "library")),
-  );
+  // Settings is a separate place, never a page the player sits over or returns to.
   const playerReturnScreenRef = useRef<Exclude<AppScreen, "bigscreen" | "lyrics" | "settings">>(
     withoutSettings(preferences.ui.navigation?.playerReturnScreen ?? "library"),
   );
@@ -46,28 +42,22 @@ export function useAppNavigation({
   const playerOpenedByKeyRef = useRef(false);
   // While the player is open, the screen hidden behind it keeps what it showed.
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
-  const isQueueView = libraryScreen === "queue";
   const isSettingsView = libraryScreen === "settings";
-  const [playbackSidebarView, setPlaybackSidebarView] = useState<PlaybackSidebarView | null>(null);
-  const canShowPlaybackSidebar = isFullscreen !== true && !isPlayerView && !isQueueView;
-  const sidebarView = canShowPlaybackSidebar ? playbackSidebarView : null;
+  // The queue lives in the playback sidebar, beside every screen, the player included.
+  const [sidebarView, setPlaybackSidebarView] = useState<PlaybackSidebarView | null>(null);
   const closePlaybackSidebar = useCallback(() => {
     if (document.activeElement?.closest("#playbackSidebar")) document.getElementById("queueBtn")?.focus();
     setPlaybackSidebarView(null);
   }, []);
   const isHomeView = libraryScreen === "home" && !browseEntity;
   const isSearchView = libraryScreen === "search" && !browseEntity;
-  if (screen === "home" || screen === "library" || screen === "search") {
-    queueReturnScreenRef.current = screen;
-  }
-  // Page history restores content; retain player/queue overlays and their return screens too.
+  // Page history restores content; retain the player overlay and its return screen too.
   const settingsReturnRef = useRef<{
     screen: AppScreen;
     playerReturnScreen: typeof playerReturnScreenRef.current;
-    queueReturnScreen: typeof queueReturnScreenRef.current;
   } | null>(null);
   const { back: goBack, forward: goForward, canGo: canGoInHistory } = usePageNavigation({
-    screen: libraryScreen === "queue" ? queueReturnScreenRef.current : libraryScreen,
+    screen: libraryScreen,
     entity: browseEntity, playlistId: selectedPlaylistId, section: librarySection,
     settingsTab, search: preferences.search,
   }, page => {
@@ -84,7 +74,6 @@ export function useAppNavigation({
       ...preferences.ui,
       navigation: {
         playerReturnScreen: playerReturnScreenRef.current,
-        queueReturnScreen: queueReturnScreenRef.current,
         entity: browseEntity,
         playlistId: selectedPlaylistId,
         section: librarySection,
@@ -104,15 +93,13 @@ export function useAppNavigation({
     }));
   });
 
-  // Player views and queue return to the page where they were opened.
-  const returnScreen = (from: AppScreen) => isPlayerScreen(from)
-    ? playerReturnScreenRef.current
-    : from === "queue" ? queueReturnScreenRef.current : "library";
+  // Player views return to the page where they were opened.
+  const returnScreen = (from: AppScreen) => isPlayerScreen(from) ? playerReturnScreenRef.current : "library";
   const leaveScreen = useStableCallback(() => setPreferences(current => ({
     ...current, ui: { ...current.ui, screen: returnScreen(current.ui.screen) },
   })));
   const openEntity = useStableCallback((entity: BrowseEntity) => {
-    if (browseEntity && entityKey(entity) === entityKey(browseEntity) && !isPlayerView && screen !== "queue") return;
+    if (browseEntity && entityKey(entity) === entityKey(browseEntity) && !isPlayerView) return;
     setBrowseEntity(entity);
     setSelectedPlaylistId(null);
     changeScreen("library");
@@ -180,7 +167,6 @@ export function useAppNavigation({
     const restored = goBack();
     if (origin) {
       playerReturnScreenRef.current = origin.playerReturnScreen;
-      queueReturnScreenRef.current = origin.queueReturnScreen;
       // A player opened over nothing playing can't come back once the song is gone.
       const playerGone = isPlayerScreen(origin.screen) && !hasCurrentTrack;
       return playerGone ? origin.playerReturnScreen : origin.screen;
@@ -194,21 +180,15 @@ export function useAppNavigation({
       if (target) changeScreen(target);
       return;
     }
-    if (browseEntity && !isPlayerView && screen !== "queue") { goBack(); return; }
+    if (browseEntity && !isPlayerView) { goBack(); return; }
     changeScreen(returnScreen(screen));
   });
 
-  // The full queue and player replace Settings.
-  const openQueue = useStableCallback(() => {
-    if (screen === "settings") leaveSettings();
-    changeScreen("queue");
-  });
   const toggleQueue = useStableCallback(() => {
     if (sidebarView) closePlaybackSidebar();
-    else if (canShowPlaybackSidebar) setPlaybackSidebarView("queue");
-    else if (screen === "queue") closeCurrentScreen();
-    else openQueue();
+    else setPlaybackSidebarView("queue");
   });
+  // The player replaces Settings.
   const openPlayer = useStableCallback(() => {
     if (!hasCurrentTrack) return;
     if (screen === "settings") leaveSettings();
@@ -230,7 +210,6 @@ export function useAppNavigation({
     settingsReturnRef.current = {
       screen,
       playerReturnScreen: playerReturnScreenRef.current,
-      queueReturnScreen: queueReturnScreenRef.current,
     };
     setBrowseEntity(null);
     setSelectedPlaylistId(null);
@@ -240,7 +219,7 @@ export function useAppNavigation({
   const canNavigate = useStableCallback((direction: "back" | "forward") => {
     if (document.querySelector("dialog[open], #trackMenuBackdrop, [data-click-menu-backdrop], .columnPickerMenu")) return false;
     if (screen === "settings" && direction === "back") return true;
-    if (isPlayerView || screen === "queue") return direction === "back";
+    if (isPlayerView) return direction === "back";
     return canGoInHistory(direction);
   });
   const navigate = useStableCallback((direction: "back" | "forward") => {
@@ -249,7 +228,7 @@ export function useAppNavigation({
       closeCurrentScreen();
       return true;
     }
-    if (isPlayerView || screen === "queue") {
+    if (isPlayerView) {
       leaveScreen();
       return true;
     }
@@ -278,7 +257,7 @@ export function useAppNavigation({
         if (!event.repeat) closeCurrentScreen();
         return;
       }
-      if (!isPlayerView && screen !== "queue") return;
+      if (!isPlayerView) return;
       event.preventDefault();
       event.stopPropagation();
 
@@ -385,11 +364,11 @@ export function useAppNavigation({
   }, [handleScreenShortcut]);
 
   return {
-    screen, isPlayerView, isQueueView, isSettingsView, isHomeView, isSearchView,
+    screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
-    sidebarView, canShowPlaybackSidebar, setPlaybackSidebarView, closePlaybackSidebar,
+    sidebarView, setPlaybackSidebarView, closePlaybackSidebar,
     sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
-    openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, openQueue, toggleQueue,
+    openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
     confirmSearch, dismissSearch,
   };

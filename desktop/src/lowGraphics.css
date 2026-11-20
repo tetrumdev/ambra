@@ -14,8 +14,6 @@
 :root[data-graphics="low"] .bigscreenClose,
 :root[data-graphics="low"] .lyricsControls::before,
 :root[data-graphics="low"] .pageFilter,
-:root[data-graphics="low"] .queueResume,
-:root[data-graphics="low"] .queueClose,
 :root[data-graphics="low"] #searchBar {
     background: rgba(22, 22, 22, 0.86);
 }

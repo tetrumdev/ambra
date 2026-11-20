@@ -49,6 +49,21 @@ pub const COMMANDS: &[&str] = &[
     "warm_native_audio",
 ];
 
+/// Where one more of a computer's outputs is reached, beside the one its app plays itself:
+/// the app runs a player of its own for each such output (`satellite` in the command's arguments,
+/// `satellites` in its reports).
+pub fn output_address(endpoint_id: &str, device_id: &str) -> String {
+    format!("{endpoint_id}\n{device_id}")
+}
+
+/// The computer an address is on, and the output, for one reached through `output_address`.
+pub fn split_address(address: &str) -> (&str, Option<&str>) {
+    match address.split_once('\n') {
+        Some((endpoint, device)) => (endpoint, Some(device)),
+        None => (address, None),
+    }
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct QueuedCommand {
@@ -398,8 +413,14 @@ impl Endpoints {
         self.reported.notified().await;
     }
 
-    /// Runs a command on an endpoint for the server itself, and waits for its answer.
-    pub async fn call(&self, endpoint_id: &str, command: &str, args: Value) -> Result<Value, String> {
+    /// Runs a command on an endpoint for the server itself, and waits for its answer. An
+    /// `output_address` runs it on that output's own player there.
+    pub async fn call(&self, address: &str, command: &str, mut args: Value) -> Result<Value, String> {
+        let (endpoint_id, device) = split_address(address);
+        if let Some(device) = device {
+            if !args.is_object() { args = json!({}); }
+            args["satellite"] = json!(device);
+        }
         let timeout = if command == "load_native_audio" && args["source"].as_str().is_some_and(|source| source.starts_with("/api/playback/live/")) { Duration::from_secs(45) } else { COMMAND_TIMEOUT };
         let (reply, answer) = oneshot::channel();
         let id = next_id(self);
@@ -419,10 +440,20 @@ impl Endpoints {
     }
 
     /// The endpoint's latest playback report, when it came and when it was sampled, while it's online.
-    pub async fn status(&self, endpoint_id: &str) -> Option<(Value, Instant, Instant, Option<String>)> {
+    /// For an `output_address`, that output's own player's report.
+    pub async fn status(&self, address: &str) -> Option<(Value, Instant, Instant, Option<String>)> {
+        let (endpoint_id, device) = split_address(address);
         let endpoints = self.endpoints.lock().await;
         let endpoint = endpoints.get(endpoint_id).filter(|endpoint| endpoint.online())?;
-        Some((endpoint.status.clone(), endpoint.status_at, endpoint.status_sampled_at, endpoint.instance_id.clone()))
+        let status = match device {
+            None => endpoint.status.clone(),
+            // Not yet playing: it can be asked to, if the app plays several outputs at once.
+            Some(device) => match &endpoint.status["satellites"][device] {
+                Value::Null => json!({ "syncV1": endpoint.status["satellitesV1"] == true, "currentSource": null, "isPlaying": false, "buffering": false, "ended": false, "error": null }),
+                status => status.clone(),
+            },
+        };
+        Some((status, endpoint.status_at, endpoint.status_sampled_at, endpoint.instance_id.clone()))
     }
 
     /// Offline, but recently enough that it may be reconnecting rather than gone.

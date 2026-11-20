@@ -59,7 +59,14 @@ pub trait AudioOutput {
     {
     }
     fn write(&mut self, first: &[f64], second: &[f64]) -> Result<usize, String>;
+    /// Frames written and not yet taken by the device.
     fn queued_frames(&mut self) -> Result<usize, String>;
+    /// How long the device takes to make a sample heard once it has left `queued_frames`:
+    /// its own buffering and conversion, as the platform reports them. Synced outputs start
+    /// that much earlier so they're heard together.
+    fn presentation_latency(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
     fn is_drained(&mut self) -> Result<bool, String>;
 }
 

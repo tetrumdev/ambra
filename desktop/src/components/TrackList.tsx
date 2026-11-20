@@ -20,6 +20,7 @@ import { TrackColumnHeader } from "./TrackColumnHeader";
 import { TrackExtraCells } from "./TrackExtraCells";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import { usePageFilteredTracks } from "../hooks/usePageFilter";
+import { nowPlayingState, useNowPlaying, type NowPlayingState } from "../hooks/useNowPlaying";
 import { revealListItem } from "../utils/revealListItem";
 import { useNavActions } from "../utils/keyboardNav";
 import {
@@ -104,6 +105,7 @@ export function TrackList({
 }: TrackListProps) {
   const connected = useServiceAvailability();
   const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
+  const nowPlaying = useNowPlaying();
   // A filtered list hides songs, so reordering it can't say where they belong.
   const reorderTracks = filtering ? undefined : reorderAllTracks;
   // Ranks and fallback numbers keep counting the whole list while it is filtered.
@@ -289,7 +291,8 @@ export function TrackList({
       case "playback": showPlaybackMenu(event, track.globalId); break;
       case "context": handleTrackContextMenu(event, index); break;
       case "collection": showCollectionMenu(event, track.globalId); break;
-      case "play": playTrack(track.globalId); break;
+      // The song already playing pauses or resumes where it is, rather than starting over.
+      case "play": if (track.globalId === nowPlaying.trackId) nowPlaying.togglePlayback(); else playTrack(track.globalId); break;
       case "cancelWarm": clearTimeout(warmTimer.current); break;
       case "warm":
         clearTimeout(warmTimer.current);
@@ -394,7 +397,8 @@ export function TrackList({
                 ? dropTarget.position
                 : null
             }
-            revealed={reveal.breathing && reveal.target === track.globalId}
+            revealed={reveal.highlighted && reveal.target === track.globalId}
+            nowPlaying={nowPlayingState(nowPlaying, track.globalId)}
             onAction={onRowAction}
             onPointerDown={onPointerDown}
           />
@@ -407,7 +411,7 @@ export function TrackList({
 }
 
 type RowAction = "select" | "playback" | "context" | "collection" | "play" | "warm" | "cancelWarm";
-const TrackRow = memo(function TrackRow({ track, index, position, available, removable, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, onAction, onPointerDown }: {
+const TrackRow = memo(function TrackRow({ track, index, position, available, removable, onOpenEntity, saved, showTrackNumbers, showRank, showDiscNumbers, showArtwork, selected, selecting, menuOpen, collectionMenuOpen, showProviderIcon, reorderable, dragging, packageIndex, packageSize, dropPosition, revealed, nowPlaying, onAction, onPointerDown }: {
   track: Track;
   available: boolean;
   removable: boolean;
@@ -431,8 +435,9 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
   packageIndex?: number;
   packageSize?: number;
   dropPosition: DropPosition | null;
-  /** The filter's only match, breathing until the listener does anything. */
+  /** The filter's only match, highlighted until the listener does anything. */
   revealed: boolean;
+  nowPlaying: NowPlayingState;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
   onPointerDown: (event: React.PointerEvent<HTMLDivElement>, index: number) => void;
 }) {
@@ -453,6 +458,8 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
         : packageIndex === 0 ? "first" : packageIndex === packageSize - 1 ? "last" : "middle"}
       data-drop-position={dropPosition ?? undefined}
       data-revealed={revealed ? "true" : undefined}
+      data-now-playing={nowPlaying}
+      aria-current={nowPlaying ? "true" : undefined}
       data-track-id={track.globalId}
       data-virtual-item=""
       draggable={false}
@@ -463,12 +470,12 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
       onDragStart={(event) => event.preventDefault()}
     >
       <div className="trackLeading" inert={!available}>
-        <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
+        <button type="button" className="trackPlayButton" aria-label={`${nowPlaying === "playing" ? "Pause" : "Play"} ${track.name}`}
           disabled={!available}
           onClick={event => { event.stopPropagation(); onAction("play", event, index); }}
-          onMouseEnter={event => onAction("warm", event, index)}
-          onMouseLeave={event => onAction("cancelWarm", event, index)}>
-          <img src="/play.svg" alt="" aria-hidden="true" />
+          onMouseEnter={nowPlaying ? undefined : event => onAction("warm", event, index)}
+          onMouseLeave={nowPlaying ? undefined : event => onAction("cancelWarm", event, index)}>
+          <img src={nowPlaying === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
         {showArtwork && <div className="coverImgContainer" data-playback-menu-trigger>
           <TrackArtwork track={track} alt={`${track.album} album cover`} className="coverImg" draggable={false} />

@@ -154,6 +154,16 @@
     opacity: 0.4;
 }
 
+/* Each output playing has its volume right under it, lined up with its name. */
+.audioDeviceVolume {
+    display: flex;
+    padding: 0 8px 4px 30px;
+}
+
+.audioDeviceVolume .volumeSlider {
+    margin: -6px 0 -4px;
+}
+
 .audioDeviceName {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -222,13 +232,45 @@
 }
 
 #extraCtrls #queueBtn {
+    position: relative;
     align-self: flex-start;
     border-radius: 8px;
 }
 
-#queueBtn[aria-expanded="true"],
+/* Open, the queue shows it the way the player's view picker does: the icon at full strength,
+   with a small dot beneath it; closed, it rests dimmed like the picker's other views. */
+#queueImg {
+    opacity: 0.7;
+}
+
+#queueBtn:hover #queueImg,
+#queueBtn:focus-visible #queueImg,
+#queueBtn[aria-expanded="true"] #queueImg {
+    opacity: 1;
+}
+
+#queueBtn::after {
+    position: absolute;
+    bottom: 0;
+    left: calc(50% - 2px);
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: white;
+    content: "";
+    opacity: 0;
+    scale: 0;
+    transition: opacity 0.2s ease, scale 0.2s ease;
+}
+
+#queueBtn[aria-expanded="true"]::after {
+    opacity: 1;
+    scale: 1;
+}
+
 #queueBtn:focus-visible {
-    background: #303030;
+    outline: 1px solid #b3b3b3;
+    outline-offset: -1px;
 }
 
 #queueImg {

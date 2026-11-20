@@ -1,6 +1,7 @@
 import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { isTauri } from "@tauri-apps/api/core";
 import {
+  Fragment,
   useEffect,
   useRef,
   useState,
@@ -29,6 +30,10 @@ function clampVolume(volume: number) {
   return Math.min(100, Math.max(0, volume));
 }
 
+function outputKey(output: { endpointId: string; deviceId: string }) {
+  return `${output.endpointId}:${output.deviceId}`;
+}
+
 const volumeLevels = ["muted", "mid", "high"] as const;
 function volumeLevel(volume: number) {
   return volume <= 0 ? "muted" : volume < 50 ? "mid" : "high";
@@ -42,9 +47,6 @@ type ExtraCtrlsProps = {
 export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps) {
   const hasNativeAudio = isTauri();
   const audio = useAudioSettings();
-  const selectedOutput = audio?.settings.outputs.find(
-    (output) => output.id === audio.settings.selectedOutputId,
-  );
   const isChangingDevice = audio?.saving ?? false;
   const isLoadingDevices = audio?.loading ?? false;
   const selectedDeviceId = audio?.settings.selectedOutputId ?? "";
@@ -77,29 +79,62 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     if (core && serverConnection) chooseOutput({ endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName });
     else void selectAudioDevice(deviceId);
   };
-  const [remoteVolume, setRemoteVolume] = useState<number | null>(null);
   const [targetError, setTargetError] = useState<string | null>(null);
-  const targetKey = target ? `${target.endpointId}:${target.deviceId}` : null;
-  useEffect(() => {
-    setRemoteVolume(null);
-    if (!target) return;
-    let disposed = false;
-    void invokeOn<number>(target, "native_audio_volume").then(value => { if (!disposed) setRemoteVolume(value); }).catch(() => {});
-    return () => { disposed = true; };
-  }, [targetKey]);
   // The server switched this computer's output; its settings say which one now.
   const ownDeviceId = coreOutput && !target ? coreOutput.deviceId : null;
   useEffect(() => {
     if (ownDeviceId !== null && ownDeviceId !== audio?.settings.selectedOutputId) void audio?.refresh();
   }, [ownDeviceId]);
-  const volume = target ? remoteVolume ?? 100
-    : volumePreview?.outputId === selectedDeviceId
-      ? volumePreview.volume
-      : selectedOutput?.volume ?? 100;
   const pendingVolumes = useRef(new Map<string, { outputId: string; volume: number }>());
   const isSendingVolume = useRef(false);
-  const remoteVolumeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const volumeButton = useRef<HTMLButtonElement>(null);
+
+  // Every output playing keeps its own volume, set from the slider under it; the volume button
+  // shows the leading one's, and keys and the wheel move them all together.
+  const groupOutputs = coreOutputs(core);
+  const isOnThisComputer = (output: CoreOutput) => output.endpointId === serverConnection?.clientId;
+  const [remoteVolumes, setRemoteVolumes] = useState<Record<string, number>>({});
+  const remoteMembers = groupOutputs.filter(member => !isOnThisComputer(member));
+  const remoteMembersKey = remoteMembers.map(outputKey).join("|");
+  useEffect(() => {
+    if (remoteMembers.length === 0) return;
+    let disposed = false;
+    for (const member of remoteMembers) {
+      void invokeOn<number>(member, "native_audio_volume")
+        .then(value => { if (!disposed) setRemoteVolumes(current => ({ ...current, [outputKey(member)]: value })); })
+        .catch(() => {});
+    }
+    return () => { disposed = true; };
+  }, [remoteMembersKey, audioMenuOpen]);
+  const localVolume = (deviceId: string) => volumePreview?.outputId === deviceId
+    ? volumePreview.volume
+    : audio?.settings.outputs.find(output => output.id === deviceId)?.volume ?? 100;
+  const memberVolume = (output: CoreOutput) => isOnThisComputer(output)
+    ? localVolume(output.deviceId)
+    : remoteVolumes[outputKey(output)] ?? 100;
+  // Levels just set, ahead of the render showing them, so wheel steps build on one another.
+  const recentLevels = useRef(new Map<string, { volume: number; at: number }>());
+  const currentLevel = (output: CoreOutput) => {
+    const recent = recentLevels.current.get(outputKey(output));
+    return recent && performance.now() - recent.at < 1000 ? recent.volume : memberVolume(output);
+  };
+  const remoteVolumeTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const setMemberVolume = (output: CoreOutput, nextVolume: number) => {
+    const key = outputKey(output);
+    recentLevels.current.set(key, { volume: nextVolume, at: performance.now() });
+    if (isOnThisComputer(output)) {
+      setLocalVolume(output.deviceId, nextVolume);
+      return;
+    }
+    setRemoteVolumes(current => ({ ...current, [key]: nextVolume }));
+    // A drag sends its latest level, not every step, over the network.
+    clearTimeout(remoteVolumeTimers.current.get(key));
+    remoteVolumeTimers.current.set(key, setTimeout(() => {
+      remoteVolumeTimers.current.delete(key);
+      void coreCommand("volume", { volume: nextVolume, output }).catch(error => setTargetError(String(error)));
+    }, 80));
+  };
+  const volume = groupOutputs.length > 0 ? memberVolume(groupOutputs[0]) : localVolume(selectedDeviceId);
 
   const chooseOutput = (output: CoreOutput) => {
     setTargetError(null);
@@ -108,7 +143,6 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
 
   // With a server, several outputs can play in step: the box beside each (or a right-click)
   // adds it to the ones playing, or takes it away; choosing the output itself plays there alone.
-  const groupOutputs = coreOutputs(core);
   const inGroup = (output: CoreOutput) => groupOutputs.some(member => member.endpointId === output.endpointId && member.deviceId === output.deviceId);
   const toggleInGroup = (output: CoreOutput) => {
     setTargetError(null);
@@ -117,10 +151,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
       next = groupOutputs.filter(member => !(member.endpointId === output.endpointId && member.deviceId === output.deviceId));
       if (next.length === 0) return;
     } else {
-      // A computer plays one of its outputs at a time: another of its outputs takes that one's place.
-      next = groupOutputs.some(member => member.endpointId === output.endpointId)
-        ? groupOutputs.map(member => member.endpointId === output.endpointId ? output : member)
-        : [...groupOutputs, output];
+      next = [...groupOutputs, output];
     }
     void coreCommand("outputs", { outputs: next }).catch(error => setTargetError(String(error)));
   };
@@ -131,8 +162,8 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     const hint = !syncs ? "Update Ambra there to play in sync"
       : lastOne ? "Choose another output to play elsewhere"
       : checked ? "Stop playing here" : "Also play here, in sync";
-    return <div
-      key={`${output.endpointId}:${output.deviceId}`}
+    const level = memberVolume(output);
+    return <Fragment key={outputKey(output)}><div
       className="audioDeviceRow"
       onContextMenu={event => {
         event.preventDefault();
@@ -164,7 +195,22 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
       >
         <span className="audioDeviceBox" aria-hidden="true" />
       </button>
-    </div>;
+    </div>
+    {checked && !offline && <div className="audioDeviceVolume">
+      <input
+        className="volumeSlider"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={level}
+        aria-label={`${label} volume`}
+        aria-valuetext={`${Math.round(level)}%`}
+        onChange={event => setMemberVolume(output, Number(event.target.value))}
+        style={{ "--volume": `${level}%` } as CSSProperties}
+      />
+    </div>}
+    </Fragment>;
   };
   const here = core && serverConnection ? serverConnection : null;
   // Outputs playing that the list doesn't show, because their computer is out of reach.
@@ -216,24 +262,28 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
 
   // Follows each change at once, so wheel events arriving between renders build on one another.
   const latestVolume = useRef(volume);
-  latestVolume.current = volume;
-  const changeVolume = (nextVolume: number) => {
-    if (target) {
-      latestVolume.current = nextVolume;
-      setRemoteVolume(nextVolume);
-      // A drag sends its latest level, not every step, over the network.
-      clearTimeout(remoteVolumeTimer.current);
-      remoteVolumeTimer.current = setTimeout(() => {
-        void coreCommand("volume", { volume: nextVolume }).catch(error => setTargetError(String(error)));
-      }, 80);
-      return;
-    }
+  latestVolume.current = groupOutputs.length > 0 ? currentLevel(groupOutputs[0]) : volume;
+  function setLocalVolume(outputId: string, nextVolume: number) {
     if (!audio || audio.loading) return;
-    latestVolume.current = nextVolume;
-    const next = { outputId: selectedDeviceId, volume: nextVolume };
+    const next = { outputId, volume: nextVolume };
     setVolumePreview(next);
     pendingVolumes.current.set(next.outputId, next);
     void sendPendingVolume();
+  }
+  // Moves every output playing by the same step, each from its own level.
+  const stepVolume = (step: number) => {
+    if (groupOutputs.length === 0) {
+      const next = clampVolume(latestVolume.current + step);
+      if (next === latestVolume.current) return;
+      latestVolume.current = next;
+      setLocalVolume(selectedDeviceId, next);
+      return;
+    }
+    for (const output of groupOutputs) {
+      const level = currentLevel(output);
+      const next = clampVolume(level + step);
+      if (next !== level) setMemberVolume(output, next);
+    }
   };
 
   // Up/Down move between devices, as in a native menu.
@@ -258,19 +308,31 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     volumeButton.current?.focus();
   };
 
+  // Mutes every output playing, and gives each its own level back.
   const toggleMute = () => {
-    const current = latestVolume.current;
-    if (current > 0) {
-      levelsBeforeMute.set(selectedDeviceId, current);
-      changeVolume(0);
-    } else {
-      changeVolume(levelsBeforeMute.get(selectedDeviceId) ?? UNMUTE_FALLBACK_VOLUME);
+    const muting = latestVolume.current > 0;
+    if (groupOutputs.length === 0) {
+      if (muting) levelsBeforeMute.set(selectedDeviceId, latestVolume.current);
+      const next = muting ? 0 : levelsBeforeMute.get(selectedDeviceId) ?? UNMUTE_FALLBACK_VOLUME;
+      latestVolume.current = next;
+      setLocalVolume(selectedDeviceId, next);
+      return;
+    }
+    for (const output of groupOutputs) {
+      const key = outputKey(output);
+      if (muting) {
+        const level = currentLevel(output);
+        if (level > 0) levelsBeforeMute.set(key, level);
+        setMemberVolume(output, 0);
+      } else {
+        setMemberVolume(output, levelsBeforeMute.get(key) ?? UNMUTE_FALLBACK_VOLUME);
+      }
     }
   };
 
   // M mutes and unmutes; Up and Down step the volume, repeating while held.
-  const shortcuts = useRef({ toggleMute, changeVolume });
-  shortcuts.current = { toggleMute, changeVolume };
+  const shortcuts = useRef({ toggleMute, stepVolume });
+  shortcuts.current = { toggleMute, stepVolume };
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       const step = matchesShortcut(event, "volumeUp") ? VOLUME_STEP
@@ -278,8 +340,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
       if (step !== 0) {
         if (!acceptsPlaybackShortcut(event, true, true)) return;
         event.preventDefault();
-        const next = clampVolume(latestVolume.current + step);
-        shortcuts.current.changeVolume(next);
+        shortcuts.current.stepVolume(step);
       } else if (matchesShortcut(event, "toggleMute") && acceptsPlaybackShortcut(event, false, true)) {
         event.preventDefault();
         if (event.repeat) return;
@@ -300,8 +361,7 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
       if (event.target instanceof Element && event.target.closest(".audioDeviceList")) return;
       if (event.deltaY === 0) return;
       event.preventDefault();
-      const next = clampVolume(latestVolume.current - Math.sign(event.deltaY) * VOLUME_STEP);
-      if (next !== latestVolume.current) shortcuts.current.changeVolume(next);
+      shortcuts.current.stepVolume(-Math.sign(event.deltaY) * VOLUME_STEP);
     };
     control.addEventListener("wheel", handleWheel, { passive: false });
     return () => control.removeEventListener("wheel", handleWheel);
@@ -388,17 +448,8 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
             {audioDevices.length === 0 && !isLoadingDevices && (
               <p className="audioControlsNote">Enable outputs in Settings.</p>
             )}
-            {!target && selectedOutput?.presetId && (
-              <span className="audioControlsNote">
-                DSP:{" "}
-                {
-                  audio?.settings.presets.find(
-                    (preset) => preset.id === selectedOutput.presetId,
-                  )?.name
-                }
-              </span>
-            )}
-            <input
+            {/* With a server, each output playing has its own slider in the list instead. */}
+            {!here && <input
               className="volumeSlider"
               type="range"
               min="0"
@@ -408,9 +459,12 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
               value={volume}
               aria-label="Volume"
               aria-valuetext={`${Math.round(volume)}%`}
-              onChange={(event) => changeVolume(Number(event.target.value))}
+              onChange={(event) => {
+                latestVolume.current = Number(event.target.value);
+                setLocalVolume(selectedDeviceId, Number(event.target.value));
+              }}
               style={{ "--volume": `${volume}%` } as CSSProperties}
-            />
+            />}
           </AudioControlsMenu>
         )}
         <button
@@ -443,12 +497,12 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
       <button
         id="queueBtn"
         type="button"
-        aria-label={queueSidebarOpen === undefined ? "Queue" : "Playback sidebar"}
+        aria-label="Queue"
         aria-expanded={queueSidebarOpen}
         aria-controls={queueSidebarOpen ? "playbackSidebar" : undefined}
         onClick={onToggleQueue}
         onKeyDown={event => { if (event.key === " ") event.stopPropagation(); }}
-        data-tooltip={queueSidebarOpen === undefined ? "Queue" : "Playback sidebar"}
+        data-tooltip="Queue"
       >
         <img src="/queue.svg" alt="" id="queueImg" />
       </button>
