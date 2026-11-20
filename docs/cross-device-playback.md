@@ -39,9 +39,11 @@ preserve device files, playlists, history, and settings. See [ownership and migr
 ## Synced outputs
 
 In the volume menu, the box beside an output (or a right-click on it) adds that output to the
-ones playing, or takes it away; clicking the output itself plays there alone. A computer plays one
-of its outputs at a time, so ticking another output of the same computer takes the first one's
-place. Phones and apps from before synced playback can't join a group yet.
+ones playing, or takes it away; clicking the output itself plays there alone. Each output
+playing has its own volume slider under it; the volume keys and the wheel move them all by the
+same step. Several outputs of one computer can play at once: the app plays the first itself and
+starts a spare player for each other one (`satellite` in the core's commands, `satellites` in the
+app's reports). Phones and apps from before synced playback can't join a group yet.
 
 The first output chosen leads the group; the core follows its reports, as with a single output.
 Every start (a new song, a resume, a seek) is coordinated: each output prepares the audio and
@@ -60,8 +62,10 @@ more than 150 ms lines it up again. Gapless song changes keep every output toget
 format, which reopens each device, starts the next song later by the group's longest resync
 delay on every output alike.
 
-Delay inside a device that the app can't measure, such as Bluetooth, is set per output as
-**Sync latency** in Settings → Outputs; that output then sends its audio that much earlier.
+Each output also counts the delay its platform reports after the samples leave the app: on
+macOS the I/O buffer, safety offset and device and stream latency; on Windows the stream latency.
+Delay inside a device that the app can't measure, such as Bluetooth or a receiver, is set per
+output as **Sync latency** in Settings → Outputs; that output then sends its audio that much earlier.
 An output joining a group that already plays prepares from where the group will be and joins
 in step. Spotify's lossless stream reaches one output, so a group plays Spotify as High.
 

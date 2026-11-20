@@ -17,8 +17,7 @@
     background: rgb(30, 30, 30);
 }
 
-.libraryTitlebar[data-content-layout="library"],
-.libraryTitlebar[data-content-layout="queue"] {
+.libraryTitlebar[data-content-layout="library"] {
     --titlebar-content-left: 230px;
 }
 

@@ -106,6 +106,7 @@ pub struct PlatformOutput {
     conversion_buffer: Vec<u8>,
     poll_interval: Duration,
     started: bool,
+    presentation_latency: Duration,
 }
 
 impl AudioOutput for PlatformOutput {
@@ -208,6 +209,10 @@ impl AudioOutput for PlatformOutput {
             .map_err(wasapi_error)
     }
 
+    fn presentation_latency(&self) -> Duration {
+        self.presentation_latency
+    }
+
     fn is_drained(&mut self) -> Result<bool, String> {
         let padding = self
             .audio_client
@@ -302,6 +307,12 @@ impl PlatformOutput {
         let poll_interval =
             Duration::from_secs_f64(buffer_frames as f64 / f64::from(spec.sample_rate) / 4.0)
                 .clamp(Duration::from_millis(1), MAX_POLL_INTERVAL);
+        // What the audio engine and the device add once a frame leaves the buffer, in 100 ns units.
+        // SAFETY: the client was initialized above.
+        let presentation_latency = unsafe { audio_client.as_iaudioclient().GetStreamLatency() }
+            .ok()
+            .filter(|latency| (0..10_000_000).contains(latency))
+            .map_or(Duration::ZERO, |latency| Duration::from_nanos(latency as u64 * 100));
 
         Ok(Self {
             audio_client,
@@ -313,6 +324,7 @@ impl PlatformOutput {
             ),
             poll_interval,
             started: false,
+            presentation_latency,
         })
     }
 }

@@ -107,6 +107,11 @@
     width: calc(var(--art-size) + 40px);
 }
 
+/* The song the player has loaded keeps its play button lit, showing pause while it plays. */
+.searchResult[data-now-playing] .trackPlayButton:not(:disabled) {
+    opacity: 1;
+}
+
 /* Hovering an artist or album link underlines that link instead of the song. */
 .searchResult:hover:not(:has(.entityLink:hover)) .searchResultName {
     text-decoration: underline;

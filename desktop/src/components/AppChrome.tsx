@@ -93,14 +93,6 @@ export function AppChrome({
         </>
       )}
 
-      {/* The queue's close button sits beside search, in App's top-right controls. */}
-      {currentScreen === "queue" && canDragWindow && (
-        <div
-          className="libraryTitlebar"
-          data-content-layout="queue"
-          data-window-drag-region
-        />
-      )}
     </>
   );
 }

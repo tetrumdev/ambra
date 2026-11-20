@@ -7,7 +7,7 @@ import type { LibrarySection } from "../components/LibraryView";
 import type { SettingsTab } from "../components/SettingsSidebar";
 import { readShortcutOverrides, type ShortcutOverrides } from "./shortcuts";
 
-export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "queue" | "settings";
+export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "settings";
 export type LyricMotion = "system" | "full" | "reduced";
 export type PlayerView = Extract<AppScreen, "bigscreen" | "lyrics">;
 
@@ -19,7 +19,6 @@ export type PlaylistGroup = "ambra" | "spotify" | "qobuz" | "tidal";
 
 type NavigationPreferences = {
   playerReturnScreen: Exclude<AppScreen, "bigscreen" | "lyrics">;
-  queueReturnScreen: Exclude<AppScreen, "bigscreen" | "lyrics" | "queue">;
   entity: BrowseEntity | null;
   playlistId: string | null;
   section: LibrarySection;
@@ -43,7 +42,7 @@ export type AppPreferences = {
     lyricsOffsetMs: number;
     /** The player view to reopen: whichever of album art or lyrics was shown last. */
     playerView: PlayerView;
-    /** The page behind the player and queue, restored with the last open screen. */
+    /** The page behind the player, restored with the last open screen. */
     navigation?: NavigationPreferences;
     playlistGroups: Record<PlaylistGroup, boolean>;
     servicePlaylistVisibility: Record<StreamingProvider, boolean>;
@@ -110,7 +109,6 @@ function isAppScreen(value: unknown): value is AppScreen {
     value === "home" ||
     value === "library" ||
     value === "search" ||
-    value === "queue" ||
     value === "settings"
   );
 }
@@ -129,9 +127,6 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
   const playerReturnScreen = isAppScreen(value.playerReturnScreen)
     && value.playerReturnScreen !== "bigscreen" && value.playerReturnScreen !== "lyrics"
     ? value.playerReturnScreen : "library";
-  const queueReturnScreen = isAppScreen(value.queueReturnScreen)
-    && value.queueReturnScreen !== "bigscreen" && value.queueReturnScreen !== "lyrics" && value.queueReturnScreen !== "queue"
-    ? value.queueReturnScreen : "library";
   let entity: BrowseEntity | null = null;
   if (isRecord(value.entity)) {
     const candidate = value.entity.kind === "album" ? value.entity.album
@@ -147,7 +142,6 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
   }
   return {
     playerReturnScreen,
-    queueReturnScreen,
     entity,
     playlistId: typeof value.playlistId === "string" ? value.playlistId : null,
     section: value.section === "artists" || value.section === "albums" || value.section === "tracks" ? value.section : "overview",
@@ -161,9 +155,13 @@ function migratePreferences(value: unknown): AppPreferences {
   if (!isRecord(value)) return defaultPreferences;
 
   const ui = isRecord(value.ui) ? value.ui : {};
+  // The queue used to be a screen of its own; a session saved on it reopens the page it covered.
+  const queueReturnScreen = isRecord(ui.navigation) ? ui.navigation.queueReturnScreen : undefined;
   const screen = isAppScreen(ui.screen)
     ? ui.screen
-    : defaultPreferences.ui.screen;
+    : ui.screen === "queue"
+      ? queueReturnScreen === "home" || queueReturnScreen === "search" ? queueReturnScreen : "library"
+      : defaultPreferences.ui.screen;
   const showAudioQuality = typeof ui.showAudioQuality === "boolean"
     ? ui.showAudioQuality
     : defaultPreferences.ui.showAudioQuality;

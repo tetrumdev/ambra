@@ -114,6 +114,9 @@ struct Transport {
 #[derive(Clone, Debug)]
 struct Follower {
     output: Output,
+    /// Where it's reached: its computer, or, when the group already plays another output there,
+    /// that output's own player on it (`endpoints::output_address`). Set by `Transport::readdress`.
+    address: String,
     /// What the core loaded there, as for the leading output.
     loaded: Option<Loaded>,
     queued_next: Option<Option<String>>,
@@ -126,7 +129,8 @@ struct Follower {
 
 impl Follower {
     fn new(output: Output) -> Self {
-        Self { output, loaded: None, queued_next: None, held: 0, started: 0, failed_at: None }
+        let address = output.endpoint_id.clone();
+        Self { output, address, loaded: None, queued_next: None, held: 0, started: 0, failed_at: None }
     }
 }
 
@@ -177,8 +181,35 @@ impl Transport {
         self.output.iter().cloned().chain(self.followers.iter().map(|follower| follower.output.clone())).collect()
     }
 
-    fn follower(&mut self, endpoint: &str) -> Option<&mut Follower> {
-        self.followers.iter_mut().find(|follower| follower.output.endpoint_id == endpoint)
+    fn follower(&mut self, address: &str) -> Option<&mut Follower> {
+        self.followers.iter_mut().find(|follower| follower.address == address)
+    }
+
+    /// Each follower's address. A computer's app plays the group's first output there itself,
+    /// and each other one on a player of its own; a follower whose address changed starts afresh.
+    fn readdress(&mut self) {
+        let mut computers: std::collections::HashSet<String> = self.output.iter().map(|output| output.endpoint_id.clone()).collect();
+        for follower in &mut self.followers {
+            let address = if computers.insert(follower.output.endpoint_id.clone()) {
+                follower.output.endpoint_id.clone()
+            } else {
+                crate::endpoints::output_address(&follower.output.endpoint_id, &follower.output.device_id)
+            };
+            if follower.address != address {
+                follower.address = address;
+                follower.loaded = None;
+                follower.queued_next = None;
+                follower.held = 0;
+                follower.started = 0;
+            }
+        }
+    }
+
+    /// Where `output` is reached, while it plays in this session.
+    fn address_of(&self, output: &Output) -> Option<String> {
+        let same = |other: &Output| other.endpoint_id == output.endpoint_id && other.device_id == output.device_id;
+        if self.output.as_ref().is_some_and(same) { return Some(output.endpoint_id.clone()); }
+        self.followers.iter().find(|follower| same(&follower.output)).map(|follower| follower.address.clone())
     }
     fn position_now(&self) -> f64 {
         let running = self.playing && !self.buffering && self.loaded.is_some();
@@ -454,7 +485,8 @@ impl Core {
             .unwrap_or_default();
         // Followers play in step with an output; with none saved, neither are they.
         let followers = if saved.output.is_some() { saved.followers.into_iter().map(Follower::new).collect() } else { Vec::new() };
-        let transport = Transport { output: saved.output, position: saved.position, followers, ..Transport::default() };
+        let mut transport = Transport { output: saved.output, position: saved.position, followers, ..Transport::default() };
+        transport.readdress();
         let core = Arc::new(Self {
             state,
             endpoints: sessions.endpoints.clone(),
@@ -545,7 +577,7 @@ impl Core {
         transport.sync = SyncPhase::Idle;
         let followers: Vec<String> = transport.followers.drain(..)
             .filter(|follower| follower.loaded.is_some())
-            .map(|follower| follower.output.endpoint_id)
+            .map(|follower| follower.address)
             .collect();
         drop(transport);
         self.commands.send_modify(|revision| *revision += 1);
@@ -566,6 +598,7 @@ impl Core {
         transport.followers.retain(|follower| follower.output.endpoint_id != endpoint);
         if transport.followers.len() == before { return; }
         if transport.followers.is_empty() { transport.sync = SyncPhase::Idle; }
+        transport.readdress();
         drop(transport);
         self.save_transport();
         self.changed();
@@ -1129,7 +1162,8 @@ enum Command {
     Output { output: Option<Output> },
     /// Plays on all of these in step, the first leading; at most one output per computer.
     Outputs { outputs: Vec<Output> },
-    Volume { volume: f64 },
+    /// Sets `output`'s volume, or the leading output's when none is named.
+    Volume { volume: f64, #[serde(default)] output: Option<Output> },
 }
 
 async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
@@ -1219,31 +1253,42 @@ async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Jso
         Command::Outputs { outputs } => {
             drop(operation.operation.take());
             // Only apps that keep time with the others join a group (`syncV1` in their reports).
+            // Only apps with players to spare play several of their computer's outputs (`satellitesV1`).
             let mut unable = None;
             if outputs.len() > 1 {
-                for output in &outputs {
+                for (index, output) in outputs.iter().enumerate() {
+                    let shares = outputs[..index].iter().any(|other| other.endpoint_id == output.endpoint_id && other.device_id != output.device_id);
                     if let Some((status, ..)) = core.endpoints.status(&output.endpoint_id).await
-                        && status["syncV1"] != true
+                        && (status["syncV1"] != true || shares && status["satellitesV1"] != true)
                     {
-                        unable = Some(output.endpoint_name.clone());
+                        unable = Some((output.endpoint_name.clone(), shares));
                         break;
                     }
                 }
             }
             match unable {
-                Some(name) => Err(format!("{name} can't play in step with other outputs. Update Ambra there first.")),
+                Some((name, true)) => Err(format!("{name} can't play several of its outputs at once. Update Ambra there first.")),
+                Some((name, false)) => Err(format!("{name} can't play in step with other outputs. Update Ambra there first.")),
                 None => {
                     set_outputs(&core, outputs).await;
                     Ok(())
                 }
             }
         }
-        Command::Volume { volume } => {
-            let output = core.transport().output.clone();
+        Command::Volume { volume, output: named } => {
+            // Each output in a group keeps its own volume; only one that's playing can be set.
+            let address = {
+                let transport = core.transport();
+                match named {
+                    Some(named) => transport.address_of(&named).ok_or("That output isn't playing"),
+                    None => transport.output.as_ref().map(|output| output.endpoint_id.clone()).ok_or("Choose an output first"),
+                }
+            };
             drop(operation.operation.take());
-            match output {
-                Some(output) => core.endpoints.call(&output.endpoint_id, "set_native_audio_volume", json!({ "volume": volume })).await.map(|_| ()),
-                None => Err("Choose an output first".into()),
+            match address {
+                _ if !volume.is_finite() || !(0.0..=100.0).contains(&volume) => Err("Volume is 0 to 100".into()),
+                Ok(address) => core.endpoints.call(&address, "set_native_audio_volume", json!({ "volume": volume })).await.map(|_| ()),
+                Err(message) => Err(message.into()),
             }
         }
     };
@@ -1253,11 +1298,11 @@ async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Jso
     }
 }
 
-/// Plays on `outputs` from now on, in step, the first leading the rest. A computer plays one
-/// output at a time, so only the first output named on each counts.
+/// Plays on `outputs` from now on, in step, the first leading the rest. Several may be on one
+/// computer; an output named twice counts once.
 async fn set_outputs(core: &Core, outputs: Vec<Output>) {
-    let mut computers = std::collections::HashSet::new();
-    let mut outputs: Vec<Output> = outputs.into_iter().filter(|output| computers.insert(output.endpoint_id.clone())).collect();
+    let mut named = std::collections::HashSet::new();
+    let mut outputs: Vec<Output> = outputs.into_iter().filter(|output| named.insert((output.endpoint_id.clone(), output.device_id.clone()))).collect();
     let leader = (!outputs.is_empty()).then(|| outputs.remove(0));
     let stopped = {
         let mut transport = core.transport();
@@ -1280,11 +1325,14 @@ async fn set_outputs(core: &Core, outputs: Vec<Output>) {
             Some(index) => kept.remove(index),
             None => Follower::new(output),
         }).collect();
-        let leader_endpoint = leader.as_ref().map(|leader| leader.endpoint_id.as_str());
-        stopped.extend(kept.into_iter()
-            .filter(|follower| follower.loaded.is_some() && Some(follower.output.endpoint_id.as_str()) != leader_endpoint)
-            .map(|follower| follower.output.endpoint_id));
-        stopped.retain(|endpoint| !transport.outputs().iter().any(|output| &output.endpoint_id == endpoint));
+        // A follower whose player now leads, or plays another follower, isn't stopped.
+        let before: Vec<String> = transport.followers.iter().filter(|follower| follower.loaded.is_some()).map(|follower| follower.address.clone()).collect();
+        transport.readdress();
+        stopped.extend(kept.into_iter().filter(|follower| follower.loaded.is_some()).map(|follower| follower.address));
+        stopped.extend(before);
+        let playing: Vec<String> = transport.output.iter().map(|output| output.endpoint_id.clone())
+            .chain(transport.followers.iter().map(|follower| follower.address.clone())).collect();
+        stopped.retain(|address| !playing.contains(address));
         if !transport.synced() {
             transport.sync = SyncPhase::Idle;
         } else if !was_synced && transport.playing && transport.loaded.is_some() && transport.sync == SyncPhase::Idle {
@@ -1838,7 +1886,7 @@ async fn pause_followers(core: &Core, io: &mut OutputOperation<'_>, unload: bool
             follower.held = 0;
             follower.started = 0;
             let loaded = if unload { follower.queued_next = None; follower.loaded.take().is_some() } else { follower.loaded.is_some() };
-            loaded.then(|| follower.output.endpoint_id.clone())
+            loaded.then(|| follower.address.clone())
         }).collect()
     };
     if playing.is_empty() { return Ok(()); }
@@ -1851,7 +1899,7 @@ async fn pause_followers(core: &Core, io: &mut OutputOperation<'_>, unload: bool
 async fn seek_followers(core: &Core, io: &mut OutputOperation<'_>, position: f64) -> Result<(), String> {
     let loaded: Vec<String> = core.transport().followers.iter()
         .filter(|follower| follower.loaded.is_some())
-        .map(|follower| follower.output.endpoint_id.clone())
+        .map(|follower| follower.address.clone())
         .collect();
     for endpoint in loaded {
         follower_call(core, io, &endpoint, "seek_native_audio", json!({ "positionSeconds": position })).await?;
@@ -1872,9 +1920,9 @@ async fn leader_anchor(core: &Core, source: &str) -> Option<(f64, f64)> {
 /// Brings each following output to what the group plays: the song, prepared and held for the
 /// group's start, or joined in step when the group already plays; paused with it otherwise.
 async fn drive_followers(core: &Core, io: &mut OutputOperation<'_>, source: &str, next: &Option<String>) -> Result<(), String> {
-    let followers: Vec<Output> = core.transport().followers.iter().map(|follower| follower.output.clone()).collect();
-    for output in followers {
-        let endpoint = output.endpoint_id.as_str();
+    let followers: Vec<(String, Output)> = core.transport().followers.iter().map(|follower| (follower.address.clone(), follower.output.clone())).collect();
+    for (address, output) in followers {
+        let endpoint = address.as_str();
         let Some((status, _, _, instance)) = core.endpoints.status(endpoint).await else {
             // Out of reach: it starts afresh when it's back.
             if let Some(follower) = core.transport().follower(endpoint) {
@@ -1977,7 +2025,7 @@ async fn start_together(core: &Core, io: &mut OutputOperation<'_>) -> Result<(),
         let mut members: Vec<String> = transport.loaded.iter().map(|loaded| loaded.endpoint_id.clone()).collect();
         members.extend(transport.followers.iter()
             .filter(|follower| follower.loaded.is_some() && follower.held == epoch)
-            .map(|follower| follower.output.endpoint_id.clone()));
+            .map(|follower| follower.address.clone()));
         (epoch, position, since, members)
     };
     let (mut needed, mut longest, mut waiting) = (0_u64, 0_u64, false);
@@ -2209,7 +2257,7 @@ async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Pa
     let loaded: Vec<String> = {
         let transport = core.transport();
         transport.loaded.iter().map(|loaded| loaded.endpoint_id.clone())
-            .chain(transport.followers.iter().filter(|follower| follower.loaded.is_some()).map(|follower| follower.output.endpoint_id.clone()))
+            .chain(transport.followers.iter().filter(|follower| follower.loaded.is_some()).map(|follower| follower.address.clone()))
             .collect()
     };
     for endpoint in loaded {
@@ -2576,7 +2624,8 @@ mod driver_tests {
         assert_eq!(desk_start["groupResyncMs"], 1500);
         let lead = desk_start["atServerMs"].as_f64().unwrap() - desk_start["sentAtServerMs"].as_f64().unwrap();
         assert!(lead >= 1500.0 + SYNC_START_MARGIN_MS - 50.0, "the start leaves the longest resync delay: {lead}");
-        assert!(matches!(h.core.transport().sync, SyncPhase::Running { .. }));
+        // Running once every output has answered its start.
+        eventually!("the group to run", matches!(h.core.transport().sync, SyncPhase::Running { .. }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2596,6 +2645,52 @@ mod driver_tests {
         let view = h.post("/api/session/command", json!({ "action": "output", "output": { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" } })).await;
         assert_eq!(view["outputs"].as_array().unwrap().len(), 1);
         assert!(h.core.transport().followers.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_second_output_on_one_computer_plays_on_a_player_of_its_own_there() {
+        let h = Harness::start().await;
+        let outputs = json!([
+            { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" },
+            { "endpointId": "desk", "deviceId": "hp", "endpointName": "Desk", "deviceName": "Headphones" },
+        ]);
+        h.report(json!({ "syncV1": true })).await;
+        let refused = h.http.post(format!("{}/api/session/command", h.base)).json(&json!({ "action": "outputs", "outputs": outputs })).send().await.unwrap();
+        assert_eq!(refused.status(), StatusCode::BAD_REQUEST, "an app with one player plays one output");
+
+        h.report(json!({ "syncV1": true, "satellitesV1": true })).await;
+        let view = h.post("/api/session/command", json!({ "action": "outputs", "outputs": outputs })).await;
+        assert_eq!(view["outputs"].as_array().unwrap().len(), 2);
+        h.post("/api/session/queue", json!({ "base": 0, "playTrackId": "a", "queue": { "version": 1, "history": [], "current": item("a"), "upcoming": [], "tracks": [track("a")] } })).await;
+        eventually!("the second output to load", commands(&h, "load_native_audio").iter().any(|args| args["satellite"] == "hp"));
+        let selected = commands(&h, "select_native_audio_device");
+        assert!(selected.iter().any(|args| args["satellite"] == "hp" && args["deviceId"] == "hp"), "its own player plays the headphones: {selected:?}");
+        assert!(commands(&h, "load_native_audio").iter().any(|args| args["satellite"].is_null()), "the computer's own player plays the speakers");
+
+        h.post("/api/session/command", json!({ "action": "volume", "volume": 20.0, "output": outputs[1] })).await;
+        let volumes = commands(&h, "set_native_audio_volume");
+        assert_eq!(volumes.len(), 1);
+        assert_eq!(volumes[0]["satellite"], "hp");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn each_output_in_a_group_has_its_own_volume() {
+        let h = Harness::start().await;
+        h.report(json!({ "syncV1": true })).await;
+        let den = SyncedOutput::start(&h.base, "den", 0);
+        eventually!("the second output to report", h.core.endpoints.online("den").await);
+        let den_speakers = json!({ "endpointId": "den", "deviceId": "spk", "endpointName": "Den", "deviceName": "Speakers" });
+        h.post("/api/session/command", json!({ "action": "outputs", "outputs": [
+            { "endpointId": "desk", "deviceId": "spk", "endpointName": "Desk", "deviceName": "Speakers" },
+            den_speakers.clone(),
+        ] })).await;
+        h.post("/api/session/command", json!({ "action": "volume", "volume": 30.0, "output": den_speakers })).await;
+        eventually!("the second output's volume", !den.commands("set_native_audio_volume").is_empty());
+        assert_eq!(den.commands("set_native_audio_volume")[0]["volume"], 30.0);
+        assert!(commands(&h, "set_native_audio_volume").is_empty(), "the leading output keeps its own");
+        let elsewhere = h.http.post(format!("{}/api/session/command", h.base)).json(&json!({ "action": "volume", "volume": 30.0,
+            "output": { "endpointId": "attic", "deviceId": "spk", "endpointName": "Attic", "deviceName": "Speakers" } })).send().await.unwrap();
+        assert_eq!(elsewhere.status(), StatusCode::BAD_REQUEST, "only an output playing can be set");
     }
 
     #[tokio::test(flavor = "multi_thread")]

@@ -21,8 +21,12 @@ use coreaudio::audio_unit::{
 use crossbeam_channel::{Receiver, Sender, TryRecvError, TrySendError, bounded};
 use objc2_core_audio::{
     AudioDeviceID, AudioObjectGetPropertyData, AudioObjectPropertyAddress,
-    kAudioDevicePropertyDeviceUID, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal,
+    AudioObjectPropertyScope, AudioObjectPropertySelector, kAudioDevicePropertyBufferFrameSize,
+    kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
+    kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertySafetyOffset,
+    kAudioDevicePropertyStreams, kAudioObjectPropertyElementMain,
+    kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyScopeOutput,
+    kAudioStreamPropertyLatency,
 };
 use objc2_core_foundation::{CFRetained, CFString};
 
@@ -33,6 +37,9 @@ const RENDER_BLOCKS: usize = 8;
 const I32_SCALE: f64 = 2_147_483_648.0;
 const MAX_RENDER_BLOCK_FRAMES: usize = 8_192;
 const GAIN_RAMP_MILLISECONDS: usize = 5;
+/// `kAudioUnitProperty_Latency`: the seconds an audio unit's own processing (a sample rate
+/// conversion, say) holds samples back.
+const AUDIO_UNIT_LATENCY: u32 = 12;
 
 pub struct PlatformOutput {
     audio_unit: coreaudio::audio_unit::AudioUnit,
@@ -48,6 +55,67 @@ pub struct PlatformOutput {
     physical_bits: Option<u32>,
     started: bool,
     owns_hog_mode: bool,
+    presentation_latency: Duration,
+}
+
+/// One fixed-size property of a CoreAudio object, if it has it.
+fn object_property<T: Copy + Default>(object_id: u32, selector: AudioObjectPropertySelector, scope: AudioObjectPropertyScope) -> Option<T> {
+    let address = AudioObjectPropertyAddress {
+        mSelector: selector,
+        mScope: scope,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let mut value = T::default();
+    let mut size = std::mem::size_of::<T>() as u32;
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object_id,
+            std::ptr::NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            std::ptr::NonNull::from(&mut size),
+            std::ptr::NonNull::from(&mut value).cast(),
+        )
+    };
+    (status == 0 && size as usize == std::mem::size_of::<T>()).then_some(value)
+}
+
+/// How long the device takes to play a sample after the render callback hands it over: one
+/// I/O buffer, the safety offset CoreAudio keeps ahead of the hardware, and the latency the
+/// device and its output stream report (built-in speakers process their sound, for one).
+fn device_latency(device_id: AudioDeviceID, sample_rate: u32) -> Duration {
+    let output = kAudioObjectPropertyScopeOutput;
+    let frames = |selector| object_property::<u32>(device_id, selector, output).unwrap_or(0);
+    let mut streams = [0_u32; 16];
+    let mut size = std::mem::size_of_val(&streams) as u32;
+    let address = AudioObjectPropertyAddress {
+        mSelector: kAudioDevicePropertyStreams,
+        mScope: output,
+        mElement: kAudioObjectPropertyElementMain,
+    };
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            device_id,
+            std::ptr::NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            std::ptr::NonNull::from(&mut size),
+            std::ptr::NonNull::from(&mut streams).cast(),
+        )
+    };
+    let stream_latency = (status == 0 && size >= 4)
+        .then(|| object_property::<u32>(streams[0], kAudioStreamPropertyLatency, kAudioObjectPropertyScopeGlobal))
+        .flatten()
+        .unwrap_or(0);
+    let total = frames(kAudioDevicePropertyLatency)
+        + frames(kAudioDevicePropertySafetyOffset)
+        + frames(kAudioDevicePropertyBufferFrameSize)
+        + stream_latency;
+    // The device counts in frames at its own rate, which may not be the song's.
+    let rate = object_property::<f64>(device_id, kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal)
+        .filter(|rate| rate.is_finite() && *rate > 0.0)
+        .unwrap_or(f64::from(sample_rate));
+    Duration::from_secs_f64(f64::from(total) / rate)
 }
 
 /// Outputs by their current CoreAudio number.
@@ -246,6 +314,10 @@ impl AudioOutput for PlatformOutput {
         Ok(self.queued_samples.load(Ordering::Acquire) as usize / self.channels)
     }
 
+    fn presentation_latency(&self) -> Duration {
+        self.presentation_latency
+    }
+
     fn is_drained(&mut self) -> Result<bool, String> {
         Ok(self.queued_samples.load(Ordering::Acquire) == 0)
     }
@@ -433,6 +505,13 @@ impl PlatformOutput {
             })
             .map_err(coreaudio_error)?;
 
+        let unit_latency = audio_unit
+            .get_property::<f64>(AUDIO_UNIT_LATENCY, Scope::Global, Element::Output)
+            .ok()
+            .filter(|seconds| seconds.is_finite() && (0.0..1.0).contains(seconds))
+            .map_or(Duration::ZERO, Duration::from_secs_f64);
+        let presentation_latency = device_latency(device_id, spec.sample_rate) + unit_latency;
+
         Ok(Self {
             audio_unit,
             device_id,
@@ -446,6 +525,7 @@ impl PlatformOutput {
             physical_bits,
             started: false,
             owns_hog_mode,
+            presentation_latency,
         })
     }
 }

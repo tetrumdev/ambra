@@ -1,4 +1,10 @@
+/* The playback sidebar: the app's one queue, beside every screen. Beside the library it is
+   a column of the page, divided off like the library sidebar; over the player it floats
+   as the same glass as the player's other controls (AppChrome.css). */
 .playbackSidebar {
+    --sidebar-row-hover: #151515;
+    --sidebar-now-playing: #191919;
+    --sidebar-divider: #535353;
     position: absolute;
     inset: var(--library-titlebar-height) 0 var(--player-height) auto;
     width: var(--playback-sidebar-width);
@@ -6,9 +12,55 @@
     display: flex;
     flex-direction: column;
     background: var(--surface-black);
-    border-left: 1px solid #535353;
+    border-left: 1px solid var(--sidebar-divider);
+    color: white;
+    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-weight: 300;
     text-align: left;
 }
+
+.playbackSidebar[data-floating] {
+    --sidebar-row-hover: rgb(255 255 255 / 6%);
+    --sidebar-now-playing: rgb(255 255 255 / 9%);
+    --sidebar-divider: rgb(255 255 255 / 12%);
+    inset: calc(var(--library-titlebar-height) + 40px) 20px calc(150px + 16px) auto;
+    /* Floating, it keeps a margin from the window edge, so it gives that back from its width. */
+    width: calc(var(--playback-sidebar-width) - 20px);
+    z-index: 11;
+    overflow: hidden;
+    border: 1px solid rgba(100, 100, 100, 0.4);
+    border-radius: 20px;
+    background: rgba(22, 22, 22, 0.45);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
+    transition: opacity 0.25s ease, visibility 0.25s;
+    animation: playbackSidebarFloatIn 0.2s ease-out;
+}
+
+@keyframes playbackSidebarFloatIn {
+    from {
+        opacity: 0;
+        transform: translateX(12px);
+    }
+}
+
+/* Over a resting player it fades with the other controls, unless it is in use. */
+:root[data-bigscreen-idle="true"] .playbackSidebar[data-floating]:not(:hover, :focus-within) {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+}
+
+:root[data-reduce-motion] .playbackSidebar[data-floating] {
+    animation: none;
+}
+
+:root[data-graphics="low"] .playbackSidebar[data-floating] {
+    background: rgba(22, 22, 22, 0.9);
+}
+
+/* Resizing */
 
 .playbackSidebarResize {
     position: absolute;
@@ -32,16 +84,20 @@
 }
 
 .playbackSidebarResize::after {
-    left: 2px;
+    left: 3px;
     top: calc(50% - 16px);
     width: 3px;
     height: 32px;
     border-radius: 100px;
-    background: #535353;
+    background: transparent;
+    transition: background-color 0.15s ease;
 }
 
-.playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::before,
 .playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::after {
+    background: #b3b3b3;
+}
+
+.playbackSidebar:not([data-floating]) .playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::before {
     background: #b3b3b3;
 }
 
@@ -49,162 +105,518 @@
     cursor: col-resize !important;
 }
 
+/* Header: the library's section tabs (LibraryView.css), and the app's dimmed close x. */
+
 .playbackSidebarHeader {
     display: flex;
+    flex: none;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    min-height: 64px;
-    padding: 0 16px 0 18px;
+    height: 60px;
+    padding: 0 10px 0 22px;
 }
 
-.playbackSidebarViews {
+.playbackSidebarTabs {
     display: flex;
     align-items: center;
-    gap: 2px;
-    box-sizing: border-box;
-    height: 38px;
-    padding: 0 3px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    background: rgb(22 22 22 / 40%);
+    gap: 20px;
+    min-width: 0;
 }
 
-.playbackSidebarViews button {
-    padding: 0 10px;
+.playbackSidebarTabs button {
+    padding: 4px 0;
     border: 0;
-    border-radius: 100px;
     background: transparent;
-    color: #b3b3b3;
+    color: #a3a2a3;
     font: inherit;
-    font-size: 0.8125rem;
-    line-height: 30px;
+    font-size: 0.9rem;
+    font-weight: 400;
     white-space: nowrap;
+    transition: color 0.15s ease;
 }
 
-.playbackSidebarViews button[aria-pressed="true"] {
-    background: rgb(255 255 255 / 12%);
+.playbackSidebarTabs button:hover,
+.playbackSidebarTabs button[aria-selected="true"] {
     color: white;
-}
-
-.playbackSidebarViews button:hover {
-    color: white;
+    text-decoration: underline;
+    text-underline-offset: 5px;
 }
 
 .playbackSidebarClose {
     display: grid;
     flex: none;
     place-items: center;
-    width: 38px;
-    height: 38px;
+    width: 36px;
+    height: 36px;
     padding: 0;
     border: 0;
+    border-radius: 50%;
     background: transparent;
 }
 
 .playbackSidebarClose img {
-    opacity: 0.65;
+    width: 0.8rem;
+    height: 0.8rem;
+    opacity: 0.55;
+    transition: opacity 0.15s ease;
 }
 
 .playbackSidebarClose:is(:hover, :focus-visible) img {
     opacity: 1;
 }
 
-.playbackSidebar :where(.playbackSidebarHeader, .playbackSidebarScroll, .playbackSidebarSelection) button:focus-visible {
+.playbackSidebar button:focus-visible {
     outline: 1px solid #b3b3b3 !important;
-    outline-offset: -2px;
+    outline-offset: -1px;
 }
+
+.playbackSidebarPanel {
+    position: relative;
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+}
+
+/* Scrolling content */
 
 .playbackSidebarScroll {
     flex: 1;
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 6px 16px 20px 18px;
+    padding: 0 10px 24px 12px;
+    /* Rows fade out under the header rather than being cut off by it. */
+    mask-image: linear-gradient(to bottom, transparent, #000 10px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent, #000 10px);
 }
 
-.playbackSidebarScroll section + section {
-    margin-top: 16px;
+.playbackSidebarSection + .playbackSidebarSection {
+    margin-top: 22px;
 }
 
-.playbackSidebarScroll .queueSectionTitle {
-    padding: 0 8px;
-    border: 0;
+.playbackSidebarHeading {
+    margin: 0;
+    color: #b3b3b3;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
 }
 
-.playbackSidebarScroll section > .queueSectionTitle,
+.playbackSidebarSection > .playbackSidebarHeading,
 .playbackSidebarSectionHeader {
     display: flex;
     align-items: center;
-    min-height: 34px;
-    border-bottom: 1px solid #535353;
-}
-
-.playbackSidebarSectionHeader {
-    justify-content: space-between;
-}
-
-.playbackSidebar button.playbackSidebarTextButton {
-    padding: 0 8px;
-    font-size: 0.8rem;
-    line-height: 30px;
-}
-
-.playbackSidebarMessage {
-    margin: 12px 8px;
-    color: #b3b3b3;
-    font-size: 0.9rem;
-    line-height: 1.5;
-}
-
-.playbackSidebar .playbackSidebarRow {
-    --library-columns: 84px minmax(0, 1fr) 40px;
-    height: 60px;
-    padding-left: 8px;
     gap: 10px;
-    font: 300 0.9rem "Stack Sans Text", Inter, sans-serif;
+    min-height: 32px;
+    padding: 0 10px;
 }
 
-.playbackSidebarRow[aria-current="true"] {
-    background-color: #1c1c1c;
-}
-
-.playbackSidebarRow .coverImgContainer {
-    width: 44px;
-    height: 44px;
-}
-
-.playbackSidebarTrackText {
-    display: grid;
+.playbackSidebarMeta {
+    flex: 1;
     min-width: 0;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: inherit;
-    font: inherit;
-    font-weight: 600;
-    line-height: 1.35;
-    text-align: left;
-}
-
-.playbackSidebarTrackText small {
     overflow: hidden;
-    color: #a3a2a3;
+    color: #8a8a8a;
     font-size: 0.75rem;
-    font-weight: 400;
+    font-variant-numeric: tabular-nums;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.selectionActionMenu.playbackSidebarSelection {
-    position: static;
-    display: flex;
-    align-self: flex-end;
-    width: auto;
-    margin: 0 16px 6px 18px;
+.playbackSidebarTextButton {
+    flex: none;
+    margin-left: auto;
+    padding: 4px 0;
+    border: 0;
+    background: transparent;
+    color: #a3a2a3;
+    font: inherit;
+    font-size: 0.75rem;
+    font-weight: 600;
+    transition: color 0.15s ease;
 }
 
-.playbackSidebarSelection button {
-    width: auto;
+.playbackSidebarTextButton:hover,
+.playbackSidebarTextButton:focus-visible {
+    color: white;
+}
+
+.playbackSidebarMessage {
+    margin: 6px 10px;
+    color: #8a8a8a;
+    font-size: 0.8rem;
+    line-height: 1.5;
+}
+
+/* Played songs: one quiet line until unfolded. */
+
+.playbackSidebarHistoryBar {
+    display: flex;
+    align-items: center;
+    min-height: 32px;
+    margin-bottom: 4px;
+    padding: 0 10px;
+}
+
+.playbackSidebarHistoryToggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border: 0;
+    background: transparent;
+    color: #a3a2a3;
+    font: inherit;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: color 0.15s ease;
+}
+
+.playbackSidebarHistoryToggle .dropdownChevron {
+    width: 8px;
+    height: 8px;
+    color: currentColor;
+}
+
+.playbackSidebarHistoryToggle[aria-expanded="true"] .dropdownChevron {
+    transform: rotate(0);
+}
+
+.playbackSidebarHistoryToggle:hover,
+.playbackSidebarHistoryToggle:focus-visible,
+.playbackSidebarHistoryToggle[aria-expanded="true"] {
+    color: #e0e0e0;
+}
+
+.playbackSidebarCount {
+    min-width: 18px;
+    padding: 1px 6px;
+    box-sizing: border-box;
+    border-radius: 100px;
+    background: rgb(255 255 255 / 9%);
+    color: #b3b3b3;
+    font-size: 0.65rem;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0;
+    text-align: center;
+}
+
+#playbackSidebarHistory {
+    margin-bottom: 18px;
+}
+
+/* Now playing */
+
+.playbackSidebarNowPlaying {
+    display: grid;
+    grid-template-columns: 64px minmax(0, 1fr) 32px;
+    align-items: center;
+    gap: 14px;
+    margin-top: 2px;
+    padding: 10px 6px 10px 10px;
+    border-radius: 12px;
+    background: var(--sidebar-now-playing);
+}
+
+.playbackSidebarNowPlaying .playbackSidebarArtwork {
+    width: 64px;
+    height: 64px;
+    border-radius: 7px;
+}
+
+.playbackSidebarNowPlayingText {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+}
+
+.playbackSidebarNowPlayingTitle {
+    overflow: hidden;
+    font-size: 0.95rem;
+    font-weight: 600;
+    line-height: 1.3;
+    text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.playbackSidebarNowPlaying .playbackSidebarRowArtists + .playbackSidebarRowArtists {
+    color: #8a8a8a;
+}
+
+/* Rows */
+
+.playbackSidebarRows {
+    display: flex;
+    flex-direction: column;
+}
+
+.playbackSidebarRow {
+    position: relative;
+    display: grid;
+    grid-template-columns: 40px minmax(0, 1fr) 40px;
+    align-items: center;
+    gap: 12px;
+    box-sizing: border-box;
+    height: 56px;
+    padding: 0 0 0 10px;
+    border-radius: 8px;
+    cursor: default;
+}
+
+.playbackSidebarRow:hover,
+.playbackSidebarRow[data-menu-open] {
+    background: var(--sidebar-row-hover);
+}
+
+.playbackSidebarRow[data-selected],
+.playbackSidebarRow[data-selected]:hover {
+    background: #352000;
+}
+
+.playbackSidebarRow[data-dragging] {
+    opacity: 0.4;
+}
+
+.playbackSidebarRow[data-drop-position]::before {
+    position: absolute;
+    right: 10px;
+    left: 10px;
+    z-index: 2;
+    height: 2px;
+    border-radius: 2px;
+    background: white;
+    content: "";
+    pointer-events: none;
+}
+
+.playbackSidebarRow[data-drop-position="before"]::before {
+    top: -1px;
+}
+
+.playbackSidebarRow[data-drop-position="after"]::before {
+    bottom: -1px;
+}
+
+/* Already played: still there to replay, but set back from what's coming. */
+.playbackSidebarRow[data-played]:not(:hover, [data-menu-open], [data-selected]) :is(.playbackSidebarArtwork, .playbackSidebarRowText) {
+    opacity: 0.6;
+}
+
+.playbackSidebarRow[data-unavailable] :is(.playbackSidebarArtwork, .playbackSidebarRowText, .playbackSidebarDuration) {
+    opacity: 0.35;
+}
+
+.playbackSidebarArtwork {
+    position: relative;
+    display: grid;
+    width: 40px;
+    height: 40px;
+    overflow: hidden;
+    border-radius: 5px;
+    background: #1d1d1d;
+}
+
+.playbackSidebarCover {
+    grid-area: 1 / 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
+.playbackSidebarArtworkButton {
+    grid-area: 1 / 1;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgb(0 0 0 / 55%);
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.playbackSidebarArtworkButton img {
+    width: 14px;
+    height: 14px;
+    transition: scale var(--motion-press-up);
+}
+
+.playbackSidebarArtworkButton:active img {
+    scale: 0.8;
+    transition: scale var(--motion-press-down);
+}
+
+:is(.playbackSidebarRow, .playbackSidebarNowPlaying):hover .playbackSidebarArtworkButton:not(:disabled),
+.playbackSidebarArtworkButton:focus-visible {
+    opacity: 1;
+}
+
+.playbackSidebarArtworkButton:disabled {
+    display: none;
+}
+
+.playbackSidebar[data-floating] .playbackSidebarScroll[data-selecting] .playbackSidebarArtworkButton,
+.playbackSidebarScroll[data-selecting] .playbackSidebarRow .playbackSidebarArtworkButton {
+    display: none;
+}
+
+.playbackSidebarRowText {
+    display: grid;
+    gap: 1px;
+    min-width: 0;
+}
+
+.playbackSidebarRowTitle {
+    min-width: 0;
+    max-width: 100%;
+    width: fit-content;
+    overflow: hidden;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: white;
+    font: inherit;
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.35;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.playbackSidebarRowArtists {
+    min-width: 0;
+    overflow: hidden;
+    color: #a3a2a3;
+    font-size: 0.75rem;
+    font-weight: 400;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.playbackSidebar .entityLink:hover,
+.playbackSidebar .entityLink:focus-visible {
+    color: white;
+    text-underline-offset: 2px;
+}
+
+/* The duration gives way to the row's menu while the row is pointed at. */
+.playbackSidebarRowEnd {
+    display: grid;
+    place-items: center;
+    height: 100%;
+}
+
+.playbackSidebarRowEnd > * {
+    grid-area: 1 / 1;
+}
+
+.playbackSidebarDuration {
+    color: #8a8a8a;
+    font-size: 0.75rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.playbackSidebarMenuButton {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+}
+
+.playbackSidebarMenuButton img {
+    width: 15px;
+    height: 15px;
+    object-fit: contain;
+}
+
+.playbackSidebarMenuButton:hover:not(:disabled),
+.playbackSidebarMenuButton[data-collection-menu-open] {
+    background: rgb(255 255 255 / 10%);
+}
+
+.playbackSidebarRowEnd .playbackSidebarMenuButton {
+    opacity: 0;
+}
+
+.playbackSidebarRow:is(:hover, :focus-within, [data-menu-open], [data-selecting]) .playbackSidebarMenuButton:not(:disabled) {
+    opacity: 1;
+}
+
+.playbackSidebarRow:is(:hover, :focus-within, [data-menu-open], [data-selecting]) .playbackSidebarDuration {
+    visibility: hidden;
+}
+
+.playbackSidebarRow[data-selecting] .playbackSidebarMenuButton img {
+    width: 18px;
+    height: 18px;
+}
+
+.playbackSidebarNowPlaying .playbackSidebarMenuButton {
+    opacity: 0.7;
+}
+
+.playbackSidebarNowPlaying:is(:hover, :focus-within, [data-menu-open]) .playbackSidebarMenuButton {
+    opacity: 1;
+}
+
+/* Selection: one quiet line over the list, its actions in the app's pill buttons. */
+
+.playbackSidebarSelection {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 6px;
+    min-height: 40px;
+    margin: 0 10px 6px 12px;
+    padding: 0 6px 0 10px;
+    border: 1px solid #2f2f2f;
+    border-radius: 12px;
+    background: rgba(29, 29, 29, 0.7);
+    font-size: 0.8rem;
+}
+
+.playbackSidebarSelectionCount {
+    flex: 1;
+    min-width: 0;
+    color: #b3b3b3;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
+.playbackSidebarPill {
+    flex: none;
+    height: 28px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 100px;
+    background: transparent;
+    color: white;
+    font: inherit;
+    white-space: nowrap;
+}
+
+.playbackSidebarPill:hover:not(:disabled),
+.playbackSidebarPill:focus-visible {
+    background: rgb(255 255 255 / 10%);
+}
+
+.playbackSidebarPill[data-tone="danger"] {
+    color: #ff9d9d;
+}
+
+.playbackSidebarPill:disabled {
+    opacity: var(--disabled-opacity);
 }

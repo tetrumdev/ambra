@@ -1,4 +1,5 @@
 import { albumForTrack, sortAlbumTracks, type BrowseEntity } from "../utils/browse";
+import { nowPlayingState, useNowPlaying } from "../hooks/useNowPlaying";
 import { ArtistLinks } from "./ArtistLinks";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
@@ -176,9 +177,13 @@ function SearchResult({
 }: SearchResultProps) {
   const connected = useServiceAvailability();
   const available = isTrackAvailable(track, connected);
+  const nowPlaying = useNowPlaying();
+  const state = nowPlayingState(nowPlaying, track.globalId);
   return (
     <div
       className="searchResult"
+      data-now-playing={state}
+      aria-current={state ? "true" : undefined}
       data-unavailable={!available ? "true" : undefined}
       data-variant={variant}
       data-track-id={track.globalId}
@@ -187,9 +192,14 @@ function SearchResult({
       onContextMenu={available ? (event) => openCollectionMenu(event, track.globalId) : undefined}
     >
       <div className="trackLeading searchResultLeading" inert={!available}>
-        <button type="button" className="trackPlayButton" aria-label={`Play ${track.name}`}
-          onClick={event => { event.stopPropagation(); playTrack(track.globalId); }}>
-          <img src="/play.svg" alt="" aria-hidden="true" />
+        <button type="button" className="trackPlayButton" aria-label={`${state === "playing" ? "Pause" : "Play"} ${track.name}`}
+          onClick={event => {
+            event.stopPropagation();
+            // The song already playing pauses or resumes where it is, rather than starting over.
+            if (state) nowPlaying.togglePlayback();
+            else playTrack(track.globalId);
+          }}>
+          <img src={state === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
         <div className="searchResultArtwork">
           <TrackArtwork

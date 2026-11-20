@@ -76,6 +76,9 @@ struct Agent {
     /// The server's clock less this app's (`monotonic_ms`), once measured: synced groups start
     /// and keep time on the server's clock.
     clock_offset_ms: Mutex<Option<f64>>,
+    /// A spare player for each other output of this computer the core plays at once with the
+    /// app's own, by device (`native_audio::spawn_satellite`).
+    satellites: tokio::sync::Mutex<HashMap<String, std::sync::Arc<NativeAudioPlayer>>>,
 }
 
 /// This device's own latest play, pause or seek: `seq` counts them, `playing` is what it left.
@@ -94,7 +97,7 @@ impl Control {
 }
 
 struct Running {
-    tasks: [tauri::async_runtime::JoinHandle<()>; 5],
+    tasks: [tauri::async_runtime::JoinHandle<()>; 6],
     agent: std::sync::Arc<Agent>,
 }
 
@@ -125,6 +128,8 @@ pub async fn stop_shared_output(app: &AppHandle) {
         for task in previous.tasks { task.abort(); let _ = task.await; }
         // Playing on alone from here.
         let _ = native_audio::dispatch_sync(&app.state::<NativeAudioPlayer>(), native_audio::SyncCommand::Clear);
+        let satellites = std::mem::take(&mut *previous.agent.satellites.lock().await);
+        close_players(satellites.into_values().collect());
         let _ = previous.agent.request(reqwest::Method::POST, "departure")
             .timeout(Duration::from_secs(1))
             .json(&json!({ "instanceId": previous.agent.instance_id }))
@@ -194,8 +199,9 @@ fn start(app: AppHandle, base_url: String, token: Option<String>, id: String, na
         sent_as: Mutex::new(HashMap::new()), device_report: Mutex::new(json!({})), control: Mutex::new(Control::default()),
         wake: tokio::sync::Notify::new(),
         clock_offset_ms: Mutex::new(None),
+        satellites: tokio::sync::Mutex::new(HashMap::new()),
     });
-    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone())), tauri::async_runtime::spawn(follow_clock(agent.clone()))];
+    let tasks = [tauri::async_runtime::spawn(report(agent.clone())), tauri::async_runtime::spawn(refresh_devices(agent.clone())), tauri::async_runtime::spawn(serve(agent.clone())), tauri::async_runtime::spawn(show_local_status(agent.clone())), tauri::async_runtime::spawn(follow_clock(agent.clone())), tauri::async_runtime::spawn(forward_settings(agent.clone()))];
     Ok(Running { tasks, agent })
 }
 
@@ -243,18 +249,35 @@ impl Agent {
     /// The engine's status, with its song named as the core sent it, and this device's own
     /// latest play, pause or seek.
     async fn status(&self) -> Value {
-        let player = self.app.state::<NativeAudioPlayer>();
-        let mut status = native_audio::native_audio_status(player)
-            .await
-            .ok()
-            .and_then(|status| serde_json::to_value(status).ok())
-            .unwrap_or(Value::Null);
-        if let Some(source) = status["currentSource"].as_str() {
-            status["currentSource"] = Value::String(self.sent_source(source));
-        }
+        let mut status = self.player_status(&self.app.state::<NativeAudioPlayer>());
         let control = self.control();
         if control.seq > 0 && status.is_object() {
             status["control"] = json!({ "seq": control.seq, "playing": control.playing });
+        }
+        status
+    }
+
+    /// What's reported to the server: the app's own player's status, and each spare player's
+    /// under `satellites`, by device.
+    async fn report_status(&self) -> Value {
+        let mut status = self.status().await;
+        let satellites: Vec<(String, std::sync::Arc<NativeAudioPlayer>)> = self.satellites.lock().await
+            .iter().map(|(device, player)| (device.clone(), player.clone())).collect();
+        if !satellites.is_empty() && status.is_object() {
+            status["satellites"] = satellites.into_iter().map(|(device, player)| {
+                let mut status = self.player_status(&player);
+                status["syncV1"] = Value::Bool(true);
+                (device, status)
+            }).collect::<serde_json::Map<_, _>>().into();
+        }
+        status
+    }
+
+    /// A player's status, its song named as the core sent it.
+    fn player_status(&self, player: &NativeAudioPlayer) -> Value {
+        let mut status = serde_json::to_value(native_audio::status_on(player)).unwrap_or(Value::Null);
+        if let Some(source) = status["currentSource"].as_str() {
+            status["currentSource"] = Value::String(self.sent_source(source));
         }
         // The group's timeline, on the server's clock; left out until that clock is known.
         if let Some(anchor) = status.get("syncAnchor").cloned().filter(Value::is_object) {
@@ -268,6 +291,23 @@ impl Agent {
             }
         }
         status
+    }
+
+    /// The spare player for `device`, started the first time the core plays it at once with
+    /// the app's own player.
+    async fn satellite(&self, device: &str) -> Result<std::sync::Arc<NativeAudioPlayer>, String> {
+        let mut satellites = self.satellites.lock().await;
+        if let Some(player) = satellites.get(device) {
+            return Ok(player.clone());
+        }
+        let mut settings = native_audio::settings_on(&self.app.state::<NativeAudioPlayer>()).await?;
+        if !settings.outputs.iter().any(|output| output.id == device) {
+            return Err("That output isn't on this computer".into());
+        }
+        settings.selected_output_id = device.to_owned();
+        let player = std::sync::Arc::new(native_audio::spawn_satellite(&self.app, settings).await?);
+        satellites.insert(device.to_owned(), player.clone());
+        Ok(player)
     }
 
     fn clock_offset(&self) -> Option<f64> {
@@ -386,13 +426,15 @@ async fn report(agent: std::sync::Arc<Agent>) {
         body["name"] = json!(agent.name);
         body["instanceId"] = json!(agent.instance_id);
         // Sampled last, so the position is as fresh as it can be when it leaves.
-        let mut status = agent.status().await;
+        let mut status = agent.report_status().await;
         // When the position was read, on this device's clock: a report held up on the way (a
         // stalled tunnel, say) is then placed when it was true, not when it finally arrived.
         body["sampledAtMs"] = json!(monotonic_ms());
         status["livePcmV1"] = Value::Bool(true);
         // Can play in step with other outputs (`native_audio/sync.rs`).
         status["syncV1"] = Value::Bool(true);
+        // Can play several of this computer's outputs at once (`satellite` in commands).
+        status["satellitesV1"] = Value::Bool(true);
         let playing = status["isPlaying"].as_bool().unwrap_or(false) || status["buffering"].as_bool().unwrap_or(false);
         let reported = transitions(&status);
         body["status"] = status;
@@ -427,7 +469,7 @@ async fn report(agent: std::sync::Arc<Agent>) {
                 () = tokio::time::sleep(watch.min(next_beat.saturating_duration_since(Instant::now()))) => {}
                 () = agent.wake.notified() => {}
             }
-            let status = agent.status().await;
+            let status = agent.report_status().await;
             if transitions(&status) != reported {
                 break;
             }
@@ -435,9 +477,46 @@ async fn report(agent: std::sync::Arc<Agent>) {
     }
 }
 
-/// What the core acts on at once when it changes, as opposed to the advancing position.
-fn transitions(status: &Value) -> [Value; 7] {
-    ["currentSource", "isPlaying", "buffering", "ended", "error", "control", "syncReady"].map(|key| status[key].clone())
+/// What the core acts on at once when it changes, as opposed to the advancing position, on
+/// every player.
+fn transitions(status: &Value) -> Vec<Value> {
+    let keys = ["currentSource", "isPlaying", "buffering", "ended", "error", "control", "syncReady"];
+    let mut changes: Vec<Value> = keys.iter().map(|key| status[*key].clone()).collect();
+    if let Some(satellites) = status["satellites"].as_object() {
+        for (device, satellite) in satellites {
+            changes.push(Value::String(device.clone()));
+            changes.extend(keys.iter().map(|key| satellite[*key].clone()));
+        }
+    }
+    changes
+}
+
+/// Gives each spare player the output settings changed here (its preset, volume, latency).
+async fn forward_settings(agent: std::sync::Arc<Agent>) {
+    let changed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let wake = changed.clone();
+    let listener = agent.app.listen("native-audio-settings-changed", move |_| wake.notify_one());
+    let _listener = SettingsListener(agent.app.clone(), listener);
+    loop {
+        changed.notified().await;
+        let satellites: Vec<(String, std::sync::Arc<NativeAudioPlayer>)> = agent.satellites.lock().await
+            .iter().map(|(device, player)| (device.clone(), player.clone())).collect();
+        if satellites.is_empty() { continue; }
+        let Ok(settings) = native_audio::settings_on(&agent.app.state::<NativeAudioPlayer>()).await else { continue };
+        for (device, player) in satellites {
+            let mut settings = settings.clone();
+            settings.selected_output_id = device;
+            if let Err(error) = native_audio::set_settings_on(&player, settings).await {
+                eprintln!("A spare player couldn't take the new output settings: {error}");
+            }
+        }
+    }
+}
+
+/// Stops spare players, off the async runtime: each waits for its playback thread to end.
+fn close_players(players: Vec<std::sync::Arc<NativeAudioPlayer>>) {
+    if players.is_empty() { return; }
+    tauri::async_runtime::spawn_blocking(move || drop(players));
 }
 
 /// Follows the server's clock, NTP-style: each reading is taken as true halfway through its
@@ -509,67 +588,92 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             if !server_media_source(source) { return Err("Shared playback cannot read private device files".into()); }
         }
     }
-    // The listener here changed playback after the core decided this: theirs stands.
-    let control = agent.control();
+    // Another of this computer's outputs, playing at once with the app's own on a spare player.
+    let satellite_device = args["satellite"].as_str();
+    let satellite = match satellite_device {
+        Some(device) => Some(agent.satellite(device).await?),
+        None => None,
+    };
+    let main = agent.app.state::<NativeAudioPlayer>();
+    let player: &NativeAudioPlayer = satellite.as_deref().unwrap_or(main.inner());
+    // The listener here changed playback after the core decided this: theirs stands. They
+    // control the app's own player only.
+    let control = if satellite.is_some() { Control::default() } else { agent.control() };
     if matches!(command, "play_native_audio" | "pause_native_audio" | "seek_native_audio") && control.overrules(args) {
         return Ok(Value::Null);
     }
-    let player = agent.app.state::<NativeAudioPlayer>();
     // A synced group's load, seek or play is held for the group's start; any other plays alone.
     if matches!(command, "load_native_audio" | "seek_native_audio" | "play_native_audio") {
         let sync = match args["sync"]["epoch"].as_u64() {
             Some(epoch) if !control.overrules(args) => native_audio::SyncCommand::Hold { epoch },
             _ => native_audio::SyncCommand::Clear,
         };
-        native_audio::dispatch_sync(&player, sync)?;
+        native_audio::dispatch_sync(player, sync)?;
     }
     let number = |key: &str| args[key].as_f64().ok_or_else(|| format!("`{key}` is missing"));
     match command {
         "load_native_audio" => native_audio::dispatch_remote_load(
-            &player,
+            player,
             agent.arg_source(args, "source").ok_or("`source` is missing")?,
             agent.arg_source(args, "nextSource"),
             number("positionSeconds")?,
             if control.overrules(args) { control.playing } else { args["autoplay"].as_bool().unwrap_or(false) },
         )
         .map(|()| Value::Null),
-        "queue_native_audio" => native_audio::queue_native_audio(player, agent.arg_source(args, "source"), agent.arg_source(args, "expectedSource"))
+        "queue_native_audio" => native_audio::queue_on(player, agent.arg_source(args, "source"), agent.arg_source(args, "expectedSource"))
             .await
             .map(|()| Value::Null),
-        "play_native_audio" => native_audio::play_native_audio(player).await.map(|()| Value::Null),
-        "pause_native_audio" => native_audio::pause_native_audio(player).await.map(|()| Value::Null),
-        "seek_native_audio" => native_audio::dispatch_remote_seek(&player, number("positionSeconds")?).map(|()| Value::Null),
+        "play_native_audio" => native_audio::play_on(player).await.map(|()| Value::Null),
+        "pause_native_audio" => native_audio::pause_on(player).await.map(|()| Value::Null),
+        "seek_native_audio" => native_audio::dispatch_remote_seek(player, number("positionSeconds")?).map(|()| Value::Null),
         // The group's start: song position `positionSeconds` is heard at `atServerMs`.
         "sync_native_audio" => {
             let at = agent.local_instant(number("atServerMs")?, args["sentAtServerMs"].as_f64());
-            native_audio::dispatch_sync(&player, native_audio::SyncCommand::Start {
+            native_audio::dispatch_sync(player, native_audio::SyncCommand::Start {
                 epoch: args["epoch"].as_u64().ok_or("`epoch` is missing")?,
                 at,
                 position: number("positionSeconds")?,
                 group_resync: Duration::from_millis(args["groupResyncMs"].as_u64().unwrap_or(0).min(10_000)),
             }).map(|()| Value::Null)
         }
-        "warm_native_audio" => native_audio::warm_native_audio(player, agent.arg_source(args, "source").ok_or("`source` is missing")?).map(|()| Value::Null),
-        "set_native_audio_volume" => native_audio::set_native_audio_volume(player, number("volume")?).await.map(|()| Value::Null),
-        "native_audio_volume" => native_audio::native_audio_volume(player).await.map(|volume| json!(volume)),
-        // The core playing on one of this computer's outputs selects it here.
+        "warm_native_audio" => native_audio::warm_on(player, agent.arg_source(args, "source").ok_or("`source` is missing")?).map(|()| Value::Null),
+        "set_native_audio_volume" => {
+            let volume = number("volume")?;
+            // A spare player's level is kept in the app's settings too, where its screens show it.
+            if let Some(device) = satellite_device {
+                let mut settings = native_audio::settings_on(main.inner()).await?;
+                if let Some(output) = settings.outputs.iter_mut().find(|output| output.id == device) {
+                    output.volume = volume;
+                }
+                native_audio::set_settings_on(main.inner(), settings).await?;
+            }
+            native_audio::set_volume_on(player, volume).await.map(|()| Value::Null)
+        }
+        "native_audio_volume" => native_audio::volume_on(player).await.map(|volume| json!(volume)),
+        // The core playing on one of this computer's outputs selects it here. A spare player
+        // only ever plays its own.
+        "select_native_audio_device" if satellite.is_some() => Ok(Value::Null),
         "select_native_audio_device" => {
             let device = args["deviceId"].as_str().unwrap_or_default().to_owned();
-            let mut settings = native_audio::native_audio_settings(player.clone()).await?;
+            // The app's own player takes the output over from a spare one playing it.
+            if let Some(spare) = agent.satellites.lock().await.remove(&device) {
+                close_players(vec![spare]);
+            }
+            let mut settings = native_audio::settings_on(main.inner()).await?;
             if settings.selected_output_id != device {
                 settings.selected_output_id = device;
-                native_audio::set_native_audio_settings(player, settings).await?;
+                native_audio::set_settings_on(main.inner(), settings).await?;
             }
             Ok(Value::Null)
         }
-        "native_audio_settings" => native_audio::native_audio_settings(player)
+        "native_audio_settings" => native_audio::settings_on(main.inner())
             .await
             .and_then(|settings| serde_json::to_value(settings).map_err(|error| error.to_string())),
         // One output's own settings: its name, preset, exclusive mode, resync delay, latency and whether it's shown.
         "set_output_settings" => {
             let output_id = args["outputId"].as_str().ok_or("`outputId` is missing")?.to_owned();
             let change = &args["change"];
-            let mut settings = native_audio::native_audio_settings(player.clone()).await?;
+            let mut settings = native_audio::settings_on(main.inner()).await?;
             let output = settings
                 .outputs
                 .iter_mut()
@@ -597,7 +701,7 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             if let Some(latency) = change["latencyMs"].as_u64() {
                 output.latency_ms = u32::try_from(latency).map_err(|_| "That latency is too long")?;
             }
-            native_audio::set_native_audio_settings(player, settings).await.map(|()| Value::Null)
+            native_audio::set_settings_on(main.inner(), settings).await.map(|()| Value::Null)
         }
         _ => Err("This computer doesn't take that command".into()),
     }

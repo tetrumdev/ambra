@@ -275,6 +275,28 @@ pub fn setup(app: &mut App) {
     });
 }
 
+/// A spare player for one more of this computer's outputs, beside the app's own: the server's
+/// core plays a synced group on several of them at once (`remote_endpoint.rs`). It plays
+/// `settings`' selected output and never saves its settings or tells the app's screens anything.
+pub(crate) async fn spawn_satellite(app: &AppHandle, settings: AudioSettings) -> Result<NativeAudioPlayer, String> {
+    let (command_tx, command_rx) = unbounded();
+    let status = Arc::new(Mutex::new(PlaybackStatus::default()));
+    let worker_status = status.clone();
+    let worker_app = app.clone();
+    let worker = thread::Builder::new()
+        .name("ambra-native-audio-satellite".to_owned())
+        .spawn(move || {
+            output::register_playback_thread();
+            let mut engine = PlaybackWorker::new(command_rx, worker_status, Some(worker_app));
+            engine.persist = false;
+            engine.run()
+        })
+        .map_err(|error| format!("Could not start another native audio player: {error}"))?;
+    let player = NativeAudioPlayer { command_tx, status, worker: Mutex::new(Some(worker)) };
+    set_settings_on(&player, settings).await?;
+    Ok(player)
+}
+
 #[tauri::command]
 pub async fn load_native_audio(
     player: State<'_, NativeAudioPlayer>,
@@ -327,10 +349,51 @@ pub fn warm_native_audio(
     player: State<'_, NativeAudioPlayer>,
     source: String,
 ) -> Result<(), String> {
+    warm_on(&player, source)
+}
+
+// The commands the server's core sends, for any player: the app's own or a spare one (`spawn_satellite`).
+
+pub(crate) fn warm_on(player: &NativeAudioPlayer, source: String) -> Result<(), String> {
     player
         .command_tx
         .send(WorkerCommand::Warm { source })
         .map_err(|_| "The native audio worker stopped".to_owned())
+}
+
+pub(crate) async fn queue_on(player: &NativeAudioPlayer, source: Option<String>, expected_source: Option<String>) -> Result<(), String> {
+    request_async(player.command_tx.clone(), move |reply| WorkerCommand::Queue { source, expected_source, reply }).await
+}
+
+pub(crate) async fn play_on(player: &NativeAudioPlayer) -> Result<(), String> {
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::Play { reply }).await
+}
+
+pub(crate) async fn pause_on(player: &NativeAudioPlayer) -> Result<(), String> {
+    update_status(&player.status, |status| status.is_playing = false);
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::Pause { reply }).await
+}
+
+pub(crate) async fn volume_on(player: &NativeAudioPlayer) -> Result<f64, String> {
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::GetVolume { reply }).await
+}
+
+pub(crate) async fn set_volume_on(player: &NativeAudioPlayer, volume: f64) -> Result<(), String> {
+    request_async(player.command_tx.clone(), move |reply| WorkerCommand::SetVolume { volume, reply }).await
+}
+
+pub(crate) async fn settings_on(player: &NativeAudioPlayer) -> Result<AudioSettings, String> {
+    let command_tx = player.command_tx.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let devices = PlatformOutput::list_devices();
+        request(&command_tx, |reply| WorkerCommand::GetAudioSettings { devices, reply })
+    })
+    .await
+    .map_err(|error| format!("The native audio command task failed: {error}"))?
+}
+
+pub(crate) async fn set_settings_on(player: &NativeAudioPlayer, settings: AudioSettings) -> Result<(), String> {
+    request_async(player.command_tx.clone(), |reply| WorkerCommand::SetAudioSettings { settings, reply }).await
 }
 
 #[tauri::command]
@@ -339,30 +402,17 @@ pub async fn queue_native_audio(
     source: Option<String>,
     expected_source: Option<String>,
 ) -> Result<(), String> {
-    let command_tx = player.command_tx.clone();
-    request_async(command_tx, move |reply| WorkerCommand::Queue {
-        source,
-        expected_source,
-        reply,
-    })
-    .await
+    queue_on(&player, source, expected_source).await
 }
 
 #[tauri::command]
 pub async fn play_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
-    request_async(player.command_tx.clone(), |reply| WorkerCommand::Play {
-        reply,
-    })
-    .await
+    play_on(&player).await
 }
 
 #[tauri::command]
 pub async fn pause_native_audio(player: State<'_, NativeAudioPlayer>) -> Result<(), String> {
-    update_status(&player.status, |status| status.is_playing = false);
-    request_async(player.command_tx.clone(), |reply| WorkerCommand::Pause {
-        reply,
-    })
-    .await
+    pause_on(&player).await
 }
 
 #[tauri::command]
@@ -396,8 +446,12 @@ pub(crate) async fn skip_to_next_native_audio(player: State<'_, NativeAudioPlaye
 pub async fn native_audio_status(
     player: State<'_, NativeAudioPlayer>,
 ) -> Result<NativeAudioStatus, String> {
+    Ok(status_on(&player))
+}
+
+pub(crate) fn status_on(player: &NativeAudioPlayer) -> NativeAudioStatus {
     let status = lock_status(&player.status).clone();
-    Ok(NativeAudioStatus {
+    NativeAudioStatus {
         current_source: status.current_source,
         current_time: status.current_time,
         duration: status.duration,
@@ -416,7 +470,7 @@ pub async fn native_audio_status(
             position_seconds,
         }),
         sync_error_ms: status.sync_error_ms,
-    })
+    }
 }
 
 #[tauri::command]
@@ -466,10 +520,7 @@ pub async fn set_native_audio_exclusive_mode(
 
 #[tauri::command]
 pub async fn native_audio_volume(player: State<'_, NativeAudioPlayer>) -> Result<f64, String> {
-    request_async(player.command_tx.clone(), |reply| {
-        WorkerCommand::GetVolume { reply }
-    })
-    .await
+    volume_on(&player).await
 }
 
 #[tauri::command]
@@ -477,23 +528,14 @@ pub async fn set_native_audio_volume(
     player: State<'_, NativeAudioPlayer>,
     volume: f64,
 ) -> Result<(), String> {
-    request_async(player.command_tx.clone(), move |reply| {
-        WorkerCommand::SetVolume { volume, reply }
-    })
-    .await
+    set_volume_on(&player, volume).await
 }
 
 #[tauri::command]
 pub async fn native_audio_settings(
     player: State<'_, NativeAudioPlayer>,
 ) -> Result<AudioSettings, String> {
-    let command_tx = player.command_tx.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let devices = PlatformOutput::list_devices();
-        request(&command_tx, |reply| WorkerCommand::GetAudioSettings { devices, reply })
-    })
-    .await
-    .map_err(|error| format!("The native audio command task failed: {error}"))?
+    settings_on(&player).await
 }
 
 #[tauri::command]
@@ -501,10 +543,7 @@ pub async fn set_native_audio_settings(
     player: State<'_, NativeAudioPlayer>,
     settings: AudioSettings,
 ) -> Result<(), String> {
-    request_async(player.command_tx.clone(), |reply| {
-        WorkerCommand::SetAudioSettings { settings, reply }
-    })
-    .await
+    set_settings_on(&player, settings).await
 }
 
 #[tauri::command]
@@ -637,6 +676,11 @@ struct PlaybackEngine<O: AudioOutput> {
     fresh_output: bool,
     /// Zeros written ahead of a synced start.
     silence: Vec<f64>,
+    /// What the open device adds after its queue, as the platform reports it (`presentation_latency`).
+    device_latency: Duration,
+    /// The app's own player, which keeps the settings and tells the app's screens what it plays.
+    /// A spare player for another output (`spawn_satellite`) does neither.
+    persist: bool,
 }
 
 struct QueuedSource {
@@ -811,6 +855,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             sync: None,
             fresh_output: false,
             silence: Vec::new(),
+            device_latency: Duration::ZERO,
+            persist: true,
         };
         if let Some(app) = worker.event_app.as_ref() {
             if let Ok(directory) = crate::persistent_data_directory(app) {
@@ -1076,7 +1122,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         // Persist first; a failed write must not change the live signal path.
         let previous_settings = self.audio_settings.clone();
         let previous_gain = self.gain.clone();
-        if self.event_app.is_some() {
+        if self.persist {
             settings.save(&directory)?;
         }
         let old_id = self.selected_device_id.clone();
@@ -1119,7 +1165,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             self.gain = previous_gain;
             self.selected_device_id = old_id;
             self.exclusive_mode = old_mode;
-            if self.event_app.is_some() {
+            if self.persist {
                 let _ = self.audio_settings.save(&directory);
             }
             if output_replaced && self.current_source.is_some() {
@@ -1165,7 +1211,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 self.defer_stream(position);
             }
         }
-        if let Some(app) = &self.event_app {
+        if let Some(app) = self.event_app.as_ref().filter(|_| self.persist) {
             let _ = app.emit("native-audio-settings-changed", &self.audio_settings);
         }
         Ok(())
@@ -1250,10 +1296,17 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn install_output(&mut self, output: O, spec: StreamSpec) {
+        self.device_latency = output.presentation_latency();
         self.output = Some(output);
         self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
         self.rendering = false;
         self.fresh_output = true;
+    }
+
+    /// How long a sample that has left the device's queue takes to be heard: the delay the
+    /// platform reports for the device, and the latency set for this output (a receiver, say).
+    fn hearing_latency(&self) -> Duration {
+        self.device_latency + Duration::from_millis(u64::from(self.audio_settings.selected().latency_ms))
     }
 
     fn apply_sync(&mut self, command: SyncCommand) {
@@ -1340,7 +1393,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     fn align_to(&mut self, anchor: Anchor, spec: StreamSpec) -> Result<bool, String> {
         let rate = f64::from(spec.sample_rate);
         let channels = spec.channels;
-        let latency = Duration::from_millis(u64::from(self.audio_settings.selected().latency_ms));
+        let latency = self.hearing_latency();
         if self.pcm.is_empty() && self.decoder_ended {
             if let Some(sync) = self.sync.as_mut() { sync.aligned = true; }
             return Ok(false);
@@ -2045,7 +2098,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 && self.rendered_frames > queued_frames
             {
                 let now = Instant::now();
-                let latency = f64::from(self.audio_settings.selected().latency_ms) / 1000.0;
+                let latency = (self.device_latency + Duration::from_millis(u64::from(self.audio_settings.selected().latency_ms))).as_secs_f64();
                 let error = current_time - latency - anchor.position_at(now);
                 sync.trim.observe(error, now);
                 realign = error.abs() > sync::REALIGN_ABOVE;
@@ -2206,7 +2259,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             status.error = None;
         });
         self.publish_sync();
-        if let Some(app) = self.event_app.as_ref() {
+        if let Some(app) = self.event_app.as_ref().filter(|_| self.persist) {
             let _ = app.emit(SOURCE_CHANGED_EVENT, event_source);
         }
         Ok(())

@@ -10,7 +10,6 @@ import { entityKey } from "./utils/browse";
 import { LibraryView } from "./components/LibraryView";
 import { HomeView } from "./components/HomeView";
 import { Sidebar } from "./components/Sidebar";
-import { Queue } from "./components/Queue";
 import { PlaybackSidebar } from "./components/PlaybackSidebar";
 import { AppScrollbar } from "./components/AppScrollbar";
 import { NavigationSwipe } from "./components/NavigationSwipe";
@@ -33,6 +32,7 @@ import { useAudioSettings } from "./hooks/AudioSettingsContext";
 import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { useQueue } from "./hooks/useQueue";
+import { NowPlayingProvider } from "./hooks/useNowPlaying";
 import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getServerConnection, subscribeServerConnection } from "./api/serverConnection";
@@ -234,16 +234,16 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
   const preferredPlaybackSidebarWidth = useRef<number | null>(null);
   const {
-    screen, isPlayerView, isQueueView, isSettingsView, isHomeView, isSearchView,
+    screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
-    sidebarView, canShowPlaybackSidebar, setPlaybackSidebarView, closePlaybackSidebar,
+    sidebarView, setPlaybackSidebarView, closePlaybackSidebar,
     sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
-    openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, openQueue, toggleQueue,
+    openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
     confirmSearch, dismissSearch,
   } = useAppNavigation({
     preferences, setPreferences, selectedPlaylistId, setSelectedPlaylistId,
-    hasCurrentTrack: player.currentTrack !== undefined, isFullscreen, localOnly,
+    hasCurrentTrack: player.currentTrack !== undefined, localOnly,
   });
   const latestSessionRef = useRef({ preferences: sessionPreferences, player, usingCore });
   latestSessionRef.current = { preferences: sessionPreferences, player, usingCore };
@@ -313,7 +313,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   const [playlistErrorDismissed, setPlaylistErrorDismissed] = useState(false);
   useEffect(() => setPlaylistErrorDismissed(false), [servicePlaylistError]);
   const browseContextKey = browseEntity ? entityKey(browseEntity) : null;
-  const viewKey = isSettingsView ? "settings" : isQueueView ? "queue"
+  const viewKey = isSettingsView ? "settings"
     : browseContextKey ? `entity:${browseContextKey}`
     : isSearchView ? "search" : isHomeView ? "home"
     : selectedPlaylist || playlistPending ? `playlist:${selectedPlaylistId}`
@@ -456,6 +456,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     queue, player, activeCollectionContext, search, searchQuery, searchProvider,
     browseContextKey: browseContextKey ?? "browse", rememberTracks,
   });
+  const togglePlayback = useStableCallback(() => { void player.togglePlayback(); });
   const updateUiPreferences = useCallback((patch: Partial<AppPreferences["ui"]>) => {
     setPreferences(current => ({ ...current, ui: { ...current.ui, ...patch } }));
   }, []);
@@ -508,7 +509,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   }), [chosenTrackColumns, hiddenTrackColumns, listeningHistory.stats]);
 
   return (
-    <>
+    <NowPlayingProvider trackId={player.currentTrack?.globalId} isPlaying={player.isPlaying} togglePlayback={togglePlayback}>
       <PlayerStage
         screen={screen}
         preferredView={preferences.ui.playerView}
@@ -531,7 +532,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       <TrackColumnsContext.Provider value={trackColumns}>
       <PageFilterProvider query={pageFilter?.query ?? ""}>
       {/* Stays mounted, hidden, behind the player, so closing it is instant and every scroll position holds. */}
-      <main ref={mainRef} className="appScreen" id={isQueueView ? "queue" : isSettingsView ? "settings" : isSearchView ? "search" : "library"}
+      <main ref={mainRef} className="appScreen" id={isSettingsView ? "settings" : isSearchView ? "search" : "library"}
         data-hidden={isPlayerView || undefined} inert={isPlayerView && searchSummon !== "on"}>
         {/* On every screen; where a screen has no search of its own it waits hidden until summoned. */}
         {!localOnly && <SearchBar
@@ -549,19 +550,14 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           summoned={!hasSearchPage && searchSummon === "on"}
           onLeave={dismissSearch}
         />}
-        {isQueueView && (
-          <button className="xContainer queueClose" type="button" onClick={closeCurrentScreen}>
-            <img src="/x.svg" alt="Close" className="closeBtn" />
-          </button>
-        )}
-        {!isQueueView && !isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
+        {!isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
         {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={closeCurrentScreen} /> : <Sidebar
-          isHomeActive={isHomeView && !isQueueView}
+          isHomeActive={isHomeView}
           onOpenHome={openHome}
           isSettingsActive={isSettingsView}
           onOpenSettings={openSettings}
-          activeLibrarySection={!isQueueView && !isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist && !playlistPending ? librarySection : null}
-          activePlaylistId={!isQueueView && !isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
+          activeLibrarySection={!isSettingsView && !isSearchView && !isHomeView && !browseEntity && !selectedPlaylist && !playlistPending ? librarySection : null}
+          activePlaylistId={!isSettingsView && !isSearchView && !isHomeView ? selectedPlaylist?.id ?? null : null}
           onOpenLibrarySection={openLibrarySection}
           onCreatePlaylist={createPlaylist}
           onRenamePlaylist={renamePlaylist}
@@ -592,22 +588,6 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
             onServicePlaylistVisibilityChange={(provider, visible) => setPreferences(current => ({
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
             }))}
-          />
-        ) : isQueueView ? (
-          <Queue
-            onOpenEntity={openEntity}
-            currentEntry={queue.currentEntry}
-            upcomingEntries={queue.upcomingEntries}
-            historyEntries={queue.historyEntries}
-            jumpTo={jumpToQueueEntry}
-            replayHistory={replayQueueHistoryEntry}
-            reorderEntries={queue.reorderEntries}
-            deleteEntries={deleteQueueEntries}
-            deleteHistoryEntries={queue.removeHistoryEntries}
-            registerScrollElement={registerScrollElement}
-            playlistOptions={playlistOptions}
-            savedTrackIds={libraryTrackIds}
-            addToLibrary={addEntityTrack}
           />
         ) : browseEntity ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
           onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
@@ -689,7 +669,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       {!isPlayerView && <UpdateNotice />}
       <DownloadDialog />
       <DownloadActivity tracks={availableTracks} hidden={isPlayerView} />
-      {!isPlayerView && !isQueueView && !isSettingsView && servicePlaylistError && !playlistErrorDismissed && (
+      {!isPlayerView && !isSettingsView && servicePlaylistError && !playlistErrorDismissed && (
         <div className="playlistSyncError" role="alert" data-playback-error={!!player.playbackError}>
           <span data-tooltip={servicePlaylistError} data-tooltip-overflow="">{servicePlaylistError}</span>
           <button type="button" aria-label="Dismiss playlist error" data-tooltip="Dismiss"
@@ -722,12 +702,13 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         onSeek={player.seek}
         onOpenBigscreen={openPlayer}
         onToggleQueue={toggleQueue}
-        queueSidebarOpen={canShowPlaybackSidebar ? sidebarView !== null : undefined}
+        queueSidebarOpen={sidebarView !== null}
         direction={skipDirection}
       />
 
       {sidebarView && <PlaybackSidebar
         view={sidebarView}
+        floating={isPlayerView}
         preferredWidth={preferredPlaybackSidebarWidth}
         onChangeView={setPlaybackSidebarView}
         onClose={closePlaybackSidebar}
@@ -735,13 +716,16 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         isPlaying={player.isPlaying}
         onTogglePlayback={player.togglePlayback}
         upcoming={queue.upcomingEntries}
+        history={queue.historyEntries}
         onJumpTo={jumpToQueueEntry}
+        onReplayHistory={replayQueueHistoryEntry}
         onRemove={deleteQueueEntries}
+        onRemoveHistory={queue.removeHistoryEntries}
         onReorder={ids => queue.reorderEntries(
           queue.historyEntries.map(({ historyId }) => ({ historyId })),
           ids.map(queueId => ({ queueId })),
         )}
-        onOpenFullQueue={openQueue}
+        onOpenEntity={openEntity}
         lyrics={<LyricsView key={player.currentTrack?.globalId} compact
           track={player.currentTrack} clock={player.clock} playing={player.isPlaying} onSeek={player.seek}
           motion={preferences.ui.lyricMotion} autoSync={preferences.ui.autoSyncLyrics} globalOffsetMs={preferences.ui.lyricsOffsetMs} />}
@@ -757,7 +741,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       <ShortcutToast />
       <MusicDropZone onImport={library.importFiles} />
       <NavigationSwipe canNavigate={canNavigate} navigate={navigate} screenRef={mainRef} contextKey={`${screen}:${viewKey}:${settingsTab}`} />
-    </>
+    </NowPlayingProvider>
   );
 }
 

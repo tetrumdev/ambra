@@ -43,9 +43,12 @@ export type PageReveal = {
   target: string | null;
   /** Changes each time the match is found anew, so the list scrolls to it once per find. */
   key: string | null;
-  /** True until the listener clicks, scrolls or types after it was found. */
-  breathing: boolean;
+  /** True until the listener scrolls, clicks or presses a key outside the filter after it was found. */
+  highlighted: boolean;
 };
+
+/** Keys that move nothing on the page, so pressing them leaves the found song highlighted. */
+const QUIET_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Escape", "Enter", "Tab"]);
 
 /**
  * When the whole page has one match, a list that holds it keeps all its songs and points at
@@ -54,17 +57,25 @@ export type PageReveal = {
 export function usePageReveal(matchedIds: readonly string[], filtering: boolean): PageReveal {
   const { matches, query } = usePageFilter();
   const target = filtering && matches === 1 && matchedIds.length === 1 ? matchedIds[0] : null;
-  const key = target === null ? null : `${query}\n${target}`;
+  const key = target === null ? null : `${query}
+${target}`;
   const [dismissed, setDismissed] = useState<string | null>(null);
-  const breathing = key !== null && dismissed !== key;
+  const highlighted = key !== null && dismissed !== key;
   useEffect(() => {
-    if (!breathing) return;
-    const dismiss = () => setDismissed(key);
-    const events = ["pointerdown", "wheel", "keydown", "touchstart"] as const;
+    if (!highlighted) return;
+    // The list's own jump to the match is a scroll too, so only the listener's input counts:
+    // anything done in the filter bar itself (typing, Enter, closing it) keeps the highlight.
+    const inFilter = (event: Event) => event.target instanceof Element && event.target.closest(".pageFilter") !== null;
+    const dismiss = (event: Event) => {
+      if (inFilter(event)) return;
+      if (event instanceof KeyboardEvent && QUIET_KEYS.has(event.key)) return;
+      setDismissed(key);
+    };
+    const events = ["pointerdown", "wheel", "keydown", "touchmove"] as const;
     for (const event of events) window.addEventListener(event, dismiss, { capture: true, passive: true });
     return () => { for (const event of events) window.removeEventListener(event, dismiss, { capture: true }); };
-  }, [breathing, key]);
-  return { target, key, breathing };
+  }, [highlighted, key]);
+  return { target, key, highlighted };
 }
 
 /** The songs of `tracks` the page filter lets through, or all of them around the page's only match. */
