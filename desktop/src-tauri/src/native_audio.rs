@@ -22,7 +22,7 @@ pub mod lyric_offset;
 mod output;
 mod resync;
 pub mod settings;
-mod sync;
+pub(crate) mod sync;
 
 use decoder::DecodedSource;
 use dither::Dither;
@@ -99,7 +99,7 @@ struct PlaybackStatus {
     /// This output's own resync delay, which a group waits out alike when every device reopens.
     resync_delay_ms: u32,
     /// When the group hears which song position, while this output plays in sync.
-    sync_anchor: Option<(Instant, f64)>,
+    sync_anchor: Option<Anchor>,
     /// How far ahead of the group this output plays, averaged.
     sync_error_ms: Option<f64>,
 }
@@ -163,8 +163,9 @@ pub struct SyncAnchorReport {
 pub(crate) enum SyncCommand {
     /// Prepare what comes next (a load, seek or play) but hold it for the group's start.
     Hold { epoch: u64 },
-    /// The group's start: song position `position` is heard at `at`.
-    Start { epoch: u64, at: Instant, position: f64, group_resync: Duration },
+    /// The group's start: song position `position` is heard at `at`, placed with the server
+    /// clock's offset `clock_offset_ms` (None when it wasn't known yet).
+    Start { epoch: u64, at: Instant, position: f64, group_resync: Duration, clock_offset_ms: Option<f64> },
     /// Play on alone, as soon as ready.
     Clear,
 }
@@ -465,9 +466,9 @@ pub(crate) fn status_on(player: &NativeAudioPlayer) -> NativeAudioStatus {
         sync_ready: status.sync_ready,
         sync_resync_delay_ms: status.sync_resync_delay_ms,
         resync_delay_ms: status.resync_delay_ms,
-        sync_anchor: status.sync_anchor.map(|(at, position_seconds)| SyncAnchorReport {
-            in_ms: sync::signed_seconds(at, Instant::now()) * 1000.0,
-            position_seconds,
+        sync_anchor: status.sync_anchor.map(|anchor| SyncAnchorReport {
+            in_ms: sync::signed_seconds(anchor.heard_at(), Instant::now()) * 1000.0,
+            position_seconds: anchor.position,
         }),
         sync_error_ms: status.sync_error_ms,
     }
@@ -1325,9 +1326,9 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 self.sync = Some(SyncState::hold(epoch));
                 self.publish_sync();
             }
-            SyncCommand::Start { epoch, at, position, group_resync } => {
+            SyncCommand::Start { epoch, at, position, group_resync, clock_offset_ms } => {
                 let Some(sync) = self.sync.as_mut().filter(|sync| sync.epoch == epoch) else { return };
-                sync.start(Anchor { at, position, group_resync });
+                sync.start(Anchor { at, position, group_resync, clock_offset_ms });
                 self.publish_sync();
                 // Started anew while playing: what the device holds is placed again.
                 if self.rendering
@@ -1349,7 +1350,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     /// Publishes the group's timeline as this output keeps it.
     fn publish_sync(&self) {
-        let anchor = self.sync.as_ref().and_then(|sync| sync.anchor).map(|anchor| (anchor.at, anchor.position));
+        let anchor = self.sync.as_ref().and_then(|sync| sync.anchor);
         let holding = self.sync.as_ref().is_some_and(|sync| sync.anchor.is_none());
         update_status(&self.status, |status| {
             status.sync_anchor = anchor;

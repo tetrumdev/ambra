@@ -54,7 +54,9 @@ goes to every output at once.
 
 Each output lines itself up on its own (`desktop/src-tauri/src/native_audio/sync.rs`). Outputs
 follow the server's clock through `/api/session/clock`, trusting the quickest of recent round
-trips. Before its first sample an output writes exactly as much silence as puts that sample on
+trips. The group's timeline stays on the server's clock: each computer's clock runs a few
+milliseconds a minute faster or slower than the server's, so an output moves its timeline with
+every new clock reading rather than keeping the one it started with. Before its first sample an output writes exactly as much silence as puts that sample on
 time, or drops what it's already too late for. While playing it compares the position it is
 heard at with the group's timeline and drops or doubles single frames, spread out (at most one in
 200, usually one in 1000), so its sound card's clock can't drift from the others'. A stall of
