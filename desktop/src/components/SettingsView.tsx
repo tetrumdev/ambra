@@ -7,7 +7,7 @@ import { automaticUpdateChecks, checkForUpdate, installUpdate, setAutomaticUpdat
 import { enabledOutputsFirst, MAX_OUTPUT_LATENCY_MS, MAX_TARGET_LUFS, MIN_TARGET_LUFS, type AudioSettings, type DspPreset, type NormalizationMode, type OutputSettings } from "../utils/audioSettings";
 import { ANIMATION_FPS_OPTIONS } from "../utils/frameRate";
 import { MAX_LYRICS_OFFSET_MS, type AppPreferences } from "../utils/preferences";
-import type { StreamingProvider } from "../api/server";
+import { setVocalTiming, vocalTimingStatus, type StreamingProvider, type VocalTimingStatus } from "../api/server";
 import { musicProviderName } from "../utils/musicProviderName";
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
@@ -23,6 +23,44 @@ import { serverConnection } from "../api/serverConnection";
 import { preferredService, setPreferredService, subscribePreferredService, type PreferredService } from "../utils/servicePreference";
 
 /** Which service's copy is shown when several have a song or album in the same quality. */
+/**
+ * The server's optional vocal model, which hears where each line's singing ends and lines the
+ * lyrics up with the isolated vocals. It downloads once (about 30 MB) and runs on the server.
+ */
+function VocalTimingSetting() {
+  const [status, setStatus] = useState<VocalTimingStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const downloading = status?.model.state === "downloading";
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => vocalTimingStatus().then(
+      value => { if (!cancelled) { setStatus(value); setError(null); } },
+      reason => { if (!cancelled) setError(String(reason instanceof Error ? reason.message : reason)); },
+    );
+    void load();
+    // Download progress and the songs waiting are only shown while there is something to show.
+    const timer = downloading || status?.pending ? setInterval(load, 2000) : undefined;
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [downloading, Boolean(status?.pending)]);
+  const model = status?.model;
+  const megabytes = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
+  const hint = error
+    ?? (model?.state === "downloading" ? `Downloading the vocal model, ${megabytes(model.received)} of ${megabytes(model.total)}`
+      : model?.state === "failed" ? model.error
+        : model?.state === "ready" && status?.pending ? `Analyzing ${status.pending} ${status.pending === 1 ? "song" : "songs"}`
+          : undefined);
+  return <SettingRow label="Precise lyric timing" hint={hint}
+    help={`Your server listens for the vocals in each song, so lyrics end with the singing and line up to within a few hundredths of a second. Downloads a ${status ? megabytes(status.modelBytes) : "30 MB"} model to the server. Songs are analyzed as they play or come up in the queue; slower servers take longer, and each song is analyzed once.`}>
+    <Toggle label="Precise lyric timing" checked={Boolean(status?.enabled)} disabled={!status || busy}
+      onChange={enabled => {
+        setBusy(true);
+        setVocalTiming(enabled).then(setStatus, reason => setError(String(reason instanceof Error ? reason.message : reason)))
+          .finally(() => setBusy(false));
+      }} />
+  </SettingRow>;
+}
+
 function PreferredServiceSetting() {
   const service = useSyncExternalStore(subscribePreferredService, preferredService);
   const options: { value: PreferredService; label: string }[] = [
@@ -131,6 +169,7 @@ export function SettingsView({
         <SettingRow label="Auto-sync lyrics" hint={audio.native ? undefined : DESKTOP_ONLY} help="Lines lyrics up with the vocals of the song playing.">
           <Toggle label="Auto-sync lyrics" checked={autoSyncLyrics} disabled={!audio.native} onChange={autoSyncLyrics => onPreferencesChange({ autoSyncLyrics })} />
         </SettingRow>
+        <VocalTimingSetting />
         <SettingRow label="Lyrics offset" help="For a delay in your speakers or headphones, like Bluetooth. A positive offset shows lyrics earlier, on every song.">
           <span className="settingsFieldRow settingsUnitInput">
             <input type="number" aria-label="Lyrics offset (milliseconds)" min={-MAX_LYRICS_OFFSET_MS} max={MAX_LYRICS_OFFSET_MS} step={10} required

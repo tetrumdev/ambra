@@ -629,6 +629,36 @@ async fn save_on_server(state: &AppState, track: &TrackRef, quality: Quality) ->
     Ok(())
 }
 
+/// A plain copy of a song to analyze (vocal timing): the server's own download when it has
+/// one, else a fresh copy at the smallest quality in `scratch`. Returns the readable file, its
+/// container, and the scratch file the caller removes afterwards, if one was made.
+pub(super) async fn analysis_copy(
+    state: &AppState,
+    scratch: &Store,
+    provider: &str,
+    provider_track_id: &str,
+) -> Result<(ambra_vault::Reader<fs::File>, String, Option<String>), String> {
+    let track = TrackRef {
+        provider: parse_provider(provider).map_err(|error| error.message)?,
+        provider_track_id: provider_track_id.to_owned(),
+    };
+    if let Ok(store) = state.downloads.store()
+        && let Some(entry) = store.get(&track.id())
+        && let Ok(reader) = store.open_file(&entry.file)
+    {
+        return Ok((reader, entry.container, None));
+    }
+    let stem = format!("analysis-{}", file_stem(&track.id()));
+    let produced = produce(state, scratch, &track, Quality::Lossy, &stem, None).await?;
+    match scratch.open_file(&produced.file) {
+        Ok(reader) => Ok((reader, produced.container, Some(produced.file))),
+        Err(error) => {
+            let _ = fs::remove_file(scratch.path(&produced.file));
+            Err(error.to_string())
+        }
+    }
+}
+
 struct Produced {
     file: String,
     container: String,

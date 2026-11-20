@@ -152,6 +152,7 @@ pub fn parse(raw: &str, duration_ms: Option<u64>) -> Result<LyricsResponse, io::
     let mut result = LyricsResponse::empty(Some(false));
     result.original_format = Some("ttml");
     result.language = root.attr("lang").map(str::to_owned);
+    result.machine_timed = root.attr("byModel") == Some("true");
     // Format declarations describe intent, not proof of detailed timing.
     let declared = root.attr("timing").unwrap_or("");
     let granularity = match declared.to_ascii_lowercase().as_str() {

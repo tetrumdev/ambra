@@ -35,6 +35,7 @@ mod live_pcm;
 mod storage;
 mod tray;
 mod user_state;
+mod vocal_timing;
 mod write_behind;
 
 /// The server runs for days with a worker thread per core. glibc keeps a separate pool of

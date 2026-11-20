@@ -12,6 +12,8 @@ export class SearchCache<T> {
 
   clear() { this.entries.clear(); }
 
+  delete(key: string) { this.entries.delete(key); }
+
   get(key: string): T | undefined {
     const entry = this.entries.get(key);
     if (!entry) return undefined;

@@ -344,6 +344,10 @@ pub(in crate::api) fn state(directory: &std::path::Path) -> AppState {
             directory.join("downloads"),
             &directory.join("download-vault.key"),
         )),
+        vocal_timing: Arc::new(super::super::vocal_timing::VocalTiming::at(
+            directory.join("vocal-timing"),
+            &directory.join("download-vault.key"),
+        )),
     }
 }
 fn local_track(name: &str, id: &str) -> Value {

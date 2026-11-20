@@ -7,6 +7,7 @@ edition = "2024"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ambra-net = { path = "../crates/ambra-net" }
 ambra-vault = { path = "../crates/ambra-vault" }
+ambra-lyric-sync = { path = "../crates/ambra-lyric-sync" }
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 axum = "0.8.9"
 base64 = "0.22.1"
@@ -27,17 +28,20 @@ qbz-qobuz = { path = "vendor/qbz/qbz-qobuz" }
 # Keep this separate from Ambra's reqwest 0.13 streaming client.
 qobuz-http = { package = "reqwest", version = "0.12", default-features = false, features = ["gzip"] }
 quick-xml = "0.41.0"
+realfft = "3.5"
 rpassword = "7"
 reqwest = { version = "0.13.4", features = ["json", "query", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
 sha2 = "0.10"
+symphonia = { version = "0.6", features = ["all"] }
 tidlers = "0.5.0"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-stream = "0.1"
 tokio-tungstenite = "0.28"
 tokio-util = { version = "0.7", features = ["io", "rt"] }
+tract-onnx = "0.21"
 tower-http = { version = "0.7.0", features = ["compression-gzip", "cors", "fs"] }
 urlencoding = "2"
 rusqlite = { version = "0.41.0", features = ["bundled"] }

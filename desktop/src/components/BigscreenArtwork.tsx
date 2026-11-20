@@ -12,7 +12,7 @@ import {
   settledBigscreenArtwork,
 } from "../utils/artworkImages";
 import type { Track } from "../types/music";
-import { RIM_ANGLES, coverShadowShares, rimMask, swirlPalette } from "../utils/artworkPalette";
+import { RIM_ANGLES, coverRim, rimMask, swirlPalette, type CoverRim } from "../utils/artworkPalette";
 import { whiteArtwork } from "../utils/artworkPlaceholder";
 import { FluidGradientBackground } from "./FluidGradientBackground";
 import "./BigscreenArtwork.css";
@@ -77,28 +77,42 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
   // Each stretch of rim gets a shadow if light, a halo if dark; the palette request is shared with the swirl.
   const shadow = useRef<HTMLDivElement>(null);
   const halo = useRef<HTMLDivElement>(null);
-  const shares = useRef(RIM_ANGLES.map(() => 1));
-  const paint = (values: number[]) => {
-    shares.current = values;
-    shadow.current?.style.setProperty("--rim-mask", rimMask(values));
-    halo.current?.style.setProperty("--rim-mask", rimMask(values.map(share => 1 - share)));
+  const rim = useRef<CoverRim>({
+    shadow: RIM_ANGLES.map(() => 1), halo: RIM_ANGLES.map(() => 0), shadowTint: [0, 0, 0], haloTint: [1, 1, 1],
+  });
+  const paint = (value: CoverRim) => {
+    rim.current = value;
+    const rgb = (color: number[]) => color.map(channel => Math.round(channel * 255)).join(" ");
+    for (const [element, strength, tint] of [
+      [shadow.current, value.shadow, value.shadowTint],
+      [halo.current, value.halo, value.haloTint],
+    ] as const) {
+      element?.style.setProperty("--rim-mask", rimMask(strength));
+      element?.style.setProperty("--rim-tint", rgb(tint));
+    }
   };
-  useLayoutEffect(() => paint(shares.current), []);
+  useLayoutEffect(() => paint(rim.current), []);
   useEffect(() => {
     if (!track) return;
     let cancelled = false;
     let frame = 0;
     void artworkPalette(track).then((palette) => {
       if (cancelled || palette.colors.length !== 4) return;
-      const from = shares.current;
-      const to = coverShadowShares(palette);
+      const from = rim.current;
+      const to = coverRim(palette);
       if (reducedMotion()) return paint(to);
       // Masks don't transition in CSS, so the shift between covers is eased here, in step with the cover's.
       const start = performance.now();
       const step = (now: number) => {
         const progress = Math.min(1, (now - start) / 600);
         const eased = progress * progress * (3 - 2 * progress);
-        paint(from.map((value, index) => value + (to[index] - value) * eased));
+        const mix = <T extends number[]>(a: T, b: T) => a.map((value, index) => value + (b[index] - value) * eased) as T;
+        paint({
+          shadow: mix(from.shadow, to.shadow),
+          halo: mix(from.halo, to.halo),
+          shadowTint: mix(from.shadowTint, to.shadowTint),
+          haloTint: mix(from.haloTint, to.haloTint),
+        });
         if (progress < 1) frame = requestAnimationFrame(step);
       };
       frame = requestAnimationFrame(step);

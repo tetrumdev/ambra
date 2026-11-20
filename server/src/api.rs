@@ -2,6 +2,7 @@ mod credits;
 mod discover;
 mod downloads;
 mod playlists;
+mod vocal_timing;
 
 use crate::library_sync::{Change, Events, Journal};
 use crate::loudness::Loudness;
@@ -102,6 +103,7 @@ struct AppState {
     discover: Arc<discover::Discover>,
     user_state: Arc<crate::user_state::UserState>,
     downloads: Arc<downloads::Downloads>,
+    vocal_timing: Arc<vocal_timing::VocalTiming>,
 }
 
 /// Requests own a cheap provider clone; signing out can remove the active session.
@@ -245,6 +247,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         discover: Arc::new(discover::Discover::default()),
         user_state: user_state.clone(),
         downloads: Arc::new(downloads::Downloads::open()),
+        vocal_timing: Arc::new(vocal_timing::VocalTiming::open()),
     };
 
     let config = crate::server_config::ServerConfig::load();
@@ -276,6 +279,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .merge(crate::local_music::router(user_state.clone(), library_events))
         .merge(crate::user_state::router(user_state.clone()))
         .merge(downloads::routes())
+        .merge(vocal_timing::routes())
         .route("/api/health", get(health))
         .route("/api/lyrics", get(lyrics))
         .route("/api/auth/status", get(auth_status))
@@ -372,6 +376,7 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
     // Open the port first; provider sessions restore concurrently behind it.
     tokio::spawn(restore_providers(state.clone(), providers_ready_tx));
     downloads::start(state.clone());
+    vocal_timing::start(state.clone());
 
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -495,8 +500,10 @@ async fn lyrics(
     let mut response = if let Err(message) = request.validate() {
         ApiError::bad_request(message).into_response()
     } else {
-        let lyrics = state.lyrics.fetch(&state.http_client, request).await;
-        Json(lyrics.as_ref()).into_response()
+        let lyrics = state.lyrics.fetch(&state.http_client, request.clone()).await;
+        let mut lyrics = std::sync::Arc::unwrap_or_clone(lyrics);
+        vocal_timing::apply(&state, &request, &mut lyrics);
+        Json(lyrics).into_response()
     };
     response
         .headers_mut()

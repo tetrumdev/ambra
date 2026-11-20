@@ -7,6 +7,7 @@ name = "AMBRA"
 version = "0.4.1"
 dependencies = [
  "alsa",
+ "ambra-lyric-sync",
  "ambra-net",
  "ambra-vault",
  "axum",
@@ -111,6 +112,13 @@ checksum = "db8fee663d06c4e303404ef5f40488a53e062f89ba8bfed81f42325aafad1527"
 dependencies = [
  "libc",
  "pkg-config",
+]
+
+[[package]]
+name = "ambra-lyric-sync"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

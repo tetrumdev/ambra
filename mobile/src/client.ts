@@ -166,6 +166,11 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   if (track.isrc) query.set("isrc", track.isrc);
   if (track.version) query.set("version", track.version);
   if (track.provider === "spotify" && track.providerTrackId) query.set("spotifyId", track.providerTrackId);
+  // Names the recording, so lyrics come back with line endings from the server's vocal analysis.
+  if (track.providerTrackId && ["tidal", "qobuz", "spotify"].includes(track.provider)) {
+    query.set("provider", track.provider);
+    query.set("trackId", track.providerTrackId);
+  }
   return parseTrackLyrics(await request<unknown>(`/api/lyrics?${query}`, { signal, timeoutMs: 30_000 }));
 }
 

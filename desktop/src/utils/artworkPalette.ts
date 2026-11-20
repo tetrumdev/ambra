@@ -1,4 +1,4 @@
-import { luminance, parseColor, separateCollapsedPalette } from "./backgroundPalette";
+import { luminance, parseColor, separateCollapsedPalette, type Rgb } from "./backgroundPalette";
 import { SWIRL_SHADE_MIN, SWIRL_SHADE_RANGE } from "./swirlShader";
 
 export type ArtworkPalette = {
@@ -75,32 +75,92 @@ const RIM_SAMPLES = Array.from({ length: 32 }, (_, index) => {
   return { index, angle: (Math.atan2(x, -y) * 180 / Math.PI + 360) % 360 };
 }).sort((a, b) => a.angle - b.angle);
 
-/** The rim's angles, in the order coverShadowShares returns its shares. */
+/** The rim's angles, in the order coverRim lists its strengths. */
 export const RIM_ANGLES = RIM_SAMPLES.map(sample => sample.angle);
 
+/** sRGB to OKLab, where distances match how different two colors look, hue included. */
+function toOklab(color: Rgb): Rgb {
+  const [r, g, b] = color.map(c => c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  return [
+    0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+    1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+    0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s,
+  ];
+}
+
+function fromOklab([L, a, b]: Rgb): Rgb {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ].map(c => {
+    const clamped = Math.min(1, Math.max(0, c));
+    return clamped <= 0.0031308 ? clamped * 12.92 : 1.055 * clamped ** (1 / 2.4) - 0.055;
+  }) as Rgb;
+}
+
+const smoothstep = (from: number, to: number, value: number) => {
+  const t = Math.min(1, Math.max(0, (value - from) / (to - from)));
+  return t * t * (3 - 2 * t);
+};
+
+export type CoverRim = {
+  /** How strongly the shadow and the halo show at each point of the rim, in RIM_ANGLES order. */
+  shadow: number[];
+  halo: number[];
+  shadowTint: Rgb;
+  haloTint: Rgb;
+};
+
 /**
- * How much of the cover's separation the dark shadow carries at each point of its rim, from 0
- * to 1, in RIM_ANGLES order; a soft light halo carries the rest (BigscreenArtwork.css). A shadow
+ * How the cover is lifted off the swirl at each point of its rim (BigscreenArtwork.css). A shadow
  * only lifts a stretch of rim brighter than the darkened field around it; a dark stretch sinks
  * into it, and lighter surroundings show that stretch instead. Whichever leaves more contrast
  * wins locally, crossfading where the rim changes so the two never meet at a hard line.
+ * A stretch whose color already stands apart from the field, by hue as much as by lightness,
+ * needs only a trace of either. Both are tinted with the field's hue, so they read as the field
+ * itself darkening or catching the cover's light, not as a grey outline.
  */
-export function coverShadowShares(palette: ArtworkPalette): number[] {
-  const edges = palette.edgeColors;
-  if (!edges) return RIM_ANGLES.map(() => 1);
+export function coverRim(palette: ArtworkPalette): CoverRim {
   const total = palette.weights.reduce((sum, weight) => sum + weight, 0);
-  const field = swirlPalette(palette).colors.reduce(
-    (sum, color, index) => sum + luminance(parseColor(color)) * palette.weights[index], 0,
-  ) / total * (SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE / 2);
-  const rim = RIM_SAMPLES.map(({ index }) => luminance([edges[3 * index], edges[3 * index + 1], edges[3 * index + 2]]));
+  const shade = SWIRL_SHADE_MIN + SWIRL_SHADE_RANGE / 2;
+  const field = swirlPalette(palette).colors.reduce<Rgb>((sum, color, index) => {
+    const share = palette.weights[index] / total * shade;
+    return sum.map((channel, at) => channel + parseColor(color)[at] * share) as Rgb;
+  }, [0, 0, 0]);
+  const fieldLab = toOklab(field);
+  const edges = palette.edgeColors;
+  const rim = RIM_SAMPLES.map(({ index }) => (edges
+    ? [edges[3 * index], edges[3 * index + 1], edges[3 * index + 2]]
+    : [1, 1, 1]) as Rgb);
+  const fieldLuminance = luminance(field);
   // Each sample is a single pixel, so neighbours steady it against noise and stray detail.
-  return rim.map((_, at) => {
-    const local = (rim[(at + rim.length - 1) % rim.length] + 2 * rim[at] + rim[(at + 1) % rim.length]) / 4;
-    const withShadow = local - field * SHADOW_RIM;
-    const withHalo = field + (1 - field) * HALO_LIFT - local;
-    const share = Math.min(1, Math.max(0, (withShadow - withHalo + 0.05) / 0.1));
-    return share * share * (3 - 2 * share);
+  const local = rim.map((color, at) => color.map((channel, c) =>
+    (rim[(at + rim.length - 1) % rim.length][c] + 2 * channel + rim[(at + 1) % rim.length][c]) / 4) as Rgb);
+  const shares = local.map(color => {
+    const withShadow = luminance(color) - fieldLuminance * SHADOW_RIM;
+    const withHalo = fieldLuminance + (1 - fieldLuminance) * HALO_LIFT - luminance(color);
+    return smoothstep(-0.05, 0.05, withShadow - withHalo);
   });
+  const needs = local.map(color => {
+    if (!edges) return 1;
+    const lab = toOklab(color);
+    const distance = Math.hypot(lab[0] - fieldLab[0], lab[1] - fieldLab[1], lab[2] - fieldLab[2]);
+    return 1 - 0.65 * smoothstep(0.08, 0.3, distance);
+  });
+  const [, a, b] = fieldLab;
+  return {
+    shadow: shares.map((share, at) => share * needs[at]),
+    halo: shares.map((share, at) => (1 - share) * needs[at]),
+    shadowTint: fromOklab([0.16, a * 0.7, b * 0.7]),
+    haloTint: fromOklab([0.86, a * 0.6, b * 0.6]),
+  };
 }
 
 /** A mask showing a layer as strongly as `strength` asks at each rim angle, blended between them. */
