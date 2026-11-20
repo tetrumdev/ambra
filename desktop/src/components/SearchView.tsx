@@ -4,7 +4,7 @@ import { ArtistLinks } from "./ArtistLinks";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
 import { ArtistPortrait } from "./ArtistPortrait";
 import { prefetchArtistPage } from "../utils/artistPage";
@@ -15,7 +15,10 @@ import type { GlobalTrackId, Track } from "../types/music";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { TrackCollectionMenu, type PlaylistMenuOptions } from "./TrackCollectionMenu";
-import { MENU_WIDTH, isKeyboardMenuClick } from "../utils/trackMenu";
+import {
+  MENU_WIDTH, SongContextMenu, isKeyboardMenuClick, playSongOnDoubleClick, songMenuPosition, suppressSongClick,
+  pauseTrackAction, trackPlaybackActions,
+} from "../utils/trackMenu";
 import { showTrackCredits } from "../utils/trackCredits";
 import { ArtworkImage } from "./ArtworkImage";
 import "./LibraryView.css";
@@ -57,19 +60,22 @@ type OpenMenu = {
   y: number;
   flipY?: number;
 } | {
-  kind: "playback" | "collection";
+  kind: "playback" | "collection" | "combined";
   trackId: GlobalTrackId;
   x: number;
   y: number;
   /** Where the collection menu opens upward from near the bottom. */
   flipY?: number;
   openedWithKeyboard?: boolean;
+  returnFocusTo?: HTMLElement;
+  instant?: boolean;
 };
 
 type SearchResultProps = {
   onOpenEntity: (entity: BrowseEntity) => void;
   track: Track;
   variant: "featured" | "grid";
+  combinedMenu: boolean;
   playTrack: (trackId: GlobalTrackId) => void;
   openActions: (event: React.MouseEvent, trackId: GlobalTrackId) => void;
   openCollectionMenu: (
@@ -170,6 +176,7 @@ function formatTime(time: number) {
 function SearchResult({
   track,
   variant,
+  combinedMenu,
   onOpenEntity,
   playTrack,
   openActions,
@@ -179,6 +186,11 @@ function SearchResult({
   const available = isTrackAvailable(track, connected);
   const nowPlaying = useNowPlaying();
   const state = nowPlayingState(nowPlaying, track.globalId);
+  function playSong(allowPause: boolean) {
+    if (!state) playTrack(track.globalId);
+    else if (state === "paused" || allowPause) nowPlaying.togglePlayback();
+  }
+
   return (
     <div
       className="searchResult"
@@ -188,16 +200,16 @@ function SearchResult({
       data-variant={variant}
       data-track-id={track.globalId}
       data-glide={`track:${track.globalId}`}
-      onClick={available ? (event) => openActions(event, track.globalId) : undefined}
+      onClickCapture={combinedMenu ? suppressSongClick : undefined}
+      onClick={available && !combinedMenu ? (event) => openActions(event, track.globalId) : undefined}
       onContextMenu={available ? (event) => openCollectionMenu(event, track.globalId) : undefined}
+      onDoubleClick={available && combinedMenu ? event => playSongOnDoubleClick(event, () => playSong(false)) : undefined}
     >
       <div className="trackLeading searchResultLeading" inert={!available}>
         <button type="button" className="trackPlayButton" aria-label={`${state === "playing" ? "Pause" : "Play"} ${track.name}`}
           onClick={event => {
             event.stopPropagation();
-            // The song already playing pauses or resumes where it is, rather than starting over.
-            if (state) nowPlaying.togglePlayback();
-            else playTrack(track.globalId);
+            playSong(true);
           }}>
           <img src={state === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
@@ -267,8 +279,10 @@ export function SearchView({
   playlistOptions,
   registerScrollElement,
 }: SearchViewProps) {
+  const combinedMenu = useContext(SongContextMenu);
+  const nowPlaying = useNowPlaying();
   const [openMenu, setOpenMenu] = useState<OpenMenu | null>(null);
-  useEffect(() => setOpenMenu(null), [query, provider]);
+  useEffect(() => setOpenMenu(null), [query, provider, combinedMenu]);
   const root = useRef<HTMLDivElement | null>(null);
   const attachRoot = useCallback((element: HTMLDivElement | null) => {
     root.current = element;
@@ -293,6 +307,7 @@ export function SearchView({
   );
   useResultGlide(root, [shownTracks, shownArtists, shownAlbums]);
   const [featuredTrack, ...remainingTracks] = shownTracks;
+  const menuTrack = openMenu && "trackId" in openMenu ? shownTracks.find(track => track.globalId === openMenu.trackId) : undefined;
   const order = categoryOrder(query, tracks, artists, albums, candidates);
   const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
   const count = shownTracks.length + shownArtists.length + shownAlbums.length;
@@ -359,6 +374,10 @@ export function SearchView({
     event: React.MouseEvent<HTMLElement>,
     trackId: GlobalTrackId,
   ) {
+    if (combinedMenu) {
+      setOpenMenu({ kind: "combined", trackId, ...songMenuPosition(event) });
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     setOpenMenu({ kind: "collection", trackId, ...menuPosition(event) });
@@ -392,7 +411,7 @@ export function SearchView({
           onClose={() => setOpenMenu(null)}
         />
       )}
-      {openMenu?.kind === "collection" && (
+      {(openMenu?.kind === "collection" || openMenu?.kind === "combined") && (
         <TrackCollectionMenu
           trackId={openMenu.trackId}
           playlistOptions={playlistOptions}
@@ -400,9 +419,15 @@ export function SearchView({
           xPos={openMenu.x}
           yPos={openMenu.y}
           flipY={openMenu.flipY}
+          returnFocusTo={openMenu.returnFocusTo}
+          instant={openMenu.instant}
           actions={[
+            ...(openMenu.kind === "combined" && menuTrack ? [
+              ...(nowPlaying.trackId === menuTrack.globalId && nowPlaying.isPlaying ? [pauseTrackAction(nowPlaying.togglePlayback)] : []),
+              ...trackPlaybackActions(menuTrack.globalId, { playStandalone, playNext, addToQueue }),
+            ] : []),
             { label: "Add to Library", icon: "/add.svg", onSelect: () => addToLibrary(openMenu.trackId) },
-            { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(tracks.find(track => track.globalId === openMenu.trackId) ?? null) },
+            ...(openMenu.kind === "collection" ? [{ label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuTrack ?? null) }] : []),
           ]}
         />
       )}
@@ -440,6 +465,7 @@ export function SearchView({
               onOpenEntity={onOpenEntity}
               track={featuredTrack}
               variant="featured"
+              combinedMenu={combinedMenu}
               playTrack={playStandalone}
               openActions={openActions}
               openCollectionMenu={openCollectionMenu}
@@ -454,6 +480,7 @@ export function SearchView({
                   key={track.globalId}
                   track={track}
                   variant="grid"
+                  combinedMenu={combinedMenu}
                   playTrack={playStandalone}
                   openActions={openActions}
                   openCollectionMenu={openCollectionMenu}

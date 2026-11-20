@@ -86,6 +86,7 @@ import { useCorePlayer } from "./hooks/useCorePlayer";
 import { useCoreQueue } from "./hooks/useCoreQueue";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
+import { SongContextMenu } from "./utils/trackMenu";
 
 function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
   // Rerenders when a service connects or drops, so what the pages offer stays current.
@@ -509,6 +510,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   }), [chosenTrackColumns, hiddenTrackColumns, listeningHistory.stats]);
 
   return (
+    <SongContextMenu.Provider value={preferences.ui.songContextMenu}>
     <NowPlayingProvider trackId={player.currentTrack?.globalId} isPlaying={player.isPlaying} togglePlayback={togglePlayback}>
       <PlayerStage
         screen={screen}
@@ -742,6 +744,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       <MusicDropZone onImport={library.importFiles} />
       <NavigationSwipe canNavigate={canNavigate} navigate={navigate} screenRef={mainRef} contextKey={`${screen}:${viewKey}:${settingsTab}`} />
     </NowPlayingProvider>
+    </SongContextMenu.Provider>
   );
 }
 

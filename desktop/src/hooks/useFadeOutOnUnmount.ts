@@ -6,8 +6,9 @@ const FADE_MS = 150;
 // Native menus fade out instead of vanishing. React removes a closed menu at
 // once, so as it unmounts a lifeless copy is left in its place and faded out.
 // The menu's own logic never waits on the animation.
-export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>) {
+export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>, enabled = true) {
   useLayoutEffect(() => {
+    if (!enabled) return;
     const host = ref.current;
     // A `display: contents` wrapper has no box of its own; fade what it wraps.
     const element = host && getComputedStyle(host).display === "contents"
@@ -27,7 +28,7 @@ export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>) {
         setTimeout(() => ghost.remove(), FADE_MS + 50);
       });
     };
-  }, [ref]);
+  }, [ref, enabled]);
 }
 
 function fadingCopy(element: HTMLElement): HTMLElement | null {

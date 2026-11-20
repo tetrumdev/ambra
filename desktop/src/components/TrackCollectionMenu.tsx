@@ -5,6 +5,7 @@ import type { Playlist, Track } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
+import { TrackMenuBackdrop } from "./TrackMenuBackdrop";
 import { MENU_WIDTH } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { isDownloadable, isDownloadedOnServer, offlineSource, openDownloadDialog, removeLocalDownloads, removeServerDownloads } from "../utils/offlineDownloads";
@@ -20,6 +21,7 @@ export type PlaylistMenuOptions = {
 };
 
 export type TrackCollectionAction = {
+  id?: string;
   label: string;
   icon: string;
   disabled?: boolean;
@@ -43,9 +45,11 @@ type TrackCollectionMenuProps = {
   tracks?: Track[] | null;
   /** The trigger already says Add to Playlist, so open its picker directly. */
   startWithPlaylistPicker?: boolean;
+  returnFocusTo?: HTMLElement;
+  instant?: boolean;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false, returnFocusTo, instant = false }: TrackCollectionMenuProps) {
   const collection = tracks !== undefined;
   const connected = useServiceAvailability();
   const available = collection || isTrackAvailable(trackId, connected);
@@ -64,28 +68,32 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const panel = useRef<HTMLDivElement>(null);
   async function save(action: () => boolean | Promise<boolean>) {
     if (saving) return;
     setSaving(true);
     setError(null);
     try {
-      if (await action()) onClose();
-      else setError("Could not save this playlist. Please try again.");
+      if (await action()) {
+        if (panel.current) onClose();
+      } else setError("Could not save this playlist. Please try again.");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save this song. Please try again.");
     } finally {
       setSaving(false);
     }
   }
-  const panel = useRef<HTMLDivElement>(null);
-  useFadeOutOnUnmount(panel);
+  useFadeOutOnUnmount(panel, !instant);
   const [position, setPosition] = useState({ left: xPos, top: yPos, above: placement === "above" });
   useLayoutEffect(() => {
     const element = panel.current;
     if (!element) return;
     const reposition = () => {
       const { width, height } = element.getBoundingClientRect();
-      const left = Math.max(4, Math.min(xPos, window.innerWidth - width - 4));
+      const maxLeft = window.innerWidth - width - 4;
+      const left = instant && xPos > maxLeft && xPos - width >= 4
+        ? xPos - width
+        : Math.max(4, Math.min(xPos, maxLeft));
       // Only the menu's natural size decides the flip, so its open/close scale never flips it back.
       const naturalHeight = element.offsetHeight || height;
       const bottom = Math.min(window.innerHeight, document.getElementById("bottomInfoBar")?.getBoundingClientRect().top ?? Infinity) - 4;
@@ -102,14 +110,20 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       observer.disconnect();
       window.removeEventListener("resize", reposition);
     };
-  }, [xPos, yPos, placement, flipY]);
+  }, [xPos, yPos, placement, flipY, instant]);
   useEffect(() => { panel.current?.focus(); }, [choosingPlaylist]);
+  useEffect(() => () => {
+    if (returnFocusTo?.isConnected) returnFocusTo.focus({ preventScroll: true });
+  }, [returnFocusTo]);
   const width = choosingPlaylist ? 260 : MENU_WIDTH;
   return (
-    <div id="trackMenuBackdrop" onClick={onClose} onKeyDown={event => {
+    <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{ left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top", width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)" }} onClick={event => event.stopPropagation()}>
+      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{
+        left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top",
+        width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)", animation: instant ? "none" : undefined,
+      }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem menuBack" onClick={startWithPlaylistPicker ? onClose : () => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>
           <div className="playlistMenuList">
@@ -140,14 +154,14 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
           </form>
         </> : <>
         {actions.map(action => (
-          <button type="button" key={action.label} className="menuItem" disabled={action.disabled} onClick={() => { action.onSelect(); onClose(); }}>
+          <button type="button" key={action.id ?? action.label} className="menuItem" disabled={action.disabled} onClick={() => { action.onSelect(); onClose(); }}>
             <img className="menuIcon" src={action.icon} alt="" aria-hidden="true" />
-            {action.label}
+            <span className="menuItemLabel">{action.label}</span>
           </button>
         ))}
         {playlistOptions && <button type="button" className="menuItem" disabled={collection && !tracks?.length} onClick={() => setChoosingPlaylist(true)}><img className="menuIcon" src="/playlist-add.svg" alt="" aria-hidden="true" />Add to Playlist</button>}
         </>}
       </div>
-    </div>
+    </TrackMenuBackdrop>
   );
 }
