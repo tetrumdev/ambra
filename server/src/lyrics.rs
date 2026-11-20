@@ -27,6 +27,8 @@ pub struct LyricsRequest {
     /// The recording the lyrics are for, so the server can analyze its vocals.
     pub provider: Option<String>,
     pub track_id: Option<String>,
+    /// One lyrics provider the listener chose for this song, asked alone instead of all of them.
+    source: Option<String>,
     /// Asked ahead of playback; its analysis waits behind songs playing now.
     #[serde(default)]
     pub prefetch: bool,
@@ -43,6 +45,11 @@ impl LyricsRequest {
             })
         {
             return Err("Invalid track reference");
+        }
+        if self.source.as_deref().is_some_and(|source| {
+            ![Provider::Amll, Provider::Red, Provider::Lrclib].iter().any(|provider| provider.name() == source)
+        }) {
+            return Err("Unknown lyrics source");
         }
         if [
             &self.track_name,
@@ -126,6 +133,9 @@ impl Lookups {
 async fn fetch_with(client: &ProviderClient<'_>, request: &LyricsRequest) -> LyricsResponse {
     let mut selection = Selection::default();
     for provider in [Provider::Amll, Provider::Red, Provider::Lrclib] {
+        if request.source.as_deref().is_some_and(|source| source != provider.name()) {
+            continue;
+        }
         match client.fetch(provider, request).await {
             Ok(Some(lyrics)) => {
                 selection.answered = true;

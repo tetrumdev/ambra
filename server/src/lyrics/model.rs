@@ -89,8 +89,7 @@ pub struct LyricsResponse {
     /// `aligned` once the recording's isolated vocals placed line endings, `pending` while
     /// the server is still analyzing it; absent when vocal timing is off or unavailable.
     pub vocal_timing: Option<&'static str>,
-    /// Word timing placed by a model (lrc.red `byModel`), whose line endings are often wrong.
-    #[serde(skip)]
+    /// Word timing placed by a model (TTML `byModel`), whose line endings are often wrong.
     pub machine_timed: bool,
 }
 

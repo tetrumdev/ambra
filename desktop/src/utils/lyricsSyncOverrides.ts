@@ -1,4 +1,5 @@
 import { getPersistentItem, setPersistentItem } from "./persistentStorage";
+import { lyricsSources, type LyricsSource } from "./lyricsWire";
 
 /** A listener's own timing choices for one track, kept across sessions. */
 export type LyricSyncOverride = {
@@ -6,6 +7,8 @@ export type LyricSyncOverride = {
   correctionMs?: number;
   /** Show the lyrics as plain text even though they are timed. */
   unsynced?: boolean;
+  /** The one lyrics provider chosen for this track instead of the automatic pick. */
+  source?: LyricsSource;
 };
 
 export const lyricSyncKey = "ambra.lyrics-sync.v1";
@@ -20,11 +23,12 @@ function readOverrides(): Record<string, LyricSyncOverride> {
     const overrides: Record<string, LyricSyncOverride> = {};
     for (const [trackId, entry] of Object.entries(value)) {
       if (typeof entry !== "object" || entry === null) continue;
-      const { correctionMs, unsynced } = entry as Record<string, unknown>;
+      const { correctionMs, unsynced, source } = entry as Record<string, unknown>;
       const override: LyricSyncOverride = {};
       if (typeof correctionMs === "number" && Number.isFinite(correctionMs)
         && Math.abs(correctionMs) <= MAX_CORRECTION_MS) override.correctionMs = correctionMs;
       if (unsynced === true) override.unsynced = true;
+      if (lyricsSources.includes(source as LyricsSource)) override.source = source as LyricsSource;
       if (Object.keys(override).length) overrides[trackId] = override;
     }
     return overrides;
@@ -41,7 +45,7 @@ export function saveLyricSyncOverride(trackId: string, override: LyricSyncOverri
   const overrides = readOverrides();
   // Reinserting keeps the most recently edited tracks at the end.
   delete overrides[trackId];
-  if (override && (override.correctionMs !== undefined || override.unsynced)) overrides[trackId] = override;
+  if (override && (override.correctionMs !== undefined || override.unsynced || override.source)) overrides[trackId] = override;
   const trackIds = Object.keys(overrides);
   for (const stale of trackIds.slice(0, Math.max(0, trackIds.length - MAX_TRACKS))) delete overrides[stale];
   try {

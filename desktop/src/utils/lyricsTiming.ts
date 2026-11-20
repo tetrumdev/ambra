@@ -11,10 +11,15 @@ export function segmentProgress(segment: LyricSegment, timeMs: number): number {
   return Math.min(1, Math.max(0, (timeMs - segment.startMs) / (segment.endMs - segment.startMs)));
 }
 
-/** Line timing gets a uniform highlight; only real internal timings get a sweep. */
+/**
+ * Line timing gets a uniform highlight; only real internal timings get a sweep. A line of one
+ * word timed as a word, common in word-timed songs, sweeps too.
+ */
 export function detailedLine(line: LyricLine): boolean {
   const timed = line.segments.filter(segment => segment.startMs !== null && segment.endMs !== null
     && segment.endMs > segment.startMs && segment.text.trim());
+  if (timed.length === 1 && (timed[0].granularity === "word" || timed[0].granularity === "syllable")
+    && !/\s/.test(timed[0].text.trim())) return true;
   return timed.some(segment => segment.startMs !== timed[0]?.startMs || segment.endMs !== timed[0]?.endMs);
 }
 
@@ -47,6 +52,23 @@ export function sweepSegments(line: LyricLine): LyricSegment[] {
     segment.endMs = end;
   }
   return segments;
+}
+
+/**
+ * When each line hands the highlight on: the next lead line's start. A held last word or a
+ * trailing background vocal often runs past it, which would keep the old line lit beside the
+ * new one. Lines by different singers may really overlap, as in a duet, and keep their timing.
+ */
+export function lineHandoffs(lines: LyricLine[]): number[] {
+  return lines.map((line, index) => {
+    if (line.startMs === null) return Infinity;
+    for (let later = index + 1; later < lines.length; later++) {
+      const next = lines[later];
+      if (!next.text.trim() || next.startMs === null || next.startMs <= line.startMs) continue;
+      return line.singer && next.singer && line.singer !== next.singer ? Infinity : next.startMs;
+    }
+    return Infinity;
+  });
 }
 
 export function focusLyric(lines: LyricLine[], timeMs: number): number {

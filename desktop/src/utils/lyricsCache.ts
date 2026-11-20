@@ -2,6 +2,8 @@ import { trackLyrics, vocalCurve } from "../api/server";
 import { serverConnectionSignal } from "../api/serverConnection";
 import { needsLyricsRetry, type TrackLyrics } from "../types/lyrics";
 import type { Track } from "../types/music";
+import type { LyricsSource } from "./lyricsWire";
+import { lyricSyncOverride } from "./lyricsSyncOverrides";
 import { SearchCache } from "./searchCache";
 
 // One song's lyrics are one object for as long as they are cached. The lyrics view builds a
@@ -22,9 +24,15 @@ export function lyricsRevision(): number {
   return revision;
 }
 
+/** The provider the listener chose for this track, or undefined for the automatic pick. */
+export function chosenLyricsSource(track: Track): LyricsSource | undefined {
+  return lyricSyncOverride(track.globalId)?.source;
+}
+
 /** Everything a lyrics lookup depends on; a change to any of it is a different lookup. */
-export function lyricsKey(track: Track): string {
+export function lyricsKey(track: Track, source = chosenLyricsSource(track)): string {
   return JSON.stringify([
+    source ?? null,
     track.globalId,
     track.name,
     track.artist,
@@ -37,14 +45,19 @@ export function lyricsKey(track: Track): string {
   ]);
 }
 
-export function cachedLyrics(track: Track): TrackLyrics | undefined {
-  return lyricsCache.get(lyricsKey(track));
+export function cachedLyrics(track: Track, source = chosenLyricsSource(track)): TrackLyrics | undefined {
+  return lyricsCache.get(lyricsKey(track, source));
 }
 
 /** `prefetch` loads ahead of playback, so the server analyzes the song's vocals after any playing now. */
-export async function loadLyrics(track: Track, signal?: AbortSignal, prefetch = false): Promise<TrackLyrics> {
+export async function loadLyrics(
+  track: Track,
+  signal?: AbortSignal,
+  prefetch = false,
+  source = chosenLyricsSource(track),
+): Promise<TrackLyrics> {
   signal?.throwIfAborted();
-  const key = lyricsKey(track);
+  const key = lyricsKey(track, source);
   const cached = lyricsCache.get(key);
   if (cached) {
     // Loaded ahead of playback and now wanted for real: its analysis moves ahead of songs to come.
@@ -56,10 +69,10 @@ export async function loadLyrics(track: Track, signal?: AbortSignal, prefetch = 
   if (!pending || pending.signal.aborted) {
     const controller = new AbortController();
     const active = AbortSignal.any([controller.signal, serverConnectionSignal(), AbortSignal.timeout(60_000)]);
-    const result = trackLyrics(track, active, prefetch).then(lyrics => {
+    const result = trackLyrics(track, active, prefetch, source).then(lyrics => {
       active.throwIfAborted();
       if (!needsLyricsRetry(lyrics)) lyricsCache.set(key, lyrics);
-      if (lyrics.vocalTiming === "pending") watchVocalTiming(track, key, prefetch);
+      if (lyrics.vocalTiming === "pending") watchVocalTiming(track, key, prefetch, source);
       revision++;
       for (const listener of listeners) listener();
       return lyrics;
@@ -103,7 +116,7 @@ const watched = new Map<string, { foreground: () => void }>();
  * A song loaded ahead of playback is checked on as one: asking for it as if it were playing
  * would move it ahead of the song that is, and cut that song's analysis off.
  */
-function watchVocalTiming(track: Track, key: string, prefetch: boolean) {
+function watchVocalTiming(track: Track, key: string, prefetch: boolean, source: LyricsSource | undefined) {
   const existing = watched.get(key);
   if (existing) {
     if (!prefetch) existing.foreground();
@@ -124,7 +137,7 @@ function watchVocalTiming(track: Track, key: string, prefetch: boolean) {
     watched.delete(key);
     if (curve === null) return;
     lyricsCache.delete(key);
-    void loadLyrics(track).catch(() => undefined);
+    void loadLyrics(track, undefined, false, source).catch(() => undefined);
   };
   setTimeout(check, VOCAL_POLL_MS);
 }
