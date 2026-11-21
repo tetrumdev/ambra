@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type 
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type { LibrarySection } from "../components/LibraryView";
 import type { PlaybackSidebarView } from "../components/PlaybackSidebar";
+import { WAKE_PLAYER_EVENT } from "../components/PlayerStage";
 import type { SearchFocusRequest } from "../components/SearchBar";
 import type { SettingsTab } from "../components/SettingsSidebar";
 import { entityKey, type BrowseEntity } from "../utils/browse";
@@ -185,7 +186,10 @@ export function useAppNavigation({
   });
 
   const toggleQueue = useStableCallback(() => {
-    if (sidebarView) closePlaybackSidebar();
+    // Over a resting player the queue is out of sight, so the key brings it and the controls back rather than closing it.
+    const resting = isPlayerView && document.documentElement.dataset.bigscreenIdle === "true";
+    if (resting) window.dispatchEvent(new Event(WAKE_PLAYER_EVENT));
+    if (sidebarView && !resting) closePlaybackSidebar();
     else setPlaybackSidebarView("queue");
   });
   // The player replaces Settings.
@@ -204,6 +208,12 @@ export function useAppNavigation({
       // Without a song the player stays shut, so say why.
       if (!hasCurrentTrack) announceShortcut("Nothing is playing");
     }
+  });
+  // Lyrics open in the sidebar, which the player's floating one leaves out, so the key steps out of the player for them.
+  const toggleLyrics = useStableCallback(() => {
+    if (isPlayerView) changeScreen(playerReturnScreenRef.current);
+    else if (sidebarView === "lyrics") return closePlaybackSidebar();
+    setPlaybackSidebarView("lyrics");
   });
   const openSettings = useStableCallback(() => {
     if (screen === "settings") return;
@@ -347,15 +357,23 @@ export function useAppNavigation({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [openSearch]);
 
-  // Q toggles the queue; Cmd/Ctrl+comma opens settings.
+  // Q toggles the queue, L the lyrics, V the player's view; Cmd/Ctrl+comma opens settings.
   const handleScreenShortcut = useStableCallback((event: KeyboardEvent) => {
     if (wasKeyHandled(event) || event.repeat) return;
     if (matchesShortcut(event, "openSettings")) {
       event.preventDefault();
       if (!isSettingsView) openSettings();
-    } else if (matchesShortcut(event, "toggleQueue") && !isTypingTarget(event.target)) {
+    } else if (isTypingTarget(event.target)) {
+      return;
+    } else if (matchesShortcut(event, "toggleQueue")) {
       event.preventDefault();
       toggleQueue();
+    } else if (matchesShortcut(event, "toggleLyrics")) {
+      event.preventDefault();
+      toggleLyrics();
+    } else if (matchesShortcut(event, "switchPlayerView") && isPlayerView) {
+      event.preventDefault();
+      changeScreen(screen === "lyrics" ? "bigscreen" : "lyrics");
     }
   });
   useEffect(() => {
