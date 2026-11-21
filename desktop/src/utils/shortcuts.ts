@@ -39,6 +39,8 @@ export const shortcutDefinitions = {
   filterPage: { label: "Filter songs on the page", category: "Screens", defaults: [key("Slash")] },
   togglePlayer: { label: "Open or close the player", category: "Screens", defaults: [key("KeyF")] },
   toggleQueue: { label: "Open or close the queue", category: "Screens", defaults: [key("KeyQ")] },
+  toggleLyrics: { label: "Open or close lyrics", category: "Screens", defaults: [key("KeyL")], hint: "In the sidebar" },
+  switchPlayerView: { label: "Switch player view", category: "Screens", defaults: [key("KeyV")], hint: "Between album art and lyrics" },
   openSettings: { label: "Open settings", category: "Screens", defaults: [key("Comma", { mod: true })] },
   closeScreen: { label: "Close player, queue or settings", category: "Screens", defaults: [key("Escape")] },
   back: {

@@ -130,6 +130,7 @@ export type VocalTimingStatus = {
 
 export async function vocalTimingStatus(): Promise<VocalTimingStatus> {
   const response = await fetch(`${serverBaseUrl}/api/vocal-timing`, { signal: AbortSignal.timeout(10_000), cache: "no-store" });
+  if (response.status === 404) throw new Error("Update your server to use precise lyric timing");
   if (!response.ok) throw new Error(await responseError(response));
   return await response.json() as VocalTimingStatus;
 }

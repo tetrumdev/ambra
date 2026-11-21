@@ -25,7 +25,9 @@
     --sidebar-divider: rgba(122, 122, 122, 0.35);
     --sidebar-surface: transparent;
     --sidebar-hover: rgb(255 255 255 / 6%);
-    inset: calc(var(--library-titlebar-height) + 40px) 40px calc(150px + 20px) auto;
+    /* Spans the same height as the centred cover (BigscreenArtwork.css), so the two line up. */
+    inset: calc((100vh - 150px) / 2 - 35vmin) 40px auto auto;
+    height: 70vmin;
     /* Floating, it keeps a margin from the window edge, so it gives that back from its width. */
     width: calc(var(--playback-sidebar-width) - 40px);
     z-index: 11;
@@ -117,6 +119,8 @@
     color: #a3a2a3;
     font: inherit;
     font-size: 1rem;
+    /* The sidebar's light 300 reads thin and spread out at tab size; match the library sidebar's 400. */
+    font-weight: 400;
     white-space: nowrap;
 }
 

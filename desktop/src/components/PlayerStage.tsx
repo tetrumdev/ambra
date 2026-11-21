@@ -10,6 +10,9 @@ import { AppChrome } from "./AppChrome";
 import { AlbumArtwork, BackgroundArtwork } from "./BigscreenArtwork";
 import { LyricsView } from "./LyricsView";
 
+/** Dispatched on window to show a resting player's controls, as a pointer move would. */
+export const WAKE_PLAYER_EVENT = "ambra:wake-player";
+
 type PlayerStageProps = {
   screen: AppScreen;
   preferredView: PlayerView;
@@ -130,6 +133,7 @@ export const PlayerStage = memo(function PlayerStage({
     hidePointer();
     window.addEventListener("pointermove", onPointerMove);
     window.addEventListener("pointerdown", markActive);
+    window.addEventListener(WAKE_PLAYER_EVENT, markActive);
 
     return () => {
       clearTimeout(idleTimer);
@@ -137,6 +141,7 @@ export const PlayerStage = memo(function PlayerStage({
       root.removeAttribute("data-bigscreen-snap");
       window.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerdown", markActive);
+      window.removeEventListener(WAKE_PLAYER_EVENT, markActive);
       root.removeAttribute("data-bigscreen-idle");
     };
   }, [isPlayerView, clock, openedByKey]);
