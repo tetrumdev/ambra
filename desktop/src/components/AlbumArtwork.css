@@ -56,8 +56,9 @@
     object-fit: contain;
 }
 
+/* Expanded to the window, artwork sits on true black rather than the app's off-black. */
 .albumArtworkDialog[data-expanded="true"] {
-    background: var(--surface-black);
+    background: #000;
 }
 
 .albumArtworkDialog[data-expanded="true"] .albumArtworkZoom {

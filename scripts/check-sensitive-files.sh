@@ -2,8 +2,8 @@
 set -euo pipefail
 
 mode="${1:-working-tree}"
-if [[ "$mode" != "working-tree" && "$mode" != "--staged" && "$mode" != "--history" ]]; then
-  echo "usage: $0 [--staged|--history]" >&2
+if [[ "$mode" != "working-tree" && "$mode" != "--staged" && "$mode" != "--history" && "$mode" != "--push" ]]; then
+  echo "usage: $0 [--staged|--history|--push]" >&2
   exit 2
 fi
 
@@ -48,11 +48,7 @@ check_path() {
   rm -f "$temporary_file"
 }
 
-if [[ "$mode" == "--history" ]]; then
-  git cat-file -e "$history_baseline^{commit}" 2>/dev/null || {
-    echo "Sensitive-file history baseline is unavailable; fetch full Git history." >&2
-    exit 2
-  }
+check_commits() {
   while IFS= read -r commit; do
     [[ -n "$commit" ]] || continue
     while IFS= read -r path; do
@@ -60,17 +56,33 @@ if [[ "$mode" == "--history" ]]; then
       git cat-file -e "$commit:$path" 2>/dev/null || continue
       check_path "$path" "$commit" "commit ${commit:0:12}"
     done < <(git diff-tree --no-commit-id --name-only -r --root "$commit")
-  done < <(git rev-list --reverse "$history_baseline..HEAD")
-else
+  done < <(git rev-list --reverse "$@")
+}
+
+if [[ "$mode" == "--history" || "$mode" == "--push" ]]; then
+  git cat-file -e "$history_baseline^{commit}" 2>/dev/null || {
+    echo "Sensitive-file history baseline is unavailable; fetch full Git history." >&2
+    exit 2
+  }
+fi
+
+if [[ "$mode" == "--history" ]]; then
+  check_commits "$history_baseline..HEAD"
+elif [[ "$mode" == "--push" ]]; then
+  # pre-push stdin: <local ref> <local sha> <remote ref> <remote sha>; scan only commits no remote has yet.
+  while read -r _ local_sha _ _; do
+    [[ -n "$local_sha" && ! "$local_sha" =~ ^0+$ ]] || continue
+    check_commits "$local_sha" "^$history_baseline" --not --remotes
+  done
+elif [[ "$mode" == "--staged" ]]; then
   while IFS= read -r path; do
     [[ -n "$path" ]] || continue
-    if [[ "$mode" == "working-tree" ]]; then
-      [[ -f "$path" ]] || continue
-      check_path "$path" "working-tree" "working tree"
-    else
-      git cat-file -e ":$path" 2>/dev/null || continue
-      check_path "$path" "index" "staged tree"
-    fi
+    check_path "$path" "index" "staged tree"
+  done < <(git diff --cached --name-only --diff-filter=ACMR)
+else
+  while IFS= read -r path; do
+    [[ -n "$path" && -f "$path" ]] || continue
+    check_path "$path" "working-tree" "working tree"
   done < <(git ls-files --cached)
 fi
 

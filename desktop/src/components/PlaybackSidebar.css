@@ -255,6 +255,20 @@
     border-bottom-color: transparent;
 }
 
+/* Open, it sticks to the top, so the plays fold away from anywhere further down. */
+.playbackSidebarHistoryBar:has(.playbackSidebarHistoryToggle[aria-expanded="true"]) {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: var(--sidebar-surface);
+}
+
+.playbackSidebar[data-floating] .playbackSidebarHistoryBar:has(.playbackSidebarHistoryToggle[aria-expanded="true"]) {
+    background: rgb(22 22 22 / 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
 .playbackSidebarHistoryToggle {
     display: flex;
     align-items: center;

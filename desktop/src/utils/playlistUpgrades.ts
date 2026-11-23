@@ -32,8 +32,8 @@ async function copiesOf(services: UpgradeServices, track: Track, providers: Stre
   // A title search stops at 20 results, which a popular song's compilations can fill before its
   // album appears. Qobuz answers an ISRC with every release of that recording.
   if (track.isrc && providers.includes("qobuz")) searches.push({ provider: "qobuz", query: track.isrc });
-  const pages = await Promise.all(searches.map(search =>
-    services.catalog(search.query, search.provider, signal).catch(() => [] as Track[])));
+  // A failed search rejects the whole lookup: a partial answer could move a song to a worse service.
+  const pages = await Promise.all(searches.map(search => services.catalog(search.query, search.provider, signal)));
   const seen = new Set([track.globalId]);
   const matches = pages.flat().filter(candidate => !seen.has(candidate.globalId) && seen.add(candidate.globalId)
     && candidate.provider !== "local" && candidate.explicit === track.explicit && sameRecording(track, candidate));
@@ -129,7 +129,9 @@ export function unifyAlbumServices(chosen: Map<GlobalTrackId, Track>, copies: Ma
 /**
  * Finds the copy each streamed song should be on, across every connected service: a song alone
  * follows `bestPlaylistCopy`, and a package's songs move together (`packageCopies`). Songs from
- * one album then gather on one service (`unifyAlbumServices`).
+ * one album then gather on one service (`unifyAlbumServices`). Songs on a service that isn't
+ * connected right now move only with `restoreUnavailable`, since the server also drops a
+ * service for the whole session when it can't sign in at startup.
  */
 export async function findUpgrades(
   services: UpgradeServices,
@@ -137,6 +139,7 @@ export async function findUpgrades(
   onProgress: (done: number) => void,
   signal: AbortSignal,
   packages: GlobalTrackId[][] = [],
+  restoreUnavailable = false,
 ): Promise<Map<GlobalTrackId, Track>> {
   const providers = await services.providers(signal);
   const available = (track: Track) => track.provider === "local" || providers.includes(track.provider);
@@ -147,7 +150,7 @@ export async function findUpgrades(
       const index = next++;
       const track = tracks[index];
       // Local files are the user's own copies and stay as they are.
-      if (track.provider !== "local") results[index] = await copiesOf(services, track, providers, signal).catch(() => [track]);
+      if (track.provider !== "local" && (restoreUnavailable || available(track))) results[index] = await copiesOf(services, track, providers, signal).catch(() => [track]);
       onProgress(++done);
     }
   };

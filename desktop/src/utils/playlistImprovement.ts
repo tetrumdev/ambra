@@ -16,6 +16,7 @@ export function findPlaylistUpgrades(
   onProgress: (done: number) => void,
   signal: AbortSignal,
   packages: GlobalTrackId[][] = [],
+  restoreUnavailable = false,
 ): Promise<Map<GlobalTrackId, Track>> {
-  return findUpgrades(desktopServices, tracks, onProgress, signal, packages);
+  return findUpgrades(desktopServices, tracks, onProgress, signal, packages, restoreUnavailable);
 }

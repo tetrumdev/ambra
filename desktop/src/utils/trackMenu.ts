@@ -6,6 +6,23 @@ export const SongContextMenu = createContext(false);
 /** Every track menu's width, wide enough that no action wraps. Keep TrackMenus.css in step. */
 export const MENU_WIDTH = 220;
 
+/**
+ * The area a menu stays inside: the sidebar or screen it opened in, a pixel in from that
+ * view's border, else the window. The player bar always bounds it from below.
+ */
+export function menuBounds(menu: Element | null) {
+  const rect = menu?.closest(".playbackSidebar, .appScreen")?.getBoundingClientRect();
+  // A view with no size isn't laid out, so it bounds nothing.
+  const view = rect?.width && rect.height ? rect : undefined;
+  const inset = view ? 1 : 4;
+  const bar = document.getElementById("bottomInfoBar")?.getBoundingClientRect().top ?? Infinity;
+  return {
+    left: (view?.left ?? 0) + inset,
+    right: (view?.right ?? window.innerWidth) - inset,
+    bottom: Math.min(view?.bottom ?? Infinity, window.innerHeight, bar) - 4,
+  };
+}
+
 /** Keyboard button activation has no click count; a pointer contextmenu can also have detail 0. */
 export function isKeyboardMenuClick(event: { type: string; detail: number }) {
   return event.type === "click" && event.detail === 0;

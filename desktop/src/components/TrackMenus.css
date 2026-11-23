@@ -64,6 +64,15 @@
     gap: 10px;
 }
 
+/* The playback sidebar is a narrow panel with small rows; its menus match that scale. */
+.playbackSidebar .menuItem {
+    height: 34px;
+    min-height: 34px;
+    padding: 0 12px;
+    font-size: 0.8rem;
+    gap: 8px;
+}
+
 .menuItem:has(> .menuIcon) {
     grid-template-columns: 20px 1fr;
 }

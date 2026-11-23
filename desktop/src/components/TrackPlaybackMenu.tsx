@@ -1,9 +1,9 @@
 import "./TrackMenus.css";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { GlobalTrackId } from "../types/music";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
-import { MENU_WIDTH, trackPlaybackActions, type TrackPlaybackActions } from "../utils/trackMenu";
+import { menuBounds, trackPlaybackActions, type TrackPlaybackActions } from "../utils/trackMenu";
 import { TrackMenuBackdrop } from "./TrackMenuBackdrop";
 
 type TrackPlaybackMenuProps = TrackPlaybackActions & {
@@ -35,6 +35,14 @@ export function TrackPlaybackMenu({
     target?.focus({ preventScroll: true });
     return () => { if (previous?.isConnected) previous.focus(); };
   }, []);
+  // Turns left or upward only when its real size would run past the edge of its view.
+  const [flip, setFlip] = useState({ left: false, up: false });
+  useLayoutEffect(() => {
+    const element = menu.current;
+    if (!element) return;
+    const bounds = menuBounds(element);
+    setFlip({ left: xPos + element.offsetWidth > bounds.right, up: yPos + element.offsetHeight > bounds.bottom });
+  }, [xPos, yPos]);
   if (trackId && !isTrackAvailable(trackId, connected)) return null;
   const offset = instant ? "0" : "1%";
   return (
@@ -69,8 +77,8 @@ export function TrackPlaybackMenu({
           left: xPos,
           top: yPos,
           transform: `translate(
-            ${xPos >= window.innerWidth - MENU_WIDTH ? "-100%" : offset},
-            ${yPos >= window.innerHeight - 250 ? "-100%" : offset}
+            ${flip.left ? "-100%" : offset},
+            ${flip.up ? "-100%" : offset}
           )`,
           // The scale applies after the flip, so the box's own corner is always the clicked point.
           transformOrigin: "0 0",

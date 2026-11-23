@@ -1,4 +1,4 @@
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode, type RefObject } from "react";
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { useRangeSelection } from "../hooks/useRangeSelection";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
@@ -26,7 +26,6 @@ import "./PlaybackSidebar.css";
 const views = [
   { id: "queue", label: "Queue" },
   { id: "lyrics", label: "Lyrics" },
-  { id: "recent", label: "Recently played" },
 ] as const;
 
 export type PlaybackSidebarView = typeof views[number]["id"];
@@ -55,14 +54,16 @@ type PlaybackSidebarProps = SidebarTracksProps & {
   view: PlaybackSidebarView;
   /** Over the player, the panel floats as glass and leaves the lyrics to the stage. */
   floating: boolean;
-  preferredWidth: RefObject<number | null>;
+  preferredWidth: number | null;
+  /** The width the user settled on, after a drag ends or a key resizes it. */
+  onResize: (width: number) => void;
   onChangeView: (view: PlaybackSidebarView) => void;
   onClose: () => void;
   lyrics: ReactNode;
 };
 
 export function PlaybackSidebar({
-  view: chosenView, floating, preferredWidth, onChangeView, onClose, lyrics, ...tracks
+  view: chosenView, floating, preferredWidth, onResize, onChangeView, onClose, lyrics, ...tracks
 }: PlaybackSidebarProps) {
   const shownViews = floating ? views.filter(({ id }) => id !== "lyrics") : views;
   const view = floating && chosenView === "lyrics" ? "queue" : chosenView;
@@ -70,7 +71,7 @@ export function PlaybackSidebar({
     <aside className="playbackSidebar" id="playbackSidebar" aria-label="Playback sidebar"
       data-floating={floating || undefined}
       onKeyDown={event => { if (event.key === " " && event.target instanceof HTMLButtonElement) event.stopPropagation(); }}>
-      <PlaybackSidebarResize preferredWidth={preferredWidth} />
+      <PlaybackSidebarResize preferredWidth={preferredWidth} onResize={onResize} />
       <header className="playbackSidebarHeader">
         <div className="playbackSidebarTabs" role="tablist" aria-label="Playback sidebar view">
           {shownViews.map(({ id, label }) => (
@@ -84,7 +85,7 @@ export function PlaybackSidebar({
         </button>
       </header>
       <div className="playbackSidebarPanel" id="playbackSidebarPanel" role="tabpanel">
-        {view === "lyrics" ? lyrics : <SidebarTracks key={view} view={view} {...tracks} />}
+        {view === "lyrics" ? lyrics : <SidebarTracks {...tracks} />}
       </div>
     </aside>
   );
@@ -95,11 +96,11 @@ const MAX_SIDEBAR_WIDTH = 520;
 const MIN_PAGE_WIDTH = 500;
 const SIDEBAR_WIDTH_PROPERTY = "--playback-sidebar-width";
 
-function PlaybackSidebarResize({ preferredWidth }: { preferredWidth: RefObject<number | null> }) {
+function PlaybackSidebarResize({ preferredWidth, onResize }: { preferredWidth: number | null; onResize: (width: number) => void }) {
   const handle = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointerId: number; x: number; width: number } | null>(null);
   const [windowWidth, setWindowWidth] = useState(() => window.innerWidth);
-  const [requestedWidth, setRequestedWidth] = useState(preferredWidth.current);
+  const [requestedWidth, setRequestedWidth] = useState(preferredWidth);
   const min = Math.min(MIN_SIDEBAR_WIDTH, windowWidth);
   const max = Math.min(MAX_SIDEBAR_WIDTH, Math.max(min, windowWidth - MIN_PAGE_WIDTH));
   const clampWidth = (width: number) => Math.min(max, Math.max(min, Math.round(width)));
@@ -117,9 +118,10 @@ function PlaybackSidebarResize({ preferredWidth }: { preferredWidth: RefObject<n
     return () => { viewport?.style.removeProperty(SIDEBAR_WIDTH_PROPERTY); };
   }, [width]);
 
-  function resize(next: number) {
-    preferredWidth.current = clampWidth(next);
-    setRequestedWidth(preferredWidth.current);
+  // Dragging saves once, where it stops.
+  function resize(next: number, settled = true) {
+    setRequestedWidth(clampWidth(next));
+    if (settled) onResize(clampWidth(next));
   }
 
   return (
@@ -135,12 +137,13 @@ function PlaybackSidebarResize({ preferredWidth }: { preferredWidth: RefObject<n
       }}
       onPointerMove={event => {
         const start = drag.current;
-        if (start?.pointerId === event.pointerId) resize(start.width + start.x - event.clientX);
+        if (start?.pointerId === event.pointerId) resize(start.width + start.x - event.clientX, false);
       }}
       onLostPointerCapture={event => {
         if (drag.current?.pointerId !== event.pointerId) return;
         drag.current = null;
         event.currentTarget.removeAttribute("data-resizing");
+        onResize(width);
       }}
       onKeyDown={event => {
         if (event.altKey || event.ctrlKey || event.metaKey) return;
@@ -170,11 +173,10 @@ type RowAction = "play" | "start" | "playback" | "collection" | "combined" | "se
 type EntryAction = (action: RowAction, event: MouseEvent<HTMLElement>, entry: SidebarEntry) => void;
 
 function SidebarTracks({
-  view, currentTrack, isPlaying, onTogglePlayback, upcoming: upcomingEntries, history: historyEntries,
+  currentTrack, isPlaying, onTogglePlayback, upcoming: upcomingEntries, history: historyEntries,
   onJumpTo, onReplayHistory, onRemove, onRemoveHistory, onReorder,
   recent, recentError, onRecentAction, onOpenEntity, playlistOptions, savedTrackIds, addToLibrary,
-}: SidebarTracksProps & { view: "queue" | "recent" }) {
-  const queueView = view === "queue";
+}: SidebarTracksProps) {
   const combinedMenu = useContext(SongContextMenu);
   const connected = useServiceAvailability();
   const scroller = useRef<HTMLDivElement>(null);
@@ -184,16 +186,24 @@ function SidebarTracks({
   // Played songs start folded into one line above now playing, so the queue opens on what's playing.
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  const current = useMemo<SidebarEntry | undefined>(() => queueView && currentTrack
+  const current = useMemo<SidebarEntry | undefined>(() => currentTrack
     ? { id: `current:${currentTrack.globalId}`, track: currentTrack, current: true }
-    : undefined, [queueView, currentTrack]);
-  const upcoming = useMemo<SidebarEntry[]>(() => queueView
-    ? upcomingEntries.map(entry => ({ id: queueEntryKey(entry), track: entry.track, queueId: entry.queueId }))
-    : [...recent].sort((a, b) => b.lastPlayedAt - a.lastPlayedAt).map(({ track }) => ({ id: `recent:${track.globalId}`, track })),
-  [queueView, upcomingEntries, recent]);
-  const history = useMemo<SidebarEntry[]>(() => queueView
-    ? historyEntries.map(entry => ({ id: `history:${entry.historyId}`, track: entry.track, historyId: entry.historyId }))
-    : [], [queueView, historyEntries]);
+    : undefined, [currentTrack]);
+  const upcoming = useMemo<SidebarEntry[]>(
+    () => upcomingEntries.map(entry => ({ id: queueEntryKey(entry), track: entry.track, queueId: entry.queueId })),
+    [upcomingEntries]);
+  const queueHistory = useMemo<SidebarEntry[]>(
+    () => historyEntries.map(entry => ({ id: `history:${entry.historyId}`, track: entry.track, historyId: entry.historyId })),
+    [historyEntries]);
+  // Played songs: older listening history, then this queue's own plays, the latest just above now playing.
+  // A song this queue played, or is playing, shows only there.
+  const history = useMemo<SidebarEntry[]>(() => {
+    const inQueue = new Set([...queueHistory.map(entry => entry.track.globalId), currentTrack?.globalId]);
+    const older = recent.filter(({ track }) => !inQueue.has(track.globalId))
+      .sort((a, b) => a.lastPlayedAt - b.lastPlayedAt)
+      .map(({ track }) => ({ id: `recent:${track.globalId}`, track }));
+    return [...older, ...queueHistory];
+  }, [queueHistory, recent, currentTrack?.globalId]);
   const shownHistory = historyOpen ? history : [];
   const allEntries = useMemo(() => [...shownHistory, ...(current ? [current] : []), ...upcoming], [shownHistory, current, upcoming]);
 
@@ -226,7 +236,7 @@ function SidebarTracks({
   const moveToFront = (entry: SidebarEntry) => reorder([entry.id, ...upcomingIds.filter(id => id !== entry.id)]);
 
   const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(
-    upcomingIds, queueView ? reorder : undefined, () => setMenu(null), scroller,
+    upcomingIds, reorder, () => setMenu(null), scroller,
   );
 
   function removeEntries(entries: SidebarEntry[]) {
@@ -255,11 +265,11 @@ function SidebarTracks({
     if (entry.queueId !== undefined) return [
       { label: "Play from Here", icon: "/skip.svg", onSelect: () => playEntry(entry) },
       { label: "Move to Front", icon: "/play-next.svg", whenUnavailable: true, disabled: upcoming[0] === entry, onSelect: () => moveToFront(entry) },
-      { label: "Remove from Queue", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
+      { id: "remove", label: "Remove from Queue", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
     ];
     if (entry.historyId !== undefined) return [
       { label: "Play Again", icon: "/skip.svg", onSelect: () => playEntry(entry) },
-      { label: "Remove from History", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
+      { id: "remove", label: "Remove from History", icon: "/delete.svg", whenUnavailable: true, onSelect: () => removeEntries([entry]) },
     ];
     return [];
   }
@@ -273,6 +283,7 @@ function SidebarTracks({
       addToQueue: () => onRecentAction("queue", entry.track),
     });
   }
+
 
   // Stable, so the playback clock and menus re-render only the rows they change.
   const actions = useRef<EntryAction>(() => {});
@@ -314,8 +325,10 @@ function SidebarTracks({
     const rect = anchor.getBoundingClientRect();
     const keyboard = isKeyboardMenuClick(event);
     setMenu(action === "collection"
-      ? { kind: action, id: entry.id, anchor, x: rect.right - MENU_WIDTH, y: rect.bottom + 4, flipY: rect.top - 4, keyboard }
-      : { kind: action, id: entry.id, anchor, x: keyboard ? rect.left : event.clientX, y: keyboard ? rect.bottom : event.clientY,
+      ? { kind: action, id: entry.id, anchor, x: rect.right - MENU_WIDTH - 1, y: rect.bottom + 4, flipY: rect.top - 4, keyboard }
+      : { kind: action, id: entry.id, anchor, x: keyboard ? rect.left : event.clientX,
+        // Just below the pointer, so it doesn't open already hovering the first action.
+        y: keyboard ? rect.bottom : event.clientY + 2,
         flipY: keyboard ? rect.top : event.clientY, keyboard });
   };
   const onAction = useCallback<EntryAction>((action, event, entry) => actions.current(action, event, entry), []);
@@ -356,7 +369,7 @@ function SidebarTracks({
     <>
       {menu?.kind === "playback" && menuEntry && menuAvailable && (menuEntry.queueId !== undefined || menuEntry.historyId !== undefined
         ? <TrackCollectionMenu trackId={menuEntry.track.globalId} xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu}
-            actions={queueActions(menuEntry)} />
+            fitContent downloads={false} actions={queueActions(menuEntry).filter(action => action.id !== "remove")} />
         : <TrackPlaybackMenu trackId={menuEntry.track.globalId} xPos={menu.x} yPos={menu.y} onClose={() => setMenu(null)}
             openedWithKeyboard={menu.keyboard} playStandalone={() => recentAction("standalone")}
             playNext={() => recentAction("next")} addToQueue={() => recentAction("queue")} />)}
@@ -364,16 +377,16 @@ function SidebarTracks({
         xPos={menu.x} yPos={menu.y} flipY={menu.flipY} instant={menu.instant} onClose={closeMenu}
         playlistOptions={menuAvailable ? playlistOptions : undefined}
         actions={menuAvailable ? [
-          ...(menu.kind === "combined" ? combinedPlaybackActions(menuEntry) : []),
+          ...(menu.kind === "combined" ? combinedPlaybackActions(menuEntry) : queueActions(menuEntry).filter(action => action.id === "remove")),
           ...(menuEntry.track.provider !== "local" && !savedTrackIds.has(menuEntry.track.globalId)
             ? [{ label: "Add to Library", icon: "/add.svg", onSelect: () => addToLibrary(menuEntry.track) }] : []),
           ...(menu.kind === "collection" ? [
             { label: "Go to Album", icon: "/album.svg", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(menuEntry.track) }) },
             { label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuEntry.track) },
           ] : []),
-          ...(menuEntry.current ? [] : [{
-            label: menu.kind === "collection" ? "Select Songs" : menuEntrySelected ? "Deselect Song" : "Select Song",
-            icon: menu.kind === "combined" && menuEntrySelected ? "/select.svg" : "/no-select.svg",
+          ...(menuEntry.current || menu.kind !== "combined" ? [] : [{
+            label: menuEntrySelected ? "Deselect Song" : "Select Song",
+            icon: menuEntrySelected ? "/select.svg" : "/no-select.svg",
             onSelect: () => selection.toggle(selectableIds.indexOf(menuEntry.id), Boolean(menu.extendSelection)),
           }]),
         ] : queueActions(menuEntry).filter(action => action.whenUnavailable)}
@@ -383,26 +396,28 @@ function SidebarTracks({
         startWithPlaylistPicker playlistOptions={playlistOptions} xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu} />}
 
       {selection.isSelecting && <div className="selectionActionMenu playbackSidebarSelection" role="group" aria-label="Selected songs">
-        {queueView && <button type="button" className="selectionRemoveAction" disabled={!selected.length}
-          onClick={() => removeEntries(selected)}>Remove</button>}
+        <button type="button" className="selectionRemoveAction" disabled={!selected.some(entry => entry.queueId !== undefined || entry.historyId !== undefined)}
+          onClick={() => removeEntries(selected)}>Remove</button>
         <button type="button" disabled={!selected.length} onClick={event => {
           const anchor = event.currentTarget;
           const rect = anchor.getBoundingClientRect();
-          setMenu({ kind: "selection", anchor, x: Math.max(8, rect.right - MENU_WIDTH), y: rect.bottom + 4, flipY: rect.top - 4 });
+          setMenu({ kind: "selection", anchor, x: Math.max(8, rect.right - MENU_WIDTH - 1), y: rect.bottom + 4, flipY: rect.top - 4 });
         }}>Add to Playlist</button>
         <button type="button" onClick={selection.clear}>Cancel</button>
       </div>}
 
       <div className="playbackSidebarScroll" ref={scroller} data-selecting={selection.isSelecting || undefined}>
-        {queueView ? <>
+        <>
           {history.length > 0 && <div className="playbackSidebarHeading playbackSidebarHistoryBar">
             <button type="button" className="playbackSidebarHistoryToggle" aria-expanded={historyOpen}
               aria-controls="playbackSidebarHistory" onClick={toggleHistory}>
               <DropdownChevron />Played ({history.length})
             </button>
-            {historyOpen && <button type="button" className="playbackSidebarTextButton"
-              onClick={() => removeEntries(history)}>Clear</button>}
+            {/* Listening history isn't the queue's to clear; this clears the queue's own plays. */}
+            {historyOpen && queueHistory.length > 0 && <button type="button" className="playbackSidebarTextButton"
+              onClick={() => removeEntries(queueHistory)}>Clear</button>}
           </div>}
+          {historyOpen && recentError && <p className="playbackSidebarMessage" role="alert">{recentError}</p>}
           {historyOpen && <SidebarRows id="playbackSidebarHistory" label="Played songs" entries={history} {...rowProps} />}
 
           <section className="playbackSidebarSection" ref={nowPlayingRef} aria-labelledby="playbackSidebarNowPlaying">
@@ -429,12 +444,7 @@ function SidebarTracks({
               ? <SidebarRows label="Upcoming songs" entries={upcoming} onPointerDown={onPointerDown} {...rowProps} />
               : <p className="playbackSidebarMessage">Nothing up next.</p>}
           </section>
-        </> : <section className="playbackSidebarSection" aria-label="Recently played songs">
-          {recentError && <p className="playbackSidebarMessage" role="alert">{recentError}</p>}
-          {upcoming.length > 0
-            ? <SidebarRows label="Recently played songs" entries={upcoming} {...rowProps} />
-            : !recentError && <p className="playbackSidebarMessage">Play a song to start your listening history.</p>}
-        </section>}
+        </>
       </div>
     </>
   );

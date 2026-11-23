@@ -6,7 +6,7 @@ import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackMenuBackdrop } from "./TrackMenuBackdrop";
-import { MENU_WIDTH } from "../utils/trackMenu";
+import { MENU_WIDTH, menuBounds } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { isDownloadable, isDownloadedOnServer, offlineSource, openDownloadDialog, removeLocalDownloads, removeServerDownloads } from "../utils/offlineDownloads";
 import { serverOnline } from "../api/serverConnection";
@@ -47,21 +47,25 @@ type TrackCollectionMenuProps = {
   startWithPlaylistPicker?: boolean;
   returnFocusTo?: HTMLElement;
   instant?: boolean;
+  /** As wide as its labels, for a short menu opened at the cursor. */
+  fitContent?: boolean;
+  /** False for a playback-only menu whose song's other menu already offers downloads. */
+  downloads?: boolean;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false, returnFocusTo, instant = false }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false, returnFocusTo, instant = false, downloads = true, fitContent = false }: TrackCollectionMenuProps) {
   const collection = tracks !== undefined;
   const connected = useServiceAvailability();
   const available = collection || isTrackAvailable(trackId, connected);
   if (!available) { actions = actions.filter(action => action.whenUnavailable); playlistOptions = undefined; }
   // Every song's edit menu offers a download; collection menus (no song) bring their own.
-  if (available && trackId && isDownloadable(trackId)) {
+  if (downloads && available && trackId && isDownloadable(trackId)) {
     actions = [...actions, { label: "Download", icon: "/download.svg", onSelect: () => openDownloadDialog([trackId], "this song") }];
   }
-  if (trackId && offlineSource(trackId)) {
+  if (downloads && trackId && offlineSource(trackId)) {
     actions = [...actions, { label: "Remove Download", icon: "/delete.svg", whenUnavailable: true, onSelect: () => void removeLocalDownloads([trackId]) }];
   }
-  if (trackId && isDownloadedOnServer(trackId) && serverOnline) {
+  if (downloads && trackId && isDownloadedOnServer(trackId) && serverOnline) {
     actions = [...actions, { label: "Remove from Server Downloads", icon: "/delete.svg", whenUnavailable: true, onSelect: () => void removeServerDownloads([trackId]) }];
   }
   const [choosingPlaylist, setChoosingPlaylist] = useState(startWithPlaylistPicker);
@@ -90,13 +94,15 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     if (!element) return;
     const reposition = () => {
       const { width, height } = element.getBoundingClientRect();
-      const maxLeft = window.innerWidth - width - 4;
-      const left = instant && xPos > maxLeft && xPos - width >= 4
-        ? xPos - width
-        : Math.max(4, Math.min(xPos, maxLeft));
+      const bounds = menuBounds(element);
+      // A menu opened at the cursor turns to its left at the view's edge; one already lined up
+      // with its trigger fits, and a wider playlist chooser only shifts in.
+      const turnWidth = Math.min(MENU_WIDTH, element.offsetWidth || width);
+      const turn = xPos + turnWidth > bounds.right && xPos - turnWidth >= bounds.left;
+      const left = Math.max(bounds.left, Math.min(turn ? xPos - turnWidth : xPos, bounds.right - width));
       // Only the menu's natural size decides the flip, so its open/close scale never flips it back.
       const naturalHeight = element.offsetHeight || height;
-      const bottom = Math.min(window.innerHeight, document.getElementById("bottomInfoBar")?.getBoundingClientRect().top ?? Infinity) - 4;
+      const bottom = bounds.bottom;
       const above = placement === "above"
         || (flipY !== undefined && yPos + naturalHeight > bottom && flipY - naturalHeight >= 4);
       const top = Math.max(4, Math.min(above ? (placement === "above" ? yPos : flipY!) - naturalHeight : yPos, window.innerHeight - naturalHeight - 4));
@@ -115,7 +121,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
   useEffect(() => () => {
     if (returnFocusTo?.isConnected) returnFocusTo.focus({ preventScroll: true });
   }, [returnFocusTo]);
-  const width = choosingPlaylist ? 260 : MENU_WIDTH;
+  const width = choosingPlaylist ? 260 : fitContent ? "max-content" : MENU_WIDTH;
   return (
     <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }

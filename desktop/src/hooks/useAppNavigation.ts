@@ -45,11 +45,20 @@ export function useAppNavigation({
   const libraryScreen = isPlayerView ? playerReturnScreenRef.current : screen;
   const isSettingsView = libraryScreen === "settings";
   // The queue lives in the playback sidebar, beside every screen, the player included.
-  const [sidebarView, setPlaybackSidebarView] = useState<PlaybackSidebarView | null>(null);
+  // Beside the library and over the player it opens and closes separately; both are remembered.
+  const [sidebarViews, setSidebarViews] = useState(() => {
+    const saved = preferences.ui.navigation?.sidebar;
+    return { library: saved?.library ?? null, player: saved?.player ?? null };
+  });
+  const [sidebarWidth, setSidebarWidth] = useState(() => preferences.ui.navigation?.sidebar?.width ?? null);
+  const sidebarView = isPlayerView ? sidebarViews.player : sidebarViews.library;
+  const setPlaybackSidebarView = useStableCallback((view: PlaybackSidebarView | null) => {
+    setSidebarViews(current => ({ ...current, [isPlayerView ? "player" : "library"]: view }));
+  });
   const closePlaybackSidebar = useCallback(() => {
     if (document.activeElement?.closest("#playbackSidebar")) document.getElementById("queueBtn")?.focus();
     setPlaybackSidebarView(null);
-  }, []);
+  }, [setPlaybackSidebarView]);
   const isHomeView = libraryScreen === "home" && !browseEntity;
   const isSearchView = libraryScreen === "search" && !browseEntity;
   // Page history restores content; retain the player overlay and its return screen too.
@@ -79,9 +88,10 @@ export function useAppNavigation({
         playlistId: selectedPlaylistId,
         section: librarySection,
         settingsTab,
+        sidebar: { ...sidebarViews, width: sidebarWidth },
       },
     },
-  }), [preferences, localOnly, browseEntity, selectedPlaylistId, librarySection, settingsTab]);
+  }), [preferences, localOnly, browseEntity, selectedPlaylistId, librarySection, settingsTab, sidebarViews, sidebarWidth]);
 
   const changeScreen = useStableCallback((nextScreen: AppScreen) => {
     if (isPlayerScreen(nextScreen) && !isPlayerView && !hasCurrentTrack) return;
@@ -213,7 +223,7 @@ export function useAppNavigation({
   const toggleLyrics = useStableCallback(() => {
     if (isPlayerView) changeScreen(playerReturnScreenRef.current);
     else if (sidebarView === "lyrics") return closePlaybackSidebar();
-    setPlaybackSidebarView("lyrics");
+    setSidebarViews(current => ({ ...current, library: "lyrics" }));
   });
   const openSettings = useStableCallback(() => {
     if (screen === "settings") return;
@@ -384,7 +394,7 @@ export function useAppNavigation({
   return {
     screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
-    sidebarView, setPlaybackSidebarView, closePlaybackSidebar,
+    sidebarView, setPlaybackSidebarView, closePlaybackSidebar, sidebarWidth, setSidebarWidth,
     sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
     openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,

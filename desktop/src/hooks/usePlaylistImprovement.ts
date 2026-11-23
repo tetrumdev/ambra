@@ -80,7 +80,7 @@ export function usePlaylistImprovement(
     try {
       const found = await findPlaylistUpgrades(tracks, done => {
         if (requested) setProgress({ playlistId, done, total: tracks.length });
-      }, controller.signal, playlist.packages);
+      }, controller.signal, playlist.packages, requested);
       controller.signal.throwIfAborted();
       const upgrades = [...found].map(([from, to]) => ({ from: tracks.find(track => track.globalId === from)!, to }));
       if (upgrades.length && !latest.current.replaceTracks(playlistId, found)) {

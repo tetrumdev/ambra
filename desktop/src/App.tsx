@@ -233,11 +233,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   );
   const audioSettings = useAudioSettings();
   useStartupWindow(!library.isRestoring && !audioSettings?.loading && isFullscreen !== null);
-  const preferredPlaybackSidebarWidth = useRef<number | null>(null);
   const {
     screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
-    sidebarView, setPlaybackSidebarView, closePlaybackSidebar,
+    sidebarView, setPlaybackSidebarView, closePlaybackSidebar, sidebarWidth, setSidebarWidth,
     sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
     openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
@@ -711,7 +710,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
       {sidebarView && <PlaybackSidebar
         view={sidebarView}
         floating={isPlayerView}
-        preferredWidth={preferredPlaybackSidebarWidth}
+        preferredWidth={sidebarWidth}
+        onResize={setSidebarWidth}
         onChangeView={setPlaybackSidebarView}
         onClose={closePlaybackSidebar}
         currentTrack={player.currentTrack}

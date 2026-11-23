@@ -12,7 +12,7 @@
     z-index: 6;
     visibility: hidden;
     /* Its size and place glide only when the layout switches (AlbumArtwork), never with a window resize. */
-    transition: opacity 400ms ease, box-shadow 600ms ease;
+    transition: opacity 400ms ease;
 }
 
 /* Beside the lyrics: centred in the left column, as large as fits under the controls. */
@@ -50,6 +50,7 @@
     pointer-events: none;
     -webkit-mask-image: var(--rim-mask);
     mask-image: var(--rim-mask);
+    transition: opacity 600ms ease;
 }
 
 .coverGlow::before {
@@ -66,8 +67,9 @@
     box-shadow: 0 0 16px rgb(var(--rim-tint) / 0.1), 0 0 60px rgb(var(--rim-tint) / 0.08);
 }
 
+/* The logo is black on black: no glow, so it and the background read as one image. */
 #albumCover[data-empty="true"] .coverGlow {
-    display: none;
+    opacity: 0;
 }
 
 /* Opening and closing the player is instant. */
@@ -101,10 +103,6 @@
 
 #albumCover[data-empty="true"] .albumCoverImg {
     opacity: 0;
-}
-
-#albumCover[data-empty="true"] {
-    box-shadow: 0 0 40px 3px rgba(255, 255, 255, 0.18);
 }
 
 #albumCover[data-empty="true"] .albumCoverPlaceholder {
@@ -156,6 +154,11 @@
     z-index: 0;
     inset: 0;
     visibility: hidden;
+    background: transparent;
+    transition: background-color 600ms ease;
+}
+
+#backgroundFX > * {
     opacity: 1;
     transition: opacity 600ms ease;
 }
@@ -164,7 +167,12 @@
     visibility: visible;
 }
 
+/* Nothing playing leaves the logo alone on true black, unlike the app's off-black surfaces. */
 #backgroundFX[data-empty="true"] {
+    background: #000;
+}
+
+#backgroundFX[data-empty="true"] > * {
     opacity: 0;
 }
 
@@ -174,7 +182,9 @@
 :root[data-reduce-motion] #albumCover,
 :root[data-reduce-motion] .albumCoverImg,
 :root[data-reduce-motion] .albumCoverPlaceholder,
-:root[data-reduce-motion] #backgroundFX {
+:root[data-reduce-motion] #backgroundFX,
+:root[data-reduce-motion] #backgroundFX > *,
+:root[data-reduce-motion] .coverGlow {
     transition: none;
 }
 

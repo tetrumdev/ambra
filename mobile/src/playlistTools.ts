@@ -27,7 +27,7 @@ export type Improvement = { upgraded: number; done: number; total: number };
 export async function improvePlaylist(playlist: Playlist, onProgress: (done: number, total: number) => void, signal: AbortSignal): Promise<number> {
   const tracks = playlistSongs(playlist);
   onProgress(0, tracks.length);
-  const upgrades = await findUpgrades(phoneServices, tracks, done => onProgress(done, tracks.length), signal, playlist.packages ?? []);
+  const upgrades = await findUpgrades(phoneServices, tracks, done => onProgress(done, tracks.length), signal, playlist.packages ?? [], true);
   signal.throwIfAborted();
   if (upgrades.size) await replacePlaylistTracks(playlist.id, upgrades);
   return upgrades.size;

@@ -253,6 +253,8 @@ test("the sidebar divider clamps drag and keyboard resizing and restores the cho
   };
 
   try {
+    // The sidebar's open state and width are remembered; start from neither.
+    localStorage.removeItem("ambra.device-view.v1");
     await setWindowWidth(1200);
     await act(async () => root.render(<App localOnly />));
     await toggle();

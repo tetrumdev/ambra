@@ -280,7 +280,8 @@ export function TrackList({
     setOpenMenu({
       kind: "collection",
       trackId,
-      x: triggerRect.right - menuWidth,
+      // One pixel in, so the menu never covers the column border beside the trigger.
+      x: triggerRect.right - menuWidth - 1,
       y: triggerRect.bottom + gap,
       flipY: triggerRect.top - gap,
     });

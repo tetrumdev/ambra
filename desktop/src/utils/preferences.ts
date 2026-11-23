@@ -5,6 +5,7 @@ import { hideableTrackColumns, orderedOptionalColumns, type HideableColumnKey, t
 import type { BrowseEntity } from "./browse";
 import type { LibrarySection } from "../components/LibraryView";
 import type { SettingsTab } from "../components/SettingsSidebar";
+import type { PlaybackSidebarView } from "../components/PlaybackSidebar";
 import { readShortcutOverrides, type ShortcutOverrides } from "./shortcuts";
 
 export type AppScreen = "bigscreen" | "lyrics" | "home" | "library" | "search" | "settings";
@@ -23,7 +24,13 @@ type NavigationPreferences = {
   playlistId: string | null;
   section: LibrarySection;
   settingsTab: SettingsTab;
+  /** The playback sidebar, open or not, separately beside the library and over the player. */
+  sidebar: { library: PlaybackSidebarView | null; player: PlaybackSidebarView | null; width: number | null };
 };
+
+function isSidebarView(value: unknown): value is PlaybackSidebarView {
+  return value === "queue" || value === "lyrics";
+}
 
 export type AppPreferences = {
   version: 4;
@@ -150,6 +157,12 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
     settingsTab: value.settingsTab === "outputs" || value.settingsTab === "dsp" || value.settingsTab === "services"
       || value.settingsTab === "server" || value.settingsTab === "local" || value.settingsTab === "keyboard"
       ? value.settingsTab : "general",
+    sidebar: {
+      library: isRecord(value.sidebar) && isSidebarView(value.sidebar.library) ? value.sidebar.library : null,
+      player: isRecord(value.sidebar) && isSidebarView(value.sidebar.player) ? value.sidebar.player : null,
+      width: isRecord(value.sidebar) && typeof value.sidebar.width === "number" && Number.isFinite(value.sidebar.width)
+        ? value.sidebar.width : null,
+    },
   };
 }
 

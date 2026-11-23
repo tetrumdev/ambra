@@ -340,7 +340,7 @@ export function SearchView({
     if (event.type === "contextmenu") return { x: event.clientX, y: event.clientY, flipY: event.clientY };
     const triggerRect = event.currentTarget.getBoundingClientRect();
     const gap = 4;
-    return { x: triggerRect.right - MENU_WIDTH, y: triggerRect.bottom + gap, flipY: triggerRect.top - gap };
+    return { x: triggerRect.right - MENU_WIDTH - 1, y: triggerRect.bottom + gap, flipY: triggerRect.top - gap };
   }
 
   // Each album's songs, loaded when its menu first opens.
