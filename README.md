@@ -29,7 +29,7 @@ AMBRA is an open-source music player for audiophiles, music lovers, and everyday
   - [x] Tidal
   - [x] Qobuz
   - [x] Spotify
-  - [ ] Local Files
+  - [x] Local Files
 - [ ] Finish UI
 - [x] Lyrics Support
 - [x] Playback Sync
@@ -43,16 +43,16 @@ AMBRA is an open-source music player for audiophiles, music lovers, and everyday
 <b>Future Features</b>
 
 - [ ] Serverless Streaming and Downloading
-  - [ ] P2P Sync
+  - [x] P2P Sync
 - [ ] Multi-User Support
-- [ ] P2P Support
+- [x] P2P Support
 - [ ] "Spotify Connect" with all services
 - [ ] Room Autocorrection
 - [ ] Stats
-- [ ] Add download support
-  - [ ] Tidal
-  - [ ] Qobuz
-  - [ ] Spotify
+- [x] Add download support
+  - [x] Tidal
+  - [x] Qobuz
+  - [x] Spotify
 - [ ] Visualizer
 - [ ] Add additional streaming and downloading support
   - [ ] Youtube Music
