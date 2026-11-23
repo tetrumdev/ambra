@@ -22,8 +22,8 @@ any selected method other than `TcpPunch`.
 
 **This is not a production-readiness claim.** TCP/443 worked on this network pair;
 two completed attempts with unprivileged home ports failed. There is no proven
-general NAT success rate, physical mobile result, Windows simultaneous-open
-support, audible playback test, or physical network-handoff test. The optional
+general NAT success rate, physical mobile result, Windows result across the
+internet, audible playback test, or physical network-handoff test. The optional
 privileged-port launcher supplies a finite socket pool. See the limitations below.
 
 Sanitized measurements are in [evidence.json](results/nostr-tcp-2026-11-13/evidence.json).
@@ -199,7 +199,7 @@ zero ports, and IPv6 are rejected as punched public candidates.
 Candidate gathering enumerates up to four native IPv4 interfaces. Each attempt
 binds an explicit local address and port, configures `SO_REUSEADDR` and
 `SO_REUSEPORT`, and binds to the physical interface (`IP_BOUND_IF` on macOS;
-`SO_BINDTODEVICE` on Linux). It connects that socket to `stun.nextcloud.com:443`,
+`SO_BINDTODEVICE` on Linux; Windows differs, see [Windows](#windows)). It connects that socket to `stun.nextcloud.com:443`,
 sends an RFC 5389 Binding request, checks the transaction/cookie/frame/attributes,
 and reads a bounded IPv4 mapped address. A held control socket retains the observed
 mapping while a separate reused-port listener and outgoing sockets prepare.
@@ -252,6 +252,79 @@ privileges. It is a remaining operational limitation, not an invisible permanent
 privilege solution. Fixed-port attempts are serialized to avoid multiple
 `SO_REUSEPORT` listeners distributing a peer's connection to the wrong attempt;
 existing established sessions can continue while the next attempt starts.
+
+## Windows
+
+Windows uses the same candidates, timing, limits, Noise roles, knock, and
+nomination as macOS and Linux. Only the socket options differ:
+
+- **Port sharing.** Windows has no `SO_REUSEPORT`. Its `SO_REUSEADDR` alone lets
+  the held STUN stream, the listener, and every active open share one local
+  address and port. `connect()` still refuses a duplicate 4-tuple, as on Unix, so
+  an overlapping re-dial to the same candidate fails without disturbing the first.
+  Ambra never sets `SO_EXCLUSIVEADDRUSE`, because that option forbids sharing.
+- **Interface binding.** `IP_UNICAST_IF` pins each socket to the gathered physical
+  interface, like `IP_BOUND_IF` and `SO_BINDTODEVICE`. The IPv4 option takes the
+  interface index in network byte order. A host-order index fails with an error.
+  `getsockopt` reads the index back in host order. The only new manifest entry is
+  `windows-sys`, the crate and version range that `socket2` already builds on
+  Windows.
+- **No launcher.** Windows has no privileged ports, so `AMBRA_TCP_PUNCH_PORT=443`
+  binds directly. `AMBRA_TCP_PUNCH_FDS` and `scripts/tcp-punch-bind.py` are Unix-only.
+
+### Windows evidence
+
+On November 20, 2026, one Windows 11 machine ran both ends of a punch. It has
+Ethernet behind the home router and Wi-Fi behind a second, port-preserving
+consumer NAT router whose WAN address is on the Ethernet subnet. Packets crossed
+both physical links and the NAT router. This is a real NAT on the wire, but not
+an internet path.
+
+- `Endpoint::gather` on Ethernet: TCP STUN through `stun.nextcloud.com:443`
+  in 217–237 ms. The public port equalled the local port.
+- Raw simultaneous open with **no listener** on either end: 3/3 in 11–13 ms.
+- Full `Endpoint` punching (`IP_UNICAST_IF`, reused port, signed knock, Noise,
+  nomination): 5/5 debug runs in 85–92 ms, with Noise in 62–66 ms, then 32 MiB
+  verified byte for byte. One release run punched in 48 ms and moved 32 MiB at
+  30.2 MiB/s. The debug build moved 3.7 MiB/s, limited by unoptimized crypto.
+  Every winner was an active socket, never the listener.
+- `IP_UNICAST_IF` on Wi-Fi sent traffic over Wi-Fi even though Ethernet had the
+  lower-metric default route.
+
+Two controls failed for reasons outside the punching code. The home router answers
+a hairpin to its own public address with RST, so two candidates sharing one public
+IP cannot reach each other. Ethernet cannot reach the Wi-Fi subnet at all, even with
+an ordinary connect, because the routers do not route between those subnets.
+
+### Windows limitations
+
+- **No internet-path result.** There is no Windows-to-Mac, Windows-to-Linux, or
+  Windows-to-Windows result across the internet or across carrier-grade NAT.
+- **Firewall and the listener.** A simultaneous-open SYN reaches a socket in
+  `SYN_SENT`, and Windows Firewall passes it as part of that outbound flow. The
+  tests above passed while the test binary had explicit inbound **Block** rules.
+  The listener is different: a peer's SYN that arrives after the local active open
+  has ended needs an inbound allow rule. The server's firewall rules cover only its
+  fixed ports, not the ephemeral punch port, so that fallback path is usually
+  closed on Windows. Paced re-dials recreate `SYN_SENT` sockets during the window.
+- **Firewall prompt.** A program with no firewall rules that listens on a physical
+  address makes Windows show its "allow access" prompt. Dismissing it creates
+  Block rules. That affects the listener only, as described above. Running the
+  `ambra-net` tests that listen on physical addresses can leave such rules for the
+  test binaries.
+- **Port sharing scope.** Linux `SO_REUSEPORT` limits sharing to the same user.
+  Windows `SO_REUSEADDR` does not form that group. Another local program that also
+  sets `SO_REUSEADDR` can bind the same address and port and take connections
+  meant for the listener. Noise and the signed knock still stop impersonation; the
+  attempt fails. With a fixed port, Ambra's specific-address binding also takes
+  precedence over another program's wildcard listener on that port while an attempt
+  runs. Use `AMBRA_TCP_PUNCH_PORT=443` on Windows only when nothing else uses TCP/443.
+- **Interface names.** The native-interface filter matches Unix tunnel name
+  prefixes. Windows uses friendly names such as `Tailscale` or `Wi-Fi`. Tailscale is
+  still excluded by its overlay address. Other VPN adapters (WireGuard, OpenVPN,
+  Cloudflare WARP) can be chosen if Windows lists them first. The attempt then runs
+  through the VPN and usually fails, and other methods continue. Linux has the same
+  gap for WARP's `CloudflareWARP` interface.
 
 ## Connection manager and application integration
 
@@ -391,7 +464,8 @@ Verified on this Mac and/or the physical home machine:
   11 pass. The full desktop suite passes 69 tests, with one existing test ignored.
 - Mobile bridge host check and six host tests pass.
 - Windows GNU cross-check of `ambra-net` passes; the new socket method explicitly
-  returns unsupported there rather than claiming Windows traversal.
+  returns unsupported there rather than claiming Windows traversal. (Superseded on
+  November 20, 2026: Windows is now supported. See [Windows](#windows).)
 - Real-server integration script passes approval, authorization, upload/range,
   replay denial, administrative restrictions, revocation, toggles, and shutdown.
 - Nostr tests cover serialization, invalid/unknown fields, encryption, binding,
@@ -417,7 +491,7 @@ Apple Command Line Tools and host Rust target are usable for mobile work here.
 No physical mobile binary or mobile network behavior is qualified.
 
 Still unverified: actual audible desktop playback, many-hour stability, other NAT
-combinations, physical Wi-Fi/cellular roaming, IPv6 punching, Windows socket reuse,
+combinations, physical Wi-Fi/cellular roaming, IPv6 punching, Windows across the internet,
 mobile battery/background behavior, and helper operation after pool exhaustion or
 server-interface changes. A larger release qualification campaign and independent
 security review remain necessary. The finite optional bind helper and WebSocket

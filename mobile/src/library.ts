@@ -4,7 +4,8 @@ import type { ServicePlaylist } from "../../desktop/src/api/playlists";
 import type { Playlist, Track } from "../../desktop/src/types/music";
 import { remoteTrack } from "../../desktop/src/utils/remoteTrack";
 import { mergeVisibleTrackOrder } from "../../desktop/src/utils/trackCollectionOrder";
-import { phoneMediaUrl, rebased, request } from "./client";
+import { applyServerLibraryDelta } from "../../desktop/src/utils/trackReconcile";
+import { phoneMediaUrl, rebased, request, serverAddress } from "./client";
 import { normalizePackages } from "./queueModel";
 import { editState, readState, stateValue } from "./sharedState";
 import { services, type Service } from "./servicePreferences";
@@ -69,16 +70,45 @@ function parsePlaylists(raw: string | null) {
   return { playlists, tracks };
 }
 
+/** The server's songs as last received, at the address their media URLs point to, with the
+ * cursor that asks only for what changed since (as desktop does). Older servers send no cursor. */
+let serverSongs: { address: string; cursor: string; tracks: Track[]; retry: boolean } | null = null;
+type LibrarySync = { tracks: RemoteTrack[]; cursor?: string; reset?: boolean; removedTrackIds?: string[]; updatedTrackIds?: string[]; retry?: boolean };
+
+async function librarySongs(): Promise<Track[]> {
+  const address = serverAddress();
+  const known = serverSongs?.address === address && !serverSongs.retry ? serverSongs : null;
+  const result = await request<LibrarySync>(`/api/library?since=${encodeURIComponent(known?.cursor ?? "")}`, { timeoutMs: 60_000 });
+  const loaded = result.tracks.map(playableTrack);
+  const tracks = known && result.cursor && !result.reset
+    ? applyServerLibraryDelta(known.tracks, loaded, result.removedTrackIds ?? [], result.updatedTrackIds)
+    : loaded;
+  serverSongs = result.cursor ? { address, cursor: result.cursor, tracks, retry: Boolean(result.retry) } : null;
+  return tracks;
+}
+
+/** Imported music as last received, by its tag: the server sends the list again only when it changed. */
+let importedSongs: { tag: string; tracks: Track[] } | null = null;
+
+async function importedMusic(): Promise<Track[]> {
+  const body = await request<Track[] | { tag: string; tracks?: Track[] }>(
+    `/api/music/local/tracks?known=${encodeURIComponent(importedSongs?.tag ?? "")}`, { timeoutMs: 30_000 });
+  if (Array.isArray(body)) { importedSongs = null; return body; }
+  const tracks = body.tracks ?? importedSongs?.tracks ?? [];
+  importedSongs = { tag: body.tag, tracks };
+  return tracks;
+}
+
 let refreshing: Promise<void> | null = null;
 /** Loads everything again; screens show the last snapshot meanwhile. */
 export function refreshLibrary(): Promise<void> {
   refreshing ??= (async () => {
     publish({ loading: true });
     try {
-      const [library, imported, state, connected] = await Promise.all([
-        request<{ tracks: RemoteTrack[] }>("/api/library", { timeoutMs: 60_000 }),
+      const [libraryTracks, imported, state, connected] = await Promise.all([
+        librarySongs(),
         // Music imported from devices into the server's own library, as desktop lists it.
-        request<Track[]>("/api/music/local/tracks", { timeoutMs: 30_000 }).catch(() => [] as Track[]),
+        importedMusic().catch(() => [] as Track[]),
         readState(undefined, true),
         request<ServiceAuthStatus>("/api/auth/status", { timeoutMs: 10_000 }).catch(() => null),
       ]);
@@ -86,7 +116,7 @@ export function refreshLibrary(): Promise<void> {
       const removed = new Set(parseJson<string[]>(stateValue(state, REMOVED_KEY), []));
       const positions = new Map(order.map((id, index) => [id, index]));
       const local = (JSON.parse(rebased(JSON.stringify(imported))) as Track[]).filter(track => track && typeof track.globalId === "string");
-      const tracks = [...library.tracks.map(playableTrack), ...local]
+      const tracks = [...libraryTracks, ...local]
         .filter(track => !removed.has(track.globalId))
         .sort((a, b) => (positions.get(a.globalId) ?? Infinity) - (positions.get(b.globalId) ?? Infinity));
       const { playlists, tracks: playlistTracks } = parsePlaylists(stateValue(state, PLAYLISTS_KEY));

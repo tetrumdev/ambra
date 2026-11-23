@@ -1,6 +1,11 @@
 //! Imported music belongs to the server, independently of the importing app.
 //! Files are content-addressed, streamed to disk, verified, and published atomically.
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{Arc, atomic::{AtomicU64, Ordering}},
+    time::Duration,
+};
 
 use axum::{
     Json, Router,
@@ -11,7 +16,7 @@ use axum::{
     routing::get,
 };
 use futures_util::StreamExt;
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use sha2::{Digest, Sha256};
 use tokio::{io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt}, sync::Mutex};
 use tokio_util::io::ReaderStream;
@@ -19,10 +24,22 @@ use tokio_util::io::ReaderStream;
 use crate::library_sync::{Events, Journal};
 
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// How long the saved index stays in memory after it was last used.
+const INDEX_KEPT_FOR: Duration = Duration::from_secs(60);
+
+/// The saved library: each track as the JSON text it was saved as, by global ID. Kept as text,
+/// it costs about the file's size in memory and is read and written without building a tree.
+type Index = BTreeMap<String, Box<RawValue>>;
 
 struct Library {
     root: PathBuf,
     changes: Mutex<Journal<Value>>,
+    /// The saved index while it is in use. Desktop imports one request per song; reading and
+    /// parsing the whole file again for each made an import into a large library slow (every
+    /// song cost a full parse). Guarded by `changes`, which every reader and writer holds;
+    /// dropped once unused for `INDEX_KEPT_FOR`. Only this process writes the file.
+    index: std::sync::Mutex<Option<Arc<Index>>>,
+    index_uses: AtomicU64,
     events: Events,
     state: Arc<crate::user_state::UserState>,
 }
@@ -38,7 +55,26 @@ impl Library {
     fn new(root: PathBuf, state: Arc<crate::user_state::UserState>, events: Events) -> Self {
         let changes = Journal::default();
         events.send_modify(|versions| versions.local = changes.cursor());
-        Self { root, changes: Mutex::new(changes), events, state }
+        Self { root, changes: Mutex::new(changes), index: std::sync::Mutex::default(), index_uses: AtomicU64::new(0), events, state }
+    }
+
+    fn cached_index(&self) -> std::sync::MutexGuard<'_, Option<Arc<Index>>> {
+        self.index.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Keeps the index for another `INDEX_KEPT_FOR`, then lets it go unless used meanwhile.
+    fn keep_index(self: &Arc<Self>, index: Arc<Index>) {
+        *self.cached_index() = Some(index);
+        let use_number = self.index_uses.fetch_add(1, Ordering::Relaxed) + 1;
+        let library = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(INDEX_KEPT_FOR).await;
+            if let Some(library) = library.upgrade()
+                && library.index_uses.load(Ordering::Relaxed) == use_number
+            {
+                library.cached_index().take();
+            }
+        });
     }
 }
 
@@ -84,13 +120,20 @@ async fn artwork_palette(State(library): State<Arc<Library>>, Path(id): Path<Str
     }
 }
 
-async fn read_index(library: &Library) -> Result<BTreeMap<String, Value>, String> {
-    match tokio::fs::read(library.root.join("library.json")).await {
-        Ok(bytes) => tokio::task::spawn_blocking(move || serde_json::from_slice(&bytes))
-            .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
-        Err(error) => Err(error.to_string()),
-    }
+/// The saved index; the caller holds `changes`.
+async fn read_index(library: &Arc<Library>) -> Result<Arc<Index>, String> {
+    let cached = library.cached_index().clone();
+    let index = match cached {
+        Some(index) => index,
+        None => Arc::new(match tokio::fs::read(library.root.join("library.json")).await {
+            Ok(bytes) => tokio::task::spawn_blocking(move || serde_json::from_slice::<Index>(&bytes))
+                .await.map_err(|error| error.to_string())?.map_err(|error| error.to_string())?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Index::new(),
+            Err(error) => return Err(error.to_string()),
+        }),
+    };
+    library.keep_index(index.clone());
+    Ok(index)
 }
 
 /// Names the saved library as it is now: every save replaces the file, so its identity,
@@ -132,7 +175,7 @@ async fn list(State(library): State<Arc<Library>>, Query(query): Query<ListQuery
             return (headers, Json(Listing { cursor, reset: false, tracks: latest.into_values().collect() })).into_response();
         }
         return match read_index(&library).await {
-            Ok(index) => (headers, Json(Listing { cursor, reset: true, tracks: index.into_values().collect() })).into_response(),
+            Ok(index) => (headers, Json(Listing { cursor, reset: true, tracks: index.values().collect() })).into_response(),
             Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
         };
     }
@@ -142,9 +185,11 @@ async fn list(State(library): State<Arc<Library>>, Query(query): Query<ListQuery
     }
     match read_index(&library).await {
         Ok(index) => {
-            let tracks = index.into_values().collect::<Vec<_>>();
-            let body = if query.known.is_some() { json!({ "tag": tag, "tracks": tracks }) } else { Value::Array(tracks) };
-            ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
+            #[derive(serde::Serialize)]
+            struct Tagged<'a> { tag: String, tracks: Vec<&'a RawValue> }
+            let tracks = index.values().map(AsRef::as_ref).collect::<Vec<_>>();
+            let headers = [(header::CACHE_CONTROL, "no-store")];
+            if query.known.is_some() { (headers, Json(Tagged { tag, tracks })).into_response() } else { (headers, Json(tracks)).into_response() }
         }
         Err(message) => error(StatusCode::INTERNAL_SERVER_ERROR, message),
     }
@@ -198,15 +243,31 @@ async fn add(State(library): State<Arc<Library>>, request: Request) -> Response 
         let track = track.clone();
         tokio::spawn(async move {
             let mut changes = library.changes.lock().await;
-            let mut index = read_index(&library).await?;
-            if index.get(&id) == Some(&track) {
+            let index = read_index(&library).await?;
+            if index.get(&id).and_then(|saved| serde_json::from_str::<Value>(saved.get()).ok()).as_ref() == Some(&track) {
                 return Ok(());
             }
-            index.insert(id, track.clone());
+            let saved = serde_json::value::to_raw_value(&track).map_err(|error| error.to_string())?;
+            // Changed in place when nothing else holds it; the file is replaced before the index
+            // in memory, so a failed save leaves both as they were.
+            library.cached_index().take();
+            let mut index = Arc::unwrap_or_clone(index);
+            let previous = index.insert(id.clone(), saved);
             let path = library.root.join("library.json");
-            tokio::task::spawn_blocking(move || {
-                crate::server_config::write_private(&path, &serde_json::to_vec(&index).map_err(|e| e.to_string())?)
-            }).await.map_err(|error| error.to_string())??;
+            let (mut index, written) = tokio::task::spawn_blocking(move || {
+                let written = serde_json::to_vec(&index).map_err(|e| e.to_string())
+                    .and_then(|bytes| crate::server_config::write_private(&path, &bytes));
+                (index, written)
+            }).await.map_err(|error| error.to_string())?;
+            if let Err(message) = written {
+                match previous {
+                    Some(previous) => { index.insert(id, previous); }
+                    None => { index.remove(&id); }
+                }
+                library.keep_index(Arc::new(index));
+                return Err(message);
+            }
+            library.keep_index(Arc::new(index));
             changes.record_weighted(vec![track], weight);
             library.events.send_modify(|versions| versions.local = changes.cursor());
             Ok::<_, String>(())
@@ -494,6 +555,59 @@ mod tests {
         full_times.sort();
         delta_times.sort();
         println!("loopback median (five warm requests): {:?} full, {:?} delta", full_times[2], delta_times[2]);
+        server.abort();
+        tokio::fs::remove_dir_all(root).await.unwrap();
+    }
+
+    /// `cargo test --release local_import_benchmark -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore = "importing into a 20,000-track library, one track at a time as desktop does"]
+    async fn local_import_benchmark() {
+        let root = directory();
+        tokio::fs::create_dir_all(&root).await.unwrap();
+        const EXISTING: usize = 20_000;
+        const IMPORTED: usize = 200;
+        let mut index = BTreeMap::new();
+        for number in 0..EXISTING {
+            let file = format!("{number:064x}.flac");
+            let id = format!("local:{number:064x}");
+            index.insert(id.clone(), json!({
+                "globalId": id, "provider": "local", "providerTrackId": file, "playbackKind": "direct",
+                "name": format!("Song {number}"), "artist": "Recording Artist", "album": "Album Title",
+                "durationSeconds": 180, "audio": format!("/api/music/local/files/{file}"),
+                "cover": "/white.svg", "fullCover": "/white.svg", "nativeCover": null,
+                "artists": [{ "providerId": "Recording Artist", "name": "Recording Artist", "imageUrl": null }],
+                "albumArtists": [], "trackNumber": 1,
+            }));
+        }
+        tokio::fs::write(root.join("library.json"), serde_json::to_vec(&index).unwrap()).await.unwrap();
+        drop(index);
+        for number in 0..IMPORTED {
+            tokio::fs::write(root.join(format!("{:064x}.flac", EXISTING + number)), b"fixture").await.unwrap();
+        }
+        let (base, server) = harness(root.clone()).await;
+        let client = paired_client();
+        let url = format!("{base}/api/music/local/tracks");
+        let start = std::time::Instant::now();
+        for number in 0..IMPORTED {
+            let details = json!({
+                "file": format!("{:064x}.flac", EXISTING + number), "name": format!("Imported {number}"),
+                "artist": "Recording Artist", "album": "Album Title", "durationSeconds": 180,
+                "artists": [], "albumArtists": [],
+            });
+            assert_eq!(client.post(&url).json(&details).send().await.unwrap().status(), StatusCode::OK);
+        }
+        let imported = start.elapsed();
+        let mut listings = Vec::new();
+        for _ in 0..5 {
+            let start = std::time::Instant::now();
+            let body = client.get(&url).query(&[("since", "")]).send().await.unwrap().bytes().await.unwrap();
+            listings.push(start.elapsed());
+            assert!(body.len() > 1_000_000);
+        }
+        listings.sort();
+        println!("{IMPORTED} imports into {EXISTING} tracks: {imported:?} ({:?} each); full listing median {:?}",
+            imported / IMPORTED as u32, listings[2]);
         server.abort();
         tokio::fs::remove_dir_all(root).await.unwrap();
     }

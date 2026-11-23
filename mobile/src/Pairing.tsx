@@ -16,9 +16,11 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(initialError);
   const abort = useRef<AbortController | null>(null);
+  // The camera reports a code many times a second; pair once per opening.
+  const scanned = useRef(false);
   useEffect(() => () => abort.current?.abort(), []);
 
-  const start = async () => {
+  const start = async (link = address) => {
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
@@ -26,7 +28,7 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
     setError(null);
     setPairing(null);
     try {
-      const started = await requestPairing(address, Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone"), controller.signal);
+      const started = await requestPairing(link, Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone"), controller.signal);
       if (controller.signal.aborted) return;
       setPairing(started);
       setBusy(false);
@@ -57,10 +59,10 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
             <Text style={styles.secondaryText}>Cancel</Text>
           </Touchable>
         </> : <>
-          <Text style={styles.body}>Paste the server pairing link from ambra-server pair qr. Approve the six-digit code on that server.</Text>
+          <Text style={styles.body}>Scan the QR code from ambra-server pair qr, or paste its link. Then approve the six-digit code on that server.</Text>
           {scanning && permission?.granted && <CameraView style={{ height: 240, width: "100%" }} barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-            onBarcodeScanned={({ data }) => { if (data.startsWith("ambra://pair/")) { setAddress(data); setScanning(false); } else setError("This QR code is not an Ambra pairing link."); }} />}
-          <Touchable accessibilityRole="button" onPress={() => void (async () => { const next = permission?.granted ? permission : await requestPermission(); if (next.granted) setScanning(value => !value); else setError("Allow camera access to scan, or paste the pairing link."); })()} style={styles.secondary}>
+            onBarcodeScanned={({ data }) => { if (scanned.current) return; if (data.startsWith("ambra://pair/")) { scanned.current = true; setAddress(data); setScanning(false); void start(data); } else setError("This QR code is not an Ambra pairing link."); }} />}
+          <Touchable accessibilityRole="button" onPress={() => void (async () => { const next = permission?.granted ? permission : await requestPermission(); if (next.granted) { scanned.current = false; setScanning(value => !value); } else setError("Allow camera access to scan, or paste the pairing link."); })()} style={styles.secondary}>
             <Text style={styles.secondaryText}>{scanning ? "Close camera" : "Scan server QR code"}</Text>
           </Touchable>
           <TextInput

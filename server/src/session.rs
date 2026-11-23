@@ -1385,6 +1385,10 @@ async fn drive(core: Shared) {
     let mut saved_at = Instant::now();
     let mut position_reported_at = Instant::now();
     loop {
+        // Without an output there is nothing to keep in time: choosing one, a queue change or
+        // a command wakes the driver. Idle sessions (every one but the playing one) then cost
+        // no wakeups, rather than four a second each.
+        let idle = core.transport().output.is_none();
         tokio::select! {
             _ = core.wake.notified() => {}
             _ = core.endpoints.reported() => {}
@@ -1392,7 +1396,7 @@ async fn drive(core: Shared) {
                 if changed.is_err() { return; }
                 core.refresh_queue().await;
             }
-            _ = tokio::time::sleep(TICK) => {}
+            _ = tokio::time::sleep(TICK), if !idle => {}
         }
         if core.closed() { return; }
         if let Err(message) = step(&core).await {

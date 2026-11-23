@@ -119,3 +119,34 @@ test("Improve Playlist swaps songs for their better copies in place, bound songs
   expect(saved.playlists[0].packages).toEqual([["qobuz:9", "qobuz:8"]]);
   expect(saved.tracks.map((track: { globalId: string }) => track.globalId)).toEqual(["qobuz:9", "qobuz:8"]);
 });
+
+test("a refresh asks only for library changes since the last one, and an unchanged imported list isn't sent again", async () => {
+  const remote = (id: string) => ({
+    id: `tidal:${id}`, provider: "tidal", providerTrackId: id, title: id, version: null, album: null,
+    primaryArtist: { name: "Ada" }, artists: [], trackNumber: 1, discNumber: 1, durationSeconds: 1, explicit: false,
+    isrc: null, copyright: null, quality: null, maximumSamplingRateKHz: null, maximumBitDepth: null,
+    playback: { kind: "direct", url: `/api/providers/tidal/tracks/${id}/stream` },
+  });
+  const asked: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/api/state")) return respond({ revision: 1, values: {} });
+    if (url.pathname.endsWith("/api/music/local/tracks")) {
+      asked.push(`local ${url.searchParams.get("known")}`);
+      return respond(url.searchParams.get("known") === "t1" ? { tag: "t1" } : { tag: "t1", tracks: [] });
+    }
+    if (url.pathname.endsWith("/api/library")) {
+      const since = url.searchParams.get("since");
+      asked.push(`library ${since}`);
+      return respond(since === "c1"
+        ? { tracks: [remote("3")], cursor: "c2", reset: false, removedTrackIds: ["tidal:1"], updatedTrackIds: [] }
+        : { tracks: [remote("1"), remote("2")], cursor: "c1", reset: true });
+    }
+    return respond(null);
+  }) as typeof globalThis.fetch;
+  await library.refreshLibrary();
+  expect(library.librarySnapshot().tracks.map(track => track.globalId)).toEqual(["tidal:1", "tidal:2"]);
+  await library.refreshLibrary();
+  expect(asked).toEqual(["library ", "local ", "library c1", "local t1"]);
+  expect(library.librarySnapshot().tracks.map(track => track.globalId)).toEqual(["tidal:2", "tidal:3"]);
+});

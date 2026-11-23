@@ -26,7 +26,7 @@ use tokio::sync::Mutex;
 
 use crate::server_config::{PairedClient, ServerConfig, random_bytes, random_hex, token_hash};
 
-const PAIRING_EXPIRES: Duration = Duration::from_secs(10 * 60);
+pub const PAIRING_EXPIRES: Duration = Duration::from_secs(10 * 60);
 const MAX_PENDING: usize = 16;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

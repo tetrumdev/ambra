@@ -263,7 +263,7 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
       });
       return;
     }
-    if (status.status !== "pending") throw new Error(status.status === "denied" ? "The server refused this phone." : "The code expired.");
+    if (status.status !== "pending") throw new Error(status.status === "denied" ? "The server refused this phone." : "The code expired. Connect again for a new one.");
     await new Promise(resolve => setTimeout(resolve, 1500));
   }
 }

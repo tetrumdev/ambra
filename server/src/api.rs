@@ -1234,7 +1234,7 @@ async fn search_catalog(
         ));
     }
     if !provider_is_configured(&state, request.provider) {
-        return Err(ApiError::bad_request("Music provider is not configured"));
+        return Err(not_signed_in(request.provider));
     }
     let limit = request.limit.unwrap_or(20).clamp(1, 20);
     let key = SearchCacheKey {
@@ -1352,7 +1352,7 @@ async fn search_tracks(
         ));
     }
     if !provider_is_configured(&state, request.provider) {
-        return Err(ApiError::bad_request("Music provider is not configured"));
+        return Err(not_signed_in(request.provider));
     }
     let limit = request
         .limit
@@ -1450,7 +1450,7 @@ async fn track_metadata(
         }
     };
     if !provider_is_configured(&state, provider) {
-        return Err(ApiError::bad_request("Music provider is not configured"));
+        return Err(not_signed_in(provider));
     }
     let track = load_track(
         &state,
@@ -1513,7 +1513,7 @@ async fn add_track(
     Json(request): Json<AddTrackRequest>,
 ) -> Result<Json<LibraryResponse>, ApiError> {
     if !provider_is_configured(&state, request.provider) {
-        return Err(ApiError::bad_request("Music provider is not configured"));
+        return Err(not_signed_in(request.provider));
     }
 
     let entry = LibraryEntry {
@@ -2600,6 +2600,10 @@ fn provider_is_configured(state: &AppState, provider: MusicProvider) -> bool {
         MusicProvider::Qobuz => state.qobuz.get().is_some(),
         MusicProvider::Spotify => current_spotify(state).is_some(),
     }
+}
+
+fn not_signed_in(provider: MusicProvider) -> ApiError {
+    ApiError::bad_request(format!("{} isn't signed in on this server", provider_name(provider)))
 }
 
 fn provider_name(provider: MusicProvider) -> &'static str {

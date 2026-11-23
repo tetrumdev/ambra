@@ -133,53 +133,80 @@ impl Config {
         address: SocketAddr,
         interface: Option<&if_addrs::Interface>,
     ) -> Result<Socket> {
-        #[cfg(windows)]
-        return Err("TCP simultaneous-open socket reuse is not yet qualified on Windows".into());
-        #[cfg(not(windows))]
+        let socket = if address.port() == 443
+            && !self
+                .pool
+                .lock()
+                .map_err(|_| "TCP pool unavailable")?
+                .is_empty()
         {
-            let socket = if address.port() == 443
-                && !self
-                    .pool
-                    .lock()
-                    .map_err(|_| "TCP pool unavailable")?
-                    .is_empty()
-            {
-                let socket = self
-                    .pool
-                    .lock()
-                    .map_err(|_| "TCP pool unavailable")?
-                    .pop()
-                    .ok_or("TCP socket pool exhausted")?;
-                if socket.local_addr()?.as_socket() != Some(address) {
-                    return Err("Inherited TCP binding does not match native interface".into());
-                }
-                socket
-            } else {
-                let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
-                socket.set_reuse_address(true)?;
-                #[cfg(unix)]
-                socket.set_reuse_port(true)?;
-                socket.bind(&address.into()).map_err(|e| {
-                    format!(
-                        "TCP bind {address}: {e}; TCP/443 may need the optional socket launcher"
-                    )
-                })?;
-                socket
-            };
-            // A physical interface binding prevents an installed VPN from carrying this path.
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            if let Some(interface) = interface {
-                socket
-                    .bind_device_by_index_v4(interface.index.and_then(std::num::NonZeroU32::new))?;
+            let socket = self
+                .pool
+                .lock()
+                .map_err(|_| "TCP pool unavailable")?
+                .pop()
+                .ok_or("TCP socket pool exhausted")?;
+            if socket.local_addr()?.as_socket() != Some(address) {
+                return Err("Inherited TCP binding does not match native interface".into());
             }
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            if let Some(interface) = interface {
-                socket.bind_device(Some(interface.name.as_bytes()))?;
-            }
-            socket.set_nonblocking(true)?;
-            Ok(socket)
+            socket
+        } else {
+            let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
+            // Unix needs SO_REUSEADDR plus SO_REUSEPORT for one listener, one held STUN
+            // stream and several active opens on one port. Windows has no SO_REUSEPORT:
+            // its SO_REUSEADDR alone allows those bindings, and connect() still refuses a
+            // duplicate 4-tuple. Ambra never sets SO_EXCLUSIVEADDRUSE, which forbids sharing.
+            socket.set_reuse_address(true)?;
+            #[cfg(unix)]
+            socket.set_reuse_port(true)?;
+            socket.bind(&address.into()).map_err(|e| {
+                format!("TCP bind {address}: {e}; TCP/443 may need the optional socket launcher")
+            })?;
+            socket
+        };
+        // A physical interface binding prevents an installed VPN from carrying this path.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if let Some(interface) = interface {
+            socket.bind_device_by_index_v4(interface.index.and_then(std::num::NonZeroU32::new))?;
         }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        if let Some(interface) = interface {
+            socket.bind_device(Some(interface.name.as_bytes()))?;
+        }
+        #[cfg(windows)]
+        if let Some(index) = interface.and_then(|i| i.index) {
+            unicast_interface(&socket, index)?;
+        }
+        socket.set_nonblocking(true)?;
+        Ok(socket)
     }
+}
+
+/// Windows counterpart of `IP_BOUND_IF`/`SO_BINDTODEVICE`: `IP_UNICAST_IF` sends this
+/// socket's unicast traffic through one interface, even when a VPN owns the default route.
+#[cfg(windows)]
+fn unicast_interface(socket: &Socket, index: u32) -> std::io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{
+        IP_UNICAST_IF, IPPROTO_IP, SOCKET_ERROR, WSAGetLastError, setsockopt,
+    };
+    // The IPv4 option takes the index in network byte order; IPV6_UNICAST_IF does not.
+    let value = index.to_be();
+    let result = unsafe {
+        setsockopt(
+            socket.as_raw_socket() as _,
+            IPPROTO_IP,
+            IP_UNICAST_IF,
+            (&value as *const u32).cast(),
+            std::mem::size_of::<u32>() as i32,
+        )
+    };
+    if result == SOCKET_ERROR {
+        return Err(std::io::Error::from_raw_os_error(unsafe {
+            WSAGetLastError()
+        }));
+    }
+    Ok(())
 }
 
 pub struct Endpoint {
@@ -496,6 +523,124 @@ mod tests {
             .unwrap();
         assert!(inherited_socket(udp.as_raw_fd()).is_err());
         assert!(udp.local_addr().is_ok());
+    }
+    #[cfg(windows)]
+    async fn active(
+        config: &Config,
+        local: SocketAddr,
+        peer: SocketAddr,
+    ) -> std::io::Result<TcpStream> {
+        let socket = config.socket(local, None).unwrap();
+        TcpSocket::from_std_stream(socket.into())
+            .connect(peer)
+            .await
+    }
+    /// Gathering's order: STUN stream first, then a listener and active opens on its port.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_one_port_holds_stun_stream_listener_and_active_opens() {
+        let config = Config::default();
+        let stun = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let peer = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let first = config.socket("127.0.0.1:0".parse().unwrap(), None).unwrap();
+        let local = first.local_addr().unwrap().as_socket().unwrap();
+        let held = TcpSocket::from_std_stream(first.into())
+            .connect(stun.local_addr().unwrap())
+            .await
+            .unwrap();
+        let listener = config.socket(local, None).unwrap();
+        listener.listen(8).unwrap();
+        let listener = TcpListener::from_std(listener.into()).unwrap();
+        let dial = active(&config, local, peer.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (accepted, source) = peer.accept().await.unwrap();
+        assert_eq!(source, local);
+        // A second active open to the same peer would duplicate the 4-tuple.
+        assert!(
+            active(&config, local, peer.local_addr().unwrap())
+                .await
+                .is_err()
+        );
+        let mut inbound = TcpStream::connect(local).await.unwrap();
+        let (mut incoming, _) = listener.accept().await.unwrap();
+        assert_eq!(incoming.local_addr().unwrap(), local);
+        inbound.write_all(b"in").await.unwrap();
+        let mut bytes = [0; 2];
+        incoming.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(&bytes, b"in");
+        for stream in [&held, &dial] {
+            assert_eq!(stream.local_addr().unwrap(), local);
+        }
+        drop((held, dial, accepted, stun));
+    }
+    /// Two active opens with no listener anywhere: only a real SYN/SYN crossing connects them.
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_simultaneous_open_without_listeners_joins_two_active_sockets() {
+        let config = Config::default();
+        let reserve = |config: &Config| {
+            let socket = config.socket("127.0.0.1:0".parse().unwrap(), None).unwrap();
+            socket.local_addr().unwrap().as_socket().unwrap()
+        };
+        for attempt in 0..5 {
+            let (a, b) = (reserve(&config), reserve(&config));
+            let (left, right) = tokio::join!(active(&config, a, b), active(&config, b, a));
+            let (Ok(mut left), Ok(mut right)) = (left, right) else {
+                eprintln!("simultaneous open attempt {attempt} missed; retrying");
+                continue;
+            };
+            assert_eq!(
+                (left.local_addr().unwrap(), left.peer_addr().unwrap()),
+                (a, b)
+            );
+            assert_eq!(
+                (right.local_addr().unwrap(), right.peer_addr().unwrap()),
+                (b, a)
+            );
+            left.write_all(b"ping").await.unwrap();
+            let mut bytes = [0; 4];
+            right.read_exact(&mut bytes).await.unwrap();
+            assert_eq!(&bytes, b"ping");
+            return;
+        }
+        panic!("Windows never completed a TCP simultaneous open");
+    }
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn windows_interface_binding_sets_unicast_if_and_still_connects() {
+        use std::os::windows::io::AsRawSocket;
+        use windows_sys::Win32::Networking::WinSock::{IP_UNICAST_IF, IPPROTO_IP, getsockopt};
+        let loopback = if_addrs::get_if_addrs()
+            .unwrap()
+            .into_iter()
+            .find(|i| i.is_loopback() && i.ip().is_ipv4() && i.index.is_some())
+            .expect("IPv4 loopback interface");
+        let index = loopback.index.unwrap();
+        let config = Config::default();
+        let socket = config
+            .socket("127.0.0.1:0".parse().unwrap(), Some(&loopback))
+            .unwrap();
+        let mut value = 0u32;
+        let mut length = std::mem::size_of::<u32>() as i32;
+        let result = unsafe {
+            getsockopt(
+                socket.as_raw_socket() as _,
+                IPPROTO_IP,
+                IP_UNICAST_IF,
+                (&mut value as *mut u32).cast(),
+                &mut length,
+            )
+        };
+        assert_eq!(result, 0);
+        // Windows reads it back in host order, though setting it requires network order;
+        // a host-order index > 255 is rejected, so a successful set round-trips here.
+        assert_eq!(value, index);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        TcpSocket::from_std_stream(socket.into())
+            .connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
     }
     #[test]
     fn candidates_reject_internal_overlay_reserved_and_zero_ports() {

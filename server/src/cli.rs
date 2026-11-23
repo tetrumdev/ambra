@@ -14,36 +14,36 @@ const HELP: &str = "\
 Ambra server
 
 USAGE:
-    ambra-server start [--bind <address>]      Start the background server and tray icon
-    ambra-server stop                          Stop the local background server
-    ambra-server serve [--bind <address>]      Run in this terminal (Ctrl+C to stop)
-    ambra-server status                        Is it running, and where
-    ambra-server config show                   Current settings
-    ambra-server config set bind <address>     Where to listen: lan, local, an IP, or IP:port
-    ambra-server config set name <name>        The name clients see
-    ambra-server config set discovery on|off   Whether clients on the network can find it
-    ambra-server network status|diagnose         Native listeners and sanitized network diagnostics
-    ambra-server network identity                Public cryptographic server identity
-    ambra-server network endpoint <IP:port>|auto Set a public hint or use signed discovery
-    ambra-server network p2p on|off               Enable or disable remote networking
-    ambra-server network tailcat on|off           Enable or disable final relay-capable fallback
-    ambra-server network pwnat on|off             Opt in to raw-ICMP fallback (requires helper)
-    ambra-server pair qr                          Public QR pairing link (requires running server)
-    ambra-server pair list                     Devices waiting to pair, and paired devices
-    ambra-server pair approve <code>           Let the device showing <code> use the server
-    ambra-server pair deny <code>              Refuse a device's request
-    ambra-server pair revoke <device>          Unpair a device, by name or ID
-    ambra-server login spotify|tidal|qobuz     Sign in on the server machine
-    ambra-server login complete tidal|qobuz    Enter the callback URL securely
-    ambra-server logout spotify|tidal|qobuz    Remove a server provider account
-    ambra-server services status               Provider connection status
-    ambra-server spotify status                Sanitized playback backend status
-    ambra-server spotify soloist setup       Consent to automatic downloads and updates
+    ambra-server start [--bind <address>]           Start the background server and tray icon
+    ambra-server stop                               Stop the local background server
+    ambra-server serve [--bind <address>]           Run in this terminal (Ctrl+C to stop)
+    ambra-server status                             Is it running, and where
+    ambra-server config show                        Current settings
+    ambra-server config set bind <address>          Where to listen: lan, local, an IP, or IP:port
+    ambra-server config set name <name>             The name clients see
+    ambra-server config set discovery on|off        Whether clients on the network can find it
+    ambra-server network status|diagnose            Native listeners and sanitized network diagnostics
+    ambra-server network identity                   Public cryptographic server identity
+    ambra-server network endpoint <IP:port>|auto    Set a public hint or use signed discovery
+    ambra-server network p2p on|off                 Enable or disable remote networking
+    ambra-server network tailcat on|off             Enable or disable final relay-capable fallback
+    ambra-server network pwnat on|off               Opt in to raw-ICMP fallback (requires helper)
+    ambra-server pair qr                            Public QR pairing link (requires running server)
+    ambra-server pair list                          Devices waiting to pair, and paired devices
+    ambra-server pair approve <code>                Let the device showing <code> use the server
+    ambra-server pair deny <code>                   Refuse a device's request
+    ambra-server pair revoke <device>               Unpair a device, by name or ID
+    ambra-server login spotify|tidal|qobuz          Sign in on the server machine
+    ambra-server login complete tidal|qobuz         Enter the callback URL securely
+    ambra-server logout spotify|tidal|qobuz         Remove a server provider account
+    ambra-server services status                    Provider connection status
+    ambra-server spotify status                     Sanitized playback backend status
+    ambra-server spotify soloist setup              Consent to automatic downloads and updates
     ambra-server spotify soloist pair|reset|check|sign-out
-    ambra-server spotify soloist key         Enter a personal API key without echo
-    ambra-server spotify soloist driver setup   Optional Windows server audio driver
-    ambra-server spotify soloist disable     Disable optional lossless support
-    ambra-server help                          This message
+    ambra-server spotify soloist key                Enter a personal API key without echo
+    ambra-server spotify soloist driver setup       Optional Windows server audio driver
+    ambra-server spotify soloist disable            Disable optional lossless support
+    ambra-server help                               This message
 
 The server shares itself with the local network by default (`config set bind lan`).
 Use `config set bind local` to keep it to this machine. Changing where it listens takes
@@ -126,7 +126,7 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
             let payload = response["payload"].as_str().ok_or("No pairing payload")?;
             let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
             Ok(format!(
-                "{}\n{}\nApprove the six-digit code after the device connects.",
+                "{}\n{}\nScan this on the device, or paste the link. Then approve the six-digit code it shows: `ambra-server pair approve <code>`.",
                 code.render::<char>()
                     .quiet_zone(true)
                     .module_dimensions(2, 1)
@@ -142,7 +142,7 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
                     "Open {url}\nAfter signing in, run `ambra-server login complete {provider}` and paste the callback URL."
                 ))
             } else {
-                Ok(format!("{provider} connected."))
+                Ok(format!("{} is already connected.", service_name(provider)))
             }
         }
         ["login", "complete", provider @ ("tidal" | "qobuz")] => {
@@ -154,12 +154,22 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
                 Some(json!({ "callbackUrl": callback })),
             )
             .await?;
-            Ok(format!("{provider} connected on the server."))
+            Ok(format!("{} connected on the server.", service_name(provider)))
         }
         ["logout", provider @ ("spotify" | "tidal" | "qobuz")] => {
-            pretty(local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?)
+            local("POST", &format!("/api/auth/{provider}/disconnect"), None).await?;
+            Ok(format!("Signed out of {} on the server.", service_name(provider)))
         }
-        ["services", "status"] => pretty(local("GET", "/api/auth/status", None).await?),
+        ["services", "status"] => {
+            let status = local("GET", "/api/auth/status", None).await?;
+            Ok(["spotify", "tidal", "qobuz"]
+                .map(|provider| format!(
+                    "{:<9}{}",
+                    service_name(provider),
+                    if status[provider] == true { "connected" } else { "not connected" }
+                ))
+                .join("\n"))
+        }
         ["spotify", "status"] => pretty(local("GET", "/api/spotify/playback/status", None).await?),
         ["spotify", "soloist", "setup"] => setup_soloist().await,
         ["spotify", "soloist", "driver", "setup"] => setup_windows_driver().await,
@@ -195,10 +205,11 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
             Ok("Soloist API key saved on the server.".into())
         }
 
-        ["stop"] => {
-            local("POST", "/api/local/stop", None).await?;
-            Ok("Ambra server is stopping.".into())
-        }
+        ["stop"] => match local("POST", "/api/local/stop", None).await {
+            Ok(_) => Ok("Ambra server is stopping.".into()),
+            Err(error) if error == NOT_RUNNING => Err("The Ambra server isn't running on this machine.".into()),
+            Err(error) => Err(error),
+        },
         ["config"] | ["config", "show"] => config_show().await,
         ["config", "set", "bind", address] => config_set(json!({ "bind": address })).await,
         ["config", "set", "name", name @ ..] if !name.is_empty() => {
@@ -249,10 +260,23 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
                 reply["revoked"].as_str().unwrap_or("the device")
             ))
         }
-        _ => Err(format!(
-            "Unknown command `{}`.\n\n{HELP}",
-            arguments.join(" ")
-        )),
+        _ => Err(format!("Unknown command `{}`.\n\n{}", arguments.join(" "), help_for(&words))),
+    }
+}
+
+/// The help lines for the command's first word, or all of the help when none match.
+fn help_for(words: &[&str]) -> String {
+    let prefix = format!("    ambra-server {} ", words.first().copied().unwrap_or_default());
+    let lines = HELP.lines().filter(|line| line.starts_with(&prefix)).collect::<Vec<_>>();
+    if lines.is_empty() { HELP.into() } else { format!("USAGE:\n{}", lines.join("\n")) }
+}
+
+fn service_name(provider: &str) -> &str {
+    match provider {
+        "spotify" => "Spotify",
+        "tidal" => "TIDAL",
+        "qobuz" => "Qobuz",
+        other => other,
     }
 }
 
@@ -390,16 +414,17 @@ async fn local(method: &str, path: &str, body: Option<Value>) -> Result<Value, S
     };
     let response = request.send().await.map_err(|error| {
         if error.is_connect() || error.is_timeout() {
-            "The Ambra server isn't running on this machine.".to_owned()
+            NOT_RUNNING.to_owned()
         } else {
             error.to_string()
         }
     })?;
     let status = response.status();
-    if status == reqwest::StatusCode::NOT_FOUND {
+    let value = response.json::<Value>().await.unwrap_or(Value::Null);
+    // A route this server doesn't have; a handler's own 404 ("no device has that code") says why.
+    if status == reqwest::StatusCode::NOT_FOUND && value["error"].as_str().is_none() {
         return Err(OLDER_SERVER.into());
     }
-    let value = response.json::<Value>().await.unwrap_or(Value::Null);
     if status.is_success() {
         Ok(value)
     } else {
@@ -409,12 +434,14 @@ async fn local(method: &str, path: &str, body: Option<Value>) -> Result<Value, S
     }
 }
 
+const NOT_RUNNING: &str =
+    "The Ambra server isn't running on this machine. Start it with `ambra-server start`.";
 const OLDER_SERVER: &str =
     "The Ambra server running on this machine is an older version; restart it to use this command.";
 
 /// No server here holds the settings in memory, so the file can be edited directly.
 fn not_running(error: &str) -> bool {
-    error.starts_with("The Ambra server isn't running") || error == OLDER_SERVER
+    error == NOT_RUNNING || error == OLDER_SERVER
 }
 
 async fn status() -> Result<String, String> {
@@ -469,13 +496,14 @@ async fn config_show() -> Result<String, String> {
             let config = ServerConfig::load();
             json!({
                 "name": config.name, "bind": config.bind, "listening": null, "discovery": config.discovery, "p2p": config.p2p,
+                "tailcat": config.tailcat, "pwnat": config.pwnat, "publicEndpoint": config.public_endpoint,
                 "pairedClients": config.paired_clients.len(), "path": ServerConfig::path().display().to_string(),
             })
         }
         Err(error) => return Err(error),
     };
     Ok(format!(
-        "name:       {}\nbind:       {}{}\ndiscovery:  {}\np2p:        {}\npaired:     {} device(s)\nfile:       {}",
+        "name:       {}\nbind:       {}{}\ndiscovery:  {}\np2p:        {}\ntailcat:    {}\npwnat:      {}\nendpoint:   {}\npaired:     {} device(s)\nfile:       {}",
         config["name"].as_str().unwrap_or("?"),
         config["bind"].as_str().unwrap_or("?"),
         match config["listening"].as_str() {
@@ -490,6 +518,9 @@ async fn config_show() -> Result<String, String> {
             "off"
         },
         if config["p2p"] == true { "on" } else { "off" },
+        if config["tailcat"] == true { "on" } else { "off" },
+        if config["pwnat"] == true { "on" } else { "off" },
+        config["publicEndpoint"].as_str().unwrap_or("auto"),
         config["pairedClients"],
         config["path"].as_str().unwrap_or("?"),
     ))
@@ -553,11 +584,14 @@ async fn pair_list() -> Result<String, String> {
         Some(pending) if !pending.is_empty() => {
             lines.push("Waiting to pair:".to_owned());
             for device in pending {
+                let left = crate::network::PAIRING_EXPIRES.as_secs()
+                    .saturating_sub(device["ageSeconds"].as_u64().unwrap_or(0));
                 lines.push(format!(
-                    "  {}  {} ({})  — `ambra-server pair approve {}`",
+                    "  {}  {} ({}), expires in {} min  — `ambra-server pair approve {}`",
                     device["code"].as_str().unwrap_or("?"),
                     device["clientName"].as_str().unwrap_or("?"),
                     device["address"].as_str().unwrap_or("?"),
+                    left.div_ceil(60),
                     device["code"].as_str().unwrap_or("?"),
                 ));
             }
@@ -584,6 +618,14 @@ async fn pair_list() -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unknown_command_shows_only_its_own_help() {
+        let pair = help_for(&["pair", "nonsense"]);
+        assert!(pair.contains("pair approve <code>") && !pair.contains("config set"));
+        assert_eq!(help_for(&["nonsense"]), HELP);
+        assert!(HELP.lines().filter(|line| line.starts_with("    ambra-server ")).all(|line| line.len() < 110));
+    }
 
     #[test]
     fn starting_is_explicit_and_serve_is_foreground() {

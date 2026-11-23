@@ -38,6 +38,10 @@ zeroize = "1"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Same crate and version range socket2 already builds on Windows; only IP_UNICAST_IF is used.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = ">=0.60, <0.62", features = ["Win32_Networking_WinSock"] }
+
 [dev-dependencies]
 nostr-sdk = { version = "0.45.6", features = ["local-relay"] }
 tempfile = "3"

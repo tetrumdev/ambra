@@ -1,7 +1,9 @@
 //! Line endings placed by the recording's isolated vocals (`crate::vocal_timing`). Where a
 //! line's final word had no end timed by a person, the word ends where the singing stops,
 //! never past the next line.
-use super::model::{LyricLine, LyricsResponse, Segment, fit_line_end, has_detail, letters};
+use super::model::{
+    LyricLine, LyricsResponse, Segment, fit_line_end, has_detail, letters, next_word_start, sung_ends,
+};
 use ambra_lyric_sync::{FRAME_MS, LyricWindow};
 
 /// Line-only timings rarely carry ends; a line is assumed sung for at most this long.
@@ -15,6 +17,13 @@ const SMOOTHING_FRAMES: i64 = 5;
 /// The singing has stopped once the level stays low this long (160 ms).
 const SILENT_FRAMES: i64 = 8;
 const MIN_WORD_MS: i64 = 120;
+/// Inside a line, only silence this long (400 ms) is a pause after a word, not a consonant.
+const PAUSE_FRAMES: i64 = 20;
+/// A word given less time than this, up to the next word, has no room for a pause after it.
+const MIN_PAUSED_WORD_MS: u64 = 700;
+/// A pause this soon (300 ms) after a word's timed start is a pause before the word: its
+/// timestamp caught the previous word's last sound, and it is sung once the singing resumes.
+const LATE_START_FRAMES: i64 = 15;
 /// The word must be heard within this long of its start, or the vocals can't place its end.
 const ONSET_FRAMES: i64 = 400 / FRAME_MS;
 /// Sung and gap levels closer than this (natural-log power) can't tell singing from silence.
@@ -105,6 +114,54 @@ pub fn refine(lyrics: &mut LyricsResponse, power: &[f64]) -> bool {
     let loud = |frame: i64| smoothed(frame).is_some_and(|value| value > threshold);
 
     let offset_ms = lyrics.offset_ms as f64;
+    let at = |frame: i64| ((frame * FRAME_MS + shift) as f64 + offset_ms).max(0.0) as u64;
+    // Where one line's last word runs straight into the next line's first word, sources often
+    // start the first word while the last is still sung, or squeeze the last word to nothing
+    // (moved by the song's pace in `normalize`). A gap in the singing just after the boundary
+    // is where the line really changes. A gap later than that is a pause after the first word.
+    for index in 1..lyrics.lines.len() {
+        let (before, after) = lyrics.lines.split_at_mut(index);
+        let (previous, line) = (&mut before[index - 1], &mut after[0]);
+        let (Some((_, last)), Some((first, _))) = (sung_ends(previous), sung_ends(line)) else { continue };
+        let (Some(last_start), Some(last_end), Some(first_start), Some(latest)) = (
+            previous.segments[last].start_ms,
+            previous.segments[last].end_ms,
+            line.segments[first].start_ms,
+            next_word_start(line, first),
+        ) else {
+            continue;
+        };
+        let shared = previous.segments[last].end_estimated && last_end.abs_diff(first_start) <= 50;
+        if !(line.segments[first].start_estimated || shared) || previous.singer != line.singer {
+            continue;
+        }
+        let from = frame_of(last_start as f64 - offset_ms) + MIN_WORD_MS / FRAME_MS;
+        let to = frame_of(latest as f64 - offset_ms).min(frames) - MIN_WORD_MS / FRAME_MS;
+        // Sources start these lines early, never late, so a gap the first word would have to
+        // start before its timed start is a dip inside the last word.
+        let first_frame = frame_of(first_start as f64 - offset_ms);
+        let earliest = if line.segments[first].start_estimated { from } else { first_frame };
+        let boundary = (from..to.min(first_frame + LATE_START_FRAMES))
+            .filter(|frame| (*frame..frame + SILENT_FRAMES).all(|frame| !loud(frame)))
+            .find_map(|gap| {
+                let resumes = (gap + SILENT_FRAMES..to).find(|frame| loud(*frame))?;
+                (resumes >= earliest).then_some((gap, resumes))
+            });
+        if let Some((gap, resumes)) = boundary {
+            let end = at(gap).clamp(last_start + MIN_WORD_MS as u64, latest);
+            previous.segments[last].end_ms = Some(end);
+            let start = at(resumes).clamp(end, latest.saturating_sub(MIN_WORD_MS as u64).max(end));
+            line.segments[first].start_ms = Some(start);
+            line.start_ms = Some(start);
+        }
+        previous.estimated_end_limit = line.start_ms;
+        fit_line_end(previous);
+        for line in [previous, line] {
+            if !line.words.is_empty() {
+                line.words = line.segments.clone();
+            }
+        }
+    }
     for line in &mut lyrics.lines {
         let Some(limit) = line.estimated_end_limit.filter(|_| has_detail(line)) else { continue };
         let Some(last) = line
@@ -129,6 +186,51 @@ pub fn refine(lyrics: &mut LyricsResponse, power: &[f64]) -> bool {
         line.segments[last].end_ms = Some(end.clamp(start + MIN_WORD_MS as u64, limit.max(start + MIN_WORD_MS as u64)));
         fit_line_end(line);
         if !line.words.is_empty() {
+            line.words = line.segments.clone();
+        }
+    }
+    // Words a source timed only by their starts run on to the next word, across any breath
+    // between them; a word followed by a pause ends where its singing stops.
+    for line in &mut lyrics.lines {
+        if !has_detail(line) {
+            continue;
+        }
+        let mut changed = false;
+        for index in 0..line.segments.len().saturating_sub(1) {
+            let segment = &line.segments[index];
+            let (Some(start), Some(end)) = (segment.start_ms, segment.end_ms) else { continue };
+            if !segment.end_estimated || letters(&segment.text) == 0 || end < start + MIN_PAUSED_WORD_MS {
+                continue;
+            }
+            let first = frame_of(start as f64 - offset_ms);
+            let next = frame_of(end as f64 - offset_ms).min(frames);
+            if !(first..first + ONSET_FRAMES).any(loud) {
+                continue;
+            }
+            let Some(silent_from) = (first + MIN_WORD_MS / FRAME_MS..next - PAUSE_FRAMES)
+                .find(|frame| (*frame..frame + PAUSE_FRAMES).all(|frame| !loud(frame)))
+            else {
+                continue;
+            };
+            let at = |frame: i64| ((frame * FRAME_MS + shift) as f64 + offset_ms).max(0.0) as u64;
+            let resumes = (silent_from + PAUSE_FRAMES..next).find(|frame| loud(*frame));
+            let previous = index.checked_sub(1).filter(|previous| {
+                let previous = &line.segments[*previous];
+                previous.end_estimated && previous.end_ms == Some(start)
+            });
+            if let (Some(resumes), Some(previous)) = (resumes, previous)
+                && silent_from - first < LATE_START_FRAMES
+            {
+                let previous_start = line.segments[previous].start_ms.unwrap_or(start);
+                let pause = at(silent_from).clamp(previous_start + MIN_WORD_MS as u64, start);
+                line.segments[previous].end_ms = Some(pause);
+                line.segments[index].start_ms = Some(at(resumes).clamp(start, end - MIN_WORD_MS as u64));
+            } else {
+                line.segments[index].end_ms = Some(at(silent_from).clamp(start + MIN_WORD_MS as u64, end));
+            }
+            changed = true;
+        }
+        if changed && !line.words.is_empty() {
             line.words = line.segments.clone();
         }
     }
