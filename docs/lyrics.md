@@ -11,7 +11,7 @@ Providers run in this order:
 1. AMLL: exact ISRC/platform lookup, then a bounded metadata search for suitable detailed synchronization.
 2. lrc.red: direct ISRC retrieval or a bounded metadata search for detailed synchronization.
 3. LRCLIB: signature lookup, then search for a matching word-timed revision when needed.
-4. If no detailed result exists, select the best-synchronized remaining result (line before plain), preferring LRCLIB, then lrc.red, then AMLL among equals.
+4. If no detailed result exists, select the best-synchronized remaining result (line before plain), preferring AMLL, then lrc.red, then LRCLIB among equals.
 5. If no valid result exists, return `unavailable`. Explicit instrumental records return `instrumental`.
 
 Detailed synchronization requires multiple nonempty segments with valid, distinct timing windows. A TTML `Word` declaration or LRCLIB `hasWordSync` flag does not qualify a record by itself. Subword text pieces remain separate segments. The API uses `segment` for finer timings whose linguistic unit is unknown; `syllable` additionally requires explicit source semantics and internal text boundaries. Rendering follows supplied timings without creating syllables or inserting spaces.

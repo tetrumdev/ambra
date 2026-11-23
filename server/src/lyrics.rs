@@ -181,8 +181,8 @@ impl Selection {
     }
 
     fn finish(self) -> LyricsResponse {
-        // Better timing wins; between equals, LRCLIB, then lrc.red, then AMLL.
-        let mut lyrics = [self.lrclib, self.red, self.amll]
+        // Better timing wins; between equals, AMLL, then lrc.red, then LRCLIB.
+        let mut lyrics = [self.amll, self.red, self.lrclib]
             .into_iter()
             .flatten()
             .reduce(|best, next| {
