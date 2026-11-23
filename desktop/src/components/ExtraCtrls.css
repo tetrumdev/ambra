@@ -52,9 +52,6 @@
     flex-direction: column;
     gap: 2px;
     width: 260px;
-    padding-bottom: 6px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid #2f2f2f;
 }
 
 .audioDeviceHeading {

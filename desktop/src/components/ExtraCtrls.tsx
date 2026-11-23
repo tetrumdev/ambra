@@ -11,7 +11,7 @@ import {
 } from "react";
 import { AudioControlsMenu } from "./AudioControlsMenu";
 import { useAudioSettings } from "../hooks/AudioSettingsContext";
-import { visibleOutputs } from "../utils/audioSettings";
+import { visibleOutputs, type AudioSettings } from "../utils/audioSettings";
 import { acceptsPlaybackShortcut } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
@@ -100,8 +100,13 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     if (remoteMembers.length === 0) return;
     let disposed = false;
     for (const member of remoteMembers) {
-      void invokeOn<number>(member, "native_audio_volume")
-        .then(value => { if (!disposed) setRemoteVolumes(current => ({ ...current, [outputKey(member)]: value })); })
+      // Each output's own saved level: `native_audio_volume` answers only for the app's own player
+      // there, so every other output on that computer would show (and step from) its level.
+      void invokeOn<AudioSettings>(member, "native_audio_settings")
+        .then(settings => {
+          const value = settings.outputs.find(output => output.id === member.deviceId)?.volume ?? 100;
+          if (!disposed) setRemoteVolumes(current => ({ ...current, [outputKey(member)]: value }));
+        })
         .catch(() => {});
     }
     return () => { disposed = true; };
