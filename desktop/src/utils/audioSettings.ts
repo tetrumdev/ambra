@@ -25,9 +25,9 @@ export const defaultAudioSettings = (): AudioSettings => ({ version: 1, selected
   { id: "", name: "System Default", enabled: true, exclusiveMode: false, resyncDelayMs: 0, latencyMs: 0, presetId: null, volume: 100 },
 ] });
 const storageKey = "ambra.audio-settings.v1";
-export function loadAudioSettings(): AudioSettings {
+export function loadAudioSettings(key = storageKey): AudioSettings {
   try {
-    const value = JSON.parse(getPersistentItem(storageKey) ?? "null") as AudioSettings | null;
+    const value = JSON.parse(getPersistentItem(key) ?? "null") as AudioSettings | null;
     if (value?.version === 1 && typeof value.selectedOutputId === "string"
       && Array.isArray(value.outputs) && value.outputs.length <= 256
       && Array.isArray(value.presets) && value.presets.length <= 64) {

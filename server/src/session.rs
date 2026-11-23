@@ -47,6 +47,8 @@ pub const MAIN_SESSION: &str = "main";
 const SESSIONS_FILE: &str = "sessions.v1.json";
 const MAX_SESSIONS: usize = 32;
 const MAX_SESSION_NAME: usize = 60;
+const MAX_STAGES: usize = 32;
+const MAX_STAGE_OUTPUTS: usize = 16;
 /// A queue is saved in the shared state, so it may be as large as that allows. Axum's own
 /// limit (2 MiB) refused a queue of a couple of thousand songs.
 const MAX_QUEUE_BYTES: usize = 64 * 1024 * 1024;
@@ -878,6 +880,9 @@ struct SessionView {
     output_online: bool,
     /// Every output playing, in step: `output` first, then those following it.
     outputs: Vec<Output>,
+    /// The session whose settings apps apply while following this one: its own id, or the
+    /// session it syncs its settings with.
+    settings_profile: String,
     /// The queue revision this view goes with.
     queue_revision: u64,
     /// Left out when the app already has this revision: a long queue is large, and play,
@@ -930,9 +935,13 @@ async fn view(core: &Core, known_queue: Option<u64>, detail: QueueDetail) -> Ses
         Some(endpoint) => core.endpoints.online(endpoint).await,
         None => false,
     };
+    let settings_profile = core.sessions.upgrade()
+        .and_then(|sessions| sessions.list().iter().find(|(info, _)| info.id == core.id).map(|(info, _)| info.settings_profile()))
+        .unwrap_or_else(|| core.id.clone());
     let transport = core.transport();
     SessionView {
         instance_id: core.instance_id.clone(),
+        settings_profile,
         revision: *core.revision.borrow(),
         playing: transport.playing,
         position_seconds: transport.position_now(),
@@ -982,6 +991,8 @@ pub fn router<S: Clone + Send + Sync + 'static>(sessions: Arc<Sessions>) -> Rout
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/sessions/{id}/rename", post(rename_session))
         .route("/api/sessions/{id}/delete", post(delete_session))
+        .route("/api/sessions/{id}/stages", post(set_stages))
+        .route("/api/sessions/{id}/settings", post(sync_settings))
         .with_state(sessions)
 }
 
@@ -2079,6 +2090,30 @@ async fn start_together(core: &Core, io: &mut OutputOperation<'_>) -> Result<(),
 struct SessionInfo {
     id: String,
     name: String,
+    /// Named groups of outputs this session plays on together.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    stages: Vec<Stage>,
+    /// The session whose settings this one shares; never one that shares another's itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settings_from: Option<String>,
+}
+
+impl SessionInfo {
+    fn new(id: &str, name: String) -> Self {
+        Self { id: id.into(), name, stages: Vec::new(), settings_from: None }
+    }
+
+    fn settings_profile(&self) -> String {
+        self.settings_from.clone().unwrap_or_else(|| self.id.clone())
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Stage {
+    id: String,
+    name: String,
+    outputs: Vec<Output>,
 }
 
 /// Every session this server runs. `main` always exists; the others are made and removed by apps.
@@ -2114,7 +2149,7 @@ impl Sessions {
         saved.retain(|info| valid_session_id(&info.id));
         saved.truncate(MAX_SESSIONS);
         if !saved.iter().any(|info| info.id == MAIN_SESSION) {
-            saved.insert(0, SessionInfo { id: MAIN_SESSION.into(), name: "Main".into() });
+            saved.insert(0, SessionInfo::new(MAIN_SESSION, "Main".into()));
         }
         let sessions = Arc::new(Self {
             state, endpoints, spotify_playback,
@@ -2168,7 +2203,7 @@ impl Sessions {
                 "title": track["title"], "artist": track["artist"], "album": track["album"], "cover": track["cover"],
             }));
             let transport = core.transport();
-            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), outputs: transport.outputs(), track });
+            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), outputs: transport.outputs(), track, stages: info.stages, settings_from: info.settings_from });
         }
         summaries
     }
@@ -2185,6 +2220,10 @@ struct SessionSummary {
     outputs: Vec<Output>,
     /// The current song, for showing what each session is playing.
     track: Option<Value>,
+    stages: Vec<Stage>,
+    /// The session whose settings this one shares, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    settings_from: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -2205,7 +2244,7 @@ async fn create_session(State(sessions): State<Arc<Sessions>>, Json(body): Json<
             return error(StatusCode::BAD_REQUEST, format!("A server runs at most {MAX_SESSIONS} sessions"));
         }
         let core = Core::open(&id, &sessions);
-        list.push((SessionInfo { id: id.clone(), name }, core));
+        list.push((SessionInfo::new(&id, name), core));
     }
     if let Err(message) = sessions.save() {
         return error(StatusCode::INTERNAL_SERVER_ERROR, message);
@@ -2241,6 +2280,10 @@ async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Pa
         let Some(index) = list.iter().position(|(info, _)| info.id == id) else {
             return error(StatusCode::NOT_FOUND, "That session no longer exists");
         };
+        // Sessions sharing its settings go back to their own.
+        for (info, _) in list.iter_mut() {
+            if info.settings_from.as_deref() == Some(id.as_str()) { info.settings_from = None; }
+        }
         list.remove(index).1
     };
     if let Err(message) = sessions.save() {
@@ -2272,9 +2315,108 @@ async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Pa
     Json(sessions.summaries().await).into_response()
 }
 
+#[derive(Deserialize)]
+struct StagesBody {
+    stages: Vec<Stage>,
+}
+
+/// Replaces a session's stages.
+async fn set_stages(State(sessions): State<Arc<Sessions>>, axum::extract::Path(id): axum::extract::Path<String>, Json(body): Json<StagesBody>) -> Response {
+    if body.stages.len() > MAX_STAGES {
+        return error(StatusCode::BAD_REQUEST, format!("A session has at most {MAX_STAGES} stages"));
+    }
+    let mut stages: Vec<Stage> = Vec::with_capacity(body.stages.len());
+    for stage in body.stages {
+        let name = match session_name(&stage.name) { Ok(name) => name, Err(response) => return response };
+        if !valid_session_id(&stage.id) || stages.iter().any(|other| other.id == stage.id) {
+            return error(StatusCode::BAD_REQUEST, "Each stage needs its own id");
+        }
+        if stage.outputs.is_empty() || stage.outputs.len() > MAX_STAGE_OUTPUTS {
+            return error(StatusCode::BAD_REQUEST, format!("A stage has 1 to {MAX_STAGE_OUTPUTS} outputs"));
+        }
+        stages.push(Stage { name, ..stage });
+    }
+    {
+        let mut list = sessions.list();
+        let Some((info, _)) = list.iter_mut().find(|(info, _)| info.id == id) else {
+            return error(StatusCode::NOT_FOUND, "That session no longer exists");
+        };
+        info.stages = stages;
+    }
+    if let Err(message) = sessions.save() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    Json(sessions.summaries().await).into_response()
+}
+
+#[derive(Deserialize)]
+struct SettingsBody {
+    from: Option<String>,
+}
+
+/// Shares another session's settings from now on (`from`), or goes back to its own (`null`).
+async fn sync_settings(State(sessions): State<Arc<Sessions>>, axum::extract::Path(id): axum::extract::Path<String>, Json(body): Json<SettingsBody>) -> Response {
+    {
+        let mut list = sessions.list();
+        let mut infos: Vec<SessionInfo> = list.iter().map(|(info, _)| info.clone()).collect();
+        if let Err(response) = link_settings(&mut infos, &id, body.from.as_deref()) {
+            return response;
+        }
+        for ((info, _), linked) in list.iter_mut().zip(infos) { *info = linked; }
+    }
+    if let Err(message) = sessions.save() {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, message);
+    }
+    // Apps following any of them switch settings with the next view.
+    for core in sessions.cores() { core.changed(); }
+    Json(sessions.summaries().await).into_response()
+}
+
+/// Links are one step deep: a session shares the settings of one that keeps its own, and
+/// those sharing `id`'s move along with it.
+fn link_settings(infos: &mut [SessionInfo], id: &str, from: Option<&str>) -> Result<(), Response> {
+    if !infos.iter().any(|info| info.id == id) {
+        return Err(error(StatusCode::NOT_FOUND, "That session no longer exists"));
+    }
+    let root = match from {
+        None => None,
+        Some(from) => {
+            let Some(other) = infos.iter().find(|info| info.id == from) else {
+                return Err(error(StatusCode::NOT_FOUND, "That session no longer exists"));
+            };
+            let root = other.settings_profile();
+            // Already sharing one set of settings.
+            if root == id { return Ok(()); }
+            Some(root)
+        }
+    };
+    for info in infos.iter_mut() {
+        if info.id == id || (root.is_some() && info.settings_from.as_deref() == Some(id)) {
+            info.settings_from = root.clone();
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_links_stay_one_step_deep() {
+        let mut infos: Vec<SessionInfo> = ["main", "a", "b"].iter().map(|id| SessionInfo::new(id, (*id).into())).collect();
+        let from = |infos: &[SessionInfo]| infos.iter().map(|info| info.settings_profile()).collect::<Vec<_>>();
+        link_settings(&mut infos, "b", Some("a")).ok().unwrap();
+        // `a`, which `b` shares, now shares main's: `b` follows along.
+        link_settings(&mut infos, "a", Some("main")).ok().unwrap();
+        assert_eq!(from(&infos), ["main", "main", "main"]);
+        // Linking to a session that already shares this one's settings changes nothing.
+        link_settings(&mut infos, "main", Some("b")).ok().unwrap();
+        assert_eq!(infos[0].settings_from, None);
+        link_settings(&mut infos, "b", None).ok().unwrap();
+        assert_eq!(from(&infos), ["main", "main", "b"]);
+        assert!(link_settings(&mut infos, "b", Some("gone")).is_err());
+    }
 
     fn queue() -> Value {
         json!({

@@ -93,8 +93,52 @@
     height: 12px;
 }
 
-.audioDeviceOption[aria-checked="true"] .audioDeviceCheck {
+.audioDeviceOption[aria-checked="true"] .audioDeviceCheck,
+.audioDeviceOption[aria-current="true"] .audioDeviceCheck {
     background: url("/check.svg") center / contain no-repeat;
+}
+
+.audioStageNew .audioDeviceCheck {
+    display: grid;
+    place-items: center;
+    line-height: 1;
+}
+
+/* Removing a stage: a small cross at the end of its row. */
+.audioDeviceRemove {
+    position: absolute;
+    top: 50%;
+    right: 3px;
+    width: 24px;
+    height: 24px;
+    transform: translateY(-50%);
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: #a3a2a3;
+    cursor: pointer;
+    opacity: 0;
+}
+
+.audioDeviceRow:hover .audioDeviceRemove:not(:disabled),
+.audioDeviceRemove:focus-visible {
+    opacity: 1;
+}
+
+.audioDeviceRemove:hover {
+    background: #3c3c3c;
+    color: inherit;
+}
+
+.audioStageForm {
+    display: flex;
+    gap: 4px;
+    padding: 2px 8px;
+}
+
+.audioStageForm input {
+    flex: 1;
+    min-width: 0;
 }
 
 /* With a server, each output has a box of its own, over the check column: ticking it adds the

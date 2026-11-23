@@ -40,6 +40,8 @@ export type CoreView = {
    * Missing from servers older than synced playback.
    */
   outputs?: CoreOutput[];
+  /** The session whose settings apply while following this one. Missing from older servers. */
+  settingsProfile?: string;
   queueRevision: number;
   queue: PersistedQueue & { revision?: number };
 };
@@ -58,7 +60,12 @@ export type CoreSession = {
   output: CoreOutput | null;
   outputs?: CoreOutput[];
   track: { title?: string; artist?: string; album?: string; cover?: string } | null;
+  /** Named groups of outputs the session plays on together. Missing from older servers. */
+  stages?: CoreStage[];
+  /** The session whose settings this one shares. */
+  settingsFrom?: string;
 };
+export type CoreStage = { id: string; name: string; outputs: CoreOutput[] };
 
 /** Every output a session plays on, the leading one first. */
 export function coreOutputs(session: { output: CoreOutput | null; outputs?: CoreOutput[] } | null | undefined): CoreOutput[] {
@@ -82,6 +89,8 @@ subscribeServerConnection(() => {
 
 export const coreView = () => view;
 export const coreSession = () => session;
+/** Whose settings apply here now; null until a view says (or from a server without profiles). */
+export const coreSettingsProfile = () => view?.settingsProfile ?? null;
 
 /** The first session's requests name none, as servers from before sessions expect. */
 function inSession(path: string) {
@@ -123,6 +132,9 @@ export async function coreSessions(): Promise<CoreSession[]> {
 
 export const createCoreSession = (name: string) => sessionsRequest<CoreSession>("/api/sessions", { name });
 export const renameCoreSession = (id: string, name: string) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/rename`, { name });
+export const setCoreStages = (id: string, stages: CoreStage[]) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/stages`, { stages });
+/** Shares `from`'s settings from now on, or goes back to the session's own (`null`). */
+export const syncCoreSettings = (id: string, from: string | null) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/settings`, { from });
 export async function removeCoreSession(id: string) {
   const left = await sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/delete`, {});
   if (id === session) setCoreSession(MAIN_SESSION);

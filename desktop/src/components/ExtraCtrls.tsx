@@ -16,7 +16,7 @@ import { acceptsPlaybackShortcut } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import "./ExtraCtrls.css";
 import { invokeOn, useEndpoints } from "../utils/playbackTarget";
-import { coreCommand, coreOutputs, coreSession, coreSessions, coreView, setCoreSession, subscribeCore, type CoreOutput, type CoreSession } from "../api/core";
+import { coreCommand, coreOutputs, coreSession, coreSessions, coreView, setCoreStages, subscribeCore, type CoreOutput, type CoreStage } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
 
 /** How far keyboard and wheel input change the volume, in percent. */
@@ -32,6 +32,12 @@ function clampVolume(volume: number) {
 
 function outputKey(output: { endpointId: string; deviceId: string }) {
   return `${output.endpointId}:${output.deviceId}`;
+}
+
+/** The same outputs, in any order. */
+function sameOutputs(left: CoreOutput[], right: CoreOutput[]) {
+  const keys = new Set(left.map(outputKey));
+  return left.length === right.length && right.every(output => keys.has(outputKey(output)));
 }
 
 const volumeLevels = ["muted", "mid", "high"] as const;
@@ -64,16 +70,21 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
   const coreOutput = core?.output ?? null;
   const target = coreOutput && coreOutput.endpointId !== serverConnection?.clientId ? coreOutput : null;
   const endpoints = useEndpoints(audioMenuOpen && core !== null, true);
-  // With more than one session on the server, the menu also switches which one this app controls.
+  // Stages: the session's named groups of outputs, played on together in step.
   const currentSession = useSyncExternalStore(subscribeCore, coreSession);
-  const [sessions, setSessions] = useState<CoreSession[]>([]);
+  const [stages, setStages] = useState<CoreStage[] | null>(null);
+  const [newStage, setNewStage] = useState<{ name: string; outputs: CoreOutput[] } | null>(null);
   const following = core !== null;
   useEffect(() => {
     if (!audioMenuOpen || !following) return;
     let disposed = false;
-    void coreSessions().then(list => { if (!disposed) setSessions(list); }).catch(() => {});
+    setNewStage(null);
+    void coreSessions().then(list => {
+      // A server from before stages has none to offer.
+      if (!disposed) setStages(list.find(session => session.id === currentSession)?.stages ?? null);
+    }).catch(() => {});
     return () => { disposed = true; };
-  }, [audioMenuOpen, following]);
+  }, [audioMenuOpen, following, currentSession]);
   const isPlayingHere = (deviceId: string) => core ? coreOutput?.endpointId === serverConnection?.clientId && coreOutput?.deviceId === deviceId : selectedDeviceId === deviceId;
   const pickHere = (deviceId: string, deviceName: string) => {
     if (core && serverConnection) chooseOutput({ endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName });
@@ -146,62 +157,65 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
     void coreCommand("output", { output }).catch(error => setTargetError(String(error)));
   };
 
-  // With a server, several outputs can play in step: the box beside each (or a right-click)
-  // adds it to the ones playing, or takes it away; choosing the output itself plays there alone.
-  const inGroup = (output: CoreOutput) => groupOutputs.some(member => member.endpointId === output.endpointId && member.deviceId === output.deviceId);
-  const toggleInGroup = (output: CoreOutput) => {
-    setTargetError(null);
-    let next: CoreOutput[];
-    if (inGroup(output)) {
-      next = groupOutputs.filter(member => !(member.endpointId === output.endpointId && member.deviceId === output.deviceId));
-      if (next.length === 0) return;
-    } else {
-      next = [...groupOutputs, output];
-    }
-    void coreCommand("outputs", { outputs: next }).catch(error => setTargetError(String(error)));
+  // With a server, choosing an output plays there alone; a stage plays on all of its outputs in
+  // step. While a new stage is made, the box beside each output picks it for the stage.
+  const sameOutput = (output: CoreOutput) => (member: CoreOutput) => member.endpointId === output.endpointId && member.deviceId === output.deviceId;
+  const inGroup = (output: CoreOutput) => groupOutputs.some(sameOutput(output));
+  const saveStages = async (next: CoreStage[]) => {
+    const list = await setCoreStages(currentSession, next);
+    setStages(list.find(session => session.id === currentSession)?.stages ?? next);
   };
+  const playStage = (stage: CoreStage) => {
+    setTargetError(null);
+    void coreCommand("outputs", { outputs: stage.outputs }).catch(error => setTargetError(String(error)));
+  };
+  const createStage = () => {
+    if (!newStage || !stages || !newStage.name.trim() || newStage.outputs.length === 0) return;
+    const stage = { id: crypto.randomUUID().replace(/-/g, "").slice(0, 12), name: newStage.name.trim(), outputs: newStage.outputs };
+    setTargetError(null);
+    void saveStages([...stages, stage]).then(() => { setNewStage(null); playStage(stage); }).catch(error => setTargetError(String(error)));
+  };
+  const removeStage = (stage: CoreStage) => {
+    if (!stages) return;
+    setTargetError(null);
+    void saveStages(stages.filter(other => other.id !== stage.id)).catch(error => setTargetError(String(error)));
+  };
+  const togglePicked = (output: CoreOutput) => setNewStage(current => current && {
+    ...current,
+    outputs: current.outputs.some(sameOutput(output)) ? current.outputs.filter(member => !sameOutput(output)(member)) : [...current.outputs, output],
+  });
   const groupRow = (output: CoreOutput, label: string, { syncs, disabled = false, offline = false }: { syncs: boolean; disabled?: boolean; offline?: boolean }) => {
-    const checked = inGroup(output);
-    const lastOne = checked && groupOutputs.length <= 1;
-    const canToggle = syncs && !lastOne;
-    const hint = !syncs ? "Update Ambra there to play in sync"
-      : lastOne ? "Choose another output to play elsewhere"
-      : checked ? "Stop playing here" : "Also play here, in sync";
+    const playing = inGroup(output);
+    const picked = newStage?.outputs.some(sameOutput(output)) ?? false;
     const level = memberVolume(output);
-    return <Fragment key={outputKey(output)}><div
-      className="audioDeviceRow"
-      onContextMenu={event => {
-        event.preventDefault();
-        if (canToggle && !disabled) toggleInGroup(output);
-      }}
-    >
+    return <Fragment key={outputKey(output)}><div className="audioDeviceRow">
       <button
         className="audioDeviceOption"
         type="button"
-        aria-current={checked || undefined}
+        aria-current={(!newStage && playing) || undefined}
         aria-label={label}
-        disabled={disabled || offline}
-        onClick={() => chooseOutput(output)}
+        disabled={disabled || offline || (newStage !== null && !syncs)}
+        onClick={() => newStage ? togglePicked(output) : chooseOutput(output)}
       >
         <span className="audioDeviceCheck" aria-hidden="true" />
         <span className="audioDeviceName" data-tooltip={label}>
           {offline ? `${output.deviceName} (offline)` : output.deviceName}
         </span>
       </button>
-      <button
+      {newStage && <button
         className="audioDeviceToggle"
         type="button"
         role="checkbox"
-        aria-checked={checked}
-        aria-label={`Play on ${label} in sync`}
-        data-tooltip={hint}
-        disabled={disabled || !canToggle}
-        onClick={() => toggleInGroup(output)}
+        aria-checked={picked}
+        aria-label={`Add ${label} to the stage`}
+        data-tooltip={syncs ? undefined : "Update Ambra there to play in sync"}
+        disabled={!syncs}
+        onClick={() => togglePicked(output)}
       >
         <span className="audioDeviceBox" aria-hidden="true" />
-      </button>
+      </button>}
     </div>
-    {checked && !offline && <div className="audioDeviceVolume">
+    {playing && !offline && !newStage && <div className="audioDeviceVolume">
       <input
         className="volumeSlider"
         type="range"
@@ -385,20 +399,50 @@ export function ExtraCtrls({ onToggleQueue, queueSidebarOpen }: ExtraCtrlsProps)
                   aria-label="Audio output device"
                   onKeyDown={moveDeviceFocus}
                 >
-                  {core && sessions.length > 1 && <>
-                    <span className="audioDeviceHeading" aria-hidden="true">Session</span>
-                    {sessions.map(session => <button
-                      key={`session:${session.id}`}
-                      className="audioDeviceOption"
+                  {here && stages && <>
+                    <span className="audioDeviceHeading" aria-hidden="true">Stages</span>
+                    {stages.map(stage => <div key={`stage:${stage.id}`} className="audioDeviceRow">
+                      <button
+                        className="audioDeviceOption"
+                        type="button"
+                        aria-current={sameOutputs(stage.outputs, groupOutputs) || undefined}
+                        aria-label={`${stage.name} stage: ${stage.outputs.map(output => output.deviceName).join(", ")}`}
+                        disabled={newStage !== null}
+                        onClick={() => playStage(stage)}
+                      >
+                        <span className="audioDeviceCheck" aria-hidden="true" />
+                        <span className="audioDeviceName" data-tooltip={stage.outputs.map(output => output.deviceName).join(", ")}>{stage.name}</span>
+                      </button>
+                      <button
+                        className="audioDeviceRemove"
+                        type="button"
+                        aria-label={`Remove the ${stage.name} stage`}
+                        data-tooltip="Remove stage"
+                        disabled={newStage !== null}
+                        onClick={() => removeStage(stage)}
+                      >×</button>
+                    </div>)}
+                    {newStage ? <form className="audioStageForm" onSubmit={event => { event.preventDefault(); createStage(); }}>
+                      <input
+                        type="text"
+                        aria-label="Stage name"
+                        placeholder="Stage name"
+                        maxLength={60}
+                        autoFocus
+                        value={newStage.name}
+                        onChange={event => setNewStage({ ...newStage, name: event.target.value })}
+                      />
+                      <button type="submit" disabled={!newStage.name.trim() || newStage.outputs.length === 0}>Create</button>
+                      <button type="button" onClick={() => setNewStage(null)}>Cancel</button>
+                    </form> : <button
+                      className="audioDeviceOption audioStageNew"
                       type="button"
-                      role="radio"
-                      aria-checked={session.id === currentSession}
-                      aria-label={`${session.name} session`}
-                      onClick={() => setCoreSession(session.id)}
+                      onClick={() => setNewStage({ name: "", outputs: [...groupOutputs] })}
                     >
-                      <span className="audioDeviceCheck" aria-hidden="true" />
-                      <span className="audioDeviceName" data-tooltip={session.name} data-tooltip-overflow="">{session.name}</span>
-                    </button>)}
+                      <span className="audioDeviceCheck" aria-hidden="true">+</span>
+                      <span className="audioDeviceName">New stage</span>
+                    </button>}
+                    {newStage && <p className="audioControlsNote">Tick the outputs to play on together.</p>}
                   </>}
                   <span className="audioDeviceHeading" aria-hidden="true">
                     {here ? "Outputs" : "Output"}

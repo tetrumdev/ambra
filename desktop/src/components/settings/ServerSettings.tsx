@@ -1,12 +1,12 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connectToServer, getServerConnection, subscribeServerConnection, type ConnectionMethod } from "../../api/serverConnection";
 import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { Help, SettingRow, Toggle } from "./SettingsControls";
 import {
-  MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore,
+  MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore, syncCoreSettings,
   type CoreSession,
 } from "../../api/core";
 
@@ -159,11 +159,12 @@ function SavedServers({ saved, changing, onChange }: {
   </div>;
 }
 
-function describeSession(session: CoreSession) {
+function describeSession(session: CoreSession, sessions: CoreSession[]) {
+  const syncedWith = session.settingsFrom && sessions.find(other => other.id === session.settingsFrom)?.name;
   const track = session.track ? [session.track.title, session.track.artist].filter(Boolean).join(" · ") : "Nothing queued";
   const outputs = coreOutputs(session);
   const output = outputs.length ? `${session.playing ? "Playing" : "Paused"} on ${outputs.map(output => output.endpointName).join(", ")}` : "No output";
-  return `${track} — ${output}`;
+  return `${track} — ${output}${syncedWith ? ` — Settings synced with ${syncedWith}` : ""}`;
 }
 
 /** The server's sessions: each has its own queue and output, and this device follows one. */
@@ -171,6 +172,7 @@ function PlaybackSessions() {
   const current = useSyncExternalStore(subscribeCore, coreSession);
   const [sessions, setSessions] = useState<CoreSession[]>([]);
   const [naming, setNaming] = useState<{ id: string | null; name: string } | null>(null);
+  const [linking, setLinking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(() => coreSessions().then(setSessions), []);
   useEffect(() => {
@@ -194,8 +196,8 @@ function PlaybackSessions() {
     });
   };
   return <div className="settingsGroup">
-    <h2>Sessions<Help topic="Sessions">Each session has its own queue and plays on its own outputs, so different rooms can play different music at once. This device controls the one it follows.</Help></h2>
-    {sessions.map(session => <SettingRow key={session.id} label={session.name} hint={describeSession(session)}>
+    <h2>Sessions<Help topic="Sessions">Each session is a profile: its own queue, stages and settings, so different rooms can play different music at once. This device controls the one it follows, with that session's settings. Sync with shares another session's settings.</Help></h2>
+    {sessions.map(session => <Fragment key={session.id}><SettingRow label={session.name} hint={describeSession(session, sessions)}>
       <span className="settingsActions">
         {session.id === current
           ? <span className="settingsChip" data-state="connected">Following</span>
@@ -203,8 +205,20 @@ function PlaybackSessions() {
         <button type="button" className="settingsPill" onClick={() => setNaming({ id: session.id, name: session.name })}>Rename</button>
         {session.id !== MAIN_SESSION && <button type="button" className="settingsPill"
           onClick={() => void act(() => removeCoreSession(session.id))}>Remove</button>}
+        {session.settingsFrom
+          ? <button type="button" className="settingsPill" onClick={() => void act(() => syncCoreSettings(session.id, null))}>Stop syncing</button>
+          : sessions.length > 1 && <button type="button" className="settingsPill" aria-expanded={linking === session.id}
+            onClick={() => setLinking(linking === session.id ? null : session.id)}>Sync with</button>}
       </span>
-    </SettingRow>)}
+    </SettingRow>
+    {linking === session.id && !session.settingsFrom && <SettingRow label="Sync settings with">
+      <span className="settingsActions">
+        {sessions.filter(other => (other.settingsFrom ?? other.id) !== session.id && other.id !== session.id).map(other =>
+          <button key={other.id} type="button" className="settingsPill"
+            onClick={() => void act(async () => { await syncCoreSettings(session.id, other.id); setLinking(null); })}>{other.name}</button>)}
+      </span>
+    </SettingRow>}
+    </Fragment>)}
     {naming ? <SettingRow label={naming.id ? "Rename session" : "New session"}>
       <span className="settingsActions">
         <input type="text" aria-label="Session name" value={naming.name} maxLength={60} autoFocus

@@ -83,6 +83,7 @@ import { usePlaylistImprovement } from "./hooks/usePlaylistImprovement";
 import { isTrackAvailable, useServiceAvailability } from "./hooks/useServiceAvailability";
 import "./components/UnavailableTracks.css";
 import { useCorePlayer } from "./hooks/useCorePlayer";
+import { useSettingsProfile } from "./hooks/useSettingsProfile";
 import { useCoreQueue } from "./hooks/useCoreQueue";
 import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
@@ -92,6 +93,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   // Rerenders when a service connects or drops, so what the pages offer stays current.
   const services = useServiceAvailability();
   const [preferences, setPreferences] = useState(loadPreferences);
+  useSettingsProfile(setPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
   setMaxAnimationFps(preferences.ui.maxAnimationFps);
