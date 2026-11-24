@@ -1456,6 +1456,16 @@ pub struct PurchaseFormatOption {
     pub streaming: bool,
 }
 
+/// An account mix from Qobuz's dynamic-tracks list.
+#[derive(Debug, Deserialize)]
+pub struct DynamicMix {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub images: std::collections::HashMap<String, String>,
+}
+
 /// Response from `/album/suggest` — albums similar to a seed album.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumSuggestResponse {

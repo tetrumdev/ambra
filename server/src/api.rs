@@ -2,6 +2,7 @@ mod credits;
 mod discover;
 mod downloads;
 mod playlists;
+mod provider_recommendations;
 mod vocal_timing;
 
 use crate::library_sync::{Change, Events, Journal};
@@ -294,6 +295,8 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route("/api/library/tracks", post(add_track))
         .route("/api/library/tracks/remove", post(remove_tracks))
         .route("/api/recommendations/discover", get(discover::get))
+        .route("/api/providers/{provider}/recommendations", get(provider_recommendations::list))
+        .route("/api/providers/{provider}/recommendations/{id}", get(provider_recommendations::tracks))
         .route("/api/search/tracks", get(search_tracks))
         .route("/api/search/providers", get(search_providers))
         .route("/api/search/catalog", get(search_catalog))

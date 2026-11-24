@@ -4,13 +4,54 @@
 }
 
 .homeHeader {
-    padding: 34px 30px 12px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px 18px;
+    padding: 34px 30px 32px;
 }
 
 .homeHeader .libraryTitle {
-    margin: 0 0 20px;
+    margin: 0;
     font-size: clamp(2.5rem, 5vw, 4rem);
     line-height: 1.15;
+}
+
+.homeSource {
+    position: relative;
+}
+
+.homeSource select,
+.homeRetry {
+    border: 1px solid #535353;
+    border-radius: 6px;
+    background: #191919;
+    color: white;
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 7px 12px;
+}
+
+.homeSource select {
+    appearance: none;
+    padding-inline-end: 30px;
+    cursor: pointer;
+}
+
+.homeSource .dropdownChevron {
+    position: absolute;
+    inset-inline-end: 11px;
+    top: calc(50% - 5px);
+    transform: none;
+    pointer-events: none;
+}
+
+.homeRetry {
+    margin: -20px 30px 28px;
+}
+
+.homeCardButton[aria-pressed="true"] .homeArtwork {
+    box-shadow: 0 0 0 2px currentColor;
 }
 
 .homeSection {

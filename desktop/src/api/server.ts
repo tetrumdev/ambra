@@ -817,6 +817,27 @@ export async function loadDiscover(signal: AbortSignal): Promise<DiscoverRespons
   return { ...value, tracks: value.tracks.map(track => "globalId" in track ? JSON.parse(fromStorage(JSON.stringify(track))) as Track : playableTrack(track)) };
 }
 
+export type RecommendationMix = { id: string; title: string; imageUrl: string | null };
+export type ProviderRecommendations = { mixes: RecommendationMix[]; albums: CatalogAlbum[] };
+
+async function recommendationResponse(provider: StreamingProvider, signal: AbortSignal, id?: string) {
+  const path = `/api/providers/${provider}/recommendations${id === undefined ? "" : `/${encodeURIComponent(id)}`}`;
+  const response = await fetch(`${serverBaseUrl}${path}`, {
+    signal: AbortSignal.any([signal, AbortSignal.timeout(55_000)]), cache: "no-store",
+  });
+  if (!response.ok) throw new Error(await responseError(response));
+  return response.json();
+}
+
+export function loadProviderRecommendations(provider: StreamingProvider, signal: AbortSignal): Promise<ProviderRecommendations> {
+  return recommendationResponse(provider, signal);
+}
+
+export async function loadRecommendationMix(provider: StreamingProvider, id: string, signal: AbortSignal): Promise<Track[]> {
+  const tracks: RemoteTrack[] = await recommendationResponse(provider, signal, id);
+  return tracks.filter(track => track.provider === provider).map(playableTrack);
+}
+
 subscribeServerConnection(() => {
   for (const cache of [catalogResponses, artistProfiles, artistAlbumPages, albumTracks, trackCredits, albumInfos, artistBiographies]) cache.clear();
   artistRequests.clear(); artworkQualityRequests.clear(); paletteRequests.clear();

@@ -1,3 +1,4 @@
+mod recommendations;
 mod credits;
 mod playlists;
 
@@ -53,6 +54,7 @@ pub struct TidalProvider {
     playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
     maximum_playback_cache: Arc<Mutex<HashMap<String, CachedMaximumPlayback>>>,
     loudness: Arc<Mutex<HashMap<String, Loudness>>>,
+    recommendation_cache: Arc<super::recommendations::Cache>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -204,6 +206,7 @@ impl TidalProvider {
             maximum_playback_cache: Arc::new(Mutex::new(HashMap::new())),
             loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
+            recommendation_cache: Arc::default(),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
     }
@@ -304,94 +307,8 @@ impl TidalProvider {
             return Err(io::Error::other("Tidal reports that this track is not streamable").into());
         }
 
-        let primary_artist = ArtistMetadata {
-            provider_id: track.artist.id.to_string(),
-            name: track.artist.name.clone(),
-            image_url: track
-                .artist
-                .picture
-                .as_deref()
-                .map(|picture| uuid_to_url_with_size(picture, 750)),
-        };
-        let artists = if track.artists.is_empty() {
-            vec![primary_artist.clone()]
-        } else {
-            track
-                .artists
-                .iter()
-                .map(|artist| ArtistMetadata {
-                    provider_id: artist.id.to_string(),
-                    name: artist.name.clone(),
-                    image_url: artist
-                        .picture
-                        .as_deref()
-                        .map(|picture| uuid_to_url_with_size(picture, 750)),
-                })
-                .collect()
-        };
-        let album = track.album.as_ref().map(|album| AlbumMetadata {
-            provider_id: album.id.to_string(),
-            title: album.title.clone(),
-            version: album_details
-                .as_ref()
-                .and_then(|album| album.version.clone()),
-            artists: album_details
-                .as_ref()
-                .map(|album| {
-                    album
-                        .artists
-                        .iter()
-                        .map(|artist| ArtistMetadata {
-                            provider_id: artist.id.to_string(),
-                            name: artist.name.clone(),
-                            image_url: artist
-                                .picture
-                                .as_deref()
-                                .map(|picture| uuid_to_url_with_size(picture, 750)),
-                        })
-                        .collect()
-                })
-                .filter(|artists: &Vec<_>| !artists.is_empty())
-                .unwrap_or_else(|| vec![primary_artist.clone()]),
-            cover_url: album
-                .cover
-                .as_deref()
-                .map(|cover| uuid_to_url_with_size(cover, 1280)),
-            release_date: album.release_date.clone().or_else(|| {
-                album_details
-                    .as_ref()
-                    .map(|album| album.release_date.clone())
-            }),
-            label: None,
-            genres: Vec::new(),
-            upc: album_details
-                .as_ref()
-                .map(|album| album.upc.clone())
-                .filter(|upc| !upc.is_empty()),
-        });
-
         let playback = self.playback_metadata(track_id).await?;
-
-        let metadata = TrackMetadata {
-            id: format!("tidal:{track_id}"),
-            provider: MusicProvider::Tidal,
-            provider_track_id: track_id.to_owned(),
-            title: track.title,
-            version: track.version,
-            primary_artist,
-            artists,
-            album,
-            duration_seconds: track.duration,
-            track_number: Some(track.track_number),
-            disc_number: Some(track.volume_number),
-            explicit: track.explicit,
-            isrc: track.isrc,
-            copyright: track.copyright,
-            quality: Some(playback.quality),
-            maximum_sampling_rate_khz: playback.maximum_sampling_rate_khz,
-            maximum_bit_depth: playback.maximum_bit_depth,
-            playback: playback.playback,
-        };
+        let metadata = describe_track(track, album_details, playback);
         self.track_metadata_cache
             .lock()
             .await
@@ -1271,6 +1188,100 @@ fn tidal_stream_quality_label(
         }
         _ if codec == "AAC" && provider_quality == "HIGH" => "AAC 320 kbps".to_owned(),
         _ => codec.to_owned(),
+    }
+}
+
+fn describe_track(
+    track: TidalTrack,
+    album_details: Option<&AlbumResponse>,
+    playback: TrackPlaybackMetadata,
+) -> TrackMetadata {
+    let track_id = track.id.to_string();
+    let primary_artist = ArtistMetadata {
+        provider_id: track.artist.id.to_string(),
+        name: track.artist.name.clone(),
+        image_url: track
+            .artist
+            .picture
+            .as_deref()
+            .map(|picture| uuid_to_url_with_size(picture, 750)),
+    };
+    let artists = if track.artists.is_empty() {
+        vec![primary_artist.clone()]
+    } else {
+        track
+            .artists
+            .iter()
+            .map(|artist| ArtistMetadata {
+                provider_id: artist.id.to_string(),
+                name: artist.name.clone(),
+                image_url: artist
+                    .picture
+                    .as_deref()
+                    .map(|picture| uuid_to_url_with_size(picture, 750)),
+            })
+            .collect()
+    };
+    let album = track.album.as_ref().map(|album| AlbumMetadata {
+        provider_id: album.id.to_string(),
+        title: album.title.clone(),
+        version: album_details
+            .as_ref()
+            .and_then(|album| album.version.clone()),
+        artists: album_details
+            .as_ref()
+            .map(|album| {
+                album
+                    .artists
+                    .iter()
+                    .map(|artist| ArtistMetadata {
+                        provider_id: artist.id.to_string(),
+                        name: artist.name.clone(),
+                        image_url: artist
+                            .picture
+                            .as_deref()
+                            .map(|picture| uuid_to_url_with_size(picture, 750)),
+                    })
+                    .collect()
+            })
+            .filter(|artists: &Vec<_>| !artists.is_empty())
+            .unwrap_or_else(|| vec![primary_artist.clone()]),
+        cover_url: album
+            .cover
+            .as_deref()
+            .map(|cover| uuid_to_url_with_size(cover, 1280)),
+        release_date: album.release_date.clone().or_else(|| {
+            album_details
+                .as_ref()
+                .map(|album| album.release_date.clone())
+        }),
+        label: None,
+        genres: Vec::new(),
+        upc: album_details
+            .as_ref()
+            .map(|album| album.upc.clone())
+            .filter(|upc| !upc.is_empty()),
+    });
+
+    TrackMetadata {
+        id: format!("tidal:{track_id}"),
+        provider: MusicProvider::Tidal,
+        provider_track_id: track_id,
+        title: track.title,
+        version: track.version,
+        primary_artist,
+        artists,
+        album,
+        duration_seconds: track.duration,
+        track_number: Some(track.track_number),
+        disc_number: Some(track.volume_number),
+        explicit: track.explicit,
+        isrc: track.isrc,
+        copyright: track.copyright,
+        quality: Some(playback.quality),
+        maximum_sampling_rate_khz: playback.maximum_sampling_rate_khz,
+        maximum_bit_depth: playback.maximum_bit_depth,
+        playback: playback.playback,
     }
 }
 

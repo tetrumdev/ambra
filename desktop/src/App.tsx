@@ -664,7 +664,8 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
         ) : isHomeView ? (
           <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={homePlaylists}
             error={listeningHistory.error} onAction={onEntityAction}
-            onSelectPlaylist={selectPlaylist} registerScrollElement={registerScrollElement} />
+            onSelectPlaylist={selectPlaylist} onSelectAlbum={album => openEntity({ kind: "album", album })}
+            registerScrollElement={registerScrollElement} />
         ) : selectedPlaylist ? (
           <PlaylistView
             key={selectedPlaylist.id}

@@ -39,7 +39,7 @@ async function mount(combinedMenu = false) {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => {
     root.render(<SongContextMenu.Provider value={combinedMenu}><HomeView entries={[]} tracks={[]} playlists={[]} error={null}
-      onAction={(action, tracks, id) => actions.push([action, tracks, id])} onSelectPlaylist={() => {}}
+      onAction={(action, tracks, id) => actions.push([action, tracks, id])} onSelectPlaylist={() => {}} onSelectAlbum={() => {}}
       registerScrollElement={() => {}} /></SongContextMenu.Provider>);
   });
 }
@@ -145,4 +145,83 @@ test("late responses and unmounted requests cannot replace newer discoveries", a
     expect(pending[2].signal.aborted).toBe(true);
     await act(async () => { pending[2].resolve(Response.json(next)); });
   } finally { globalThis.fetch = serverFetch; }
+});
+
+test("Home loads only the selected recommendation source and drops disconnected providers", async () => {
+  const serverFetch = globalThis.fetch;
+  const calls: string[] = [];
+  const album = { id: "qobuz:album", provider: "qobuz", title: "Qobuz release", artist: "Artist", imageUrl: null };
+  const mix = (id: string, title: string) => ({ id, title, imageUrl: null });
+  const tidalTrack = {
+    id: "tidal:123", provider: "tidal", providerTrackId: "123", title: "TIDAL recommendation",
+    primaryArtist: { name: "Artist" }, artists: [], durationSeconds: 180,
+    playback: { kind: "dash", url: "/api/providers/tidal/tracks/123/manifest.mpd" },
+  };
+  let spotifyReply!: (value: Response) => void;
+  let spotifySignal: AbortSignal | null | undefined;
+  globalThis.fetch = ((url, init) => {
+    const path = String(url).split("/api/")[1];
+    if (path === "providers/spotify/recommendations") {
+      calls.push(path);
+      spotifySignal = init?.signal;
+      return new Promise<Response>(resolve => { spotifyReply = resolve; });
+    }
+    if (path === "providers/tidal/recommendations") {
+      calls.push(path);
+      return Promise.resolve(Response.json({ mixes: [mix("discovery", "Daily Discovery")], albums: [] }));
+    }
+    if (path === "providers/tidal/recommendations/discovery") {
+      calls.push(path);
+      return Promise.resolve(Response.json([tidalTrack]));
+    }
+    if (path === "providers/qobuz/recommendations") {
+      calls.push(path);
+      return Promise.resolve(Response.json({ mixes: [mix("weekly", "WeeklyQ")], albums: [album] }));
+    }
+    return serverFetch(url, init);
+  }) as typeof fetch;
+  updateServiceAvailability({ tidal: true, qobuz: true, spotify: true });
+  next = { ...next, tracks: [track], status: "ready" };
+  try {
+    await mount();
+    const select = container.querySelector("select")!;
+    const choose = (value: string) => act(async () => {
+      select.value = value;
+      select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+    });
+    const ambraCalls = discoverCalls;
+    expect(container.querySelector("h1")?.textContent).toBe("Home");
+    expect(select.value).toBe("ambra");
+    expect([...select.options].map(option => option.text)).toEqual(["Ambra", "Spotify", "TIDAL", "Qobuz"]);
+    expect(calls).toEqual([]);
+
+    await choose("spotify");
+    await choose("tidal");
+    expect(spotifySignal?.aborted).toBe(true);
+    await act(async () => { spotifyReply(Response.json({ mixes: [mix("daylist", "daylist")], albums: [] })); });
+    expect(container.textContent).not.toContain("daylist");
+    expect(container.textContent).not.toContain("Discovery Song");
+    expect(container.textContent).toContain("Daily Discovery");
+    expect(calls).toEqual(["providers/spotify/recommendations", "providers/tidal/recommendations"]);
+
+    const tidalMix = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Daily Discovery"))!;
+    await act(async () => { tidalMix.click(); });
+    expect(calls.at(-1)).toEqual("providers/tidal/recommendations/discovery");
+    expect(container.textContent).toContain("TIDAL recommendation");
+
+    await choose("qobuz");
+    expect(container.textContent).toContain("WeeklyQ");
+    expect(container.textContent).toContain("Qobuz release");
+    expect(container.textContent).not.toContain("TIDAL recommendation");
+    expect(discoverCalls).toBe(ambraCalls);
+
+    await act(async () => { updateServiceAvailability({ tidal: true, qobuz: false, spotify: false }); });
+    expect([...select.options].map(option => option.text)).toEqual(["Ambra", "TIDAL"]);
+    expect(select.value).toBe("ambra");
+    expect(container.textContent).toContain("Discovery Song");
+    expect(container.textContent).not.toContain("WeeklyQ");
+  } finally {
+    globalThis.fetch = serverFetch;
+    await act(async () => { updateServiceAvailability({ tidal: false, qobuz: false, spotify: false }); });
+  }
 });

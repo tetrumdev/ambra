@@ -9,12 +9,18 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { ProviderIcon } from "./ProviderIcon";
+import { ArtworkImage } from "./ArtworkImage";
+import { DropdownChevron } from "./DropdownChevron";
+import {
+  loadProviderRecommendations, loadRecommendationMix,
+  type CatalogAlbum, type RecommendationMix, type StreamingProvider,
+} from "../api/server";
 import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
 import { SongContextMenu, isKeyboardMenuClick, playSongOnDoubleClick, songMenuPosition, suppressSongClick } from "../utils/trackMenu";
-import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
+import { isTrackAvailable, useServiceAvailability, useServiceStatus } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
 import { useDiscover } from "../hooks/useDiscover";
@@ -22,6 +28,8 @@ import { reducedMotion } from "../utils/reducedMotion";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
 const rowLimit = 12;
+const recommendationProviders = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" } satisfies Record<StreamingProvider, string>;
+type RecommendationSource = "ambra" | StreamingProvider;
 
 function HomeRow({
   title,
@@ -194,23 +202,137 @@ function SongCards({
   );
 }
 
-export function HomeView({
-  entries,
-  tracks,
-  playlists,
-  error,
-  onAction,
-  onSelectPlaylist,
-  registerScrollElement,
-}: {
+function useRecommendationRequest<T>(load: (signal: AbortSignal) => Promise<T>) {
+  const [result, setResult] = useState<{ value?: T; error?: boolean }>({});
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    void load(controller.signal).then(value => {
+      if (!controller.signal.aborted) setResult({ value });
+    }).catch(() => {
+      if (!controller.signal.aborted) setResult({ error: true });
+    });
+    return () => controller.abort();
+  }, [load, attempt]);
+  return { ...result, retry: () => { setResult({}); setAttempt(attempt + 1); } };
+}
+
+function RecommendationCard({ title, imageUrl, selected, onClick, detail }: {
+  title: string;
+  imageUrl: string | null;
+  selected?: boolean;
+  onClick: () => void;
+  detail?: string;
+}) {
+  return (
+    <li className="homeCard">
+      <button type="button" className="homeCardButton" onClick={onClick} aria-pressed={selected}>
+        <div className="homeArtwork">
+          {imageUrl
+            ? <ArtworkImage src={imageUrl} alt="" />
+            : <span className="homePlaylistPlaceholder" aria-hidden="true">♫</span>}
+        </div>
+        <span className="homeCardTitle" data-tooltip={title} data-tooltip-overflow="">{title}</span>
+        {detail && <span className="homeCardDetail">{detail}</span>}
+      </button>
+    </li>
+  );
+}
+
+function RecommendationMixRow({ mix, provider, onAction }: {
+  mix: RecommendationMix; provider: StreamingProvider; onAction: OnAction;
+}) {
+  const load = useCallback((signal: AbortSignal) => loadRecommendationMix(provider, mix.id, signal), [provider, mix.id]);
+  const { value, error, retry } = useRecommendationRequest(load);
+  return (
+    <>
+      <HomeRow title={mix.title}
+        empty={error ? "Could not load this mix." : value ? "No playable songs are available yet." : "Loading songs…"}
+        hasItems={Boolean(value?.length)} loading={!value && !error}>
+        <SongCards tracks={value ?? []} onAction={onAction} />
+      </HomeRow>
+      {error && <button className="homeRetry" type="button" onClick={retry}>Retry mix</button>}
+    </>
+  );
+}
+
+function ProviderHome({ provider, onAction, onSelectAlbum }: {
+  provider: StreamingProvider; onAction: OnAction; onSelectAlbum: (album: CatalogAlbum) => void;
+}) {
+  const load = useCallback((signal: AbortSignal) => loadProviderRecommendations(provider, signal), [provider]);
+  const { value, error, retry } = useRecommendationRequest(load);
+  const [mix, setMix] = useState<RecommendationMix | null>(null);
+  return (
+    <>
+      <HomeRow
+        title={provider === "qobuz" ? "Your mixes" : "Made for you"}
+        empty={error ? `Could not load ${recommendationProviders[provider]} recommendations.`
+          : value ? "Your personalized mixes will appear here when available." : "Loading recommendations…"}
+        hasItems={Boolean(value?.mixes.length)}
+        loading={!value && !error}
+      >
+        {value?.mixes.map(item => (
+          <RecommendationCard key={item.id} title={item.title} imageUrl={item.imageUrl}
+            selected={mix?.id === item.id} onClick={() => setMix(mix?.id === item.id ? null : item)} />
+        ))}
+      </HomeRow>
+      {error && <button className="homeRetry" type="button" onClick={retry}>Retry recommendations</button>}
+      {mix && <RecommendationMixRow key={mix.id} mix={mix} provider={provider} onAction={onAction} />}
+      {Boolean(value?.albums.length) && (
+        <HomeRow title="Release Watch" empty="" hasItems>
+          {value?.albums.filter(album => album.provider === provider).map(album => (
+            <RecommendationCard key={album.id} title={album.title} imageUrl={album.imageUrl}
+              detail={album.artist} onClick={() => onSelectAlbum(album)} />
+          ))}
+        </HomeRow>
+      )}
+    </>
+  );
+}
+
+type AmbraHomeProps = {
   entries: ListeningEntry[];
   tracks: Track[];
   playlists: Playlist[];
   error: string | null;
   onAction: OnAction;
   onSelectPlaylist: (id: string) => void;
+};
+
+export function HomeView({ registerScrollElement, onSelectAlbum, ...props }: AmbraHomeProps & {
   registerScrollElement: (element: HTMLDivElement | null) => void;
+  onSelectAlbum: (album: CatalogAlbum) => void;
 }) {
+  const connected = useServiceStatus();
+  const [selected, setSelected] = useState<RecommendationSource>("ambra");
+  const source = selected !== "ambra" && connected?.[selected] ? selected : "ambra";
+  useEffect(() => {
+    if (selected !== source) setSelected(source);
+  }, [selected, source]);
+
+  return (
+    <div className="libraryView homeView smoothScroll" ref={registerScrollElement}>
+      <header className="homeHeader">
+        <h1 className="libraryTitle">Home</h1>
+        <div className="homeSource">
+          <select aria-label="Recommendation source" value={source}
+            onChange={event => setSelected(event.currentTarget.value as RecommendationSource)}>
+            <option value="ambra">Ambra</option>
+            {(Object.keys(recommendationProviders) as StreamingProvider[]).filter(provider => connected?.[provider]).map(provider => (
+              <option key={provider} value={provider}>{recommendationProviders[provider]}</option>
+            ))}
+          </select>
+          <DropdownChevron />
+        </div>
+      </header>
+      {source === "ambra" ? <AmbraHome {...props} /> : (
+        <ProviderHome key={source} provider={source} onAction={props.onAction} onSelectAlbum={onSelectAlbum} />
+      )}
+    </div>
+  );
+}
+
+function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlaylist }: AmbraHomeProps) {
   const discover = useDiscover(entries);
   const tracksById = useMemo(
     () => new Map(tracks.map((track) => [track.globalId, track])),
@@ -234,13 +356,7 @@ export function HomeView({
     .map(resolve);
 
   return (
-    <div
-      className="libraryView homeView smoothScroll"
-      ref={registerScrollElement}
-    >
-      <header className="homeHeader">
-        <h1 className="libraryTitle">Welcome Back</h1>
-      </header>
+    <>
       {error && (
         <p className="homeError" role="alert">
           {error}
@@ -327,6 +443,6 @@ export function HomeView({
       >
         <SongCards tracks={discover.tracks} onAction={onAction} />
       </HomeRow>
-    </div>
+    </>
   );
 }

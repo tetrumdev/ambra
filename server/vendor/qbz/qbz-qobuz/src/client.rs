@@ -1303,6 +1303,37 @@ impl QobuzClient {
         Ok(serde_json::from_value(response)?)
     }
 
+    /// The personalized mixes published for the signed-in account.
+    pub async fn get_dynamic_mixes(&self) -> Result<Vec<qbz_models::types::DynamicMix>> {
+        let response = self
+            .http()?
+            .get(endpoints::build_url("/dynamic-tracks/list"))
+            .headers(self.authenticated_headers().await?)
+            .send()
+            .await?
+            .error_for_status()?;
+        Ok(response.json().await?)
+    }
+
+    /// Read a published mix in service order. The list supplies its type.
+    pub async fn get_dynamic_mix_tracks(&self, kind: &str, limit: u32) -> Result<Vec<Track>> {
+        let response: Value = self
+            .http()?
+            .get(endpoints::build_url("/dynamic-tracks/get"))
+            .headers(self.authenticated_headers().await?)
+            .query(&[("type", kind), ("extra", "tracks")])
+            .query(&[("limit", limit), ("offset", 0)])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        if response.pointer("/tracks/items").and_then(Value::as_array).is_none() {
+            return Err(ApiError::ApiResponse("Missing Qobuz mix tracks".into()));
+        }
+        Ok(qbz_models::lenient::parse_items_array(&response, "tracks", "dynamic mix track"))
+    }
+
     /// Dynamic suggestions for mixes (`POST /dynamic/suggest`). Seeds
     /// from recently-listened track ids. Returns the suggested tracks
     /// (items parsed leniently). Ported from the legacy api client;

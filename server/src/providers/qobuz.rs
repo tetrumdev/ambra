@@ -1,3 +1,4 @@
+mod recommendations;
 mod cmaf;
 mod credits;
 mod playlists;
@@ -21,7 +22,7 @@ use tokio::sync::Mutex;
 use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
 use crate::loudness::Loudness;
 use crate::models::{
-    AlbumMetadata, ArtistMetadata, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
+    AlbumMetadata, ArtistMetadata, CatalogAlbum, MusicProvider, PlaybackKind, PlaybackMetadata, SearchPage,
     TrackMetadata, search_next_offset,
 };
 
@@ -41,6 +42,7 @@ pub struct QobuzProvider {
     albums: Arc<Mutex<HashMap<String, Album>>>,
     /// Tracks without loudness values are remembered too, so each is asked about once.
     loudness: Arc<Mutex<HashMap<String, Loudness>>>,
+    recommendation_cache: Arc<super::recommendations::Cache>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -143,6 +145,7 @@ impl QobuzProvider {
             albums: Arc::new(Mutex::new(HashMap::new())),
             loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
+            recommendation_cache: Arc::default(),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
     }
@@ -327,7 +330,7 @@ impl QobuzProvider {
         query: &str,
         limit: u32,
     ) -> ProviderResult<crate::models::CatalogSearchPage> {
-        use crate::models::{CatalogAlbum, CatalogArtist, CatalogSearchPage};
+        use crate::models::{CatalogArtist, CatalogSearchPage};
         let response = self.client.catalog_search(query, limit, 0).await?;
         if !response.get("tracks").is_some()
             && !response.get("artists").is_some()
@@ -363,23 +366,7 @@ impl QobuzProvider {
             albums: albums
                 .into_iter()
                 .filter(|album| album.streamable != Some(false))
-                .map(|album| CatalogAlbum {
-                    artists: album_artists(&album),
-                    id: format!("qobuz:{}", album.id),
-                    provider: MusicProvider::Qobuz,
-                    title: album.title,
-                    artist: album.artist.name,
-                    image_url: album.image.best().cloned(),
-                    upc: album.upc,
-                    release_type: None,
-                    release_date: album.release_date_original,
-                    version: album.version,
-                    explicit: album.parental_warning,
-                    maximum_bit_depth: album.maximum_bit_depth,
-                    maximum_sampling_rate_khz: album
-                        .maximum_sampling_rate
-                        .and_then(normalize_sampling_rate),
-                })
+                .map(catalog_album)
                 .collect(),
         })
     }
@@ -673,6 +660,26 @@ fn preferred_quality(entitlements: &Entitlements) -> Quality {
         Quality::Lossless
     } else {
         Quality::Mp3
+    }
+}
+
+fn catalog_album(album: Album) -> CatalogAlbum {
+    CatalogAlbum {
+        artists: album_artists(&album),
+        id: format!("qobuz:{}", album.id),
+        provider: MusicProvider::Qobuz,
+        title: album.title,
+        artist: album.artist.name,
+        image_url: album.image.best().cloned(),
+        upc: album.upc,
+        release_type: None,
+        release_date: album.release_date_original,
+        version: album.version,
+        explicit: album.parental_warning,
+        maximum_bit_depth: album.maximum_bit_depth,
+        maximum_sampling_rate_khz: album
+            .maximum_sampling_rate
+            .and_then(normalize_sampling_rate),
     }
 }
 

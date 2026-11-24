@@ -1,3 +1,4 @@
+mod recommendations;
 mod playlists;
 
 use std::{
@@ -60,6 +61,7 @@ pub struct SpotifyProvider {
     oauth_client_id: Arc<String>,
     quality: SpotifyQuality,
     tracks: Arc<Mutex<HashMap<String, Track>>>,
+    recommendation_cache: Arc<super::recommendations::Cache>,
     track_metadata: Arc<crate::metadata_store::MetadataStore>,
 }
 
@@ -261,6 +263,7 @@ impl SpotifyProvider {
             oauth_client_id: Arc::new(oauth_client_id),
             quality: configured_quality(),
             tracks: Arc::new(Mutex::new(HashMap::new())),
+            recommendation_cache: Arc::default(),
             track_metadata: Arc::new(track_metadata),
         }))
     }
@@ -556,54 +559,7 @@ impl SpotifyProvider {
             .unwrap_or_else(|_| track.album.clone());
         let artists = self.artist_metadata(&track.artists).await;
         let album_artists = self.artist_metadata(&full_album.artists).await;
-        let primary_artist = artists
-            .first()
-            .cloned()
-            .or_else(|| album_artists.first().cloned())
-            .unwrap_or_else(unknown_artist);
-
-        let metadata = TrackMetadata {
-            id: format!("spotify:{track_id}"),
-            provider: MusicProvider::Spotify,
-            provider_track_id: track_id.to_owned(),
-            title: track.name.clone(),
-            version: nonempty(&track.version_title),
-            primary_artist: primary_artist.clone(),
-            artists: if artists.is_empty() {
-                vec![primary_artist.clone()]
-            } else {
-                artists
-            },
-            album: Some(AlbumMetadata {
-                provider_id: full_album.id.to_id()?,
-                title: full_album.name.clone(),
-                version: nonempty(&full_album.version_title),
-                artists: if album_artists.is_empty() {
-                    vec![primary_artist]
-                } else {
-                    album_artists
-                },
-                cover_url: best_image_url(&full_album.covers),
-                release_date: Some(format_spotify_date(&full_album.date)),
-                label: nonempty(&full_album.label),
-                genres: unique_nonempty(track.tags.clone()),
-                upc: external_id(&full_album.external_ids, &["upc", "ean"]),
-            }),
-            duration_seconds: u64::try_from(track.duration.max(0)).unwrap_or(0) / 1_000,
-            track_number: positive_u32(track.number),
-            disc_number: positive_u32(track.disc_number),
-            explicit: track.is_explicit,
-            isrc: external_id(&track.external_ids, &["isrc"]),
-            copyright: album_copyright(&full_album),
-            quality: Some(format_quality(format).to_owned()),
-            maximum_sampling_rate_khz: Some(44.1),
-            maximum_bit_depth: None,
-            playback: PlaybackMetadata {
-                kind: PlaybackKind::Direct,
-                url: format!("/api/providers/spotify/tracks/{track_id}/stream"),
-            },
-        };
-
+        let metadata = describe_track(track_id, &track, &full_album, artists, album_artists, Some(format))?;
         self.track_metadata.insert(track_id, &metadata);
         Ok(metadata)
     }
@@ -912,6 +868,63 @@ fn librespot_token_for_search(auth: &SpotifySearchAuth) -> librespot_core::token
     }
 }
 
+fn describe_track(
+    track_id: &str,
+    track: &Track,
+    full_album: &Album,
+    artists: Vec<ArtistMetadata>,
+    album_artists: Vec<ArtistMetadata>,
+    format: Option<AudioFileFormat>,
+) -> ProviderResult<TrackMetadata> {
+    let primary_artist = artists
+        .first()
+        .cloned()
+        .or_else(|| album_artists.first().cloned())
+        .unwrap_or_else(unknown_artist);
+
+    Ok(TrackMetadata {
+        id: format!("spotify:{track_id}"),
+        provider: MusicProvider::Spotify,
+        provider_track_id: track_id.to_owned(),
+        title: track.name.clone(),
+        version: nonempty(&track.version_title),
+        primary_artist: primary_artist.clone(),
+        artists: if artists.is_empty() {
+            vec![primary_artist.clone()]
+        } else {
+            artists
+        },
+        album: Some(AlbumMetadata {
+            provider_id: full_album.id.to_id()?,
+            title: full_album.name.clone(),
+            version: nonempty(&full_album.version_title),
+            artists: if album_artists.is_empty() {
+                vec![primary_artist]
+            } else {
+                album_artists
+            },
+            cover_url: best_image_url(&full_album.covers),
+            release_date: Some(format_spotify_date(&full_album.date)),
+            label: nonempty(&full_album.label),
+            genres: unique_nonempty(track.tags.clone()),
+            upc: external_id(&full_album.external_ids, &["upc", "ean"]),
+        }),
+        duration_seconds: u64::try_from(track.duration.max(0)).unwrap_or(0) / 1_000,
+        track_number: positive_u32(track.number),
+        disc_number: positive_u32(track.disc_number),
+        explicit: track.is_explicit,
+        isrc: external_id(&track.external_ids, &["isrc"]),
+        copyright: album_copyright(&full_album),
+        quality: format.map(|format| format_quality(format).to_owned()),
+        maximum_sampling_rate_khz: Some(44.1),
+        maximum_bit_depth: None,
+        playback: PlaybackMetadata {
+            kind: PlaybackKind::Direct,
+            url: format!("/api/providers/spotify/tracks/{track_id}/stream"),
+        },
+    })
+}
+
 fn spotify_uri(kind: &str, id: &str) -> ProviderResult<SpotifyUri> {
     Ok(SpotifyUri::from_uri(&format!("spotify:{kind}:{id}"))?)
 }
@@ -1183,6 +1196,7 @@ mod tests {
                 oauth_client_id: Arc::new("test-client".to_owned()),
                 quality: SpotifyQuality::Kbps320,
                 tracks: Arc::new(Mutex::new(HashMap::new())),
+                recommendation_cache: Arc::default(),
                 track_metadata: Arc::new(crate::metadata_store::MetadataStore::in_memory()),
             })
         }
