@@ -197,7 +197,7 @@
 }
 
 .playlistArtworkGrid > span {
-    background: #fff;
+    background: var(--ink);
 }
 
 .libraryHeaderBody {
@@ -274,9 +274,9 @@
     height: 36px;
     padding: 0;
     background-color: transparent;
-    border: 1px solid white;
+    border: 1px solid var(--ink);
     border-radius: 50%;
-    color: white;
+    color: var(--ink);
 }
 
 .libraryCompactBtn img {
@@ -284,7 +284,7 @@
 }
 
 .libraryCompactPlay {
-    background-color: white;
+    background-color: var(--ink);
     border-color: transparent;
 }
 
@@ -365,7 +365,7 @@
     border: 1px solid #535353;
     border-radius: 18px;
     background: #090909;
-    color: white;
+    color: var(--ink);
     font: inherit;
     text-align: left;
 }
@@ -426,7 +426,7 @@
 
 .librarySectionButton:hover,
 .librarySectionButton[aria-current="page"] {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 5px;
 }
@@ -550,7 +550,7 @@
     font-weight: 600;
     padding: 0 20px;
     gap: 10px;
-    background-color: white;
+    background-color: var(--ink);
     border: 1px solid transparent;
     border-radius: 100px;
     color: black;
@@ -571,9 +571,9 @@
     padding: 0 20px;
     gap: 10px;
     background-color: transparent;
-    border: 1px solid white;
+    border: 1px solid var(--ink);
     border-radius: 100px;
-    color: white;
+    color: var(--ink);
 }
 
 .libraryShuffleBtn img {
@@ -592,9 +592,9 @@
     padding: 0;
     font-size: 1rem;
     background-color: transparent;
-    border: 1px solid white;
+    border: 1px solid var(--ink);
     border-radius: 50%;
-    color: white;
+    color: var(--ink);
 }
 
 .libraryMoreBtn img {
@@ -623,7 +623,7 @@
     padding: 0;
     border: none;
     background: none;
-    color: white;
+    color: var(--ink);
     font: inherit;
     text-decoration: underline;
     text-underline-offset: 2px;
@@ -729,7 +729,7 @@
 .columnSortButton:hover,
 .columnSortButton:focus-visible,
 .columnSortButton[data-sort-direction] {
-    color: white;
+    color: var(--ink);
 }
 
 .columnSortButton:hover span:first-child,
@@ -815,7 +815,7 @@
     z-index: 2;
     height: 2px;
     border-radius: 2px;
-    background: white;
+    background: var(--ink);
     content: "";
     pointer-events: none;
 }
@@ -874,7 +874,7 @@
     margin: 0;
     padding: 0 15px;
     border: 0;
-    color: white;
+    color: var(--ink);
     background: transparent;
     font: inherit;
     font-size: 0.9rem;
@@ -907,7 +907,7 @@
     border: 1px solid #ad3c3c;
     border-radius: 7px;
     background: #702727;
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-weight: 600;
     cursor: default;
@@ -999,7 +999,9 @@
 /* Each artist is its own link, which an ellipsis would drop whole; in a row, only the last name
    shrinks and is cut at its end. Earlier names stay whole (even a fraction of a pixel would cut
    them), unless one alone is wider than the column. */
-.artistName.trackDescriptor:has(> .entityLink) {
+/* No specificity of its own, so every rule hiding the column (the picker, narrow views, album
+   pages) still wins. */
+:where(.artistName.trackDescriptor:has(> .entityLink)) {
     display: flex;
 }
 

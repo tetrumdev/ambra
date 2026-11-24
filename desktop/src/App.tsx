@@ -91,7 +91,13 @@ import { useServicePlaylists } from "./hooks/useServicePlaylists";
 import { TrackCreditsDialog } from "./components/TrackCreditsDialog";
 import { SongContextMenu } from "./utils/trackMenu";
 
-function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOnly: boolean; sharedPlayback?: boolean; onPlaybackRelease?: (release: () => Promise<void>) => void }) {
+function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false, onPlaybackRelease }: {
+  localOnly: boolean;
+  sharedPlayback?: boolean;
+  /** Still connecting to the server this app plays through; local playback isn't in use yet. */
+  awaitingSharedPlayback?: boolean;
+  onPlaybackRelease?: (release: () => Promise<void>) => void;
+}) {
   // Rerenders when a service connects or drops, so what the pages offer stays current.
   const services = useServiceAvailability();
   const [preferences, setPreferences] = useState(loadPreferences);
@@ -171,7 +177,10 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   // Root restores the playback mode and remounts when its queue authority changes.
   const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
-  const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId, !library.isRestoring);
+  const queue = usingCore ? useCoreQueue(availableTracks) : useQueue(availableTracks, preferences.playback.trackId,
+    // This computer's own queue was last saved when it last played locally, so it stays put
+    // while the server it plays through is connecting: it would show a song long since played.
+    !library.isRestoring && !awaitingSharedPlayback);
   const playbackTracks = useMemo(() => {
     if (usingCore) return availableTracks;
     let tracks = availableTracks;
@@ -723,6 +732,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
         onPrevious={player.previous}
         onTogglePlayback={player.togglePlayback}
         onNext={player.next}
+        canGoBack={queue.historyEntries.length > 0}
+        canSkip={queue.upcomingEntries.length > 0}
         onSeek={player.seek}
         onOpenBigscreen={openPlayer}
         onToggleQueue={toggleQueue}

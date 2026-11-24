@@ -8,9 +8,13 @@
     --library-leading-width: 28px;
     --library-columns: var(--library-leading-width) minmax(0, 1fr) var(--library-extra-columns,) var(--library-duration-fixed) 40px;
 }
-.albumView .artistColumn,
+/* Albums by several artists name each song's, in a column of their own. */
+.libraryView.albumView.multiArtistAlbum {
+    --library-columns: var(--library-leading-width) minmax(0, 2fr) var(--library-artist-column) var(--library-extra-columns,) var(--library-duration-fixed) 40px;
+}
+.albumView:not(.multiArtistAlbum) .artistColumn,
 .albumView .albumColumn,
-.albumView .artistName,
+.albumView:not(.multiArtistAlbum) .artistName,
 .albumView .albumName {
     display: none;
 }
@@ -60,7 +64,7 @@
 }
 .entityBylineAction:hover,
 .entityBylineAction:focus-visible {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;
 }
@@ -83,7 +87,7 @@
 }
 .browseScope [aria-current="page"],
 .browseBack:hover {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;
 }

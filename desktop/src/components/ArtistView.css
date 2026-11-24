@@ -47,7 +47,7 @@
     font-size: 0.8rem;
 }
 .artistTextAction:hover {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 5px;
 }

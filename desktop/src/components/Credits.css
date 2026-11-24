@@ -16,7 +16,7 @@
 
 .creditRow dd {
     margin: 0;
-    color: white;
+    color: var(--ink);
     font-size: 14px;
     line-height: 1.5;
 }
@@ -46,7 +46,7 @@
     padding: 0;
     border: 0;
     background: none;
-    color: white;
+    color: var(--ink);
     font: inherit;
     text-decoration: underline;
     cursor: default;
@@ -71,7 +71,7 @@
     width: 100%;
     padding: 10px 4px;
     border: 0;
-    color: white;
+    color: var(--ink);
     background: transparent;
     font: inherit;
     text-align: left;

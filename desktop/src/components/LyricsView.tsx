@@ -129,6 +129,8 @@ const UNSUNG_HEAD = headValue(-1);
 const PAUSE_MIN_MS = 4000;
 /** Blur by distance from the focused group, in px. */
 const blurSteps = [0, 0, 0.8, 1.4, 2];
+/** How long after a line is clicked the seek it asked for still counts as that click's. */
+const LINE_SEEK_MS = 2000;
 
 function lineEnd(line: LyricLine): number | null {
   const ends = [line.endMs, ...line.backgroundVocals.map((vocal) => vocal.endMs)]
@@ -430,7 +432,11 @@ function SyncedLyrics({
   const resume = useRef<() => void>(() => {});
   // Player reports and menu state must not rebuild the song's word/letter tree.
   const credits = useMemo(() => <LyricsCredits lyrics={lyrics} />, [lyrics]);
+  // When a line was last clicked: the jump in time that seek brings moves the lyrics there
+  // smoothly, where any other jump snaps.
+  const lineSeekAt = useRef(-Infinity);
   const seek = useCallback((seconds: number) => {
+    lineSeekAt.current = performance.now();
     resume.current();
     onSeek?.(seconds);
   }, [onSeek]);
@@ -615,6 +621,9 @@ function SyncedLyrics({
         !Number.isFinite(lastTime) ||
         sampledTime < lastTime - 50 ||
         sampledTime - lastTime > Math.max(350, expectedAdvance + 150);
+      // The seek can take a moment to reach the clock, longer through a server.
+      const lineSeek = discontinuity && Number.isFinite(lastTime) && now - lineSeekAt.current < LINE_SEEK_MS;
+      if (lineSeek) lineSeekAt.current = -Infinity;
       // Small native-clock corrections must not switch focus back across a line boundary.
       const time = discontinuity ? sampledTime : Math.max(lastTime, sampledTime);
       for (const block of layout) {
@@ -833,7 +842,7 @@ function SyncedLyrics({
         block.dotsAnimating = dotsMoving || block.active;
         settling ||= dotsMoving;
       }
-      const snapRipple = reducedMotion || discontinuity || snapScroll;
+      const snapRipple = reducedMotion || (discontinuity && !lineSeek) || snapScroll;
       if (snapRipple) rippleFocus = focus;
       const visibleScroll = followingRef.current ? scroll.value : container.scrollTop;
       for (const block of layout) {
@@ -852,7 +861,9 @@ function SyncedLyrics({
         const offset = scroll.value - spring.value;
         const top = block.top - visibleScroll + offset;
         const destinationTop = block.top - visibleScroll;
-        const nearby = (followingRef.current || Math.abs(offset) > 0.01) &&
+        // Kept while browsing too: dropping a group's layer as its fade to the browsing look starts
+        // ends that fade at once.
+        const nearby =
           Math.max(top, destinationTop) + block.height >= -viewportHeight &&
           Math.min(top, destinationTop) <= viewportHeight * 2;
         if (block.nearby !== nearby) {

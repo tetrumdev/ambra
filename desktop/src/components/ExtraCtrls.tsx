@@ -19,15 +19,18 @@ import { invokeOn, useEndpoints } from "../utils/playbackTarget";
 import {
   coreCommand,
   coreOutputs,
-  coreSession,
-  coreSessions,
   coreView,
-  setCoreStages,
   subscribeCore,
   type CoreOutput,
   type CoreStage,
 } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
+import {
+  applyLoudnessTarget,
+  GENERAL_STAGE,
+  useStages,
+} from "../hooks/useStages";
+import { MAX_TARGET_LUFS, MIN_TARGET_LUFS } from "../utils/audioSettings";
 
 /** How far keyboard and wheel input change the volume, in percent. */
 const VOLUME_STEP = 5;
@@ -57,6 +60,14 @@ const volumeLevels = ["muted", "mid", "high"] as const;
 function volumeLevel(volume: number) {
   return volume <= 0 ? "muted" : volume < 50 ? "mid" : "high";
 }
+
+/** A stage being made or changed in the volume menu. */
+type StageDraft = {
+  id: string | null;
+  name: string;
+  outputs: CoreOutput[];
+  targetLufs: string;
+};
 
 type ExtraCtrlsProps = {
   onToggleQueue?: () => void;
@@ -92,32 +103,17 @@ export function ExtraCtrls({
       ? coreOutput
       : null;
   const endpoints = useEndpoints(audioMenuOpen && core !== null, true);
-  // Stages: the session's named groups of outputs, played on together in step.
-  const currentSession = useSyncExternalStore(subscribeCore, coreSession);
-  const [stages, setStages] = useState<CoreStage[] | null>(null);
-  const [newStage, setNewStage] = useState<{
-    name: string;
-    outputs: CoreOutput[];
-  } | null>(null);
-  const following = core !== null;
+  // Stages: the session's named groups of outputs, played on together in step, each with its
+  // own volumes and target loudness. General is the one whose outputs are picked in the list.
+  const {
+    stages,
+    activeStage,
+    save: saveStages,
+  } = useStages(core !== null, audioMenuOpen);
+  const [editing, setEditing] = useState<StageDraft | null>(null);
   useEffect(() => {
-    if (!audioMenuOpen || !following) return;
-    let disposed = false;
-    setNewStage(null);
-    void coreSessions()
-      .then((list) => {
-        // A server from before stages has none to offer.
-        if (!disposed)
-          setStages(
-            list.find((session) => session.id === currentSession)?.stages ??
-              null,
-          );
-      })
-      .catch(() => {});
-    return () => {
-      disposed = true;
-    };
-  }, [audioMenuOpen, following, currentSession]);
+    if (!audioMenuOpen) setEditing(null);
+  }, [audioMenuOpen]);
   const isPlayingHere = (deviceId: string) =>
     core
       ? coreOutput?.endpointId === serverConnection?.clientId &&
@@ -157,6 +153,9 @@ export function ExtraCtrls({
   const [remoteVolumes, setRemoteVolumes] = useState<Record<string, number>>(
     {},
   );
+  const [remoteExclusive, setRemoteExclusive] = useState<
+    Record<string, boolean>
+  >({});
   const remoteMembers = groupOutputs.filter(
     (member) => !isOnThisComputer(member),
   );
@@ -169,14 +168,18 @@ export function ExtraCtrls({
       // there, so every other output on that computer would show (and step from) its level.
       void invokeOn<AudioSettings>(member, "native_audio_settings")
         .then((settings) => {
-          const value =
-            settings.outputs.find((output) => output.id === member.deviceId)
-              ?.volume ?? 100;
-          if (!disposed)
-            setRemoteVolumes((current) => ({
-              ...current,
-              [outputKey(member)]: value,
-            }));
+          const own = settings.outputs.find(
+            (output) => output.id === member.deviceId,
+          );
+          if (disposed) return;
+          setRemoteVolumes((current) => ({
+            ...current,
+            [outputKey(member)]: own?.volume ?? 100,
+          }));
+          setRemoteExclusive((current) => ({
+            ...current,
+            [outputKey(member)]: own?.exclusiveMode ?? false,
+          }));
         })
         .catch(() => {});
     }
@@ -189,6 +192,14 @@ export function ExtraCtrls({
       ? volumePreview.volume
       : (audio?.settings.outputs.find((output) => output.id === deviceId)
           ?.volume ?? 100);
+  // Exclusive mode plays the samples untouched, so its volume can't be changed.
+  const localExclusive = (deviceId: string) =>
+    audio?.settings.outputs.find((output) => output.id === deviceId)
+      ?.exclusiveMode ?? false;
+  const isExclusive = (output: CoreOutput) =>
+    isOnThisComputer(output)
+      ? localExclusive(output.deviceId)
+      : (remoteExclusive[outputKey(output)] ?? false);
   const memberVolume = (output: CoreOutput) =>
     isOnThisComputer(output)
       ? localVolume(output.deviceId)
@@ -206,8 +217,32 @@ export function ExtraCtrls({
   const remoteVolumeTimers = useRef(
     new Map<string, ReturnType<typeof setTimeout>>(),
   );
-  const setMemberVolume = (output: CoreOutput, nextVolume: number) => {
+  // Levels set while a stage plays are kept as that stage's, sent once the change settles.
+  const stageLevels = useRef(new Map<string, number>());
+  const stageLevelsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const rememberStageLevel = (output: CoreOutput, level: number) => {
+    if (!stages) return;
+    stageLevels.current.set(outputKey(output), level);
+    clearTimeout(stageLevelsTimer.current);
+    stageLevelsTimer.current = setTimeout(() => {
+      const levels = Object.fromEntries(stageLevels.current);
+      stageLevels.current.clear();
+      void saveStages((list, activeId) =>
+        list.map((stage) =>
+          stage.id === activeId
+            ? { ...stage, volumes: { ...stage.volumes, ...levels } }
+            : stage,
+        ),
+      ).catch((error) => setTargetError(String(error)));
+    }, 600);
+  };
+  const setMemberVolume = (
+    output: CoreOutput,
+    nextVolume: number,
+    remember = true,
+  ) => {
     const key = outputKey(output);
+    if (remember) rememberStageLevel(output, nextVolume);
     recentLevels.current.set(key, {
       volume: nextVolume,
       at: performance.now(),
@@ -229,66 +264,141 @@ export function ExtraCtrls({
       }, 80),
     );
   };
-  const volume =
+  // The button shows the shared level, "Var" when the outputs differ or some are exclusive, and
+  // nothing when all are exclusive.
+  const levels =
     groupOutputs.length > 0
-      ? memberVolume(groupOutputs[0])
-      : localVolume(selectedDeviceId);
+      ? groupOutputs.filter((output) => !isExclusive(output)).map(memberVolume)
+      : localExclusive(selectedDeviceId)
+        ? []
+        : [localVolume(selectedDeviceId)];
+  const someExclusive =
+    groupOutputs.length > 0
+      ? levels.length < groupOutputs.length
+      : levels.length === 0;
+  const volume = levels.length > 0 ? Math.max(...levels) : 100;
+  const volumeReadout =
+    levels.length === 0
+      ? null
+      : someExclusive || levels.some((level) => level !== levels[0])
+        ? "Var"
+        : `${Math.round(levels[0])}%`;
 
-  const chooseOutput = (output: CoreOutput) => {
-    setTargetError(null);
-    void coreCommand("output", { output }).catch((error) =>
-      setTargetError(String(error)),
-    );
-  };
-
-  // With a server, choosing an output plays there alone; a stage plays on all of its outputs in
-  // step. While a new stage is made, the box beside each output picks it for the stage.
   const sameOutput = (output: CoreOutput) => (member: CoreOutput) =>
     member.endpointId === output.endpointId &&
     member.deviceId === output.deviceId;
   const inGroup = (output: CoreOutput) => groupOutputs.some(sameOutput(output));
-  const saveStages = async (next: CoreStage[]) => {
-    const list = await setCoreStages(currentSession, next);
-    setStages(
-      list.find((session) => session.id === currentSession)?.stages ?? next,
-    );
-  };
-  const playStage = (stage: CoreStage) => {
+  const run = (work: Promise<unknown>) => {
     setTargetError(null);
-    void coreCommand("outputs", { outputs: stage.outputs }).catch((error) =>
-      setTargetError(String(error)),
-    );
+    void work.catch((error) => setTargetError(String(error)));
   };
-  const createStage = () => {
-    if (
-      !newStage ||
-      !stages ||
-      !newStage.name.trim() ||
-      newStage.outputs.length === 0
-    )
+  // Plays on a stage's outputs at its levels and target loudness.
+  const activate = async (stage: CoreStage) => {
+    if (stage.outputs.length > 0 && !sameOutputs(stage.outputs, groupOutputs))
+      await coreCommand("outputs", { outputs: stage.outputs });
+    for (const output of stage.outputs) {
+      const level = stage.volumes?.[outputKey(output)];
+      if (level !== undefined && !isExclusive(output))
+        setMemberVolume(output, level, false);
+    }
+    if (stage.targetLufs !== undefined)
+      await applyLoudnessTarget(stage.outputs, stage.targetLufs, audio);
+  };
+  const playStage = (stage: CoreStage) =>
+    run(saveStages((list) => list, stage.id).then(() => activate(stage)));
+  const general = stages?.find((stage) => stage.id === GENERAL_STAGE) ?? null;
+  // Picking outputs by hand plays them on the General stage.
+  const playGeneral = (outputs: CoreOutput[]) => {
+    // A server from before stages: as before, a row plays there alone.
+    if (!general) {
+      run(coreCommand("output", { output: outputs[0] }));
       return;
-    const stage = {
-      id: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
-      name: newStage.name.trim(),
-      outputs: newStage.outputs,
-    };
-    setTargetError(null);
-    void saveStages([...stages, stage])
-      .then(() => {
-        setNewStage(null);
-        playStage(stage);
-      })
-      .catch((error) => setTargetError(String(error)));
-  };
-  const removeStage = (stage: CoreStage) => {
-    if (!stages) return;
-    setTargetError(null);
-    void saveStages(stages.filter((other) => other.id !== stage.id)).catch(
-      (error) => setTargetError(String(error)),
+    }
+    const stage = { ...general, outputs };
+    run(
+      saveStages(
+        (list) =>
+          list.map((other) => (other.id === GENERAL_STAGE ? stage : other)),
+        GENERAL_STAGE,
+      ).then(() => activate(stage)),
     );
   };
-  const togglePicked = (output: CoreOutput) =>
-    setNewStage(
+  const chooseOutput = (output: CoreOutput) => playGeneral([output]);
+  const toggleGeneral = (output: CoreOutput) => {
+    const next = inGroup(output)
+      ? groupOutputs.filter((member) => !sameOutput(output)(member))
+      : [...groupOutputs, output];
+    if (next.length > 0) playGeneral(next);
+  };
+
+  const openEditor = (stage: CoreStage | null) =>
+    setEditing({
+      id: stage?.id ?? null,
+      name: stage?.name ?? "",
+      outputs: stage?.outputs ?? [...groupOutputs],
+      targetLufs: String(
+        stage?.targetLufs ??
+          audio?.settings.normalizationTargetLufs ??
+          MAX_TARGET_LUFS,
+      ),
+    });
+  const draftTarget = Number(editing?.targetLufs);
+  const draftValid =
+    editing !== null &&
+    editing.name.trim() !== "" &&
+    (editing.id === GENERAL_STAGE || editing.outputs.length > 0) &&
+    editing.targetLufs.trim() !== "" &&
+    draftTarget >= MIN_TARGET_LUFS &&
+    draftTarget <= MAX_TARGET_LUFS;
+  const saveDraft = () => {
+    if (!editing || !stages || !draftValid) return;
+    const existing = stages.find((stage) => stage.id === editing.id);
+    const stage: CoreStage = {
+      ...(existing ?? {
+        id: crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+      }),
+      name: editing.name.trim(),
+      // General's outputs are picked in the list, not here.
+      outputs:
+        existing?.id === GENERAL_STAGE ? existing.outputs : editing.outputs,
+      targetLufs: draftTarget,
+    };
+    // A new stage plays at once; changing the one playing changes what plays.
+    const playing = !existing || stage.id === activeStage?.id;
+    setEditing(null);
+    run(
+      saveStages(
+        (list) =>
+          existing
+            ? list.map((other) => (other.id === stage.id ? stage : other))
+            : [...list, stage],
+        playing ? stage.id : undefined,
+      ).then(() => (playing ? activate(stage) : undefined)),
+    );
+  };
+  // Removing the stage playing goes back to General, still on the same outputs.
+  const deleteStage = (id: string) => {
+    const wasPlaying = id === activeStage?.id;
+    const nextGeneral = general && { ...general, outputs: groupOutputs };
+    setEditing(null);
+    run(
+      saveStages(
+        (list) =>
+          list
+            .filter((stage) => stage.id !== id)
+            .map((stage) =>
+              wasPlaying && nextGeneral && stage.id === GENERAL_STAGE
+                ? nextGeneral
+                : stage,
+            ),
+        wasPlaying ? GENERAL_STAGE : undefined,
+      ).then(() =>
+        wasPlaying && nextGeneral ? activate(nextGeneral) : undefined,
+      ),
+    );
+  };
+  const toggleDrafted = (output: CoreOutput) =>
+    setEditing(
       (current) =>
         current && {
           ...current,
@@ -297,6 +407,8 @@ export function ExtraCtrls({
             : [...current.outputs, output],
         },
     );
+  // On General, the row plays there alone and the box beside it adds or removes the output; on
+  // another stage, the rows only show its outputs and their volumes.
   const groupRow = (
     output: CoreOutput,
     label: string,
@@ -304,48 +416,72 @@ export function ExtraCtrls({
       syncs,
       disabled = false,
       offline = false,
-    }: { syncs: boolean; disabled?: boolean; offline?: boolean },
+      fixed = false,
+    }: { syncs: boolean; disabled?: boolean; offline?: boolean; fixed?: boolean },
   ) => {
     const playing = inGroup(output);
-    const picked = newStage?.outputs.some(sameOutput(output)) ?? false;
+    const picking = !fixed && general !== null;
+    const exclusive = isExclusive(output);
     const level = memberVolume(output);
+    const name = (
+      <>
+        <span className="audioDeviceCheck" aria-hidden="true" />
+        <span className="audioDeviceName" data-tooltip={label}>
+          {offline ? `${output.deviceName} (offline)` : output.deviceName}
+        </span>
+      </>
+    );
     return (
       <Fragment key={outputKey(output)}>
         <div className="audioDeviceRow">
-          <button
-            className="audioDeviceOption"
-            type="button"
-            aria-current={(!newStage && playing) || undefined}
-            aria-label={label}
-            disabled={disabled || offline || (newStage !== null && !syncs)}
-            onClick={() =>
-              newStage ? togglePicked(output) : chooseOutput(output)
-            }
-          >
-            <span className="audioDeviceCheck" aria-hidden="true" />
-            <span className="audioDeviceName" data-tooltip={label}>
-              {offline ? `${output.deviceName} (offline)` : output.deviceName}
-            </span>
-          </button>
-          {newStage && (
+          {fixed ? (
+            <div
+              className="audioDeviceOption audioDeviceFixed"
+              aria-current={playing || undefined}
+            >
+              {name}
+            </div>
+          ) : (
+            <button
+              className="audioDeviceOption"
+              type="button"
+              aria-current={(!picking && playing) || undefined}
+              aria-label={label}
+              disabled={disabled || offline}
+              onClick={() => chooseOutput(output)}
+            >
+              {name}
+            </button>
+          )}
+          {picking && (
             <button
               className="audioDeviceToggle"
               type="button"
               role="checkbox"
-              aria-checked={picked}
-              aria-label={`Add ${label} to the stage`}
+              aria-checked={playing}
+              aria-label={`Play on ${label} too`}
               data-tooltip={
                 syncs ? undefined : "Update Ambra there to play in sync"
               }
-              disabled={!syncs}
-              onClick={() => togglePicked(output)}
+              disabled={
+                disabled ||
+                offline ||
+                !syncs ||
+                (playing && groupOutputs.length === 1)
+              }
+              onClick={() => toggleGeneral(output)}
             >
               <span className="audioDeviceBox" aria-hidden="true" />
             </button>
           )}
         </div>
-        {playing && !offline && !newStage && (
-          <div className="audioDeviceVolume">
+        {playing && !offline && (
+          <div
+            className="audioDeviceVolume"
+            data-tooltip={
+              exclusive ? "Exclusive mode plays at full volume" : undefined
+            }
+          >
             <input
               className="volumeSlider"
               type="range"
@@ -353,8 +489,9 @@ export function ExtraCtrls({
               max="100"
               step="1"
               value={level}
+              disabled={exclusive}
               aria-label={`${label} volume`}
-              aria-valuetext={`${Math.round(level)}%`}
+              aria-valuetext={exclusive ? "Exclusive" : `${Math.round(level)}%`}
               onChange={(event) =>
                 setMemberVolume(output, Number(event.target.value))
               }
@@ -449,8 +586,7 @@ export function ExtraCtrls({
 
   // Follows each change at once, so wheel events arriving between renders build on one another.
   const latestVolume = useRef(volume);
-  latestVolume.current =
-    groupOutputs.length > 0 ? currentLevel(groupOutputs[0]) : volume;
+  latestVolume.current = volume;
   function setLocalVolume(outputId: string, nextVolume: number) {
     if (!audio || audio.loading) return;
     const next = { outputId, volume: nextVolume };
@@ -458,20 +594,28 @@ export function ExtraCtrls({
     pendingVolumes.current.set(next.outputId, next);
     void sendPendingVolume();
   }
-  // Moves every output playing by the same step, each from its own level.
+  // Moves every output playing by the same step, keeping the gaps between their levels: the
+  // loudest stops at 100 and the quietest at 0. Exclusive outputs stay as they are.
   const stepVolume = (step: number) => {
     if (groupOutputs.length === 0) {
+      if (localExclusive(selectedDeviceId)) return;
       const next = clampVolume(latestVolume.current + step);
       if (next === latestVolume.current) return;
       latestVolume.current = next;
       setLocalVolume(selectedDeviceId, next);
       return;
     }
-    for (const output of groupOutputs) {
-      const level = currentLevel(output);
-      const next = clampVolume(level + step);
-      if (next !== level) setMemberVolume(output, next);
-    }
+    const members = groupOutputs.filter((output) => !isExclusive(output));
+    if (members.length === 0) return;
+    const levels = members.map(currentLevel);
+    const move =
+      step > 0
+        ? Math.min(step, 100 - Math.max(...levels))
+        : Math.max(step, -Math.min(...levels));
+    if (move === 0) return;
+    members.forEach((output, index) =>
+      setMemberVolume(output, levels[index] + move),
+    );
   };
 
   // Up/Down move between devices, as in a native menu.
@@ -498,8 +642,9 @@ export function ExtraCtrls({
 
   // Mutes every output playing, and gives each its own level back.
   const toggleMute = () => {
-    const muting = latestVolume.current > 0;
     if (groupOutputs.length === 0) {
+      if (localExclusive(selectedDeviceId)) return;
+      const muting = latestVolume.current > 0;
       if (muting) levelsBeforeMute.set(selectedDeviceId, latestVolume.current);
       const next = muting
         ? 0
@@ -508,7 +653,9 @@ export function ExtraCtrls({
       setLocalVolume(selectedDeviceId, next);
       return;
     }
-    for (const output of groupOutputs) {
+    const members = groupOutputs.filter((output) => !isExclusive(output));
+    const muting = members.some((output) => currentLevel(output) > 0);
+    for (const output of members) {
       const key = outputKey(output);
       if (muting) {
         const level = currentLevel(output);
@@ -575,7 +722,122 @@ export function ExtraCtrls({
       <div className="volumeControlContainer" ref={volumeControl}>
         {hasNativeAudio && audioMenuOpen && (
           <AudioControlsMenu anchor={volumeButton} onClose={closeAudioMenu}>
-            {showAudioModeToggle && (
+            {showAudioModeToggle && editing && (
+              <form
+                className="audioStageEditor"
+                aria-label={editing.id ? `Edit ${editing.name}` : "New stage"}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  saveDraft();
+                }}
+              >
+                <div className="audioStageEditorHeader">
+                  <label className="audioDeviceHeading" htmlFor="audioStageName">
+                    Stage name
+                  </label>
+                  {editing.id && editing.id !== GENERAL_STAGE && (
+                    <button
+                      className="audioStageIconButton"
+                      type="button"
+                      aria-label="Delete stage"
+                      data-tooltip="Delete stage"
+                      onClick={() => deleteStage(editing.id!)}
+                    >
+                      <img src="/delete.svg" alt="" />
+                    </button>
+                  )}
+                </div>
+                <input
+                  id="audioStageName"
+                  className="audioStageName"
+                  type="text"
+                  maxLength={60}
+                  autoFocus
+                  value={editing.name}
+                  onChange={(event) =>
+                    setEditing({ ...editing, name: event.target.value })
+                  }
+                />
+                {editing.id !== GENERAL_STAGE && (
+                  <>
+                    <span className="audioDeviceHeading" aria-hidden="true">
+                      Enabled outputs
+                    </span>
+                    <div
+                      className="audioStageChips"
+                      role="group"
+                      aria-label="Enabled outputs"
+                    >
+                      {[
+                        ...outputRows,
+                        // Outputs out of reach now stay on the stage unless untoggled.
+                        ...editing.outputs
+                          .filter(
+                            (output) =>
+                              !outputRows.some((row) =>
+                                sameOutput(output)(row.output),
+                              ),
+                          )
+                          .map((output) => ({ output, syncs: true })),
+                      ].map(({ output, syncs }) => {
+                        const picked = editing.outputs.some(sameOutput(output));
+                        return (
+                          <button
+                            key={outputKey(output)}
+                            className="audioStageChip"
+                            type="button"
+                            aria-pressed={picked}
+                            aria-label={`${output.deviceName} on ${output.endpointName}`}
+                            data-tooltip={
+                              syncs
+                                ? output.endpointName
+                                : "Update Ambra there to play in sync"
+                            }
+                            disabled={!syncs && !picked}
+                            onClick={() => toggleDrafted(output)}
+                          >
+                            {output.deviceName}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+                <label className="audioStageField">
+                  <span className="audioDeviceHeading">Target loudness</span>
+                  <span className="audioStageLufs">
+                    <input
+                      type="number"
+                      min={MIN_TARGET_LUFS}
+                      max={MAX_TARGET_LUFS}
+                      step={0.1}
+                      value={editing.targetLufs}
+                      onChange={(event) =>
+                        setEditing({ ...editing, targetLufs: event.target.value })
+                      }
+                    />
+                    <small>LUFS</small>
+                  </span>
+                </label>
+                <div className="audioStageEditorFooter">
+                  <button
+                    className="audioStageCancel"
+                    type="button"
+                    onClick={() => setEditing(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="audioStageSave"
+                    type="submit"
+                    disabled={!draftValid}
+                  >
+                    {editing.id ? "Save" : "Create"}
+                  </button>
+                </div>
+              </form>
+            )}
+            {showAudioModeToggle && !editing && (
               <>
                 <div
                   className="audioDeviceList"
@@ -583,112 +845,55 @@ export function ExtraCtrls({
                   aria-label="Audio output device"
                   onKeyDown={moveDeviceFocus}
                 >
-                  {here && stages && (
+                  {here && stages && activeStage && (
                     <>
                       <span className="audioDeviceHeading" aria-hidden="true">
                         Stages
                       </span>
-                      {stages.map((stage) => (
-                        <div
-                          key={`stage:${stage.id}`}
-                          className="audioDeviceRow"
-                        >
-                          <button
-                            className="audioDeviceOption"
-                            type="button"
-                            aria-current={
-                              sameOutputs(stage.outputs, groupOutputs) ||
-                              undefined
+                      <div
+                        className="audioStageGrid"
+                        role="radiogroup"
+                        aria-label="Stages"
+                      >
+                        {stages.map((stage) => (
+                          <div
+                            key={stage.id}
+                            className="audioStageTile"
+                            data-selected={
+                              stage.id === activeStage.id || undefined
                             }
-                            aria-label={`${stage.name} stage: ${stage.outputs.map((output) => output.deviceName).join(", ")}`}
-                            disabled={newStage !== null}
-                            onClick={() => playStage(stage)}
                           >
-                            <span
-                              className="audioDeviceCheck"
-                              aria-hidden="true"
-                            />
-                            <span
-                              className="audioDeviceName"
-                              data-tooltip={stage.outputs
-                                .map((output) => output.deviceName)
-                                .join(", ")}
+                            <button
+                              className="audioStagePick"
+                              type="button"
+                              role="radio"
+                              aria-checked={stage.id === activeStage.id}
+                              onClick={() => playStage(stage)}
                             >
                               {stage.name}
-                            </span>
-                          </button>
-                          <button
-                            className="audioDeviceRemove"
-                            type="button"
-                            aria-label={`Remove the ${stage.name} stage`}
-                            data-tooltip="Remove stage"
-                            disabled={newStage !== null}
-                            onClick={() => removeStage(stage)}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                      {newStage ? (
-                        <form
-                          className="audioStageForm"
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            createStage();
-                          }}
-                        >
-                          <input
-                            type="text"
-                            aria-label="Stage name"
-                            placeholder="Stage name"
-                            maxLength={60}
-                            autoFocus
-                            value={newStage.name}
-                            onChange={(event) =>
-                              setNewStage({
-                                ...newStage,
-                                name: event.target.value,
-                              })
-                            }
-                          />
-                          <button
-                            type="submit"
-                            disabled={
-                              !newStage.name.trim() ||
-                              newStage.outputs.length === 0
-                            }
-                          >
-                            Create
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setNewStage(null)}
-                          >
-                            Cancel
-                          </button>
-                        </form>
-                      ) : (
+                            </button>
+                            <button
+                              className="audioStageIconButton"
+                              type="button"
+                              aria-label={`Edit the ${stage.name} stage`}
+                              data-tooltip="Edit stage"
+                              onClick={() => openEditor(stage)}
+                            >
+                              <img src="/edit.svg" alt="" />
+                            </button>
+                          </div>
+                        ))}
                         <button
-                          className="audioDeviceOption audioStageNew"
+                          className="audioStageAdd"
                           type="button"
-                          onClick={() =>
-                            setNewStage({
-                              name: "",
-                              outputs: [...groupOutputs],
-                            })
-                          }
+                          aria-label="New stage"
+                          data-tooltip="New stage"
+                          onClick={() => openEditor(null)}
                         >
-                          <span className="audioDeviceCheck" aria-hidden="true">
-                            +
-                          </span>
-                          <span className="audioDeviceName">New stage</span>
+                          <img src="/add.svg" alt="" />
                         </button>
-                      )}
-                      {newStage && (
-                        <p className="audioControlsNote">
-                          Tick the outputs to play on together.
-                        </p>
-                      )}
+                      </div>
+                      <hr className="audioStageDivider" />
                     </>
                   )}
                   <span className="audioDeviceHeading" aria-hidden="true">
@@ -705,6 +910,21 @@ export function ExtraCtrls({
                       <span className="audioDeviceCheck" aria-hidden="true" />
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
+                  ) : here && activeStage && activeStage !== general ? (
+                    activeStage.outputs.map((output) =>
+                      groupRow(
+                        output,
+                        `${output.deviceName} on ${output.endpointName}`,
+                        {
+                          syncs: true,
+                          fixed: true,
+                          offline: !outputRows.some(
+                            (row) =>
+                              !row.offline && sameOutput(output)(row.output),
+                          ),
+                        },
+                      ),
+                    )
                   ) : here ? (
                     outputRows.map(({ output, ...state }) =>
                       groupRow(
@@ -759,7 +979,7 @@ export function ExtraCtrls({
                 min="0"
                 max="100"
                 step="1"
-                disabled={isLoadingDevices}
+                disabled={isLoadingDevices || localExclusive(selectedDeviceId)}
                 value={volume}
                 aria-label="Volume"
                 aria-valuetext={`${Math.round(volume)}%`}
@@ -807,7 +1027,7 @@ export function ExtraCtrls({
           </span>
         </button>
         <span className="volumePercentage" aria-live="polite">
-          {Math.round(volume)}%
+          {volumeReadout}
         </span>
       </div>
       <button

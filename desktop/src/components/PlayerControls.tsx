@@ -36,7 +36,7 @@ function PlayPauseIcon({ playing }: { playing: boolean }) {
   }, { dependencies: [playing], scope: icon });
   return (
     <svg ref={icon} viewBox="3 3 18 18" aria-hidden="true">
-      {initial.map((d, index) => <path key={index} d={d} fill="white" />)}
+      {initial.map((d, index) => <path key={index} d={d} style={{ fill: "var(--ink)" }} />)}
     </svg>
   );
 }
@@ -70,7 +70,7 @@ function SkipIcon({ backwards = false, activation }: { backwards?: boolean; acti
   }, { dependencies: [activation], scope: icon });
   return (
     <svg ref={icon} className="skipIcon" viewBox="0 0 430 276" aria-hidden="true">
-      <g transform={backwards ? "translate(430 276) rotate(180)" : undefined} fill="white">
+      <g transform={backwards ? "translate(430 276) rotate(180)" : undefined} style={{ fill: "var(--ink)" }}>
         <path d="M-191.25 0L47.5 138L-191.25 276Z" opacity="0" />
         <path d="M0 0L238.75 138L0 276Z" />
         <path d="M191.25 0L430 138L191.25 276Z" />
@@ -87,6 +87,10 @@ type PlayerControlsProps = {
   onTogglePlayback: () => void | Promise<void>;
   onNext: () => void;
   disabled?: boolean;
+  /** False on the first song played, with nothing to go back to. */
+  canGoBack?: boolean;
+  /** False with nothing left in the queue. */
+  canSkip?: boolean;
 };
 
 export function PlayerControls({
@@ -97,6 +101,8 @@ export function PlayerControls({
   onTogglePlayback,
   onNext,
   disabled = false,
+  canGoBack = true,
+  canSkip = true,
 }: PlayerControlsProps) {
   return (
     <div id="controls">
@@ -104,7 +110,7 @@ export function PlayerControls({
         id="backBtn"
         type="button"
         onClick={onPrevious}
-        disabled={disabled}
+        disabled={disabled || !canGoBack}
         data-tooltip="Previous"
         aria-label="Previous"
       >
@@ -123,7 +129,7 @@ export function PlayerControls({
         <PlayPauseIcon playing={isPlaying} />
       </button>
 
-      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled} data-tooltip="Next" aria-label="Next">
+      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled || !canSkip} data-tooltip="Next" aria-label="Next">
         <SkipIcon activation={nextActivation} />
       </button>
     </div>

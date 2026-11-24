@@ -1,3 +1,4 @@
+import { trackArtistNames } from "../utils/trackArtists";
 import { memo, useEffect, useMemo, useState } from "react";
 import {
   highestQualityAlbumArtwork,
@@ -66,7 +67,6 @@ function AlbumView({
   ...props
 }: EntityViewProps & { album: CatalogAlbum }) {
   const columns = useTrackColumns();
-  const albumColumns = useMemo(() => ({ ...columns, excluded: albumExcludedColumns }), [columns]);
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
   const saved = useMemo(
@@ -113,6 +113,12 @@ function AlbumView({
   const tracks =
     entire && album.provider !== "local" ? (catalogTracks ?? []) : saved;
   const quality = useMemo(() => albumAudioQuality(catalogTracks ?? saved), [catalogTracks, saved]);
+  // Only an album by several artists has an artist column; on others it would repeat one name.
+  const multiArtist = useMemo(() => new Set(tracks.map(trackArtistNames)).size > 1, [tracks]);
+  const albumColumns = useMemo(
+    () => ({ ...columns, excluded: multiArtist ? albumExcludedColumns : [...albumExcludedColumns, "artist" as const] }),
+    [columns, multiArtist],
+  );
   const [dialog, setDialog] = useState<"credits" | "versions" | "about" | null>(null);
   const streamed = album.provider !== "local";
   return (
@@ -127,7 +133,7 @@ function AlbumView({
       </AboutDialog>
     </>}
     <TrackCollectionView
-      className="entityView albumView"
+      className={`entityView albumView${multiArtist ? " multiArtistAlbum" : ""}`}
       title={album.title}
       tracks={tracks}
       playlistOptions={props.playlistOptions}

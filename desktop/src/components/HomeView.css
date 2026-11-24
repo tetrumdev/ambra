@@ -53,8 +53,8 @@
 
 .homeRowControls button:enabled:hover,
 .homeRowControls button:focus-visible {
-    color: white;
-    border-color: white;
+    color: var(--ink);
+    border-color: var(--ink);
 }
 
 .homeRowControls button:disabled {
@@ -87,7 +87,7 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: white;
+    color: var(--ink);
     font: inherit;
     text-align: left;
 }
@@ -137,7 +137,7 @@
 }
 
 .homeCardButton:focus-visible .homeArtwork {
-    box-shadow: 0 0 0 2px white;
+    box-shadow: 0 0 0 2px var(--ink);
 }
 
 .homeCardTitle,

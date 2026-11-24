@@ -44,6 +44,8 @@ pub const COMMANDS: &[&str] = &[
     "native_audio_settings",
     "set_output_settings",
     "native_audio_volume",
+    // A stage's target loudness, set on each computer it plays on.
+    "set_loudness_target",
     // Only prepares a song another device is about to ask for, so it starts as fast there as
     // it would if that device were the output.
     "warm_native_audio",

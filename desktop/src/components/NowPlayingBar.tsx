@@ -78,6 +78,8 @@ type NowPlayingBarProps = {
   onPrevious: () => void;
   onTogglePlayback: () => void | Promise<void>;
   onNext: () => void;
+  canGoBack: boolean;
+  canSkip: boolean;
   onSeek: (time: number) => void;
   onOpenBigscreen?: () => void;
   onToggleQueue?: () => void;
@@ -104,6 +106,8 @@ export function NowPlayingBar({
   onPrevious,
   onTogglePlayback,
   onNext,
+  canGoBack,
+  canSkip,
   onSeek,
   onToggleQueue,
   queueSidebarOpen,
@@ -169,6 +173,8 @@ export function NowPlayingBar({
           onTogglePlayback={onTogglePlayback}
           onNext={onNext}
           disabled={isEmpty}
+          canGoBack={canGoBack}
+          canSkip={canSkip}
         />
         <div className="playbackReadout">
           <PlaybackProgress
@@ -176,6 +182,7 @@ export function NowPlayingBar({
             duration={duration}
             onSeek={onSeek}
             disabled={isEmpty}
+            songKey={track?.globalId}
           />
           {track && showAudioQuality && <QualityLight track={track} audioQuality={audioQuality} />}
         </div>

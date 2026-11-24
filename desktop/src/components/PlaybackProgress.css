@@ -76,13 +76,19 @@
     height: 6px;
     border-radius: 999px;
     transition: height var(--motion-snappy);
-    background: linear-gradient(
-        to right,
-        white 0%,
-        white var(--progress),
-        rgba(214, 214, 214, 0.45) var(--progress),
-        rgba(214, 214, 214, 0.45) 100%
-    );
+    /* The new song's bar over the last one's, which wipes off as a new song starts, its
+       trailing edge fading rather than cut off. */
+    background:
+        linear-gradient(to right, var(--ink) var(--progress), transparent var(--progress)),
+        linear-gradient(
+            to right,
+            transparent var(--wipe-clear, 100%),
+            var(--ink) var(--wipe-solid, 100%),
+            var(--ink) var(--wipe-end, 100%),
+            transparent var(--wipe-fade-out, 100%)
+        ),
+        linear-gradient(to right, var(--ink) var(--wipe-held, 0%), transparent var(--wipe-held, 0%)),
+        rgba(214, 214, 214, 0.45);
 }
 
 /* Pressed or dragged, the bar swells under the pointer. */

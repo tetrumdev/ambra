@@ -13,7 +13,7 @@
     flex: none;
     width: 10px;
     height: 10px;
-    color: white;
+    color: var(--ink);
     transform: rotate(-90deg);
     transition: transform var(--motion-snappy);
 }

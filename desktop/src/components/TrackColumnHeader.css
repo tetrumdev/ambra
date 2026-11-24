@@ -103,7 +103,7 @@
 .columnPickerButton:hover,
 .columnPickerButton:focus-visible,
 .columnPickerButton[aria-expanded="true"] {
-    color: white;
+    color: var(--ink);
 }
 
 .columnPickerMenu {
@@ -120,7 +120,7 @@
     background: rgb(18 18 18 / 0.86);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    color: white;
+    color: var(--ink);
     font-family: "Stack Sans Text", Inter, sans-serif;
 }
 
@@ -140,7 +140,7 @@
     border: 0;
     border-radius: 8px;
     background: transparent;
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-size: 0.8rem;
     text-align: left;

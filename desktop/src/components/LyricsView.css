@@ -153,13 +153,13 @@
 }
 
 .lyricLine[data-active="true"] {
-    color: white;
+    color: var(--ink);
 }
 button.lyricLine {
     border-radius: 6px;
 }
 button.lyricLine:hover {
-    color: white;
+    color: var(--ink);
     text-shadow: 0 0 24px rgba(255, 255, 255, 0.15);
 }
 .lyricsViewport[data-following="false"] .lyricGroup {
@@ -224,7 +224,7 @@ button.lyricLine:hover {
     /* The bright edge fades across roughly two letters instead of cutting off. */
     background-image: linear-gradient(
         to right,
-        white calc(var(--lyric-head) - 90%),
+        var(--ink) calc(var(--lyric-head) - 90%),
         rgba(255, 255, 255, 0.45) calc(var(--lyric-head) + 90%)
     );
     background-clip: text;
@@ -242,7 +242,7 @@ button.lyricLine:hover {
 .lyricLine:dir(rtl) .lyricChar {
     background-image: linear-gradient(
         to left,
-        white calc(var(--lyric-head) - 90%),
+        var(--ink) calc(var(--lyric-head) - 90%),
         rgba(255, 255, 255, 0.45) calc(var(--lyric-head) + 90%)
     );
 }
@@ -272,7 +272,7 @@ button.lyricLine:hover {
     width: 0.3em;
     height: 0.3em;
     border-radius: 50%;
-    background: white;
+    background: var(--ink);
     opacity: 0;
     transform: scale(0.55);
 }
@@ -308,7 +308,7 @@ button.lyricLine:hover {
     margin: 0 0 20px;
 }
 .lyricsMessage button {
-    color: white;
+    color: var(--ink);
     background: rgba(255, 255, 255, 0.12);
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 100px;
@@ -387,7 +387,7 @@ button.lyricLine:hover {
     padding: 0 12px;
     border: 0;
     white-space: nowrap;
-    color: white;
+    color: var(--ink);
     background: transparent;
     font:
         500 13px/1.4 "Stack Sans Text",
@@ -432,7 +432,7 @@ button.lyricLine:hover {
     overflow: hidden;
     border: 1px solid #2f2f2f;
     border-radius: 12px;
-    color: white;
+    color: var(--ink);
     font-family: "Stack Sans Text", Inter, sans-serif;
     background: none;
     backdrop-filter: blur(20px);
@@ -542,7 +542,7 @@ button.lyricLine:hover {
     border: 1px solid rgba(255, 255, 255, 0.12);
     border-radius: 100px;
     white-space: nowrap;
-    color: white;
+    color: var(--ink);
     font:
         500 13px/1.4 "Stack Sans Text",
         sans-serif;

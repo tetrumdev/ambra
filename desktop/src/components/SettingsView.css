@@ -29,7 +29,7 @@
 
 .settingsSidebar h2 {
     margin: 26px 0 18px;
-    color: white;
+    color: var(--ink);
     font-size: 1rem;
     font-weight: 600;
 }
@@ -74,7 +74,7 @@
 
 .settingsBack:hover,
 .settingsBack:focus-visible {
-    color: white;
+    color: var(--ink);
 }
 
 
@@ -183,7 +183,7 @@
 }
 
 .settingRowLabel {
-    color: white;
+    color: var(--ink);
     font-size: 0.95rem;
 }
 
@@ -257,8 +257,8 @@
 .settingsHelp:hover,
 .settingsHelp:focus-visible,
 .settingsHelp[aria-expanded="true"] {
-    border-color: white;
-    color: white;
+    border-color: var(--ink);
+    color: var(--ink);
     outline: none;
 }
 
@@ -282,7 +282,7 @@
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
-    color: white;
+    color: var(--ink);
     font: 400 0.85rem/1.5 "Stack Sans Text", sans-serif;
     text-align: left;
     animation: settingsSaveBarIn var(--motion-enter);
@@ -305,7 +305,7 @@
 }
 
 .settingsHelpText code {
-    color: white;
+    color: var(--ink);
 }
 
 :root[data-reduce-motion] .settingsHelpPanel {
@@ -321,7 +321,7 @@
     border: 1px solid var(--settings-control-border);
     border-radius: 100px;
     background: transparent;
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-size: 0.85rem;
     font-weight: 600;
@@ -330,12 +330,12 @@
 
 .settingsPill:hover:not(:disabled),
 .settingsPill:focus-visible {
-    border-color: white;
+    border-color: var(--ink);
 }
 
 .settingsPillPrimary {
     border-color: transparent;
-    background: white;
+    background: var(--ink);
     color: black;
 }
 
@@ -360,7 +360,7 @@
 
 .settingsLink:hover:not(:disabled),
 .settingsLink:focus-visible {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;
 }
@@ -398,11 +398,11 @@
 }
 
 .settingsSegmented button:not([aria-checked="true"]):hover:not(:disabled) {
-    color: white;
+    color: var(--ink);
 }
 
 .settingsSegmented button[aria-checked="true"] {
-    background: white;
+    background: var(--ink);
     color: black;
 }
 
@@ -418,7 +418,7 @@
     border-radius: 10px;
     outline: none;
     background: var(--settings-field);
-    color: white;
+    color: var(--ink);
     color-scheme: dark;
     font: inherit;
     font-size: 0.85rem;
@@ -443,7 +443,7 @@
 
 .settingsChipActive {
     border-color: transparent;
-    background: white;
+    background: var(--ink);
     color: black;
 }
 
@@ -644,13 +644,13 @@
 
 /* Highlighted like a chosen row in the app's menus. */
 .dspPresetItem:hover {
-    color: white;
+    color: var(--ink);
     background: #1c1c1c;
 }
 
 .dspPresetItem[aria-pressed="true"] {
     background: var(--settings-selected);
-    color: white;
+    color: var(--ink);
 }
 
 .dspEditor {
@@ -750,7 +750,7 @@
 }
 
 .dspSignalPath strong {
-    color: white;
+    color: var(--ink);
     font-size: 0.85rem;
     font-weight: 600;
 }
@@ -853,7 +853,7 @@
 
 .eqCurve {
     fill: none;
-    stroke: white;
+    stroke: var(--ink);
     stroke-width: 2;
     stroke-linejoin: round;
 }
@@ -880,13 +880,13 @@
 
 .eqNodeDot {
     fill: #0b0b0b;
-    stroke: white;
+    stroke: var(--ink);
     stroke-width: 1.5;
     transition: r var(--motion-hover);
 }
 
 .eqNode text {
-    fill: white;
+    fill: var(--ink);
     font-family: "Stack Sans Text", sans-serif;
     font-size: 10px;
     font-weight: 700;
@@ -899,7 +899,7 @@
 }
 
 .eqNode[data-selected] .eqNodeDot {
-    fill: white;
+    fill: var(--ink);
 }
 
 .eqNode[data-selected] text {
@@ -952,12 +952,12 @@
 }
 
 .dspBandChip[aria-selected="true"] {
-    border-color: white;
-    color: white;
+    border-color: var(--ink);
+    color: var(--ink);
 }
 
 .dspBandChip[aria-selected="true"] b {
-    background: white;
+    background: var(--ink);
     color: black;
 }
 
@@ -981,7 +981,7 @@
     width: 30px;
     height: 30px;
     border-radius: 50%;
-    background: white;
+    background: var(--ink);
     color: black;
     font-size: 0.85rem;
     font-weight: 700;
@@ -1052,7 +1052,7 @@
     flex: none;
     padding: 3px 10px;
     border-radius: 100px;
-    background: white;
+    background: var(--ink);
     color: black;
     font-size: 0.72rem;
     font-weight: 700;
@@ -1260,7 +1260,7 @@
 
 .serverSetupCardText h2 {
     margin: 0 0 4px;
-    color: white;
+    color: var(--ink);
     font-size: 1.05rem;
     font-weight: 600;
 }
@@ -1329,7 +1329,7 @@
     border: 0;
     border-radius: 100px;
     background: transparent;
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-size: 0.8rem;
     font-weight: 600;
@@ -1351,7 +1351,7 @@
 
 .shortcutRemove:hover,
 .shortcutRemove:focus-visible {
-    color: white;
+    color: var(--ink);
 }
 
 .shortcutAdd {
@@ -1371,14 +1371,14 @@
 .shortcutAdd:hover,
 .shortcutAdd:focus-visible {
     border-color: #8a8a8a;
-    color: white;
+    color: var(--ink);
 }
 
 /* Waiting for keys: lit like the chosen option of a segmented control. */
 .shortcutBinding[data-recording],
 .shortcutAdd[data-recording] {
     border-color: transparent;
-    background: white;
+    background: var(--ink);
 }
 
 .shortcutBinding[data-recording] .shortcutBindingKeys,

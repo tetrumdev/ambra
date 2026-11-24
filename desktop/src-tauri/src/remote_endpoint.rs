@@ -709,6 +709,12 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
             }
             native_audio::set_settings_on(main.inner(), settings).await.map(|()| Value::Null)
         }
+        // A stage's target loudness; the settings refuse one out of range.
+        "set_loudness_target" => {
+            let mut settings = native_audio::settings_on(main.inner()).await?;
+            settings.normalization_target_lufs = number("lufs")?;
+            native_audio::set_settings_on(main.inner(), settings).await.map(|()| Value::Null)
+        }
         _ => Err("This computer doesn't take that command".into()),
     }
 }

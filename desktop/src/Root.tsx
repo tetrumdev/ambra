@@ -171,7 +171,8 @@ export function Root() {
   if (!ready) return <main className="stateStartup" aria-busy="true"><div data-window-drag-region className="stateTitlebar" /><h1>Loading local music…</h1></main>;
   return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
-      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!showServerLibrary} sharedPlayback={sharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
+      <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!showServerLibrary} sharedPlayback={sharedPlayback}
+        awaitingSharedPlayback={!sharedPlayback && settling && preferSharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>
     {serverConnection?.server && !connected && !settling && <div className="stateSaveError" role="status">
       <span>{serverConnection.server.name} disconnected. Local music remains available.</span>

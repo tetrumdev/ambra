@@ -1,4 +1,5 @@
 import { useClientConnection } from "../hooks/ClientConnectionContext";
+import { applyLoudnessTarget, useStages } from "../hooks/useStages";
 import { useEffect, useState, type RefCallback, useSyncExternalStore } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { isTauri } from "@tauri-apps/api/core";
@@ -112,6 +113,9 @@ export function SettingsView({
     autoSyncLyrics, lyricsOffsetMs, servicePlaylistVisibility, shortcuts, songContextMenu,
   } = preferences;
   const audio = useAudioSettings()!;
+  // Following a server, the target loudness is the playing stage's.
+  const { activeStage, save: saveStages } = useStages(useClientConnection().sharedPlayback);
+  const targetLufs = activeStage?.targetLufs ?? audio.settings.normalizationTargetLufs;
   const [presetId, setPresetId] = useState<string | null>(null);
   const setNormalization = (normalization: NormalizationMode) => void audio.update(current => ({ ...current, normalization }));
 
@@ -135,13 +139,20 @@ export function SettingsView({
         {audio.settings.normalization !== "off" && <SettingRow label="Target loudness" help="The loudness songs are brought to. Higher is louder; quiet songs only rise as far as their peaks allow, so nothing clips.">
           <span className="settingsFieldRow settingsUnitInput">
             <input type="number" aria-label="Target loudness (LUFS)" min={MIN_TARGET_LUFS} max={MAX_TARGET_LUFS} step={0.1} required
-              key={audio.settings.normalizationTargetLufs} defaultValue={audio.settings.normalizationTargetLufs} disabled={audio.saving}
+              key={targetLufs} defaultValue={targetLufs} disabled={audio.saving}
               onBlur={async e => {
                 const input = e.currentTarget;
                 const target = input.valueAsNumber;
-                const saved = audio.settings.normalizationTargetLufs;
+                const saved = targetLufs;
                 if (!input.checkValidity()) { input.reportValidity(); input.value = String(saved); return; }
-                if (target !== saved && !await audio.update(current => ({ ...current, normalizationTargetLufs: target }))) input.value = String(saved);
+                if (target === saved) return;
+                if (activeStage) {
+                  const stage = { ...activeStage, targetLufs: target };
+                  try { await saveStages(list => list.map(other => other.id === stage.id ? stage : other)); }
+                  catch { input.value = String(saved); return; }
+                  // A computer too old to take it keeps its own; the volume menu names it when the stage plays.
+                  await applyLoudnessTarget(stage.outputs, target, audio).catch(() => {});
+                } else if (!await audio.update(current => ({ ...current, normalizationTargetLufs: target }))) input.value = String(saved);
               }} />
             <small>LUFS</small>
           </span>

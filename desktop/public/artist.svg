@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <svg width="100%" height="100%" viewBox="0 0 128 128" version="1.1" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="64" cy="38" r="28" style="fill:white;"/>
-    <path d="M14,122C14,94.386 36.386,72 64,72C91.614,72 114,94.386 114,122L14,122Z" style="fill:white;"/>
+    <circle cx="64" cy="38" r="28" style="fill:#ebebeb;"/>
+    <path d="M14,122C14,94.386 36.386,72 64,72C91.614,72 114,94.386 114,122L14,122Z" style="fill:#ebebeb;"/>
 </svg>

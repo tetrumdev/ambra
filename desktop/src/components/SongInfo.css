@@ -58,7 +58,7 @@
 .songMenuButton:hover,
 .songMenuButton:focus-visible,
 .songMenuButton[aria-expanded="true"] {
-    color: white;
+    color: var(--ink);
 }
 
 #songInfo #songName,

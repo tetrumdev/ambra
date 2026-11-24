@@ -16,6 +16,7 @@
 //! a controller's window being open; losing the selected audio output pauses the session.
 
 use std::{
+    collections::BTreeMap,
     sync::{Arc, Mutex as SyncMutex, OnceLock, Weak, atomic::{AtomicBool, Ordering}},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -2103,6 +2104,9 @@ struct SessionInfo {
     /// Named groups of outputs this session plays on together.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     stages: Vec<Stage>,
+    /// The stage last chosen; apps treat none as the General stage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_stage: Option<String>,
     /// The session whose settings this one shares; never one that shares another's itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settings_from: Option<String>,
@@ -2110,7 +2114,7 @@ struct SessionInfo {
 
 impl SessionInfo {
     fn new(id: &str, name: String) -> Self {
-        Self { id: id.into(), name, stages: Vec::new(), settings_from: None }
+        Self { id: id.into(), name, stages: Vec::new(), active_stage: None, settings_from: None }
     }
 
     fn settings_profile(&self) -> String {
@@ -2124,6 +2128,12 @@ struct Stage {
     id: String,
     name: String,
     outputs: Vec<Output>,
+    /// Each output's level on this stage, by `endpointId:deviceId`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    volumes: BTreeMap<String, f64>,
+    /// The loudness songs are normalized to on this stage's computers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    target_lufs: Option<f64>,
 }
 
 /// Every session this server runs. `main` always exists; the others are made and removed by apps.
@@ -2213,7 +2223,7 @@ impl Sessions {
                 "title": track["title"], "artist": track["artist"], "album": track["album"], "cover": track["cover"],
             }));
             let transport = core.transport();
-            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), outputs: transport.outputs(), track, stages: info.stages, settings_from: info.settings_from });
+            summaries.push(SessionSummary { id: info.id, name: info.name, playing: transport.playing, output: transport.output.clone(), outputs: transport.outputs(), track, stages: info.stages, active_stage: info.active_stage, settings_from: info.settings_from });
         }
         summaries
     }
@@ -2231,6 +2241,8 @@ struct SessionSummary {
     /// The current song, for showing what each session is playing.
     track: Option<Value>,
     stages: Vec<Stage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_stage: Option<String>,
     /// The session whose settings this one shares, if any.
     #[serde(skip_serializing_if = "Option::is_none")]
     settings_from: Option<String>,
@@ -2326,8 +2338,12 @@ async fn delete_session(State(sessions): State<Arc<Sessions>>, axum::extract::Pa
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StagesBody {
     stages: Vec<Stage>,
+    /// The stage now chosen; left out, the chosen one stays.
+    #[serde(default)]
+    active: Option<String>,
 }
 
 /// Replaces a session's stages.
@@ -2344,6 +2360,12 @@ async fn set_stages(State(sessions): State<Arc<Sessions>>, axum::extract::Path(i
         if stage.outputs.is_empty() || stage.outputs.len() > MAX_STAGE_OUTPUTS {
             return error(StatusCode::BAD_REQUEST, format!("A stage has 1 to {MAX_STAGE_OUTPUTS} outputs"));
         }
+        if stage.volumes.len() > MAX_STAGE_OUTPUTS || stage.volumes.values().any(|volume| !volume.is_finite() || !(0.0..=100.0).contains(volume)) {
+            return error(StatusCode::BAD_REQUEST, "Volume is 0 to 100");
+        }
+        if stage.target_lufs.is_some_and(|target| !(-30.0..=-6.0).contains(&target)) {
+            return error(StatusCode::BAD_REQUEST, "Target loudness is -30 to -6 LUFS");
+        }
         stages.push(Stage { name, ..stage });
     }
     {
@@ -2352,6 +2374,9 @@ async fn set_stages(State(sessions): State<Arc<Sessions>>, axum::extract::Path(i
             return error(StatusCode::NOT_FOUND, "That session no longer exists");
         };
         info.stages = stages;
+        if let Some(active) = body.active.filter(|active| valid_session_id(active)) {
+            info.active_stage = Some(active);
+        }
     }
     if let Err(message) = sessions.save() {
         return error(StatusCode::INTERNAL_SERVER_ERROR, message);

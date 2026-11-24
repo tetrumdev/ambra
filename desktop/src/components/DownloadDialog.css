@@ -34,7 +34,7 @@
     padding: 10px 16px;
     font: inherit;
     font-size: 14px;
-    color: white;
+    color: var(--ink);
     background: rgba(22, 22, 22, 0.6);
     border: 1px solid #535353;
     border-radius: 100px;
@@ -98,7 +98,7 @@
 }
 
 .downloadTargets .downloadClientTarget {
-    color: white;
+    color: var(--ink);
     background: transparent;
     border-color: #535353;
 }
@@ -141,7 +141,7 @@
     width: 16px;
     height: 16px;
     margin: 0;
-    accent-color: white;
+    accent-color: var(--ink);
 }
 
 .downloadStart {

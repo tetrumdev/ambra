@@ -6,7 +6,8 @@
 }
 
 :root {
-    color: white;
+    --ink: #ebebeb;
+    color: var(--ink);
     background: #0a0a0a;
     font-family: "Stack Sans Text", -apple-system, Helvetica, Arial, sans-serif;
     -webkit-font-smoothing: antialiased;
@@ -130,7 +131,7 @@ body,
 
 .remoteProgressFill {
     height: 100%;
-    background: white;
+    background: var(--ink);
     transform-origin: left;
 }
 
@@ -201,7 +202,7 @@ body,
     border: 0;
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.18);
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-size: 16px;
 }
@@ -215,7 +216,7 @@ body,
     margin: 0;
     padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
     background: rgba(120, 0, 0, 0.92);
-    color: white;
+    color: var(--ink);
     font: 12px/1.4 ui-monospace, Menlo, monospace;
     white-space: pre-wrap;
     user-select: text;

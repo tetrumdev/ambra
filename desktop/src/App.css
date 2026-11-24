@@ -14,6 +14,9 @@
        SURFACE_BLACK (utils/surfaceBlack.ts) and the window's backgroundColor (tauri.conf.json). */
     --surface-black: #0a0a0a;
     --surface-black-rgb: 10 10 10;
+    /* Text and controls: just off white, which is easier on the eyes over the dark surfaces than
+       pure white. Keep it in step with the icons' fill (public/*.svg). */
+    --ink: #ebebeb;
     /* Sans everywhere; the serif is kept for page titles, which set it themselves (.libraryTitle). */
     font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
     font-size: 16px;
@@ -22,7 +25,7 @@
     width: 100vw;
     height: 100vh;
 
-    color: white;
+    color: var(--ink);
     background: var(--surface-black);
 
     font-synthesis: none;
@@ -93,7 +96,7 @@ body,
     height: 32px;
 }
 .stateSaveError button {
-    color: white;
+    color: var(--ink);
     background: #333;
     border: 1px solid #888;
     border-radius: 6px;
@@ -295,11 +298,11 @@ button img {
     width: 18px;
     height: 18px;
     border-radius: 50%;
-    background: white;
+    background: var(--ink);
 }
 
 .settingsToggle:checked {
-    background: white;
+    background: var(--ink);
 }
 
 .settingsToggle:checked::before {

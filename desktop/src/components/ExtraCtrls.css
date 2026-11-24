@@ -40,7 +40,7 @@
     padding: 10px;
     border: 1px solid #2f2f2f;
     border-radius: 12px;
-    color: white;
+    color: var(--ink);
     background: rgba(29, 29, 29, 0.7);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
@@ -72,7 +72,7 @@
     padding: 0 8px;
     border: 0;
     border-radius: 8px;
-    color: white;
+    color: var(--ink);
     background: transparent;
     font-family: "Stack Sans Text", sans-serif;
     font-size: 0.8rem;
@@ -96,49 +96,6 @@
 .audioDeviceOption[aria-checked="true"] .audioDeviceCheck,
 .audioDeviceOption[aria-current="true"] .audioDeviceCheck {
     background: url("/check.svg") center / contain no-repeat;
-}
-
-.audioStageNew .audioDeviceCheck {
-    display: grid;
-    place-items: center;
-    line-height: 1;
-}
-
-/* Removing a stage: a small cross at the end of its row. */
-.audioDeviceRemove {
-    position: absolute;
-    top: 50%;
-    right: 3px;
-    width: 24px;
-    height: 24px;
-    transform: translateY(-50%);
-    border: 0;
-    border-radius: 4px;
-    background: transparent;
-    color: #a3a2a3;
-    cursor: pointer;
-    opacity: 0;
-}
-
-.audioDeviceRow:hover .audioDeviceRemove:not(:disabled),
-.audioDeviceRemove:focus-visible {
-    opacity: 1;
-}
-
-.audioDeviceRemove:hover {
-    background: #3c3c3c;
-    color: inherit;
-}
-
-.audioStageForm {
-    display: flex;
-    gap: 4px;
-    padding: 2px 8px;
-}
-
-.audioStageForm input {
-    flex: 1;
-    min-width: 0;
 }
 
 /* With a server, each output has a box of its own, over the check column: ticking it adds the
@@ -205,6 +162,256 @@
     margin: -6px 0 -4px;
 }
 
+/* Exclusive mode plays at full volume: its slider rests dimmed. */
+.volumeSlider:disabled {
+    opacity: 0.4;
+}
+
+/* A stage's outputs are shown, not picked: no highlight under the pointer. */
+.audioDeviceRow:hover .audioDeviceOption.audioDeviceFixed {
+    background: transparent;
+}
+
+/* Stages: pills like the app's other choices, the one playing filled in ink. */
+.audioStageGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 8px 4px;
+}
+
+.audioStageTile,
+.audioStageChip,
+.audioStageAdd {
+    box-sizing: border-box;
+    height: 30px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    color: #b3b3b3;
+    background: transparent;
+    font-family: "Stack Sans Text", sans-serif;
+    font-size: 0.8rem;
+    font-weight: 600;
+}
+
+.audioStageTile {
+    display: flex;
+    align-items: center;
+    max-width: 100%;
+}
+
+.audioStageTile:hover,
+.audioStageTile:focus-within,
+.audioStageChip:hover:not(:disabled),
+.audioStageChip:focus-visible,
+.audioStageAdd:hover,
+.audioStageAdd:focus-visible {
+    border-color: rgb(140, 140, 140);
+    color: var(--ink);
+}
+
+.audioStageTile[data-selected],
+.audioStageChip[aria-pressed="true"] {
+    border-color: transparent;
+    color: black;
+    background: var(--ink);
+}
+
+.audioStagePick {
+    min-width: 0;
+    height: 100%;
+    padding: 0 4px 0 12px;
+    overflow: hidden;
+    border: 0;
+    color: inherit;
+    background: transparent;
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.audioStagePick:focus-visible {
+    outline: none;
+}
+
+.audioStageIconButton {
+    display: grid;
+    flex-shrink: 0;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 100px;
+    background: transparent;
+    opacity: 0.5;
+}
+
+.audioStageIconButton:hover,
+.audioStageIconButton:focus-visible {
+    opacity: 1;
+}
+
+.audioStageIconButton img {
+    width: 11px;
+    height: 11px;
+}
+
+.audioStageTile .audioStageIconButton {
+    margin-right: 3px;
+}
+
+/* The icons are white; on the ink pill they turn dark. */
+.audioStageTile[data-selected] .audioStageIconButton img {
+    filter: invert(1);
+}
+
+.audioStageAdd {
+    display: grid;
+    place-items: center;
+    width: 30px;
+    padding: 0;
+}
+
+.audioStageAdd img {
+    width: 11px;
+    height: 11px;
+    opacity: 0.7;
+}
+
+.audioStageAdd:hover img,
+.audioStageAdd:focus-visible img {
+    opacity: 1;
+}
+
+.audioStageDivider {
+    width: calc(100% - 16px);
+    margin: 6px 8px;
+    border: 0;
+    border-top: 1px solid #2f2f2f;
+}
+
+.audioStageEditor {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 260px;
+    padding: 4px 0;
+    font-family: "Stack Sans Text", sans-serif;
+}
+
+.audioStageEditorHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-right: 4px;
+}
+
+.audioStageEditor .audioDeviceHeading {
+    padding-bottom: 0;
+}
+
+.audioStageName,
+.audioStageLufs input {
+    box-sizing: border-box;
+    height: 34px;
+    margin: 0 8px 4px;
+    padding: 0 12px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    outline: none;
+    color: var(--ink);
+    background: none;
+    color-scheme: dark;
+    font: inherit;
+    font-size: 0.8rem;
+    user-select: text;
+    -webkit-user-select: text;
+}
+
+.audioStageName:focus-visible,
+.audioStageLufs input:focus-visible {
+    border-color: rgb(140, 140, 140);
+}
+
+.audioStageChips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 0 8px 4px;
+}
+
+.audioStageChip {
+    max-width: 100%;
+    padding: 0 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.audioStageChip:disabled {
+    opacity: var(--disabled-opacity);
+}
+
+.audioStageField {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.audioStageLufs {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-right: 8px;
+    color: #a3a2a3;
+    font-size: 0.75rem;
+}
+
+.audioStageLufs input {
+    width: 100px;
+    margin: 0 0 0 8px;
+}
+
+.audioStageEditorFooter {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    padding: 6px 8px 0;
+}
+
+.audioStageCancel,
+.audioStageSave {
+    height: 32px;
+    padding: 0 16px;
+    border: 1px solid #535353;
+    border-radius: 100px;
+    color: var(--ink);
+    background: transparent;
+    font: inherit;
+    font-size: 0.8rem;
+}
+
+.audioStageCancel:hover,
+.audioStageCancel:focus-visible {
+    border-color: rgb(140, 140, 140);
+}
+
+/* The primary action, as in the app's other dialogs. */
+.audioStageSave {
+    border-color: transparent;
+    color: black;
+    background: var(--ink);
+}
+
+.audioStageSave:hover:not(:disabled) {
+    background: #dedede;
+}
+
+.audioStageSave:disabled {
+    opacity: var(--disabled-opacity);
+}
+
 .audioDeviceName {
     overflow: hidden;
     text-overflow: ellipsis;
@@ -230,8 +437,8 @@
     border-radius: 999px;
     background: linear-gradient(
         to right,
-        white 0%,
-        white var(--volume),
+        var(--ink) 0%,
+        var(--ink) var(--volume),
         rgba(214, 214, 214, 0.45) var(--volume),
         rgba(214, 214, 214, 0.45) 100%
     );
@@ -245,7 +452,7 @@
     -webkit-appearance: none;
     border: 0;
     border-radius: 50%;
-    background: white;
+    background: var(--ink);
     /*box-shadow: 0 1px 5px rgba(0, 0, 0, 0.45);*/
 }
 
@@ -255,7 +462,7 @@
     font-size: 0.65rem;
     font-variant-numeric: tabular-nums;
     line-height: 1;
-    color: white;
+    color: var(--ink);
 }
 
 #volumeBtn,
@@ -297,7 +504,7 @@
     width: 4px;
     height: 4px;
     border-radius: 50%;
-    background: white;
+    background: var(--ink);
     content: "";
     opacity: 0;
     scale: 0;
@@ -350,9 +557,9 @@
 .devAudioModeToggle {
     min-width: 92px;
     padding: 5px 8px;
-    border: 1px solid white;
+    border: 1px solid var(--ink);
     border-radius: 999px;
-    color: white;
+    color: var(--ink);
     background: transparent;
     font-family: "Stack Sans Text", sans-serif;
     font-size: 10px;

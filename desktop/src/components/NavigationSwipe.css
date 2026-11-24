@@ -54,8 +54,8 @@
 }
 
 .navigationSwipe[data-ready="true"] {
-    border-color: white;
-    background: white;
+    border-color: var(--ink);
+    background: var(--ink);
     color: #111;
 }
 

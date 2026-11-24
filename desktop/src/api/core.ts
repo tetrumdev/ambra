@@ -62,10 +62,20 @@ export type CoreSession = {
   track: { title?: string; artist?: string; album?: string; cover?: string } | null;
   /** Named groups of outputs the session plays on together. Missing from older servers. */
   stages?: CoreStage[];
+  /** The stage last chosen; none means General. Missing from older servers. */
+  activeStage?: string;
   /** The session whose settings this one shares. */
   settingsFrom?: string;
 };
-export type CoreStage = { id: string; name: string; outputs: CoreOutput[] };
+export type CoreStage = {
+  id: string;
+  name: string;
+  outputs: CoreOutput[];
+  /** Each output's level on this stage, by `endpointId:deviceId`. */
+  volumes?: Record<string, number>;
+  /** The loudness songs are normalized to on this stage's computers. */
+  targetLufs?: number;
+};
 
 /** Every output a session plays on, the leading one first. */
 export function coreOutputs(session: { output: CoreOutput | null; outputs?: CoreOutput[] } | null | undefined): CoreOutput[] {
@@ -132,7 +142,7 @@ export async function coreSessions(): Promise<CoreSession[]> {
 
 export const createCoreSession = (name: string) => sessionsRequest<CoreSession>("/api/sessions", { name });
 export const renameCoreSession = (id: string, name: string) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/rename`, { name });
-export const setCoreStages = (id: string, stages: CoreStage[]) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/stages`, { stages });
+export const setCoreStages = (id: string, stages: CoreStage[], active?: string) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/stages`, { stages, active });
 /** Shares `from`'s settings from now on, or goes back to the session's own (`null`). */
 export const syncCoreSettings = (id: string, from: string | null) => sessionsRequest<CoreSession[]>(`/api/sessions/${encodeURIComponent(id)}/settings`, { from });
 export async function removeCoreSession(id: string) {

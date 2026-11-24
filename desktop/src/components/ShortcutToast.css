@@ -25,7 +25,7 @@
     background: rgba(22, 22, 22, 0.6);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    color: white;
+    color: var(--ink);
     font: 500 0.9rem "Stack Sans Text", Inter, sans-serif;
     white-space: nowrap;
     animation: shortcutToastIn 0.2s var(--motion-ease-out, ease-out);

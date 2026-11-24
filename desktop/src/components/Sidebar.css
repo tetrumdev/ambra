@@ -63,13 +63,13 @@
 
 /* Hover underlines; the current page is white and heavier, so the two never look alike. */
 .sidebarBtn:hover {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;
 }
 
 .sidebarBtn[aria-current="page"] {
-    color: white;
+    color: var(--ink);
     font-weight: 600;
 }
 
@@ -94,8 +94,8 @@
     gap: 1px;
     padding-left: 8px;
     margin: 6px 10px 22px;
-    color: white;
-    border-left: 1px solid white;
+    color: var(--ink);
+    border-left: 1px solid var(--ink);
 }
 
 .sidebarHomeButton {
@@ -104,7 +104,7 @@
 
 .sidebarBtn.sidebarLibraryButton:hover,
 .sidebarBtn.sidebarLibraryButton[aria-current="page"] {
-    color: white;
+    color: var(--ink);
 }
 
 #createPlaylistBtn {
@@ -137,7 +137,7 @@
 }
 
 .sidebarPlaylistGroup > summary:hover {
-    color: white;
+    color: var(--ink);
 }
 
 .sidebarPlaylistGroup .sidebarPlaylistRow {
@@ -213,7 +213,7 @@
 }
 
 #createPlaylistBtn:hover {
-    color: white;
+    color: var(--ink);
 }
 
 .sidebarPlaylistRow {
@@ -268,14 +268,14 @@
 .sidebarPlaylistActions:hover,
 .sidebarPlaylistActions:focus-visible,
 .sidebarPlaylistActions[aria-expanded="true"] {
-    color: white;
+    color: var(--ink);
 }
 
 .playlistEditDialog {
     box-sizing: border-box;
     background: rgba(22, 22, 22, 0.5);
     backdrop-filter: blur(10px);
-    color: white;
+    color: var(--ink);
     border: 1px solid #535353;
     border-radius: 16px;
     padding: 24px;
@@ -304,7 +304,7 @@
 
 .playlistEditCancel:hover,
 .playlistEditCancel:focus-visible {
-    color: white;
+    color: var(--ink);
     text-decoration: underline;
 }
 
@@ -352,7 +352,7 @@
     font: inherit;
     border: 1px solid #535353;
     outline: none;
-    color: white;
+    color: var(--ink);
     border-radius: 100px;
     background: none;
 }
@@ -367,7 +367,7 @@
     height: 40px;
     font: inherit;
     cursor: default;
-    background: white;
+    background: var(--ink);
     color: black;
     border: 1px solid transparent;
     border-radius: 100px;
@@ -403,7 +403,7 @@
     border: 1px solid #535353;
     border-radius: 100px;
     background: rgba(22, 22, 22, 0.4);
-    color: white;
+    color: var(--ink);
     font: inherit;
     font-size: 0.9rem;
     transition: filter 0.25s ease, border-color 0.25s ease;
@@ -432,7 +432,7 @@
     left: 0;
     height: 2px;
     border-radius: 2px;
-    background: white;
+    background: var(--ink);
     content: "";
     pointer-events: none;
 }

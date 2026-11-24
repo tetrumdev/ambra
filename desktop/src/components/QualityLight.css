@@ -39,12 +39,12 @@
     --tier: var(--tier-unknown);
     /* A slightly tinted light rather than a colored disc: a soft white core that
        fades into its tint, with no hard edge. */
-    --tint: color-mix(in srgb, var(--tier) 45%, white);
+    --tint: color-mix(in srgb, var(--tier) 45%, var(--ink));
     width: 9px;
     height: 9px;
     border-radius: 999px;
     background: radial-gradient(circle,
-        color-mix(in srgb, var(--tint) 70%, white) 0%,
+        color-mix(in srgb, var(--tint) 70%, var(--ink)) 0%,
         var(--tint) 45%,
         color-mix(in srgb, var(--tint) 0%, transparent) 100%);
     box-shadow: 0 0 8px 1px color-mix(in srgb, var(--tint) 30%, transparent);

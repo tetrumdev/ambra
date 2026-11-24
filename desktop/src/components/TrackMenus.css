@@ -26,7 +26,7 @@
     border-radius: 12px;
     z-index: 20;
     position: fixed;
-    color: white;
+    color: var(--ink);
     /* Menus are fixed-position and may render outside a view that sets the app's UI font. */
     font-family: "Stack Sans Text", Inter, sans-serif;
     text-align: left;
@@ -246,7 +246,7 @@
     border: 1px solid #535353;
     border-radius: 100px;
     outline: none;
-    color: white;
+    color: var(--ink);
     background: rgba(0, 0, 0, 0.3);
     font: inherit;
     font-size: 0.85rem;
@@ -263,7 +263,7 @@
     border: 0;
     border-radius: 100px;
     color: black;
-    background: white;
+    background: var(--ink);
     font: inherit;
     font-size: 0.85rem;
     font-weight: 600;
