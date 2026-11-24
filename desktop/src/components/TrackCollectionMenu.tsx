@@ -10,6 +10,7 @@ import { MENU_WIDTH, menuBounds } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { isDownloadable, isDownloadedOnServer, offlineSource, openDownloadDialog, removeLocalDownloads, removeServerDownloads } from "../utils/offlineDownloads";
 import { serverOnline } from "../api/serverConnection";
+import type { PlaylistGroup } from "../utils/preferences";
 
 export type PlaylistMenuOptions = {
   playlists: Playlist[];
@@ -18,6 +19,9 @@ export type PlaylistMenuOptions = {
   /** Adds several songs at once, in order, e.g. a whole album. */
   onAddTracks: (playlistId: string, tracks: Track[]) => boolean | Promise<boolean>;
   onCreateWithTracks: (name: string, tracks: Track[]) => boolean | Promise<boolean>;
+  /** Which groups show expanded, remembered between pickers. */
+  groups: Record<PlaylistGroup, boolean>;
+  onToggleGroup: (group: PlaylistGroup, expanded: boolean) => void;
 };
 
 export type TrackCollectionAction = {
@@ -137,7 +141,8 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
             {([undefined, "spotify", "qobuz", "tidal"] as const).map(provider => {
               const playlists = playlistOptions.playlists.filter(playlist => playlist.provider === provider);
               if (!playlists.length) return null;
-              return <details className="playlistMenuGroup playlistDropdown" key={provider ?? "ambra"} open>
+              return <details className="playlistMenuGroup playlistDropdown" key={provider ?? "ambra"}
+                open={playlistOptions.groups[provider ?? "ambra"]} onToggle={event => playlistOptions.onToggleGroup(provider ?? "ambra", event.currentTarget.open)}>
                 <summary><DropdownChevron /><ProviderIcon provider={provider ?? "local"} label={provider ? undefined : "AMBRA"} /></summary>
                 {playlists.map(playlist => {
               const added = collection

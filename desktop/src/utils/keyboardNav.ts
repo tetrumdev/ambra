@@ -210,7 +210,9 @@ function clearCursorMark() {
 
 /** The pointer takes over: clicking an item moves the cursor there, without showing it. */
 export function installPointerCursor() {
+  let pressed: EventTarget | null = null;
   const onPointerDown = (event: PointerEvent) => {
+    pressed = event.target;
     showKeyboardCursor(false);
     const item = event.target instanceof Element ? event.target.closest<HTMLElement>(NAV_ITEMS) : null;
     if (!item) return;
@@ -222,6 +224,17 @@ export function installPointerCursor() {
   const onPointerMove = (event: PointerEvent) => {
     if (event.movementX || event.movementY) showKeyboardCursor(false);
   };
+  // WebKit leaves `:hover` stuck on the element a press is released over when the press began
+  // on another, until the pointer enters it again. Turning pointer events off for a frame makes
+  // it test what's under the pointer afresh.
+  const onPointerUp = (event: PointerEvent) => {
+    if (event.pointerType !== "mouse" || event.target === pressed) return;
+    requestAnimationFrame(() => {
+      const root = document.documentElement;
+      root.style.pointerEvents = "none";
+      requestAnimationFrame(() => { root.style.pointerEvents = ""; });
+    });
+  };
   const onKeyDown = (event: KeyboardEvent) => {
     // Letters typed into a field aren't shortcuts, even when they share a key with one.
     if (isTypingTarget(event.target) && !event.metaKey && !event.ctrlKey && !event.altKey) return;
@@ -229,8 +242,10 @@ export function installPointerCursor() {
   };
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointermove", onPointerMove, true);
+  window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("keydown", onKeyDown, true);
   return () => {
+    window.removeEventListener("pointerup", onPointerUp, true);
     window.removeEventListener("pointerdown", onPointerDown, true);
     window.removeEventListener("pointermove", onPointerMove, true);
     window.removeEventListener("keydown", onKeyDown, true);

@@ -32,7 +32,7 @@ export async function servicePlaylistContents(provider: StreamingProvider, id: s
   return { ...result, tracks: result.tracks.map(playableTrack) };
 }
 
-export async function changeServicePlaylist(provider: StreamingProvider, id: string, change: { action: "add"; track: Track } | { action: "remove"; trackIds: string[]; revision: string } | { action: "rename"; name: string }): Promise<void> {
+export async function changeServicePlaylist(provider: StreamingProvider, id: string, change: { action: "add"; track: Track } | { action: "remove"; trackIds: string[]; revision: string } | { action: "reorder"; trackIds: string[]; revision: string } | { action: "rename"; name: string }): Promise<void> {
   await request(provider, id, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(change) });
 }
 

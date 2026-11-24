@@ -1,5 +1,6 @@
 import { useEffect, useRef, type RefObject } from "react";
-import { invoke, isTauri } from "@tauri-apps/api/core";
+import { isTauri } from "@tauri-apps/api/core";
+import { haptic } from "../utils/haptics";
 import { listen } from "@tauri-apps/api/event";
 import { reducedMotion } from "../utils/reducedMotion";
 import { enterNextViewFrom } from "../utils/viewMotion";
@@ -42,7 +43,6 @@ const RELEASE_MS = 260;
 const MAC = isTauri() && navigator.userAgent.includes("Mac");
 
 const resist = (progress: number, max: number, k: number) => Math.sign(progress) * max * Math.tanh(k * Math.abs(progress));
-const haptic = () => { if (MAC) void invoke("trackpad_haptic").catch(() => {}); };
 
 function step(spring: Spring, target: number, { stiffness, damping }: typeof ARROW_SPRING, dt: number) {
   spring.v += ((target - spring.x) * stiffness - spring.v * damping) * dt;
@@ -92,7 +92,7 @@ export function NavigationSwipe({ canNavigate, navigate, contextKey, screenRef }
       if (!gesture || gesture.ready === ready) return;
       gesture.ready = ready;
       if (indicatorRef.current) indicatorRef.current.dataset.ready = String(ready);
-      haptic();
+      haptic("levelChange");
     }
 
     function render() {

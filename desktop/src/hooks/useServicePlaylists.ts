@@ -270,19 +270,25 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     return [...byId.values()];
   }, [contents]);
 
-  async function change(id: string, track?: Track, trackIds?: string[]): Promise<boolean> {
+  async function change(id: string, request: { action: "add"; track: Track } | { action: "remove" | "reorder"; trackIds: string[] }): Promise<boolean> {
     const playlist = playlists.find(item => item.id === id);
     if (!playlist?.provider || !playlist.remoteId || !playlist.editable || mutations.current.has(id)) return false;
     mutations.current.add(id);
     setBusy(new Set(mutations.current));
     setError(null);
     try {
-      if (track) await changeServicePlaylist(playlist.provider, playlist.remoteId, { action: "add", track });
+      if (request.action === "add") await changeServicePlaylist(playlist.provider, playlist.remoteId, request);
       else {
         const result = currentContents.current[id];
-        if (!result) throw new Error("Load the playlist before removing tracks.");
-        const ids = result.tracks.filter(track => trackIds?.includes(track.globalId)).map(track => track.providerTrackId);
-        await changeServicePlaylist(playlist.provider, playlist.remoteId, { action: "remove", trackIds: ids, revision: result.revision });
+        if (!result) throw new Error("Load the playlist before changing its songs.");
+        const byId = new Map(result.tracks.map(track => [track.globalId, track]));
+        const tracks = request.trackIds.flatMap(trackId => byId.get(trackId) ?? []);
+        if (request.action === "reorder") {
+          // The new order shows at once; the reload after the change confirms it.
+          currentContents.current = { ...currentContents.current, [id]: { ...result, tracks } };
+          setContents(currentContents.current);
+        }
+        await changeServicePlaylist(playlist.provider, playlist.remoteId, { action: request.action, trackIds: tracks.map(track => track.providerTrackId), revision: result.revision });
       }
       await load(playlist, "force");
       return true;
@@ -331,5 +337,5 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     }
   }
 
-  return { groups, playlists, tracks, contents, loading, busy, errors, error, refresh, load, rename: (id: string, name: string) => edit(id, name), deletePlaylist: (id: string) => edit(id), addTrack: (id: string, track: Track) => change(id, track), removeTracks: (id: string, ids: string[]) => change(id, undefined, ids) };
+  return { groups, playlists, tracks, contents, loading, busy, errors, error, refresh, load, rename: (id: string, name: string) => edit(id, name), deletePlaylist: (id: string) => edit(id), addTrack: (id: string, track: Track) => change(id, { action: "add", track }), removeTracks: (id: string, trackIds: string[]) => change(id, { action: "remove", trackIds }), reorderTracks: (id: string, trackIds: string[]) => change(id, { action: "reorder", trackIds }) };
 }

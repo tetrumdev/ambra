@@ -1,5 +1,5 @@
 use super::*;
-use crate::playlists::{PlaylistContents, PlaylistEntry, ServicePlaylist};
+use crate::playlists::{PlaylistContents, PlaylistEntry, PlaylistMove, ServicePlaylist};
 use serde_json::Value;
 
 impl TidalProvider {
@@ -155,6 +155,7 @@ impl TidalProvider {
                     entries.push(PlaylistEntry {
                         id: (offset + index).to_string(),
                         track_id: id.to_string(),
+                        position: offset + index,
                     });
                 }
             }
@@ -258,6 +259,45 @@ impl TidalProvider {
             Some(revision),
         )
         .await?;
+        Ok(())
+    }
+}
+
+impl TidalProvider {
+    pub async fn move_playlist_tracks(
+        &self,
+        id: &str,
+        moves: &[PlaylistMove],
+        revision: &str,
+    ) -> ProviderResult<()> {
+        let mut revision = revision.to_owned();
+        for (index, step) in moves.iter().enumerate() {
+            // Every move changes the playlist's revision.
+            if index > 0 {
+                let (_, etag) = self
+                    .v1_api(
+                        reqwest::Method::GET,
+                        &format!("playlists/{id}/items?limit=1&offset=0"),
+                        &[],
+                        None,
+                    )
+                    .await?;
+                revision =
+                    etag.ok_or_else(|| io::Error::other("Tidal playlist has no revision"))?;
+            }
+            // shortcut: a long block lists every index in the URL; batch it if Tidal rejects long URLs.
+            let indices = (step.from..step.from + step.length)
+                .map(|index| index.to_string())
+                .collect::<Vec<_>>()
+                .join(",");
+            self.v1_api(
+                reqwest::Method::POST,
+                &format!("playlists/{id}/items/{indices}"),
+                &[("toIndex", step.to.to_string())],
+                Some(&revision),
+            )
+            .await?;
+        }
         Ok(())
     }
 }

@@ -1,14 +1,17 @@
 import "./SettingsView.css";
-export type SettingsTab = "general" | "outputs" | "dsp" | "services" | "server" | "local" | "keyboard";
+export type SettingsTab = "general" | "appearance" | "lyrics" | "outputs" | "dsp" | "services" | "server" | "local" | "keyboard" | "about";
 
 const tabs: Array<{ id: SettingsTab; name: string }> = [
   { id: "general", name: "General" },
+  { id: "appearance", name: "Appearance" },
+  { id: "lyrics", name: "Lyrics" },
   { id: "outputs", name: "Outputs" },
   { id: "dsp", name: "DSP" },
   { id: "services", name: "Services" },
   { id: "server", name: "Server" },
   { id: "local", name: "Local" },
   { id: "keyboard", name: "Keyboard" },
+  { id: "about", name: "About" },
 ];
 
 export function SettingsSidebar({ tab, onSelect, onBack }: { tab: SettingsTab; onSelect: (tab: SettingsTab) => void; onBack: () => void }) {

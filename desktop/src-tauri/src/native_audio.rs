@@ -657,6 +657,7 @@ struct PlaybackEngine<O: AudioOutput> {
     position_base: f64,
     rendered_frames: u64,
     current_source: Option<String>,
+    unheard_handoff: Option<UnheardHandoff>,
     rendering: bool,
     selected_device_id: Option<String>,
     exclusive_mode: bool,
@@ -682,6 +683,31 @@ struct PlaybackEngine<O: AudioOutput> {
     /// The app's own player, which keeps the settings and tells the app's screens what it plays.
     /// A spare player for another output (`spawn_satellite`) does neither.
     persist: bool,
+}
+
+/// The next song after a gapless handoff, before it is heard: the device still holds the
+/// previous song's last frames, so the new one is published only once those have played.
+struct UnheardHandoff {
+    source: String,
+    audio_quality: AudioQuality,
+    duration: f64,
+    /// Where the previous song ended, so its final moments still count up to it.
+    previous_end: f64,
+}
+
+fn publish_handoff(status: &Arc<Mutex<PlaybackStatus>>, event_app: Option<&AppHandle>, handoff: UnheardHandoff) {
+    let UnheardHandoff { source, audio_quality, duration, .. } = handoff;
+    update_status(status, |status| {
+        status.current_source = Some(source.clone());
+        status.current_time = 0.0;
+        status.audio_quality = Some(audio_quality);
+        status.duration = duration;
+        status.ended = false;
+        status.error = None;
+    });
+    if let Some(app) = event_app {
+        let _ = app.emit(SOURCE_CHANGED_EVENT, source);
+    }
 }
 
 struct QueuedSource {
@@ -839,6 +865,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             position_base: 0.0,
             rendered_frames: 0,
             current_source: None,
+            unheard_handoff: None,
             rendering: false,
             selected_device_id: None,
             exclusive_mode: false,
@@ -1593,6 +1620,7 @@ impl<O: AudioOutput> PlaybackEngine<O> {
         self.position_base = position_seconds;
         self.rendered_frames = 0;
         self.current_source = Some(source.clone());
+        self.unheard_handoff = None;
         self.rendering = false;
         if !autoplay {
             // Restoring a paused session needs only its source and position. Providers and
@@ -1763,6 +1791,10 @@ impl<O: AudioOutput> PlaybackEngine<O> {
     }
 
     fn seek(&mut self, position_seconds: f64) -> Result<(), String> {
+        // A seek moves within the song now loaded, so a handoff still being heard is done.
+        if let Some(handoff) = self.unheard_handoff.take() {
+            publish_handoff(&self.status, self.event_app.as_ref().filter(|_| self.persist), handoff);
+        }
         // Held for a synced start: the seek prepares to play from there.
         if self.sync.as_ref().is_some_and(|sync| sync.anchor.is_none()) && self.current_source.is_some() {
             self.desired_playing = true;
@@ -2105,8 +2137,18 @@ impl<O: AudioOutput> PlaybackEngine<O> {
                 realign = error.abs() > sync::REALIGN_ABOVE;
                 sync_error_ms = sync.trim.error().map(|error| error * 1000.0);
             }
+            // After a gapless handoff the previous song's queued frames play first; it stays the
+            // song shown, counting up to its end, until the next one is heard.
+            let previous_time = match self.unheard_handoff.as_ref() {
+                Some(handoff) if queued_frames > self.rendered_frames => Some((handoff.previous_end
+                    - (queued_frames - self.rendered_frames) as f64 / f64::from(spec.sample_rate)).max(0.0)),
+                _ => None,
+            };
+            if previous_time.is_none() && let Some(handoff) = self.unheard_handoff.take() {
+                publish_handoff(&self.status, self.event_app.as_ref().filter(|_| self.persist), handoff);
+            }
             update_status(&self.status, |status| {
-                status.current_time = current_time;
+                status.current_time = previous_time.unwrap_or(current_time);
                 if sync_error_ms.is_some() {
                     status.sync_error_ms = sync_error_ms;
                 }
@@ -2239,16 +2281,33 @@ impl<O: AudioOutput> PlaybackEngine<O> {
             self.open_output(next_spec)?;
         }
 
+        // What the device still has to play of the song that ended, unless the output was reset.
+        let previous_end = self.spec.map_or(0.0, |spec| self.position_base + self.rendered_frames as f64 / f64::from(spec.sample_rate));
+        let previous_queued = match self.output.as_mut() {
+            Some(output) if !format_changed => output.queued_frames()?,
+            _ => 0,
+        };
         let audio_quality = self.install_prepared(prepared)?;
         self.current_source = Some(source.clone());
         self.position_base = 0.0;
         self.rendered_frames = 0;
+        self.unheard_handoff = None;
         let event_source = source.clone();
         // A gapless handoff leaves the device running. Publishing a paused
         // snapshot here makes the new track appear stopped even though audio
         // is still queued. A reopened stream is buffering, not user-paused,
         // even when its configured resync delay is zero.
         let is_playing = self.desired_playing && self.rendering && !self.resync.is_active();
+        if previous_queued > 0 {
+            // Still playing the previous song's last frames: the new one waits until it's heard.
+            update_status(&self.status, |status| {
+                status.is_playing = is_playing;
+                status.buffering = self.desired_playing && !is_playing;
+            });
+            self.unheard_handoff = Some(UnheardHandoff { source, audio_quality, duration, previous_end });
+            self.publish_sync();
+            return Ok(());
+        }
         update_status(&self.status, |status| {
             status.current_source = Some(source);
             status.current_time = 0.0;

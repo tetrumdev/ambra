@@ -63,8 +63,9 @@
     box-shadow: 0 4px 16px rgb(var(--rim-tint) / 0.3), 0 18px 60px rgb(var(--rim-tint) / 0.42);
 }
 
+/* Wide and starting just inside the cover (negative spread), so it never hugs the rim as a band. */
 .coverGlow[data-tone="halo"]::before {
-    box-shadow: 0 0 16px rgb(var(--rim-tint) / 0.1), 0 0 60px rgb(var(--rim-tint) / 0.08);
+    box-shadow: 0 0 48px -8px rgb(var(--rim-tint) / 0.2), 0 6px 100px -12px rgb(var(--rim-tint) / 0.16);
 }
 
 /* The logo is black on black: no glow, so it and the background read as one image. */

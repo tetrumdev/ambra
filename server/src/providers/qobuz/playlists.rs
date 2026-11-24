@@ -1,5 +1,5 @@
 use super::*;
-use crate::playlists::{PlaylistContents, PlaylistEntry, ServicePlaylist, revision};
+use crate::playlists::{PlaylistContents, PlaylistEntry, PlaylistMove, ServicePlaylist, revision};
 use serde_json::Value;
 
 impl QobuzProvider {
@@ -85,6 +85,7 @@ impl QobuzProvider {
                         .or_insert(metadata);
                 }
                 entries.push(PlaylistEntry {
+                    position: entries.len(),
                     id: item["playlist_track_id"]
                         .as_u64()
                         .ok_or_else(|| io::Error::other("Qobuz playlist entry has no ID"))?
@@ -172,6 +173,32 @@ impl QobuzProvider {
                 &[("playlist_id", id.into()), ("playlist_track_ids", ids)],
             )
             .await?;
+        Ok(())
+    }
+}
+
+impl QobuzProvider {
+    pub async fn move_playlist_tracks(
+        &self,
+        id: &str,
+        moves: &[PlaylistMove],
+        _revision: &str,
+    ) -> ProviderResult<()> {
+        for step in moves {
+            if step.entry_ids.len() != step.length {
+                return Err(io::Error::other("Qobuz playlist entry has no ID").into());
+            }
+            self.client
+                .playlist_api(
+                    "updateTracksPosition",
+                    &[
+                        ("playlist_id", id.into()),
+                        ("playlist_track_ids", step.entry_ids.join(",")),
+                        ("insert_before", step.to.to_string()),
+                    ],
+                )
+                .await?;
+        }
         Ok(())
     }
 }

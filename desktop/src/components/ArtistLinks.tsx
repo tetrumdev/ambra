@@ -17,7 +17,7 @@ export function ArtistLinks({
     <>
       {artists.map((artist, index) => (
         <Fragment key={artist ? `${artist.providerId}:${artist.name}` : index}>
-          {index > 0 && ", "}
+          {index > 0 && <span className="artistSeparator">, </span>}
           <button
             type="button"
             className={className}

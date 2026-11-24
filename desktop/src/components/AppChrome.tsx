@@ -30,12 +30,10 @@ export function AppChrome({
   const canDragWindow = canUseWindowDragRegion(desktopPlatform(), isFullscreen);
   const isPlayerScreen =
     currentScreen === "bigscreen" || currentScreen === "lyrics";
-  const lyricsUnavailable =
-    lyricsAvailability === "none"
-      ? "No lyrics for this song"
-      : lyricsAvailability === "unsynced"
-        ? "No synced lyrics for this song"
-        : undefined;
+  const lyricsUnavailable = lyricsAvailability === "none" ? "No lyrics for this song" : undefined;
+  const lyricsTooltip = lyricsUnavailable
+    ?? (lyricsAvailability === "unsynced" ? "No synced lyrics for this song"
+      : lyricsAvailability === "chosenNone" ? "No lyrics from the chosen source" : undefined);
   return (
     <>
       {(currentScreen === "home" ||
@@ -81,7 +79,7 @@ export function AppChrome({
                     view.screen === "lyrics" && !!lyricsUnavailable
                   }
                   data-tooltip={
-                    view.screen === "lyrics" ? lyricsUnavailable : undefined
+                    view.screen === "lyrics" ? lyricsTooltip : undefined
                   }
                   onClick={() => onSelectPlayerView(view.screen)}
                 >

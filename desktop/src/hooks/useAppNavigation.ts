@@ -199,7 +199,8 @@ export function useAppNavigation({
     // Over a resting player the queue is out of sight, so the key brings it and the controls back rather than closing it.
     const resting = isPlayerView && document.documentElement.dataset.bigscreenIdle === "true";
     if (resting) window.dispatchEvent(new Event(WAKE_PLAYER_EVENT));
-    if (sidebarView && !resting) closePlaybackSidebar();
+    // Over the lyrics the key switches the sidebar to the queue; only an open queue closes.
+    if (sidebarView === "queue" && !resting) closePlaybackSidebar();
     else setPlaybackSidebarView("queue");
   });
   // The player replaces Settings.

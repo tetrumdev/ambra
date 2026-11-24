@@ -1,3 +1,4 @@
+import { COLOR_TRANSITION_MS, easedProgress } from "../utils/swirlShader";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { motion } from "../utils/motion";
 import {
@@ -101,11 +102,11 @@ export function AlbumArtwork({ track, active, layout = "center", resting = false
       const from = rim.current;
       const to = coverRim(palette);
       if (reducedMotion()) return paint(to);
-      // Masks don't transition in CSS, so the shift between covers is eased here, in step with the cover's.
+      // Masks don't transition in CSS, so the shift between covers is eased here, in step with the swirl's.
       const start = performance.now();
       const step = (now: number) => {
-        const progress = Math.min(1, (now - start) / 600);
-        const eased = progress * progress * (3 - 2 * progress);
+        const progress = Math.min(1, (now - start) / COLOR_TRANSITION_MS);
+        const eased = easedProgress(progress);
         const mix = <T extends number[]>(a: T, b: T) => a.map((value, index) => value + (b[index] - value) * eased) as T;
         paint({
           shadow: mix(from.shadow, to.shadow),

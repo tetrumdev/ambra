@@ -1,6 +1,6 @@
 import "./Sidebar.css";
 import { ProviderIcon } from "./ProviderIcon";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import type { Playlist } from "../types/music.ts";
 import { PlaylistActions } from "./PlaylistActions";
 import type { LibrarySection } from "./LibraryView";
@@ -15,6 +15,49 @@ import type { StreamingProvider } from "../api/server";
 import { matchesShortcut } from "../utils/shortcuts";
 import { moveSidebar } from "../utils/keyboardNav";
 import { useStableCallback } from "../hooks/useStableCallback";
+import { useTrackReorder } from "../hooks/useTrackReorder";
+
+const noop = () => {};
+
+type PlaylistRowsProps = {
+  label: string;
+  playlists: Playlist[];
+  activePlaylistId: string | null;
+  onSelectPlaylist: (playlistId: string) => void;
+  /** Absent while filtering, since a partial list can't say where hidden playlists go. */
+  onReorder?: (ids: string[]) => void;
+  scrollRef: RefObject<HTMLElement | null>;
+  actions: (playlist: Playlist) => ReactNode;
+  children?: ReactNode;
+};
+
+/** A group's playlists; dragging a name moves it instead of opening it. */
+function PlaylistRows({ label, playlists, activePlaylistId, onSelectPlaylist, onReorder, scrollRef, actions, children }: PlaylistRowsProps) {
+  const ids = useMemo(() => playlists.map(playlist => playlist.id), [playlists]);
+  const { draggedTrackId, dropTarget, suppressClick, onPointerDown } = useTrackReorder(ids, onReorder, noop, scrollRef);
+  return <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={label}>
+    {playlists.map((playlist, index) => (
+      <div key={playlist.id} className="sidebarPlaylistRow" data-track-id={playlist.id}
+        data-dragging={draggedTrackId === playlist.id ? "true" : undefined}
+        data-drop-position={dropTarget?.trackId === playlist.id ? dropTarget.position : undefined}
+        onPointerDown={event => onPointerDown(event, index)}>
+        <button
+          type="button"
+          className="sidebarBtn sidebarLibraryButton sidebarPlaylistName"
+          data-drag-handle=""
+          data-tooltip={playlist.name}
+          data-tooltip-overflow=""
+          onClick={() => { if (!suppressClick.current) onSelectPlaylist(playlist.id); }}
+          aria-current={activePlaylistId === playlist.id ? "page" : undefined}
+        >
+          {playlist.name}
+        </button>
+        {actions(playlist)}
+      </div>
+    ))}
+    {children}
+  </nav>;
+}
 
 type SidebarProps = {
   onOpenHome: () => void;
@@ -34,6 +77,7 @@ type SidebarProps = {
   servicePlaylistVisibility: Record<StreamingProvider, boolean>;
   playlistGroups: Record<PlaylistGroup, boolean>;
   onTogglePlaylistGroup: (group: PlaylistGroup, expanded: boolean) => void;
+  onReorderPlaylists: (group: PlaylistGroup, ids: string[]) => void;
 };
 
 export function Sidebar({
@@ -54,12 +98,14 @@ export function Sidebar({
   servicePlaylistVisibility,
   playlistGroups,
   onTogglePlaylistGroup,
+  onReorderPlaylists,
 }: SidebarProps) {
   const [isCreatingPlaylist, setIsCreatingPlaylist] = useState(false);
   const [newPlaylistName, setNewPlaylistName] = useState("");
   const [createError, setCreateError] = useState(false);
   const createDialog = useRef<HTMLDialogElement>(null);
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const filterInput = useRef<HTMLInputElement>(null);
   // Narrows the sidebar to the playlists and services matching it; null while closed.
   const [filter, setFilter] = useState<string | null>(null);
@@ -131,7 +177,7 @@ export function Sidebar({
   return (
     <>
       <div id="sidebarMain" ref={sidebarRef} onKeyDown={handleSidebarKeyDown}>
-        <div id="libraryContainer">
+        <div id="libraryContainer" ref={scrollRef}>
           {filter !== null && <input
             ref={filterInput}
             className="sidebarFilterInput"
@@ -181,30 +227,14 @@ export function Sidebar({
             {ambraPlaylists.length > 0 && <details className="sidebarPlaylistGroup playlistDropdown" open={query ? true : playlistGroups.ambra}
               onToggle={event => { if (!query) onTogglePlaylistGroup("ambra", event.currentTarget.open); }}>
               <summary onClick={slideDetails}><DropdownChevron />AMBRA ({playlists.length})</summary>
-              <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label="AMBRA playlists">
-            {ambraPlaylists.map((playlist) => (
-              <div key={playlist.id} className="sidebarPlaylistRow">
-                <button
-                  type="button"
-                  className="sidebarBtn sidebarLibraryButton sidebarPlaylistName"
-                  data-tooltip={playlist.name}
-                  data-tooltip-overflow=""
-                  onClick={() => onSelectPlaylist(playlist.id)}
-                  aria-current={
-                    activePlaylistId === playlist.id ? "page" : undefined
-                  }
-                >
-                  {playlist.name}
-                </button>
-                <PlaylistActions
+              <PlaylistRows label="AMBRA playlists" playlists={ambraPlaylists} activePlaylistId={activePlaylistId} onSelectPlaylist={onSelectPlaylist}
+                onReorder={query ? undefined : ids => onReorderPlaylists("ambra", ids)} scrollRef={scrollRef}
+                actions={playlist => <PlaylistActions
                   playlist={playlist}
                   onRename={onRenamePlaylist}
                   onDelete={onDeletePlaylist}
                   actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]}
-                />
-              </div>
-            ))}
-              </nav>
+                />} />
             </details>}
             {(["spotify", "qobuz", "tidal"] as const).map(provider => {
               const group = serviceGroups.find(group => group.provider === provider);
@@ -214,13 +244,11 @@ export function Sidebar({
               return <details className="sidebarPlaylistGroup playlistDropdown" key={provider} open={query ? true : playlistGroups[provider]}
                 onToggle={event => { if (!query) onTogglePlaylistGroup(provider, event.currentTarget.open); }}>
                 <summary onClick={slideDetails}><DropdownChevron /><ProviderIcon provider={provider} /> ({group.playlists.length})</summary>
-                <nav className="sidebarLibrarySections sidebarPlaylistItems" aria-label={`${musicProviderName(provider)} playlists`}>
-                {shown.map(playlist => <div key={playlist.id} className="sidebarPlaylistRow">
-                  <button type="button" className="sidebarBtn sidebarLibraryButton sidebarPlaylistName" data-tooltip={playlist.name} data-tooltip-overflow="" onClick={() => onSelectPlaylist(playlist.id)} aria-current={activePlaylistId === playlist.id ? "page" : undefined}>{playlist.name}</button>
-                  <PlaylistActions playlist={playlist} onRename={playlist.editable ? onRenamePlaylist : undefined} onDelete={playlist.editable ? onDeletePlaylist : undefined} actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]} />
-                </div>)}
-                {group.error && <p className="sidebarSyncMessage" role="alert">{group.error}</p>}
-                </nav>
+                <PlaylistRows label={`${musicProviderName(provider)} playlists`} playlists={shown} activePlaylistId={activePlaylistId} onSelectPlaylist={onSelectPlaylist}
+                  onReorder={query ? undefined : ids => onReorderPlaylists(provider, ids)} scrollRef={scrollRef}
+                  actions={playlist => <PlaylistActions playlist={playlist} onRename={playlist.editable ? onRenamePlaylist : undefined} onDelete={playlist.editable ? onDeletePlaylist : undefined} actions={[{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: () => onDuplicatePlaylist(playlist) }]} />}>
+                  {group.error && <p className="sidebarSyncMessage" role="alert">{group.error}</p>}
+                </PlaylistRows>
               </details>;
             })}
           </div>

@@ -53,6 +53,10 @@ export type AppPreferences = {
     /** The page behind the player, restored with the last open screen. */
     navigation?: NavigationPreferences;
     playlistGroups: Record<PlaylistGroup, boolean>;
+    /** Which groups the Add to Playlist picker shows expanded. */
+    playlistPickerGroups: Record<PlaylistGroup, boolean>;
+    /** Playlist IDs in the order the user dragged them to; unlisted ones follow. */
+    playlistOrder: Record<PlaylistGroup, string[]>;
     servicePlaylistVisibility: Record<StreamingProvider, boolean>;
     /** Optional columns shown in every song list. */
     trackColumns: OptionalColumnKey[];
@@ -92,6 +96,8 @@ export const defaultPreferences: AppPreferences = {
     lyricsOffsetMs: 0,
     playerView: "bigscreen",
     playlistGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
+    playlistPickerGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
+    playlistOrder: { ambra: [], spotify: [], qobuz: [], tidal: [] },
     servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
     trackColumns: [],
     hiddenTrackColumns: [],
@@ -154,9 +160,8 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
     entity,
     playlistId: typeof value.playlistId === "string" ? value.playlistId : null,
     section: value.section === "artists" || value.section === "albums" || value.section === "tracks" ? value.section : "overview",
-    settingsTab: value.settingsTab === "outputs" || value.settingsTab === "dsp" || value.settingsTab === "services"
-      || value.settingsTab === "server" || value.settingsTab === "local" || value.settingsTab === "keyboard"
-      ? value.settingsTab : "general",
+    settingsTab: ["appearance", "lyrics", "outputs", "dsp", "services", "server", "local", "keyboard", "about"].includes(value.settingsTab as string)
+      ? value.settingsTab as SettingsTab : "general",
     sidebar: {
       library: isRecord(value.sidebar) && isSidebarView(value.sidebar.library) ? value.sidebar.library : null,
       player: isRecord(value.sidebar) && isSidebarView(value.sidebar.player) ? value.sidebar.player : null,
@@ -207,6 +212,19 @@ function migratePreferences(value: unknown): AppPreferences {
       if (typeof ui.playlistGroups[group] === "boolean") playlistGroups[group] = ui.playlistGroups[group];
     }
   }
+  const playlistPickerGroups = { ...defaultPreferences.ui.playlistPickerGroups };
+  if (isRecord(ui.playlistPickerGroups)) {
+    for (const group of ["ambra", "spotify", "qobuz", "tidal"] as const) {
+      if (typeof ui.playlistPickerGroups[group] === "boolean") playlistPickerGroups[group] = ui.playlistPickerGroups[group];
+    }
+  }
+  const playlistOrder: Record<PlaylistGroup, string[]> = { ambra: [], spotify: [], qobuz: [], tidal: [] };
+  if (isRecord(ui.playlistOrder)) {
+    for (const group of ["ambra", "spotify", "qobuz", "tidal"] as const) {
+      const ids = ui.playlistOrder[group];
+      if (Array.isArray(ids)) playlistOrder[group] = ids.filter((id): id is string => typeof id === "string").slice(0, 10_000);
+    }
+  }
   const servicePlaylistVisibility = { ...defaultPreferences.ui.servicePlaylistVisibility };
   if (isRecord(ui.servicePlaylistVisibility)) {
     for (const provider of ["spotify", "qobuz", "tidal"] as const) {
@@ -230,7 +248,7 @@ function migratePreferences(value: unknown): AppPreferences {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -249,7 +267,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -284,6 +302,8 @@ function migratePreferences(value: unknown): AppPreferences {
           playerView,
           navigation,
           playlistGroups,
+          playlistPickerGroups,
+          playlistOrder,
           servicePlaylistVisibility,
           trackColumns,
           hiddenTrackColumns,
@@ -326,6 +346,8 @@ function migratePreferences(value: unknown): AppPreferences {
           playerView,
           navigation,
           playlistGroups,
+          playlistPickerGroups,
+          playlistOrder,
           servicePlaylistVisibility,
           trackColumns,
           hiddenTrackColumns,

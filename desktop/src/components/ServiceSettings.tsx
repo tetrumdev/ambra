@@ -6,10 +6,17 @@ import { signInService } from "../utils/serviceSignIn";
 import { markServiceConnected, useServiceStatus } from "../hooks/useServiceAvailability";
 import { useClientConnection } from "../hooks/ClientConnectionContext";
 import { SpotifyPlaybackSettings } from "./SpotifyPlaybackSettings";
+import { SettingRow, Toggle } from "./settings/SettingsControls";
 
-type Props = { active: boolean; onServiceConnected: () => void };
+type Props = {
+  active: boolean;
+  onServiceConnected: () => void;
+  /** Whether each service's playlists show in the library. */
+  playlistVisibility: Record<StreamingProvider, boolean>;
+  onPlaylistVisibilityChange: (provider: StreamingProvider, visible: boolean) => void;
+};
 /** Browser sign-in runs on this computer; provider credentials remain on the independent server. */
-export function ServiceSettings({ active, onServiceConnected }: Props) {
+export function ServiceSettings({ active, onServiceConnected, playlistVisibility, onPlaylistVisibilityChange }: Props) {
   const { connected } = useClientConnection();
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
   const callback = useRef(onServiceConnected);
@@ -59,6 +66,10 @@ export function ServiceSettings({ active, onServiceConnected }: Props) {
         onClick={() => void signIn(provider)} aria-label={`Sign in to ${provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"}`}>
         {status?.[provider] ? "Connected" : busy === provider ? "Waiting for sign-in…" : "Sign in"}
       </button>
+      <SettingRow label="Show playlists">
+        <Toggle label={`Show ${provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"} playlists`}
+          checked={playlistVisibility[provider]} onChange={visible => onPlaylistVisibilityChange(provider, visible)} />
+      </SettingRow>
     </div>)}
     {busy && <p role="status" className="settingsMuted">Finish signing in in your browser. <button type="button" className="settingsPill" onClick={cancel}>Cancel</button></p>}
     {busy === "tidal" && manualSubmit && <form className="settingsCallbackForm" onSubmit={event => {

@@ -165,7 +165,9 @@ impl Selection {
         provider: Provider,
         mut lyrics: LyricsResponse,
     ) -> Option<LyricsResponse> {
-        if lyrics.has_word_sync {
+        // Providers are asked in priority order (AMLL, lrc.red, LRCLIB), so the first
+        // timed lyrics win, even over finer timing from a provider further down.
+        if lyrics.status == "lyrics" && lyrics.sync != "none" {
             lyrics.failed_providers = self.failed.clone();
             return Some(lyrics);
         }
@@ -181,7 +183,8 @@ impl Selection {
     }
 
     fn finish(self) -> LyricsResponse {
-        // Better timing wins; between equals, AMLL, then lrc.red, then LRCLIB.
+        // No provider had timed lyrics: plain lyrics beat "instrumental"; between equals,
+        // AMLL, then lrc.red, then LRCLIB.
         let mut lyrics = [self.amll, self.red, self.lrclib]
             .into_iter()
             .flatten()

@@ -40,10 +40,18 @@ export const PlayerStage = memo(function PlayerStage({
   // Lyrics are the chosen view, but a song without synced ones shows its cover until one with them comes back.
   const prefersLyrics = (isPlayerView ? screen : preferredView) === "lyrics";
   const lyricsAvailability = useLyricsAvailability(track, prefersLyrics);
+  // A song whose chosen lyrics source has none, or whose lyrics have no timings, shows its cover
+  // when lyrics carry over from another song, but opening lyrics for it still shows them.
+  const [lyricsOpenedFor, setLyricsOpenedFor] = useState<string | null>(null);
+  const selectView = (view: PlayerView) => {
+    if (view === "lyrics" && track) setLyricsOpenedFor(track.globalId);
+    onSelectView(view);
+  };
   // While a song's lyrics are still being looked up, the layout holds where it was.
   const showLyricsRef = useRef(false);
   if (!prefersLyrics) showLyricsRef.current = false;
-  else if (lyricsAvailability !== "pending") showLyricsRef.current = lyricsAvailability === "lyrics";
+  else if (lyricsAvailability !== "pending") showLyricsRef.current = lyricsAvailability === "lyrics"
+    || ((lyricsAvailability === "chosenNone" || lyricsAvailability === "unsynced") && lyricsOpenedFor === track?.globalId);
   const showLyrics = showLyricsRef.current;
   // The lyrics on screen; when a song has none they stay to fade out rather than vanish.
   const lyricsTrackRef = useRef(track);
@@ -154,7 +162,7 @@ export const PlayerStage = memo(function PlayerStage({
         lyricsAvailability={lyricsAvailability}
         isFullscreen={isFullscreen}
         onExit={onExit}
-        onSelectPlayerView={onSelectView}
+        onSelectPlayerView={selectView}
       />
 
       {(track || isPlayerView) && (

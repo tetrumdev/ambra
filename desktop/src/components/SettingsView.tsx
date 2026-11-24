@@ -148,6 +148,16 @@ export function SettingsView({
         </SettingRow>}
       </div>
       <div className="settingsGroup">
+        <h2>Song controls</h2>
+        <SettingRow label="Combined song menu" help="Right-click a song to open its menu instantly. Double-click to play it. A single left-click does nothing.">
+          <Toggle label="Combined song menu" checked={songContextMenu} onChange={songContextMenu => onPreferencesChange({ songContextMenu })} />
+        </SettingRow>
+      </div>
+    </section>
+
+    <section id="settings-panel-appearance" role="region" aria-labelledby="settings-tab-appearance" hidden={tab !== "appearance"}>
+      <header className="settingsPageHeader"><h1 className="settingsTitle">Appearance</h1></header>
+      <div className="settingsGroup">
         <h2>Player</h2>
         <SettingRow label="Song specs" help="The song's format and bitrate, under the progress bar.">
           <Toggle label="Show song specs" checked={showAudioQuality} onChange={showAudioQuality => onPreferencesChange({ showAudioQuality })} />
@@ -158,6 +168,12 @@ export function SettingsView({
         <SettingRow label="Animate swirl" help="Moves the swirl behind the player, whether or not Reduce motion is on.">
           <Toggle label="Animate swirl" checked={animateSwirl} onChange={animateSwirl => onPreferencesChange({ animateSwirl })} />
         </SettingRow>
+      </div>
+    </section>
+
+    <section id="settings-panel-lyrics" role="region" aria-labelledby="settings-tab-lyrics" hidden={tab !== "lyrics"}>
+      <header className="settingsPageHeader"><h1 className="settingsTitle">Lyrics</h1></header>
+      <div className="settingsGroup">
         <SettingRow label="Lyric motion" help="Default follows Reduce motion. Full animates lyrics even with it on; Reduced keeps them still.">
           <Segmented label="Lyric motion" value={lyricMotion} onChange={lyricMotion => onPreferencesChange({ lyricMotion })}
             options={[{ value: "system", label: "Default" }, { value: "full", label: "Full" }, { value: "reduced", label: "Reduced" }]} />
@@ -184,21 +200,6 @@ export function SettingsView({
           </span>
         </SettingRow>
       </div>
-      <div className="settingsGroup">
-        <h2>Song controls</h2>
-        <SettingRow label="Combined song menu" help="Right-click a song to open its menu instantly. Double-click to play it. A single left-click does nothing.">
-          <Toggle label="Combined song menu" checked={songContextMenu} onChange={songContextMenu => onPreferencesChange({ songContextMenu })} />
-        </SettingRow>
-      </div>
-      <PreferredServiceSetting />
-      <div className="settingsGroup">
-        <h2>Sidebar</h2>
-        {(["spotify", "qobuz", "tidal"] as const).map(provider => <SettingRow key={provider} label={`${musicProviderName(provider)} playlists`}>
-          <Toggle label={`Show ${musicProviderName(provider)} playlists`} checked={servicePlaylistVisibility[provider]}
-            onChange={visible => onServicePlaylistVisibilityChange(provider, visible)} />
-        </SettingRow>)}
-      </div>
-      <UpdateSettings />
     </section>
 
     <section id="settings-panel-outputs" role="region" aria-labelledby="settings-tab-outputs" hidden={tab !== "outputs"}>
@@ -222,7 +223,9 @@ export function SettingsView({
     </section>
 
     <section id="settings-panel-services" role="region" aria-labelledby="settings-tab-services" hidden={tab !== "services"}>
-      <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected} />
+      <ServiceSettings active={tab === "services"} onServiceConnected={onServiceConnected}
+        playlistVisibility={servicePlaylistVisibility} onPlaylistVisibilityChange={onServicePlaylistVisibilityChange} />
+      <PreferredServiceSetting />
     </section>
 
     <section id="settings-panel-server" role="region" aria-labelledby="settings-tab-server" hidden={tab !== "server"}>
@@ -235,6 +238,11 @@ export function SettingsView({
 
     <section id="settings-panel-keyboard" role="region" aria-labelledby="settings-tab-keyboard" hidden={tab !== "keyboard"}>
       <KeyboardSettings overrides={shortcuts ?? {}} onChange={shortcuts => onPreferencesChange({ shortcuts })} />
+    </section>
+
+    <section id="settings-panel-about" role="region" aria-labelledby="settings-tab-about" hidden={tab !== "about"}>
+      <header className="settingsPageHeader"><h1 className="settingsTitle">About</h1></header>
+      <UpdateSettings />
     </section>
   </div>;
 }

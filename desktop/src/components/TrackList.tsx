@@ -1,4 +1,5 @@
-import { albumForTrack, type BrowseEntity } from "../utils/browse";
+import { useTrackColumns } from "../hooks/useTrackColumns";
+import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { coreView, subscribeCore, warmCoreTrack } from "../api/core";
@@ -111,6 +112,7 @@ export function TrackList({
 }: TrackListProps) {
   const combinedMenu = useContext(SongContextMenu);
   const connected = useServiceAvailability();
+  const { hidden: hiddenColumns } = useTrackColumns();
   const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
   const nowPlaying = useNowPlaying();
   // A filtered list hides songs, so reordering it can't say where they belong.
@@ -280,8 +282,8 @@ export function TrackList({
     setOpenMenu({
       kind: "collection",
       trackId,
-      // One pixel in, so the menu never covers the column border beside the trigger.
-      x: triggerRect.right - menuWidth - 1,
+      // As far in from the trigger's edge as it sits below it, clear of the column border.
+      x: triggerRect.right - menuWidth - gap,
       y: triggerRect.bottom + gap,
       flipY: triggerRect.top - gap,
     });
@@ -374,6 +376,13 @@ export function TrackList({
               label: "Add to Library",
               icon: "/add.svg",
               onSelect: () => addToLibrary(openMenu.trackId),
+            }] : []),
+            // With its column hidden, the menu is the way to a song's artist or album.
+            ...(onOpenEntity && menuTrack && isTrackAvailable(menuTrack, connected) && hiddenColumns.includes("artist") ? [{
+              label: "Go to Artist", icon: "/artist.svg", onSelect: () => onOpenEntity({ kind: "artist", artist: artistForTrack(menuTrack) }),
+            }] : []),
+            ...(onOpenEntity && menuTrack && isTrackAvailable(menuTrack, connected) && hiddenColumns.includes("album") ? [{
+              label: "Go to Album", icon: "/album.svg", onSelect: () => onOpenEntity({ kind: "album", album: albumForTrack(menuTrack) }),
             }] : []),
             ...(openMenu.kind === "collection" ? [{ label: "Credits", icon: "/credits.svg", onSelect: () => showTrackCredits(menuTrack ?? null) }] : []),
           ]}

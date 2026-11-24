@@ -1,5 +1,5 @@
 use super::*;
-use crate::playlists::{PlaylistContents, PlaylistEntry, ServicePlaylist};
+use crate::playlists::{PlaylistContents, PlaylistEntry, PlaylistMove, ServicePlaylist};
 use base64::{Engine, engine::general_purpose};
 use librespot_protocol::playlist4_external::{self as protocol, SelectedListContent};
 use protobuf::{Message, MessageField};
@@ -96,6 +96,7 @@ impl SpotifyProvider {
                     entries.push(PlaylistEntry {
                         id: (offset + index).to_string(),
                         track_id: id.to_base62()?,
+                        position: offset + index,
                     });
                 }
             }
@@ -276,6 +277,28 @@ impl SpotifyProvider {
                 let mut op = protocol::Op::new();
                 op.set_kind(protocol::op::Kind::REM);
                 op.rem = MessageField::some(removal);
+                op
+            })
+            .collect();
+        self.change_playlist(id, revision, ops).await
+    }
+
+    pub async fn move_playlist_tracks(
+        &self,
+        id: &str,
+        moves: &[PlaylistMove],
+        revision: &str,
+    ) -> ProviderResult<()> {
+        let ops = moves
+            .iter()
+            .map(|step| {
+                let mut movement = protocol::Mov::new();
+                movement.set_from_index(step.from as i32);
+                movement.set_length(step.length as i32);
+                movement.set_to_index(step.to as i32);
+                let mut op = protocol::Op::new();
+                op.set_kind(protocol::op::Kind::MOV);
+                op.mov = MessageField::some(movement);
                 op
             })
             .collect();

@@ -417,3 +417,30 @@
 .sidebarFilterInput::-webkit-search-cancel-button {
     display: none;
 }
+
+.sidebarPlaylistRow[data-dragging="true"] {
+    opacity: 0.4;
+}
+
+.sidebarPlaylistRow[data-drop-position] {
+    position: relative;
+}
+
+.sidebarPlaylistRow[data-drop-position]::before {
+    position: absolute;
+    right: 12px;
+    left: 0;
+    height: 2px;
+    border-radius: 2px;
+    background: white;
+    content: "";
+    pointer-events: none;
+}
+
+.sidebarPlaylistRow[data-drop-position="before"]::before {
+    top: -1px;
+}
+
+.sidebarPlaylistRow[data-drop-position="after"]::before {
+    bottom: -1px;
+}

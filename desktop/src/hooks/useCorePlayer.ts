@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { coreCommand, coreOutputs, coreView, coreViewAge, followCore, subscribeCore, type CoreView } from "../api/core";
 import { serverConnection } from "../api/serverConnection";
-import { createPlaybackClock } from "../utils/playbackClock";
+import { createPlaybackClock, holdLyricsForSkip } from "../utils/playbackClock";
 import { useAudioSettings } from "./AudioSettingsContext";
 import type { AudioDeckController, AudioPlayer } from "./useAudioPlayer";
 import type { QueueController } from "./useQueue";
@@ -236,6 +236,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       if (!next) { queue.next(); return; }
       const pending = { to: serverAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
       skipping.current = pending;
+      const release = holdLyricsForSkip(queue.currentEntry?.track.globalId);
       clock.setRunning(false);
       clock.set(0);
       void invoke<boolean>("shared_output_skip").catch(() => false).then(skipped => {
@@ -244,6 +245,9 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
         // Not ready here: the old song stops while the core moves on.
         if (!skipped) holdForSkip();
         if (!queue.next(!skipped)) skipping.current = null;
+      }).finally(() => {
+        // Let go once the queue's move has rendered, so the old lyrics are already leaving.
+        requestAnimationFrame(release);
       });
       return;
     }

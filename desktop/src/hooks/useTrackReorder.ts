@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { moveTrackId, type DropPosition } from "../utils/trackCollectionOrder";
+import { haptic } from "../utils/haptics";
 
 type DropTarget = { trackId: string; position: DropPosition };
 
@@ -32,7 +33,7 @@ export function useTrackReorder(
     suppressClick.current = false;
     if (!latest.current.reorderTracks || event.button !== 0 || !event.isPrimary || event.pointerType === "touch") return;
     const target = event.target as HTMLElement;
-    if (target.closest("[data-collection-menu-trigger], button:not([data-playback-menu-trigger]), input, select")) return;
+    if (target.closest("[data-collection-menu-trigger], button:not([data-playback-menu-trigger], [data-drag-handle]), input, select")) return;
     const row = event.currentTarget;
     if (row.dataset.selecting) return;
     const container = row.parentElement;
@@ -75,7 +76,15 @@ export function useTrackReorder(
       };
     }
 
+    // Where the drop line sits: after one row and before the next are the same line.
+    function lineOf(target: DropTarget | null) {
+      if (!target) return null;
+      const index = latest.current.trackIds.indexOf(target.trackId);
+      return index < 0 ? `${target.trackId}:${target.position}` : index + (target.position === "after" ? 1 : 0);
+    }
+
     function updateDestination() {
+      const line = lineOf(destination);
       const bounds = viewport();
       const over = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-track-id]");
       destination = null;
@@ -89,6 +98,8 @@ export function useTrackReorder(
         if (rules) destination = rules.resolve(sourceId, destination);
       }
       const next = destination;
+      // A tick each time the line moves past a song.
+      if (next && lineOf(next) !== line) haptic();
       setDropTarget(current => current?.trackId === next?.trackId && current?.position === next?.position ? current : next);
     }
 

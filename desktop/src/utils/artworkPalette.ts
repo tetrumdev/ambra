@@ -1,4 +1,4 @@
-import { luminance, parseColor, separateCollapsedPalette, type Rgb } from "./backgroundPalette";
+import { parseColor, separateCollapsedPalette, type Rgb } from "./backgroundPalette";
 import { SWIRL_SHADE_MIN, SWIRL_SHADE_RANGE } from "./swirlShader";
 
 export type ArtworkPalette = {
@@ -60,10 +60,8 @@ export function swirlPalette(palette: ArtworkPalette): ArtworkPalette {
   return { ...palette, colors: separateCollapsedPalette(palette.colors) };
 }
 
-/** How much of the field's brightness is left at the cover's rim under the full shadow. */
-const SHADOW_RIM = 0.68;
-/** How far the full halo lifts the field at the cover's rim, as a share of the way to white. */
-const HALO_LIFT = 0.15;
+/** OKLab lightness over which a stretch of rim crossfades from halo to shadow, around the field's own. */
+const RIM_CROSSFADE = 0.02;
 
 /**
  * Where each server boundary sample sits around the cover, in degrees clockwise from the top.
@@ -119,10 +117,10 @@ export type CoverRim = {
 };
 
 /**
- * How the cover is lifted off the swirl at each point of its rim (BigscreenArtwork.css). A shadow
- * only lifts a stretch of rim brighter than the darkened field around it; a dark stretch sinks
- * into it, and lighter surroundings show that stretch instead. Whichever leaves more contrast
- * wins locally, crossfading where the rim changes so the two never meet at a hard line.
+ * How the cover is lifted off the swirl at each point of its rim (BigscreenArtwork.css). Each
+ * stretch of rim gets whichever pushes the field away from its own shade: a shadow beside a
+ * stretch lighter than the field, a halo beside a darker one, crossfading where the rim changes
+ * so the two never meet at a hard line. Neither ever brings the field to the cover's shade.
  * A stretch whose color already stands apart from the field, by hue as much as by lightness,
  * needs only a trace of either. Both are tinted with the field's hue, so they read as the field
  * itself darkening or catching the cover's light, not as a grey outline.
@@ -139,14 +137,14 @@ export function coverRim(palette: ArtworkPalette): CoverRim {
   const rim = RIM_SAMPLES.map(({ index }) => (edges
     ? [edges[3 * index], edges[3 * index + 1], edges[3 * index + 2]]
     : [1, 1, 1]) as Rgb);
-  const fieldLuminance = luminance(field);
   // Each sample is a single pixel, so neighbours steady it against noise and stray detail.
   const local = rim.map((color, at) => color.map((channel, c) =>
     (rim[(at + rim.length - 1) % rim.length][c] + 2 * channel + rim[(at + 1) % rim.length][c]) / 4) as Rgb);
   const shares = local.map(color => {
-    const withShadow = luminance(color) - fieldLuminance * SHADOW_RIM;
-    const withHalo = fieldLuminance + (1 - fieldLuminance) * HALO_LIFT - luminance(color);
-    return smoothstep(-0.05, 0.05, withShadow - withHalo);
+    // The glow always pushes the field away from the rim's shade, never toward it: a halo beside
+    // a stretch lighter than the field would lift the field through that shade, and the two
+    // would blend where they cross. So lighter stretches get a shadow, darker ones a halo.
+    return smoothstep(-RIM_CROSSFADE, RIM_CROSSFADE, toOklab(color)[0] - fieldLab[0]);
   });
   const needs = local.map(color => {
     if (!edges) return 1;
@@ -154,12 +152,14 @@ export function coverRim(palette: ArtworkPalette): CoverRim {
     const distance = Math.hypot(lab[0] - fieldLab[0], lab[1] - fieldLab[1], lab[2] - fieldLab[2]);
     return 1 - 0.65 * smoothstep(0.08, 0.3, distance);
   });
-  const [, a, b] = fieldLab;
+  const [fieldLightness, a, b] = fieldLab;
   return {
     shadow: shares.map((share, at) => share * needs[at]),
     halo: shares.map((share, at) => (1 - share) * needs[at]),
-    shadowTint: fromOklab([0.16, a * 0.7, b * 0.7]),
-    haloTint: fromOklab([0.86, a * 0.6, b * 0.6]),
+    // Well below the field even when the field is already dark, so the shadow still deepens it.
+    shadowTint: fromOklab([Math.min(0.16, fieldLightness * 0.4), a * 0.7, b * 0.7]),
+    // A step above the field rather than near-white: over a dark field, white reads as a frame.
+    haloTint: fromOklab([Math.min(0.86, fieldLightness + 0.3), a * 0.6, b * 0.6]),
   };
 }
 

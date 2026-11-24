@@ -127,10 +127,10 @@ export function storedLyricOffset(track: Track, lyrics: TrackLyrics): number | u
   return result.confident ? result.correctionMs : undefined;
 }
 
-// The corrections each song has already announced, so a song only says it was auto-synced once.
+// The songs that have already announced an auto-sync; each says so once, whatever its correction later becomes.
 const noticedKey = "ambra.lyrics-autosync-noticed.v1";
 
-/** Whether this correction is new for the song, in which case it is remembered as announced. */
+/** Whether the song has never announced an auto-sync, in which case it is remembered as announced. */
 export function firstAutoSyncNotice(trackId: string, correctionMs: number): boolean {
   let noticed: Record<string, number> = {};
   try {
@@ -139,7 +139,7 @@ export function firstAutoSyncNotice(trackId: string, correctionMs: number): bool
   } catch {
     // A damaged record only means a notice is shown again.
   }
-  if (noticed[trackId] === correctionMs) return false;
+  if (trackId in noticed) return false;
   // Reinserting keeps the most recently announced tracks at the end.
   delete noticed[trackId];
   noticed[trackId] = correctionMs;

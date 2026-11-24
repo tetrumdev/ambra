@@ -325,7 +325,7 @@ function SidebarTracks({
     const rect = anchor.getBoundingClientRect();
     const keyboard = isKeyboardMenuClick(event);
     setMenu(action === "collection"
-      ? { kind: action, id: entry.id, anchor, x: rect.right - MENU_WIDTH - 1, y: rect.bottom + 4, flipY: rect.top - 4, keyboard }
+      ? { kind: action, id: entry.id, anchor, x: rect.right - MENU_WIDTH - 4, y: rect.bottom + 4, flipY: rect.top - 4, keyboard }
       : { kind: action, id: entry.id, anchor, x: keyboard ? rect.left : event.clientX,
         // Just below the pointer, so it doesn't open already hovering the first action.
         y: keyboard ? rect.bottom : event.clientY + 2,
@@ -401,7 +401,7 @@ function SidebarTracks({
         <button type="button" disabled={!selected.length} onClick={event => {
           const anchor = event.currentTarget;
           const rect = anchor.getBoundingClientRect();
-          setMenu({ kind: "selection", anchor, x: Math.max(8, rect.right - MENU_WIDTH - 1), y: rect.bottom + 4, flipY: rect.top - 4 });
+          setMenu({ kind: "selection", anchor, x: Math.max(8, rect.right - MENU_WIDTH - 4), y: rect.bottom + 4, flipY: rect.top - 4 });
         }}>Add to Playlist</button>
         <button type="button" onClick={selection.clear}>Cancel</button>
       </div>}

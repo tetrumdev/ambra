@@ -996,6 +996,32 @@
     text-decoration: underline;
 }
 
+/* Each artist is its own link, which an ellipsis would drop whole; in a row, only the last name
+   shrinks and is cut at its end. Earlier names stay whole (even a fraction of a pixel would cut
+   them), unless one alone is wider than the column. */
+.artistName.trackDescriptor:has(> .entityLink) {
+    display: flex;
+}
+
+/* Laid out in a row, the cell's own underline would reach every name; each link underlines itself. */
+.trackDescriptor:has(> .entityLink):hover {
+    text-decoration: none;
+}
+
+.artistName.trackDescriptor > .entityLink {
+    flex-shrink: 0;
+}
+
+.artistName.trackDescriptor > .entityLink:last-child {
+    flex-shrink: 1;
+    min-width: 0;
+}
+
+.artistName.trackDescriptor > .artistSeparator {
+    flex-shrink: 0;
+    white-space: pre;
+}
+
 .libraryItem[data-selecting="true"] .trackDescriptor:hover {
     text-decoration: none;
 }

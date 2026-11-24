@@ -3,7 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import type { LyricAnnotation, LyricLine, LyricsSource, TrackLyrics } from "../types/lyrics";
 import { lyricsSources, needsLyricsRetry } from "../types/lyrics";
 import type { Track } from "../types/music";
-import type { PlaybackClock } from "../utils/playbackClock";
+import { useLyricsHeldForSkip, type PlaybackClock } from "../utils/playbackClock";
 import type { LyricMotion } from "../utils/preferences";
 import { cachedLyrics, loadLyrics } from "../utils/lyricsCache";
 import { LARGE_SHIFT_MS, recordSyncSample } from "../utils/lyricsAutoTuning";
@@ -1213,6 +1213,7 @@ export function LyricsView({
   const [attempt, setAttempt] = useState(0);
   // "system" is the stored name for following the app's Reduce motion setting.
   const appReducedMotion = useReducedMotion();
+  const heldForSkip = useLyricsHeldForSkip(track?.globalId);
   const reducedMotion =
     motion === "reduced" || (motion === "system" && appReducedMotion);
 
@@ -1451,8 +1452,8 @@ export function LyricsView({
           <SyncedLyrics
             lyrics={syncedLyrics!}
             clock={clock}
-            playing={playing && shown}
-            frozen={!shown}
+            playing={playing && shown && !heldForSkip}
+            frozen={!shown || heldForSkip}
             reducedMotion={reducedMotion}
             onSeek={onSeek}
             menu={menu}

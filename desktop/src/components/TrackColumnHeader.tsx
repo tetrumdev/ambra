@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { useTrackColumns } from "../hooks/useTrackColumns";
 import { nextTrackSort, type TrackSort } from "../utils/trackCollectionOrder";
 import { isHideableColumn, isOptionalColumn, resizeColumnPair, trackColumns, type ColumnKey, type ColumnWidths } from "../utils/trackColumnWidths";
@@ -240,7 +241,8 @@ function ColumnPicker() {
       aria-haspopup="menu" aria-expanded={open} onClick={toggle}>
       <MenuDotsIcon />
     </button>
-    {position && <div ref={menu} className="columnPickerMenu" role="menu" aria-label="Columns" onKeyDown={moveFocus}
+    {/* On the page itself: a scroller around the list would otherwise place this fixed menu relative to it. */}
+    {position && createPortal(<div ref={menu} className="columnPickerMenu" role="menu" aria-label="Columns" onKeyDown={moveFocus}
       style={{ top: position.top, right: position.right }}>
       <span className="columnPickerHeading" aria-hidden="true">Show columns</span>
       {trackColumns.filter(column => column.key !== "track" && !excluded.includes(column.key)).map(column => {
@@ -255,6 +257,6 @@ function ColumnPicker() {
           <span className="columnPickerCheck" aria-hidden="true" />{column.label}
         </button>;
       })}
-    </div>}
+    </div>, document.body)}
   </div>;
 }

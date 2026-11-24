@@ -77,3 +77,28 @@ export function usePlaybackTime<T = number>(
 ): T {
   return useSyncExternalStore(clock.subscribe, () => select(clock.get()), () => select(clock.get()));
 }
+
+// Mid-skip the clock already describes the next song while the queue still shows the one being
+// left; that song's lyrics hold still until it leaves, instead of scrolling back to its start.
+let skipHold: { song: string } | null = null;
+const skipHoldListeners = new Set<() => void>();
+const notifySkipHold = () => { for (const listener of skipHoldListeners) listener(); };
+
+/** Holds the song's lyrics where they are; the returned function lets them go. */
+export function holdLyricsForSkip(song: string | undefined) {
+  const hold = song ? { song } : null;
+  skipHold = hold;
+  notifySkipHold();
+  return () => {
+    if (!hold || skipHold !== hold) return;
+    skipHold = null;
+    notifySkipHold();
+  };
+}
+
+export function useLyricsHeldForSkip(song: string | undefined) {
+  return useSyncExternalStore(
+    (listener) => { skipHoldListeners.add(listener); return () => { skipHoldListeners.delete(listener); }; },
+    () => song !== undefined && skipHold?.song === song,
+  );
+}

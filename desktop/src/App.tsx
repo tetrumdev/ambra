@@ -48,7 +48,9 @@ import {
   savePreferences,
   isPlayerScreen,
   type AppPreferences,
+  type PlaylistGroup,
 } from "./utils/preferences";
+import { orderPlaylists } from "./utils/playlistOrder";
 import type { GlobalTrackId, Playlist, Track } from "./types/music";
 import { configuredSearchProviders, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
 import {
@@ -114,7 +116,17 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
   );
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
   const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
-  const playlists = useMemo(() => [...playlistStore.playlists, ...servicePlaylistStore.playlists], [playlistStore.playlists, servicePlaylistStore.playlists]);
+  const { playlistOrder } = preferences.ui;
+  // Every list of playlists follows the order dragged in the sidebar.
+  const ambraPlaylists = useMemo(() => orderPlaylists(playlistStore.playlists, playlistOrder.ambra), [playlistStore.playlists, playlistOrder.ambra]);
+  const serviceGroups = useMemo(
+    () => servicePlaylistStore.groups.map(group => ({ ...group, playlists: orderPlaylists(group.playlists, playlistOrder[group.provider]) })),
+    [servicePlaylistStore.groups, playlistOrder],
+  );
+  const playlists = useMemo(
+    () => [...ambraPlaylists, ...orderPlaylists(servicePlaylistStore.playlists, [...playlistOrder.spotify, ...playlistOrder.qobuz, ...playlistOrder.tidal])],
+    [ambraPlaylists, servicePlaylistStore.playlists, playlistOrder],
+  );
   const homePlaylists = useMemo(
     () => playlists.filter(playlist => !playlist.provider || preferences.ui.servicePlaylistVisibility[playlist.provider]),
     [playlists, preferences.ui.servicePlaylistVisibility],
@@ -288,14 +300,19 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     const resolved = await Promise.all(pending.map(track => resolveTrackPlayback(track, AbortSignal.timeout(8000))));
     return Boolean(playlistStore.duplicate(name, resolved));
   });
+  const togglePickerGroup = useCallback((group: PlaylistGroup, expanded: boolean) => setPreferences(current => current.ui.playlistPickerGroups[group] === expanded ? current : {
+    ...current, ui: { ...current.ui, playlistPickerGroups: { ...current.ui.playlistPickerGroups, [group]: expanded } },
+  }), []);
   // Stable so playback-clock renders don't invalidate memoized track views.
   const playlistOptions = useMemo(
     () => ({
-      playlists: playlists.filter(playlist => playlist.editable !== false),
+      // Services whose playlists are hidden in Settings stay out of the picker too.
+      playlists: homePlaylists.filter(playlist => playlist.editable !== false),
       onAdd: addTrackToPlaylist, onCreate: createPlaylistWithTrack,
       onAddTracks: addTracksToPlaylist, onCreateWithTracks: createPlaylistWithTracks,
+      groups: preferences.ui.playlistPickerGroups, onToggleGroup: togglePickerGroup,
     }),
-    [playlists, addTrackToPlaylist, createPlaylistWithTrack, addTracksToPlaylist, createPlaylistWithTracks],
+    [homePlaylists, addTrackToPlaylist, createPlaylistWithTrack, addTracksToPlaylist, createPlaylistWithTracks, preferences.ui.playlistPickerGroups, togglePickerGroup],
   );
 
   const selectedPlaylist = playlists.find((playlist) => {
@@ -382,8 +399,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
 
   const reorderCollectionTracks = useStableCallback((orderedTrackIds: GlobalTrackId[]) => {
     if (selectedPlaylist) {
-      if (selectedPlaylist.provider) return;
-      if (!playlistStore.reorderTracks(selectedPlaylist.id, orderedTrackIds)) return;
+      if (selectedPlaylist.provider) void servicePlaylistStore.reorderTracks(selectedPlaylist.id, orderedTrackIds).catch(() => {});
+      else if (!playlistStore.reorderTracks(selectedPlaylist.id, orderedTrackIds)) return;
     } else {
       library.reorderTracks(orderedTrackIds);
     }
@@ -463,6 +480,7 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     setPreferences(current => ({ ...current, ui: { ...current.ui, ...patch } }));
   }, []);
 
+  const serviceReadOnly = Boolean(selectedPlaylist?.provider && (!selectedPlaylist.editable || servicePlaylistStore.busy.has(selectedPlaylist.id)));
   const collectionViewProps = {
     onOpenEntity: openEntity,
     tracks: collectionTracks,
@@ -471,8 +489,8 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
     playStandalone: playStandaloneFromCollection,
     addToQueue: addToQueueFromCollection,
     playNext: playNextFromCollection,
-    removeTracks: selectedPlaylist?.provider && (!selectedPlaylist.editable || servicePlaylistStore.busy.has(selectedPlaylist.id)) ? undefined : removeFromCollection,
-    reorderTracks: selectedPlaylist?.provider ? undefined : reorderCollectionTracks,
+    removeTracks: serviceReadOnly ? undefined : removeFromCollection,
+    reorderTracks: serviceReadOnly ? undefined : reorderCollectionTracks,
     // Only AMBRA's own playlists can bind songs into packages; the library and service playlists can't hold them.
     ...(selectedPlaylist && !selectedPlaylist.provider ? {
       packages: collectionPackages,
@@ -566,8 +584,11 @@ function App({ localOnly, sharedPlayback = false, onPlaybackRelease }: { localOn
           onRenamePlaylist={renamePlaylist}
           onDuplicatePlaylist={duplicatePlaylist}
           onDeletePlaylist={deletePlaylist}
-          playlists={playlistStore.playlists}
-          serviceGroups={servicePlaylistStore.groups}
+          playlists={ambraPlaylists}
+          serviceGroups={serviceGroups}
+          onReorderPlaylists={(group, ids) => setPreferences(current => ({
+            ...current, ui: { ...current.ui, playlistOrder: { ...current.ui.playlistOrder, [group]: ids } },
+          }))}
           servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
           playlistGroups={preferences.ui.playlistGroups}
           onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {

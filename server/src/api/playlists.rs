@@ -1,6 +1,6 @@
 use super::*;
 use crate::playlists::{
-    MatchTrack, PlaylistChange, PlaylistContents, PlaylistEntry, ServicePlaylist,
+    MatchTrack, PlaylistChange, PlaylistContents, PlaylistEntry, ServicePlaylist, reorder_moves,
 };
 
 macro_rules! provider_call {
@@ -82,11 +82,7 @@ pub(super) async fn change(
             revision,
         } => {
             if revision != current.revision {
-                return Err(ApiError {
-                    status: StatusCode::CONFLICT,
-                    message: "Playlist changed on another device. Refresh and try again.".into(),
-                    content_range: None,
-                });
+                return Err(changed_elsewhere());
             }
             if track_ids.is_empty() || track_ids.len() > 100 {
                 return Err(ApiError::bad_request("Select between 1 and 100 tracks."));
@@ -104,6 +100,30 @@ pub(super) async fn change(
                     remove_playlist_tracks,
                     &id,
                     &entries,
+                    &current.revision
+                )?;
+            }
+        }
+        PlaylistChange::Reorder {
+            track_ids,
+            revision,
+        } => {
+            if revision != current.revision {
+                return Err(changed_elsewhere());
+            }
+            if track_ids.len() > 10_000 {
+                return Err(ApiError::bad_request("Playlists hold up to 10,000 tracks."));
+            }
+            let moves = reorder_moves(&current.entries, &track_ids).ok_or_else(|| {
+                ApiError::bad_request("The new order doesn't match the playlist.")
+            })?;
+            if !moves.is_empty() {
+                provider_call!(
+                    &state,
+                    provider,
+                    move_playlist_tracks,
+                    &id,
+                    &moves,
                     &current.revision
                 )?;
             }
@@ -138,6 +158,14 @@ pub(super) async fn delete(
     editable_playlist(&state, provider, &id).await?;
     provider_call!(&state, provider, delete_playlist, &id)?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+fn changed_elsewhere() -> ApiError {
+    ApiError {
+        status: StatusCode::CONFLICT,
+        message: "Playlist changed on another device. Refresh and try again.".into(),
+        content_range: None,
+    }
 }
 
 /// Serializes changes to one service playlist.

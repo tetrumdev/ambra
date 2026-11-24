@@ -110,23 +110,30 @@ unsafe extern "system" fn menu_focus_filter(
 // felt crossing its threshold. Synchronous commands run on the main thread, as AppKit expects.
 #[cfg(target_os = "macos")]
 #[tauri::command]
-pub fn trackpad_haptic() {
+pub fn trackpad_haptic(pattern: Option<String>) {
     use cocoa::base::id;
     use objc::{class, msg_send, sel, sel_impl};
 
-    const ALIGNMENT: isize = 1; // NSHapticFeedbackPatternAlignment
+    // NSHapticFeedbackPattern: Generic, Alignment, LevelChange.
+    let pattern: isize = match pattern.as_deref() {
+        Some("generic") => 0,
+        Some("levelChange") => 2,
+        _ => 1,
+    };
     const NOW: usize = 1; // NSHapticFeedbackPerformanceTimeNow
     unsafe {
         let performer: id = msg_send![class!(NSHapticFeedbackManager), defaultPerformer];
         if !performer.is_null() {
-            let _: () = msg_send![performer, performFeedbackPattern: ALIGNMENT performanceTime: NOW];
+            let _: () = msg_send![performer, performFeedbackPattern: pattern performanceTime: NOW];
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
-pub fn trackpad_haptic() {}
+pub fn trackpad_haptic(pattern: Option<String>) {
+    let _ = pattern;
+}
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
