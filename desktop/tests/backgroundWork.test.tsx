@@ -6,6 +6,7 @@ import { usePlaylistImprovement } from "../src/hooks/usePlaylistImprovement";
 import { updateServiceAvailability, useServiceAvailability } from "../src/hooks/useServiceAvailability";
 import { useServicePlaylists } from "../src/hooks/useServicePlaylists";
 import { refreshServerDownloads, useDownloadJobs } from "../src/utils/offlineDownloads";
+import type { RemoteTrack, StreamingProvider } from "../src/api/server";
 import type { Playlist } from "../src/types/music";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -91,6 +92,63 @@ test("service playlist refreshes retain identical listings and apply real change
   name = "Renamed";
   await act(async () => store.refresh());
   expect(store.playlists.map(playlist => playlist.name)).toEqual(["Renamed"]);
+});
+
+test("library stats load unopened playlists for enabled services and drop unlisted tracks", async () => {
+  const connected = { tidal: true, qobuz: true, spotify: true };
+  updateServiceAvailability(connected);
+  const playlist = (id: string) => ({ id, name: id, trackCount: 1, editable: false });
+  let tidalPlaylists = [playlist("one"), playlist("two")];
+  let qobuzUnavailable = true;
+  const requested: string[] = [];
+  globalThis.fetch = (async (input) => {
+    const path = String(input).match(/\/api\/providers\/(tidal|qobuz|spotify)\/playlists(?:\/(\w+))?$/);
+    if (!path) return Response.json(connected);
+    const provider = path[1] as StreamingProvider;
+    const id = path[2];
+    if (!id) return Response.json(provider === "tidal" ? tidalPlaylists : [playlist("one")]);
+    requested.push(`${provider}:${id}`);
+    if (provider === "qobuz" && qobuzUnavailable) return new Response(null, { status: 503 });
+    const trackId = `${provider}:song`;
+    const track: RemoteTrack = {
+      id: trackId, provider, providerTrackId: "song", title: "Song", version: null,
+      primaryArtist: { providerId: "artist", name: "Artist", imageUrl: null },
+      artists: [], album: null, durationSeconds: 200, trackNumber: null, discNumber: null,
+      explicit: false, isrc: null, copyright: null, quality: null,
+      maximumSamplingRateKHz: null, maximumBitDepth: null,
+      playback: { kind: "direct", url: "/api/stream/song" },
+    };
+    return Response.json({
+      playlist: playlist(id), entries: [], revision: "1", tracks: [track], unavailableCount: 0,
+    });
+  }) as typeof fetch;
+  let store!: ReturnType<typeof useServicePlaylists>;
+  function View({ sources }: { sources: Record<StreamingProvider, boolean> }) {
+    store = useServicePlaylists(null, true, false, sources);
+    return null;
+  }
+  root = createRoot(document.createElement("div"));
+  const render = (tidal: boolean, qobuz: boolean) => act(async () => {
+    root.render(<View sources={{ tidal, qobuz, spotify: false }} />);
+  });
+  const ids = () => store.statsTracks.map(track => track.globalId).sort();
+  try {
+    await render(false, false);
+    expect(requested).toEqual([]);
+    await render(true, true);
+    expect(requested.sort()).toEqual(["qobuz:one", "tidal:one", "tidal:two"]);
+    expect(ids()).toEqual(["tidal:song"]);
+    qobuzUnavailable = false;
+    await act(async () => store.refresh());
+    expect(ids()).toEqual(["qobuz:song", "tidal:song"]);
+    await render(true, false);
+    expect(ids()).toEqual(["tidal:song"]);
+    tidalPlaylists = [];
+    await act(async () => store.refresh());
+    expect(ids()).toEqual([]);
+  } finally {
+    await act(async () => updateServiceAvailability(services));
+  }
 });
 
 test("download progress renders job subscribers while availability changes reach the library", async () => {

@@ -31,6 +31,7 @@ type LibraryViewProps = Omit<
   "title" | "removalLabel" | "headerContent" | "content" | "summary"
 > & {
   section: LibrarySection;
+  playlistStatsTracks: readonly Track[];
   onSectionChange: (section: LibrarySection) => void;
 };
 
@@ -203,13 +204,20 @@ function LibraryActions({ tracks }: { tracks: Track[] }) {
 
 export const LibraryView = memo(function LibraryView({
   section,
+  playlistStatsTracks,
   onSectionChange,
   ...props
 }: LibraryViewProps) {
-  const artists = useMemo(() => libraryArtists(props.tracks), [props.tracks]);
-  const albums = useMemo(() => libraryAlbums(props.tracks), [props.tracks]);
+  const statsTracks = useMemo(() => {
+    if (playlistStatsTracks.length === 0) return props.tracks;
+    const savedIds = new Set(props.tracks.map(track => track.globalId));
+    return [...props.tracks, ...playlistStatsTracks.filter(track => !savedIds.has(track.globalId))];
+  }, [props.tracks, playlistStatsTracks]);
+  const artists = useMemo(() => libraryArtists(statsTracks), [statsTracks]);
+  const albums = useMemo(() => libraryAlbums(statsTracks), [statsTracks]);
+  const durationTracks = section === "albums" ? statsTracks : props.tracks;
+  const duration = useMemo(() => durationTracks.reduce((total, track) => total + track.durationSeconds, 0), [durationTracks]);
   if (section === "overview") {
-    const duration = props.tracks.reduce((total, track) => total + track.durationSeconds, 0);
     const counts = { artists: artists.length, albums: albums.length, tracks: props.tracks.length };
     return (
       <div className="libraryView smoothScroll" ref={props.registerScrollElement}>
@@ -222,7 +230,8 @@ export const LibraryView = memo(function LibraryView({
               <span className="libraryOverviewTitle">{label}</span>
               <span className="libraryOverviewCount">{counts[id]}</span>
               <span className="libraryOverviewDetail">
-                {id === "artists" ? "Artists in your library" : id === "albums" ? "Albums in your library" : `${formatTotalDuration(duration)} of music`}
+                {id === "tracks" ? `${formatTotalDuration(duration)} of music`
+                  : `${label} in your ${statsTracks.length > props.tracks.length ? "library and playlists" : "library"}`}
               </span>
               <span className="libraryOverviewArrow" aria-hidden="true">→</span>
             </button>
@@ -249,7 +258,7 @@ export const LibraryView = memo(function LibraryView({
         section === "artists"
           ? { count: artists.length, unit: "artist", showDuration: false }
           : section === "albums"
-            ? { count: albums.length, unit: "album" }
+            ? { count: albums.length, unit: "album", durationSeconds: duration }
             : undefined
       }
       content={content}

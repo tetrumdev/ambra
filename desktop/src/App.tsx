@@ -122,7 +122,9 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     () => preferences.ui.navigation?.playlistId?.replace(/^ambra-server-playlist:[^:]+:/, "") ?? null,
   );
   const playlistImprovement = usePlaylistImprovement(playlistStore.playlists, playlistStore.tracks, playlistStore.replaceTracks, !localOnly);
-  const servicePlaylistStore = useServicePlaylists(selectedPlaylistId, !localOnly, preferences.ui.screen === "home");
+  const servicePlaylistStore = useServicePlaylists(
+    selectedPlaylistId, !localOnly, preferences.ui.screen === "home", preferences.ui.libraryStatsPlaylists,
+  );
   const { playlistOrder } = preferences.ui;
   // Every list of playlists follows the order dragged in the sidebar.
   const ambraPlaylists = useMemo(() => orderPlaylists(playlistStore.playlists, playlistOrder.ambra), [playlistStore.playlists, playlistOrder.ambra]);
@@ -694,6 +696,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
           <LibraryView
             key={`library:${librarySection}`}
             {...collectionViewProps}
+            playlistStatsTracks={servicePlaylistStore.statsTracks}
             section={librarySection}
             onSectionChange={setLibrarySection}
           />

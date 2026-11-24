@@ -88,7 +88,7 @@ function usePlayingOn() {
 
 type SettingsPreferences = Pick<AppPreferences["ui"],
   "showAudioQuality" | "reduceMotion" | "animateSwirl" | "lyricMotion" | "maxAnimationFps"
-  | "autoSyncLyrics" | "lyricsOffsetMs" | "servicePlaylistVisibility" | "shortcuts" | "songContextMenu"
+  | "autoSyncLyrics" | "lyricsOffsetMs" | "servicePlaylistVisibility" | "libraryStatsPlaylists" | "shortcuts" | "songContextMenu"
 >;
 
 type SettingsViewProps = {
@@ -110,7 +110,7 @@ export function SettingsView({
 }: SettingsViewProps) {
   const {
     showAudioQuality, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps,
-    autoSyncLyrics, lyricsOffsetMs, servicePlaylistVisibility, shortcuts, songContextMenu,
+    autoSyncLyrics, lyricsOffsetMs, servicePlaylistVisibility, libraryStatsPlaylists, shortcuts, songContextMenu,
   } = preferences;
   const audio = useAudioSettings()!;
   // Following a server, the target loudness is the playing stage's.
@@ -163,6 +163,17 @@ export function SettingsView({
         <SettingRow label="Combined song menu" help="Right-click a song to open its menu instantly. Double-click to play it. A single left-click does nothing.">
           <Toggle label="Combined song menu" checked={songContextMenu} onChange={songContextMenu => onPreferencesChange({ songContextMenu })} />
         </SettingRow>
+      </div>
+      <div className="settingsGroup">
+        <h2>Library stats</h2>
+        {(["qobuz", "tidal", "spotify"] as const).map(provider => {
+          const label = `Include ${musicProviderName(provider)} playlists`;
+          return <SettingRow key={provider} label={label} help="Include artists and albums from these playlists in My Library.">
+            <Toggle label={label} checked={libraryStatsPlaylists[provider]} onChange={checked => {
+              onPreferencesChange({ libraryStatsPlaylists: { ...libraryStatsPlaylists, [provider]: checked } });
+            }} />
+          </SettingRow>;
+        })}
       </div>
     </section>
 

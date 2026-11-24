@@ -69,6 +69,7 @@ export type TrackCollectionViewProps = TrackListProps & {
     count: number;
     unit: string;
     showDuration?: boolean;
+    durationSeconds?: number;
   } | null;
 };
 
@@ -96,10 +97,11 @@ export function TrackCollectionView({
   const summaryCount = summary?.count ?? tracks.length;
   const summaryUnit = summary?.unit ?? "track";
   const showDuration = summary?.showDuration ?? true;
-  const totalDurationSeconds = useMemo(() => tracks.reduce(
+  const summaryDuration = summary?.durationSeconds;
+  const totalDurationSeconds = useMemo(() => summaryDuration ?? tracks.reduce(
     (total, track) => total + track.durationSeconds,
     0,
-  ), [tracks]);
+  ), [tracks, summaryDuration]);
   function formatUnit(value: number, unit: string) {
     return `${value} ${unit}${value === 1 ? "" : "s"}`;
   }

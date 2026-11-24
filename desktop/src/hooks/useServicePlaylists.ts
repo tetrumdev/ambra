@@ -14,6 +14,7 @@ export type PlaylistServiceGroup = {
 };
 
 const providers: StreamingProvider[] = ["spotify", "qobuz", "tidal"];
+const emptyTracks: readonly Track[] = [];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 const playlistId = (provider: StreamingProvider, id: string) => `service:${provider}:${id}`;
 /** An open playlist cached longer than this is quietly checked for changes. */
@@ -38,7 +39,12 @@ function samePlaylistListing(previous: Playlist[], next: ServicePlaylist[]) {
   });
 }
 
-export function useServicePlaylists(selectedId: string | null, enabled: boolean, preloadHome = false) {
+export function useServicePlaylists(
+  selectedId: string | null,
+  enabled: boolean,
+  preloadHome = false,
+  libraryStatsPlaylists?: Readonly<Record<StreamingProvider, boolean>>,
+) {
   const connection = useSyncExternalStore(subscribeServerConnection, getServerConnection);
   const serverKey = connection?.baseUrl ?? serverBaseUrl;
   const cacheServer = useRef(serverKey);
@@ -55,6 +61,8 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
   currentContents.current = contents;
   const selection = useRef(selectedId);
   selection.current = selectedId;
+  const statsSources = useRef(libraryStatsPlaylists);
+  statsSources.current = libraryStatsPlaylists;
   const requests = useRef(new Map<string, { controller: AbortController; promise: Promise<void> }>());
   const mutations = useRef(new Set<string>());
   const alive = useRef(true);
@@ -121,7 +129,12 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
           setGroups(current => {
             const old = current.find(group => group.provider === provider);
             const unchanged = old && samePlaylistListing(old.playlists, remote);
-            if (unchanged && old.error === null) return current;
+            if (unchanged && old.error === null) {
+              // Stats also recheck unchanged listings after a failed fetch or a same-size edit.
+              const needsStatsRefresh = statsSources.current?.[provider] && old.playlists.some(playlist =>
+                playlist.trackCount !== 0 && needsFetch(currentContents.current[playlist.id], playlist, "open"));
+              if (!needsStatsRefresh) return current;
+            }
             const playlists = unchanged ? old.playlists : remote.map(toPlaylist);
             const next = [...current.filter(group => group.provider !== provider), { provider, playlists, error: null }];
             currentGroups.current = next;
@@ -242,21 +255,45 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     return () => { cancelled = true; };
   }, [enabled, hydrated, groups, load]);
 
+  const statsPlaylists = useMemo(() => {
+    if (!enabled || !libraryStatsPlaylists) return [];
+    return groups.flatMap(group => libraryStatsPlaylists[group.provider]
+      ? group.playlists.filter(playlist => playlist.trackCount !== 0)
+      : []);
+  }, [enabled, groups, libraryStatsPlaylists]);
+
   useEffect(() => {
-    if (!enabled || !preloadHome) return;
-    const playlists = providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? [])
-      .filter(playlist => playlist.trackCount !== 0 && needsFetch(currentContents.current[playlist.id], playlist, "preload"));
+    if (!enabled || (!preloadHome && statsPlaylists.length === 0)) return;
+    const homePlaylists = preloadHome
+      ? providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? [])
+      : [];
+    const playlists = [...new Set([...statsPlaylists, ...homePlaylists])].flatMap(playlist => {
+      const mode: LoadMode = playlist.provider && libraryStatsPlaylists?.[playlist.provider] ? "open" : "preload";
+      return playlist.trackCount !== 0 && needsFetch(currentContents.current[playlist.id], playlist, mode)
+        ? [{ playlist, mode }]
+        : [];
+    });
     let cancelled = false;
     let next = 0;
-    // Home needs track metadata for its cover grids before a playlist is opened.
+    // The overview and cover grids need metadata even for playlists the user hasn't opened.
     const workers = Array.from({ length: Math.min(3, playlists.length) }, async () => {
       while (!cancelled && next < playlists.length) {
-        await load(playlists[next++], "preload");
+        const { playlist, mode } = playlists[next++];
+        await load(playlist, mode);
       }
     });
     void Promise.all(workers);
     return () => { cancelled = true; };
-  }, [enabled, preloadHome, groups, load]);
+  }, [enabled, preloadHome, groups, statsPlaylists, libraryStatsPlaylists, load]);
+
+  const statsTracks = useMemo(() => {
+    if (statsPlaylists.length === 0) return emptyTracks;
+    const byId = new Map<string, Track>();
+    for (const playlist of statsPlaylists) {
+      for (const track of contents[playlist.id]?.tracks ?? []) byId.set(track.globalId, track);
+    }
+    return [...byId.values()];
+  }, [statsPlaylists, contents]);
 
   const playlists = useMemo(() => providers.flatMap(provider => groups.find(group => group.provider === provider)?.playlists ?? []).map(playlist => {
     const result = contents[playlist.id];
@@ -337,5 +374,5 @@ export function useServicePlaylists(selectedId: string | null, enabled: boolean,
     }
   }
 
-  return { groups, playlists, tracks, contents, loading, busy, errors, error, refresh, load, rename: (id: string, name: string) => edit(id, name), deletePlaylist: (id: string) => edit(id), addTrack: (id: string, track: Track) => change(id, { action: "add", track }), removeTracks: (id: string, trackIds: string[]) => change(id, { action: "remove", trackIds }), reorderTracks: (id: string, trackIds: string[]) => change(id, { action: "reorder", trackIds }) };
+  return { groups, playlists, tracks, statsTracks, contents, loading, busy, errors, error, refresh, load, rename: (id: string, name: string) => edit(id, name), deletePlaylist: (id: string) => edit(id), addTrack: (id: string, track: Track) => change(id, { action: "add", track }), removeTracks: (id: string, trackIds: string[]) => change(id, { action: "remove", trackIds }), reorderTracks: (id: string, trackIds: string[]) => change(id, { action: "reorder", trackIds }) };
 }

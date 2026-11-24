@@ -58,6 +58,7 @@ export type AppPreferences = {
     /** Playlist IDs in the order the user dragged them to; unlisted ones follow. */
     playlistOrder: Record<PlaylistGroup, string[]>;
     servicePlaylistVisibility: Record<StreamingProvider, boolean>;
+    libraryStatsPlaylists: Record<StreamingProvider, boolean>;
     /** Optional columns shown in every song list. */
     trackColumns: OptionalColumnKey[];
     /** Standard columns left out of every song list. */
@@ -99,6 +100,7 @@ export const defaultPreferences: AppPreferences = {
     playlistPickerGroups: { ambra: true, spotify: true, qobuz: true, tidal: true },
     playlistOrder: { ambra: [], spotify: [], qobuz: [], tidal: [] },
     servicePlaylistVisibility: { spotify: true, qobuz: true, tidal: true },
+    libraryStatsPlaylists: { spotify: false, qobuz: false, tidal: false },
     trackColumns: [],
     hiddenTrackColumns: [],
     shortcuts: {},
@@ -226,11 +228,13 @@ function migratePreferences(value: unknown): AppPreferences {
     }
   }
   const servicePlaylistVisibility = { ...defaultPreferences.ui.servicePlaylistVisibility };
-  if (isRecord(ui.servicePlaylistVisibility)) {
-    for (const provider of ["spotify", "qobuz", "tidal"] as const) {
-      if (typeof ui.servicePlaylistVisibility[provider] === "boolean") {
-        servicePlaylistVisibility[provider] = ui.servicePlaylistVisibility[provider];
-      }
+  const libraryStatsPlaylists = { ...defaultPreferences.ui.libraryStatsPlaylists };
+  for (const provider of ["spotify", "qobuz", "tidal"] as const) {
+    if (isRecord(ui.servicePlaylistVisibility) && typeof ui.servicePlaylistVisibility[provider] === "boolean") {
+      servicePlaylistVisibility[provider] = ui.servicePlaylistVisibility[provider];
+    }
+    if (isRecord(ui.libraryStatsPlaylists) && typeof ui.libraryStatsPlaylists[provider] === "boolean") {
+      libraryStatsPlaylists[provider] = ui.libraryStatsPlaylists[provider];
     }
   }
 
@@ -248,7 +252,7 @@ function migratePreferences(value: unknown): AppPreferences {
     case 1:
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, libraryStatsPlaylists, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { ...defaultPreferences.playback },
       };
@@ -267,7 +271,7 @@ function migratePreferences(value: unknown): AppPreferences {
 
       return {
         version: 4,
-        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, trackColumns, hiddenTrackColumns, shortcuts },
+        ui: { screen: screen === "search" ? "library" : screen, showAudioQuality, songContextMenu, reduceMotion, animateSwirl, lyricMotion, maxAnimationFps, autoSyncLyrics, lyricsOffsetMs, playerView, navigation, playlistGroups, playlistPickerGroups, playlistOrder, servicePlaylistVisibility, libraryStatsPlaylists, trackColumns, hiddenTrackColumns, shortcuts },
         search: { ...defaultPreferences.search },
         playback: { trackId, positionSeconds },
       };
@@ -305,6 +309,7 @@ function migratePreferences(value: unknown): AppPreferences {
           playlistPickerGroups,
           playlistOrder,
           servicePlaylistVisibility,
+          libraryStatsPlaylists,
           trackColumns,
           hiddenTrackColumns,
           shortcuts,
@@ -349,6 +354,7 @@ function migratePreferences(value: unknown): AppPreferences {
           playlistPickerGroups,
           playlistOrder,
           servicePlaylistVisibility,
+          libraryStatsPlaylists,
           trackColumns,
           hiddenTrackColumns,
           shortcuts,

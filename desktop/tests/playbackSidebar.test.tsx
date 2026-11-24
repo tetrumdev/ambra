@@ -333,6 +333,14 @@ test("General can combine song menus without triggering actions from single clic
     await click("#trackMenuBackdrop");
 
     await click(".sidebarSettingsButton");
+    const playlistStats = (provider: string) => `[aria-label="Include ${provider} playlists"]`;
+    expect(loadPreferences().ui.libraryStatsPlaylists).toEqual({ qobuz: false, tidal: false, spotify: false });
+    await click(playlistStats("Qobuz"));
+    await click(playlistStats("Spotify"));
+    expect(loadPreferences().ui.libraryStatsPlaylists).toEqual({ qobuz: true, tidal: false, spotify: true });
+    await click(playlistStats("Qobuz"));
+    await click(playlistStats("Tidal"));
+    expect(loadPreferences().ui.libraryStatsPlaylists).toEqual({ qobuz: false, tidal: true, spotify: true });
     expect((find(trigger) as HTMLInputElement).checked).toBe(false);
     await click(trigger);
     expect(loadPreferences().ui.songContextMenu).toBe(true);
