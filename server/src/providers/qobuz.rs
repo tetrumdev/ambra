@@ -1,3 +1,4 @@
+mod cmaf;
 mod credits;
 mod playlists;
 
@@ -11,8 +12,10 @@ use std::{
 };
 
 use futures_util::{StreamExt, stream};
-use qbz_models::{Album, AlbumSummary, Artist, Quality, Track, UserSession};
-use qbz_qobuz::{QobuzClient, performers::parse_performers};
+use qbz_models::{Album, AlbumSummary, Artist, Entitlements, Quality, Track, UserSession};
+use qbz_qobuz::{ApiError, QobuzClient, cmaf::setup_streaming_with_http, performers::parse_performers};
+
+use self::cmaf::CmafSource;
 use tokio::sync::Mutex;
 
 use crate::artwork_quality::{qobuz_max_artwork_url, same_release_upc};
@@ -30,6 +33,8 @@ pub type ProviderResult<T> = std::result::Result<T, Box<dyn std::error::Error + 
 #[derive(Clone)]
 pub struct QobuzProvider {
     client: Arc<QobuzClient>,
+    cdn: reqwest::Client,
+    entitlements: Entitlements,
     preferred_quality: Quality,
     playback_sources: Arc<Mutex<HashMap<String, CachedPlaybackSource>>>,
     playback_fetches: Arc<Mutex<HashMap<String, Weak<Mutex<()>>>>>,
@@ -44,9 +49,15 @@ pub struct QobuzLogin {
     client: QobuzClient,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
+pub enum PlaybackLocation {
+    Direct(String),
+    Cmaf(Arc<CmafSource>),
+}
+
+#[derive(Clone)]
 pub struct PlaybackSource {
-    pub url: String,
+    pub location: PlaybackLocation,
     pub mime_type: String,
     pub quality: String,
     pub sampling_rate_khz: Option<f64>,
@@ -63,14 +74,14 @@ impl QobuzProvider {
     /// Configure with a saved session, AMBRA_QOBUZ_USER_AUTH_TOKEN, or interactive OAuth.
     pub async fn authenticate_if_configured(interactive: bool) -> ProviderResult<Option<Self>> {
         if !interactive && crate::service_auth::disconnected("qobuz") { return Ok(None); }
-        let saved_session = if session_path().is_file() {
+        let environment_token = env::var("AMBRA_QOBUZ_USER_AUTH_TOKEN")
+            .ok()
+            .filter(|token| !token.trim().is_empty());
+        let saved_session = if environment_token.is_none() && !interactive && session_path().is_file() {
             Some(load_session()?)
         } else {
             None
         };
-        let environment_token = env::var("AMBRA_QOBUZ_USER_AUTH_TOKEN")
-            .ok()
-            .filter(|token| !token.trim().is_empty());
         if saved_session.is_none() && environment_token.is_none() && !interactive {
             return Ok(None);
         }
@@ -90,7 +101,7 @@ impl QobuzProvider {
         save_session(&session)?;
 
         println!("Qobuz logged in as {}", session.display_name);
-        Ok(Some(Self::from_client(client)))
+        Ok(Some(Self::from_client(client, session.entitlements)?))
     }
 
     pub async fn start_login() -> ProviderResult<(QobuzLogin, String)> {
@@ -112,23 +123,28 @@ impl QobuzProvider {
         crate::service_auth::set_disconnected("qobuz", false)?;
         save_session(&session)?;
         println!("Qobuz logged in as {}", session.display_name);
-        Ok(Self::from_client(login.client))
+        Self::from_client(login.client, session.entitlements)
     }
 
-    fn from_client(client: QobuzClient) -> Self {
+    fn from_client(client: QobuzClient, entitlements: Entitlements) -> ProviderResult<Self> {
         let track_metadata_cache_path = track_metadata_cache_path();
         let track_metadata_cache = load_track_metadata_cache(&track_metadata_cache_path);
 
-        Self {
+        Ok(Self {
             client: Arc::new(client),
-            preferred_quality: Quality::UltraHiRes,
+            cdn: crate::http_client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .no_gzip()
+                .build()?,
+            preferred_quality: preferred_quality(&entitlements),
+            entitlements,
             playback_sources: Arc::new(Mutex::new(HashMap::new())),
             playback_fetches: Arc::new(Mutex::new(HashMap::new())),
             albums: Arc::new(Mutex::new(HashMap::new())),
             loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
-        }
+        })
     }
 
     pub async fn album_track_ids(&self, album_id: &str) -> ProviderResult<Vec<String>> {
@@ -332,7 +348,7 @@ impl QobuzProvider {
         Ok(CatalogSearchPage {
             tracks: tracks
                 .into_iter()
-                .filter(|track| track.streamable)
+                .filter(Track::is_streamable)
                 .map(map_search_track)
                 .collect(),
             artists: artists
@@ -382,7 +398,7 @@ impl QobuzProvider {
         let tracks = page
             .items
             .into_iter()
-            .filter(|track| track.streamable)
+            .filter(Track::is_streamable)
             .map(map_search_track)
             .collect();
         Ok(SearchPage {
@@ -421,7 +437,7 @@ impl QobuzProvider {
             .lock()
             .await
             .insert(track_id.to_owned(), track_loudness(&track));
-        if !track.streamable {
+        if !track.is_streamable() {
             return Err(io::Error::other("Qobuz reports that this track is not streamable").into());
         }
 
@@ -451,6 +467,11 @@ impl QobuzProvider {
             label: album.label.clone(),
             genre: album.genre.clone(),
             release_date_original: album.release_date_original.clone(),
+            release_date_stream: album.release_date_stream.clone(),
+            artist: Some(album.artist.clone()),
+            version: album.version.clone(),
+            streamable: album.streamable,
+            streamable_at: None,
         };
         let tracks = album
             .tracks
@@ -466,7 +487,7 @@ impl QobuzProvider {
                 if let Some(metadata) = cached {
                     return (track_id, Ok(metadata));
                 }
-                if !track.streamable {
+                if !track.is_streamable() {
                     let error = io::Error::other("Qobuz reports that this track is not streamable");
                     return (track_id, Err(error.into()));
                 }
@@ -523,6 +544,10 @@ impl QobuzProvider {
     pub async fn playback_source(&self, track_id: &str) -> ProviderResult<PlaybackSource> {
         let numeric_track_id = validate_track_id(track_id)?;
 
+        if let Some(source) = self.cached_source(track_id).await {
+            return Ok(source);
+        }
+
         // Coalesce hover/queue warming with an overlapping play click, while
         // allowing different tracks to resolve independently.
         let fetch_lock = {
@@ -538,26 +563,11 @@ impl QobuzProvider {
         };
         let _guard = fetch_lock.lock().await;
 
-        {
-            let cache = self.playback_sources.lock().await;
-            if let Some(cached) = cache.get(track_id)
-                && cached.cached_at.elapsed() < PLAYBACK_SOURCE_TTL
-            {
-                return Ok(cached.source.clone());
-            }
+        if let Some(source) = self.cached_source(track_id).await {
+            return Ok(source);
         }
 
-        let stream = self
-            .client
-            .get_stream_url_with_fallback(numeric_track_id, self.preferred_quality)
-            .await?;
-        let source = PlaybackSource {
-            url: stream.url,
-            mime_type: nonempty(stream.mime_type).unwrap_or_else(|| "audio/flac".to_owned()),
-            quality: stream_quality_label(stream.format_id, stream.sampling_rate, stream.bit_depth),
-            sampling_rate_khz: normalize_sampling_rate(stream.sampling_rate),
-            bit_depth: stream.bit_depth,
-        };
+        let source = self.resolve_source(numeric_track_id, self.preferred_quality).await?;
         let mut cache = self.playback_sources.lock().await;
         cache.retain(|_, entry| entry.cached_at.elapsed() < PLAYBACK_SOURCE_TTL);
         if cache.len() >= 256 {
@@ -579,18 +589,67 @@ impl QobuzProvider {
         Ok(source)
     }
 
-    /// A fresh stream URL at `quality` or the best below it, for a download. Not cached:
-    /// a download may ask for a different quality than playback uses.
+    async fn cached_source(&self, track_id: &str) -> Option<PlaybackSource> {
+        self.playback_sources.lock().await.get(track_id)
+            .filter(|entry| entry.cached_at.elapsed() < PLAYBACK_SOURCE_TTL)
+            .map(|entry| entry.source.clone())
+    }
+
+    /// A fresh source, since a download can ask for a different quality.
     pub async fn download_source(&self, track_id: &str, quality: Quality) -> ProviderResult<PlaybackSource> {
-        let numeric_track_id = validate_track_id(track_id)?;
-        let stream = self.client.get_stream_url_with_fallback(numeric_track_id, quality).await?;
-        Ok(PlaybackSource {
-            url: stream.url,
-            mime_type: nonempty(stream.mime_type).unwrap_or_else(|| "audio/flac".to_owned()),
-            quality: stream_quality_label(stream.format_id, stream.sampling_rate, stream.bit_depth),
-            sampling_rate_khz: normalize_sampling_rate(stream.sampling_rate),
-            bit_depth: stream.bit_depth,
-        })
+        self.resolve_source(validate_track_id(track_id)?, quality.min(self.preferred_quality)).await
+    }
+
+    async fn resolve_source(&self, track_id: u64, quality: Quality) -> ProviderResult<PlaybackSource> {
+        let direct_error = match self.client.get_full_stream_url(track_id, quality).await {
+            Ok(stream) => {
+                let fallback_mime = if stream.format_id == Quality::Mp3.id() { "audio/mpeg" } else { "audio/flac" };
+                return Ok(PlaybackSource {
+                    location: PlaybackLocation::Direct(stream.url),
+                    mime_type: nonempty(stream.mime_type).unwrap_or_else(|| fallback_mime.to_owned()),
+                    quality: stream_quality_label(stream.format_id, stream.sampling_rate, stream.bit_depth),
+                    sampling_rate_khz: normalize_sampling_rate(stream.sampling_rate),
+                    bit_depth: stream.bit_depth,
+                });
+            }
+            Err(error @ (ApiError::TrackUnavailable(_) | ApiError::NoQualityAvailable))
+                if quality >= Quality::Lossless
+                    && (self.entitlements.lossless_streaming || self.entitlements.hires_streaming) => error,
+            Err(error) => return Err(error.into()),
+        };
+
+        // Preserve the cheap seekable direct stream. When the direct catalog
+        // endpoint cannot deliver audio, try the equivalent lossless CMAF tiers.
+        for &tier in Quality::fallback_order().iter().filter(|&&tier| tier <= quality && tier >= Quality::Lossless) {
+            match setup_streaming_with_http(&self.client, &self.cdn, track_id, tier).await {
+                Ok(setup) => {
+                    let rate = setup.sampling_rate.map(f64::from).unwrap_or_default();
+                    return Ok(PlaybackSource {
+                        mime_type: "audio/flac".to_owned(),
+                        quality: stream_quality_label(setup.format_id, rate, setup.bit_depth),
+                        sampling_rate_khz: normalize_sampling_rate(rate),
+                        bit_depth: setup.bit_depth,
+                        location: PlaybackLocation::Cmaf(Arc::new(CmafSource::new(setup, self.cdn.clone()))),
+                    });
+                }
+                Err(ApiError::NoQualityAvailable) => continue,
+                Err(ApiError::TrackUnavailable(_)) => break,
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(direct_error.into())
+    }
+
+    pub fn entitlements(&self) -> &Entitlements {
+        &self.entitlements
+    }
+
+    /// Qobuz radio from one explicitly selected track. Listening history stays local.
+    pub async fn track_radio(&self, track_id: u64, limit: usize) -> ProviderResult<Vec<TrackMetadata>> {
+        let radio = self.client.get_radio_track(&track_id.to_string()).await?;
+        let mut seen = std::collections::HashSet::from([track_id]);
+        Ok(radio.tracks.items.into_iter().filter(|track| track.is_streamable() && seen.insert(track.id))
+            .take(limit).map(map_search_track).collect())
     }
 
     async fn album(&self, album_id: &str) -> ProviderResult<Album> {
@@ -606,6 +665,17 @@ impl QobuzProvider {
     }
 }
 
+fn preferred_quality(entitlements: &Entitlements) -> Quality {
+    if entitlements.hires_streaming || entitlements.hires_purchases_streaming || entitlements.is_member_only() {
+        // Members can still hold purchased playback rights independently.
+        Quality::UltraHiRes
+    } else if entitlements.lossless_streaming {
+        Quality::Lossless
+    } else {
+        Quality::Mp3
+    }
+}
+
 fn map_search_track(track: Track) -> TrackMetadata {
     let track_id = track.id.to_string();
     let performer = track.performer.as_ref().map(artist_metadata);
@@ -614,8 +684,9 @@ fn map_search_track(track: Track) -> TrackMetadata {
     let album = track.album.as_ref().map(|summary| AlbumMetadata {
         provider_id: summary.id.clone(),
         title: summary.title.clone(),
-        version: None,
-        artists: artists.clone(),
+        version: summary.version.clone(),
+        artists: summary.artist.as_ref().map(artist_metadata)
+            .map_or_else(|| artists.clone(), |artist| vec![artist]),
         cover_url: summary.image.best().cloned(),
         // Lets the app tell the album a song first came out on from later compilations.
         release_date: summary.release_date_original.clone(),
@@ -699,7 +770,7 @@ fn map_track(
         AlbumMetadata {
             provider_id: summary.id.clone(),
             title: summary.title.clone(),
-            version: full_album.and_then(|album| album.version.clone()),
+            version: full_album.and_then(|album| album.version.clone()).or_else(|| summary.version.clone()),
             artists: album_artists,
             cover_url: full_album
                 .and_then(|album| album.image.best().cloned())
@@ -951,7 +1022,7 @@ fn push_unique_artist(artists: &mut Vec<ArtistMetadata>, artist: ArtistMetadata)
 }
 
 fn track_loudness(track: &Track) -> Loudness {
-    let info = track.audio_info.unwrap_or_default();
+    let Some(info) = track.audio_info.as_ref() else { return Loudness::default() };
     Loudness {
         track_gain_db: info.replaygain_track_gain,
         track_peak: info.replaygain_track_peak.filter(|peak| *peak > 0.0),
@@ -1109,17 +1180,10 @@ fn save_track_metadata_cache(
 }
 
 fn write_private_json(path: &Path, value: &impl serde::Serialize) -> ProviderResult<()> {
-    let temporary_path = path.with_extension(format!("{}.tmp", std::process::id()));
-    let mut options = fs::OpenOptions::new();
-    options.create(true).truncate(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(&temporary_path)?;
-    file.write_all(&serde_json::to_vec(value)?)?;
-    fs::rename(temporary_path, path)?;
+    let directory = path.parent().ok_or_else(|| io::Error::other("Missing Qobuz data directory"))?;
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    serde_json::to_writer(file.as_file_mut(), value)?;
+    file.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 

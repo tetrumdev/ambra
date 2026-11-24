@@ -26,10 +26,10 @@ export const motion = {
   pressUp: spring(0.32, 0.6, "cubic-bezier(0.34, 1.56, 0.64, 1)"),
 } satisfies Record<string, SpringTiming>;
 
-const root = document.documentElement.style;
+const root = globalThis.document?.documentElement.style;
 for (const [name, { duration, easing }] of Object.entries(motion)) {
   const token = name.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
-  root.setProperty(`--motion-${token}`, `${duration}ms ${easing}`);
-  root.setProperty(`--motion-${token}-duration`, `${duration}ms`);
-  root.setProperty(`--motion-${token}-ease`, easing);
+  root?.setProperty(`--motion-${token}`, `${duration}ms ${easing}`);
+  root?.setProperty(`--motion-${token}-duration`, `${duration}ms`);
+  root?.setProperty(`--motion-${token}-ease`, easing);
 }

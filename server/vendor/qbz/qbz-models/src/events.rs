@@ -47,6 +47,17 @@ pub enum CoreEvent {
     /// Repeat mode changed
     RepeatModeChanged { mode: crate::playback::RepeatMode },
 
+    // ============ Qobuz Connect Events ============
+    /// Qobuz Connect session lifecycle changed (headless renderer)
+    QconnectSessionChanged {
+        /// "off" | "connecting" | "connected" | "retrying" | "exhausted"
+        state: String,
+        /// The advertised renderer name, when one is set
+        device_name: Option<String>,
+        /// True only while a session is established ("connected")
+        session_active: bool,
+    },
+
     // ============ Authentication Events ============
     /// User logged in successfully
     LoggedIn { session: UserSession },

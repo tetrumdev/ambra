@@ -103,7 +103,9 @@ test("Services completes automatic sign-in with optional callback entry availabl
     await act(async () => root.render(<ClientConnectionContext.Provider value={{
       connected: true, sharedPlayback: false, network: { state: "ConnectedLocal" },
       setSharedPlayback: async () => {}, reconnect: () => {},
-    }}><ServiceSettings active onServiceConnected={onConnected} /></ClientConnectionContext.Provider>));
+    }}><ServiceSettings active onServiceConnected={onConnected}
+      playlistVisibility={{ tidal: true, qobuz: true, spotify: true }}
+      onPlaylistVisibilityChange={() => {}} /></ClientConnectionContext.Provider>));
     const button = container.querySelector<HTMLButtonElement>('[aria-label="Sign in to Tidal"]')!;
     await act(async () => { button.click(); });
     expect(container.textContent).toContain("Waiting for sign-in");

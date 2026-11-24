@@ -22,7 +22,7 @@ export function spring(response: number, dampingFraction: number, fallback: stri
   let seconds = step;
   for (let t = step; t < response * 10; t += step) if (Math.abs(1 - position(t)) > REST) seconds = t + step;
   const duration = Math.round(seconds * 1000);
-  if (!CSS.supports("animation-timing-function", "linear(0, 1)")) return { duration, easing: fallback };
+  if (!globalThis.CSS?.supports("animation-timing-function", "linear(0, 1)")) return { duration, easing: fallback };
   const points = Array.from({ length: SAMPLES + 1 }, (_, index) =>
     index === SAMPLES ? 1 : Number(position((index / SAMPLES) * seconds).toFixed(4)));
   return { duration, easing: `linear(${points.join(", ")})` };

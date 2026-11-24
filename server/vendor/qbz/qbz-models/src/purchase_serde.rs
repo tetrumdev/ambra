@@ -281,21 +281,37 @@ mod tests {
     }
 
     #[test]
-    fn purchase_track_has_no_version_field() {
-        // Compile-time + behavioral guard: an incoming `version` key must be
-        // silently ignored (PurchaseTrack does not declare it). A faithful port
-        // never renders a subtitle/version on purchased tracks.
+    fn purchase_track_captures_version_when_present() {
+        // INVERTED 2026-08-16 (contract §10-C). This test used to be named
+        // `purchase_track_has_no_version_field` and asserted that an incoming
+        // `version` key was silently ignored — except it never asserted anything
+        // about `version` at all, so it passed either way while documenting the
+        // opposite of the behaviour we now want. A guard that guards nothing and
+        // misleads the next reader is worse than no guard.
+        //
+        // `version` is now captured. The purchases ENDPOINTS do not send it, but
+        // the album-detail screen builds its tracks from the catalog album, which
+        // does, and the reference renders `formatTrackTitle(title, version)`.
         const TRACK: &str = r#"{
             "id": 1,
-            "title": "No Version",
+            "title": "Song",
             "version": "Remastered 2024"
         }"#;
         let track: PurchaseTrack =
-            serde_json::from_str(TRACK).expect("track with stray version must deserialize");
+            serde_json::from_str(TRACK).expect("track with a version must deserialize");
         assert_eq!(track.id, 1);
-        assert_eq!(track.title, "No Version");
+        assert_eq!(track.title, "Song");
+        assert_eq!(track.version.as_deref(), Some("Remastered 2024"));
         // `streamable` defaults TRUE even on the bare track shape.
         assert!(track.streamable);
+    }
+
+    #[test]
+    fn purchase_track_without_a_version_is_none() {
+        // The purchases list shape, which genuinely carries no `version`.
+        let track: PurchaseTrack =
+            serde_json::from_str(r#"{"id": 2, "title": "Plain"}"#).expect("bare track");
+        assert_eq!(track.version, None);
     }
 
     #[test]

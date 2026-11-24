@@ -92,7 +92,9 @@ const sharedState = await import("../../mobile/src/sharedState");
 const libraryServer = (values: Record<string, string>) => mock(async (input: RequestInfo | URL) => {
   const url = String(input);
   if (url.endsWith("/api/state")) return response({ revision: 1, values });
-  if (url.endsWith("/api/library") || url.endsWith("/api/music/local/tracks")) return response(url.endsWith("/api/library") ? { tracks: [] } : []);
+  const path = new URL(url).pathname;
+  if (path === "/api/library") return response({ tracks: [] });
+  if (path === "/api/music/local/tracks") return response([]);
   return response({ error: "unused" }, 404);
 }) as unknown as typeof fetch;
 

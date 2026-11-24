@@ -5,7 +5,7 @@ use md5::{Digest, Md5};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::error::{ApiError, Result};
-use qbz_models::UserSession;
+use qbz_models::{Entitlements, UserSession};
 
 /// Generate MD5 signature for protected API endpoints
 ///
@@ -17,10 +17,37 @@ pub fn generate_signature(method: &str, params: &str, timestamp: u64, secret: &s
     format!("{:x}", hasher.finalize())
 }
 
-/// Generate signature for track/getFileUrl endpoint
-pub fn sign_get_file_url(track_id: u64, format_id: u32, timestamp: u64, secret: &str) -> String {
-    let params = format!("format_id{}intentstreamtrack_id{}", format_id, track_id);
+/// Generate the signature for `track/getFileUrl`. The `intent` is PART OF THE
+/// PREIMAGE, not just a query parameter: measured live 2026-09-01 on a
+/// purchased DSD128 track (format 56), the request signed with `stream`
+/// answered HTTP 400 and the one signed with `download` answered 200 with the
+/// DSF. Parameters are alphabetical and unseparated, as on every RPC call.
+pub fn sign_get_file_url_with_intent(
+    track_id: u64,
+    format_id: u32,
+    intent: &str,
+    timestamp: u64,
+    secret: &str,
+) -> String {
+    let params = format!("format_id{}intent{}track_id{}", format_id, intent, track_id);
     generate_signature("trackgetFileUrl", &params, timestamp, secret)
+}
+
+/// Playback: `intent=stream`.
+pub fn sign_get_file_url(track_id: u64, format_id: u32, timestamp: u64, secret: &str) -> String {
+    sign_get_file_url_with_intent(track_id, format_id, "stream", timestamp, secret)
+}
+
+/// A purchased file: `intent=download`. The Qobuz desktop client signs this
+/// exact form when it writes a purchase to disk, and it is the only signature
+/// the CDN accepts for a DSD entitlement.
+pub fn sign_get_file_url_download(
+    track_id: u64,
+    format_id: u32,
+    timestamp: u64,
+    secret: &str,
+) -> String {
+    sign_get_file_url_with_intent(track_id, format_id, "download", timestamp, secret)
 }
 
 /// Generate signature for favorite/getUserFavorites endpoint
@@ -52,7 +79,12 @@ pub fn sign_search(
 /// `method` is the endpoint path with slashes removed, e.g. "/album/get" → "albumget".
 /// `kv_pairs` are (key, value) pairs sorted alphabetically by key.
 /// The params string is built as key1value1key2value2... (same as mobile app interceptor).
-pub fn sign_request(method: &str, kv_pairs: &[(&str, &str)], timestamp: u64, secret: &str) -> String {
+pub fn sign_request(
+    method: &str,
+    kv_pairs: &[(&str, &str)],
+    timestamp: u64,
+    secret: &str,
+) -> String {
     let mut sorted = kv_pairs.to_vec();
     sorted.sort_by_key(|(k, _)| *k);
     let params: String = sorted.iter().map(|(k, v)| format!("{}{}", k, v)).collect();
@@ -97,14 +129,48 @@ pub fn parse_login_response(response: &serde_json::Value) -> Result<UserSession>
         .unwrap_or("")
         .to_string();
 
-    // Check subscription
+    // Subscription / entitlements. `credential.parameters` is the server's
+    // verdict: a populated object for a subscriber, `null`/absent/empty
+    // for a Qobuz member without a subscription. The member is a valid
+    // session (member mode, 2026-09-02): favorites, playlists, purchases
+    // and previews all work; the flags below say what does not.
     let credential = user.get("credential");
-    let subscription_label = credential
+    let parameters = credential
         .and_then(|c| c.get("parameters"))
-        .and_then(|p| p.get("short_label"))
+        .and_then(|p| p.as_object())
+        .filter(|o| !o.is_empty());
+    let entitlements = parameters
+        .map(|p| Entitlements {
+            lossy_streaming: flag(p, "lossy_streaming"),
+            lossless_streaming: flag(p, "lossless_streaming"),
+            hires_streaming: flag(p, "hires_streaming"),
+            hires_purchases_streaming: flag(p, "hires_purchases_streaming"),
+            offline_streaming: flag(p, "offline_streaming"),
+            mobile_streaming: flag(p, "mobile_streaming"),
+        })
+        .unwrap_or_default();
+    let subscription_label = match parameters {
+        Some(p) => p
+            .get("short_label")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        // msgid; the UI translates it (the web player says "Qobuz member").
+        None => "Member".to_string(),
+    };
+    let subscription = user.get("subscription");
+    let subscription_end_date = subscription
+        .and_then(|s| s.get("end_date"))
         .and_then(|v| v.as_str())
-        .unwrap_or("Unknown")
-        .to_string();
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let subscription_offer = subscription
+        .and_then(|s| s.get("offer"))
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
 
     fn parse_subscription_valid_until(parameters: &serde_json::Value) -> Option<String> {
         // Try common string fields first.
@@ -159,16 +225,6 @@ pub fn parse_login_response(response: &serde_json::Value) -> Result<UserSession>
         .and_then(|v| v.as_str())
         .map(str::to_string);
 
-    // Check if user has valid subscription
-    let has_subscription = credential
-        .and_then(|c| c.get("parameters"))
-        .map(|p| !p.is_null() && p.as_object().map(|o| !o.is_empty()).unwrap_or(false))
-        .unwrap_or(false);
-
-    if !has_subscription {
-        return Err(ApiError::IneligibleUser);
-    }
-
     Ok(UserSession {
         user_auth_token,
         user_id,
@@ -176,9 +232,20 @@ pub fn parse_login_response(response: &serde_json::Value) -> Result<UserSession>
         display_name,
         subscription_label,
         subscription_valid_until,
+        entitlements,
+        subscription_end_date,
+        subscription_offer,
         country_code,
         language_code,
     })
+}
+
+/// A boolean entitlement flag; anything but literal `true` is `false`.
+fn flag(parameters: &serde_json::Map<String, serde_json::Value>, key: &str) -> bool {
+    parameters
+        .get(key)
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 /// App seed for CMAF request signing and key derivation.
@@ -212,6 +279,23 @@ mod tests {
     }
 
     #[test]
+    fn download_intent_signs_a_different_preimage_than_stream() {
+        let (tid, fid, ts, secret) = (123_456_u64, 56_u32, 1_700_000_000_u64, "s3cr3t");
+        let expected = generate_signature(
+            "trackgetFileUrl",
+            &format!("format_id{fid}intentdownloadtrack_id{tid}"),
+            ts,
+            secret,
+        );
+        assert_eq!(sign_get_file_url_download(tid, fid, ts, secret), expected);
+        assert_ne!(
+            sign_get_file_url_download(tid, fid, ts, secret),
+            sign_get_file_url(tid, fid, ts, secret),
+            "intent is inside the preimage; the two operations cannot share a signature"
+        );
+    }
+
+    #[test]
     fn test_sign_get_file_url() {
         let sig = sign_get_file_url(123456, 27, 1234567890, "testsecret");
         assert_eq!(sig.len(), 32);
@@ -219,7 +303,7 @@ mod tests {
 
     fn login_response(user_extra: serde_json::Value) -> serde_json::Value {
         let mut user = serde_json::json!({
-            "id": 1705826,
+            "id": 42,
             "email": "a@b.c",
             "display_name": "Tester",
             "credential": {"parameters": {"short_label": "Studio"}}
@@ -252,5 +336,119 @@ mod tests {
         let session = parse_login_response(&response).expect("valid login response");
         assert_eq!(session.country_code, None);
         assert_eq!(session.language_code, None);
+    }
+
+    /// Entitlement shape from Qobuz's embedded `/user/login` fixture,
+    /// with synthetic account details. The Studio account has a past
+    /// `end_date` and `is_canceled: true`, yet every entitlement is `true`.
+    /// The flags are the verdict; the date is not.
+    fn studio_fixture() -> serde_json::Value {
+        serde_json::json!({
+            "user_auth_token": "fixture-token",
+            "user": {
+                "id": 42,
+                "email": "listener@example.test",
+                "login": "fixture-studio",
+                "display_name": "Fixture Studio",
+                "country_code": "FR",
+                "language_code": "fr",
+                "subscription": {
+                    "offer": "studio",
+                    "periodicity": "annual",
+                    "end_date": "2022-06-19",
+                    "is_canceled": true
+                },
+                "credential": {
+                    "id": 1489142,
+                    "label": "streaming-studio",
+                    "description": "Abonné Qobuz Studio",
+                    "parameters": {
+                        "lossy_streaming": true,
+                        "lossless_streaming": true,
+                        "hires_streaming": true,
+                        "hires_purchases_streaming": true,
+                        "mobile_streaming": true,
+                        "offline_streaming": true,
+                        "hfp_purchase": false,
+                        "included_format_group_ids": [1, 2, 3, 4],
+                        "label": "Qobuz Studio",
+                        "short_label": "Studio",
+                        "source": "internal"
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn subscriber_carries_entitlements_offer_and_end_date() {
+        let session = parse_login_response(&studio_fixture()).expect("subscriber parses");
+        assert_eq!(session.subscription_label, "Studio");
+        assert!(session.entitlements.offline_streaming);
+        assert!(session.entitlements.hires_streaming);
+        assert!(session.entitlements.hires_purchases_streaming);
+        assert!(!session.entitlements.is_member_only());
+        assert_eq!(session.subscription_offer.as_deref(), Some("studio"));
+        assert_eq!(session.subscription_end_date.as_deref(), Some("2022-06-19"));
+    }
+
+    /// A Qobuz member without a subscription: Qobuz answers 200 and the
+    /// session is real; QBZ used to throw it away (`IneligibleUser`). The
+    /// web player shows the same account as "Qobuz member" with its
+    /// favorites and playlists (verified 2026-09-02 with a lapsed account).
+    #[test]
+    fn member_without_parameters_is_a_valid_session() {
+        for credential in [
+            serde_json::json!({"parameters": null}),
+            serde_json::json!({"parameters": {}}),
+            serde_json::json!({}),
+        ] {
+            let response = login_response(serde_json::json!({ "credential": credential }));
+            let session = parse_login_response(&response)
+                .unwrap_or_else(|e| panic!("member must parse, got {e} for {credential}"));
+            assert_eq!(session.user_id, 42);
+            assert_eq!(session.subscription_label, "Member");
+            assert_eq!(session.entitlements, Entitlements::default());
+            assert!(session.entitlements.is_member_only());
+            assert_eq!(session.subscription_end_date, None);
+        }
+        // No `credential` object at all: same verdict.
+        let mut response = login_response(serde_json::json!({}));
+        response["user"]
+            .as_object_mut()
+            .unwrap()
+            .remove("credential");
+        let session = parse_login_response(&response).expect("member without credential");
+        assert_eq!(session.subscription_label, "Member");
+        assert!(session.entitlements.is_member_only());
+    }
+
+    #[test]
+    fn flags_default_false_when_absent_or_not_boolean() {
+        let response = login_response(serde_json::json!({
+            "credential": {"parameters": {
+                "short_label": "Solo",
+                "lossless_streaming": true,
+                "hires_streaming": "true",
+                "offline_streaming": 1
+            }}
+        }));
+        let session = parse_login_response(&response).expect("parses");
+        assert_eq!(session.subscription_label, "Solo");
+        assert!(session.entitlements.lossless_streaming);
+        assert!(!session.entitlements.hires_streaming);
+        assert!(!session.entitlements.offline_streaming);
+        assert!(!session.entitlements.is_member_only());
+    }
+
+    #[test]
+    fn persisted_session_without_new_fields_still_loads() {
+        // A session snapshot written before member mode: no entitlements,
+        // no subscription fields. Must deserialize with everything false.
+        let json = r#"{"user_auth_token":"t","user_id":1,"email":"","display_name":"",
+            "subscription_label":"Studio"}"#;
+        let session: UserSession = serde_json::from_str(json).expect("old snapshot loads");
+        assert_eq!(session.entitlements, Entitlements::default());
+        assert_eq!(session.subscription_offer, None);
     }
 }

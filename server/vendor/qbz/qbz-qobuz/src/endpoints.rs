@@ -5,6 +5,7 @@ pub const BASE_URL: &str = "https://www.qobuz.com/api.json/0.2";
 /// Endpoint paths
 pub mod paths {
     // User
+    pub const USER_GET: &str = "/user/get";
     pub const USER_LOGIN: &str = "/user/login";
 
     // OAuth
@@ -50,6 +51,14 @@ pub mod paths {
     pub const PLAYLIST_ADD_TRACKS: &str = "/playlist/addTracks";
     pub const PLAYLIST_DELETE_TRACKS: &str = "/playlist/deleteTracks";
     pub const PLAYLIST_UPDATE: &str = "/playlist/update";
+    // Reorder tracks WITHIN a playlist. Not in
+    // qobuz-api-inferred-openapi-v10.0.0.0-beta.yaml; the shape comes from the
+    // DESKTOP web-player capture
+    // (qbz-nix-docs/qobuz-api-delta-desktop-8.2.0-b015.md:95), not from the
+    // decompiled Android route table, which CLAUDE.md forbids inferring
+    // endpoints from. Distinct from /playlist/updatePlaylistsPosition, which
+    // reorders PLAYLISTS.
+    pub const PLAYLIST_UPDATE_TRACKS_POSITION: &str = "/playlist/updateTracksPosition";
     pub const PLAYLIST_GET_TAGS: &str = "/playlist/getTags";
     pub const PLAYLIST_SUBSCRIBE: &str = "/playlist/subscribe";
     pub const PLAYLIST_UNSUBSCRIBE: &str = "/playlist/unsubscribe";
@@ -93,6 +102,11 @@ pub mod paths {
 
     // Session (CMAF streaming)
     pub const SESSION_START: &str = "/session/start";
+
+    // Qobuz Connect cloud authentication. Both are form-encoded POSTs; see
+    // qobuz-api-inferred-openapi-v10.0.0.0-beta.yaml.
+    pub const QWS_CREATE_TOKEN: &str = "/qws/createToken";
+    pub const QWS_DELEGATE_AUTH: &str = "/qws/delegateAuth";
 
     // File (CMAF streaming)
     pub const FILE_URL: &str = "/file/url";

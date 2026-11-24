@@ -704,6 +704,7 @@ pub(super) fn http_client() -> Result<reqwest::Client, reqwest::Error> {
     crate::http_client::builder()
         .connect_timeout(Duration::from_secs(10))
         .read_timeout(Duration::from_secs(60))
+        .no_gzip()
         .build()
 }
 
@@ -755,7 +756,19 @@ async fn produce(
             let container = container_for_mime(&source.mime_type, "flac");
             let file = format!("{stem}.{container}");
             let mut pending = store.begin(&file).map_err(text)?;
-            fetch_into(&state.download_http_client, &source.url, pending.writer()).await?;
+            match source.location {
+                QobuzPlaybackLocation::Direct(url) => {
+                    fetch_into(&state.download_http_client, &url, pending.writer()).await?;
+                }
+                QobuzPlaybackLocation::Cmaf(source) => {
+                    let length = source.content_length();
+                    let chunks = source.bytes(0..length);
+                    tokio::pin!(chunks);
+                    while let Some(chunk) = chunks.next().await {
+                        pending.writer().write_all(&chunk.map_err(text)?).map_err(text)?;
+                    }
+                }
+            }
             let size = store.finish(pending).map_err(text)?;
             Ok(Produced {
                 file,

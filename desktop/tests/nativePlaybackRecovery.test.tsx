@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import type { Track } from "../src/types/music";
+import { setReducedMotion } from "../src/utils/reducedMotion";
 
 const calls: { command: string; args?: Record<string, unknown> }[] = [];
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
@@ -58,8 +59,9 @@ function Harness() {
 beforeAll(() => {
   Object.assign(globalThis, { window: dom, document: dom.document, navigator: dom.navigator, localStorage: dom.localStorage,
     HTMLElement: dom.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true });
+  setReducedMotion(true);
 });
-afterAll(() => { dom.happyDOM.abort(); });
+afterAll(() => { setReducedMotion(false); dom.happyDOM.abort(); });
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 test("returning to the window replaces a stalled status read and reconciles a missed gapless handoff", async () => {

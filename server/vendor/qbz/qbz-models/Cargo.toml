@@ -26,5 +26,5 @@ chrono = { workspace = true }
 url = "2"
 # Percent-encoding the Plex transcode `url=`/token params (plex_thumb_url),
 # matching the Tauri frontend's buildPlexArtworkUrl. Same crate used across
-# qbz-slint / qbz-media-controls / qbz-integrations.
+# qbz-qt / qbz-media-controls / qbz-integrations.
 urlencoding = "2"

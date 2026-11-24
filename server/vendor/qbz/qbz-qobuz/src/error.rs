@@ -22,6 +22,9 @@ pub enum ApiError {
     #[error("Track is not streamable")]
     NonStreamable,
 
+    #[error("Qobuz only offers a preview of track {0} for this account")]
+    PreviewOnly(u64),
+
     #[error("Invalid quality format: {0}")]
     InvalidQuality(u32),
 
@@ -34,8 +37,9 @@ pub enum ApiError {
     /// Qobuz answered 403 Forbidden on an authenticated request. The account is
     /// authenticated but not currently allowed to perform the action (entitlement
     /// not restored after an outage, geo/concurrency limit, or an edge/WAF block).
-    /// The string is a short body preview for diagnostics. Terminal, never a
-    /// per-quality restriction — abort the fallback loop instead of retrying.
+    /// The string contains only a redacted body-presence diagnostic. Terminal,
+    /// never a per-quality restriction — abort the fallback loop instead of
+    /// retrying.
     #[error("Access forbidden by Qobuz (HTTP 403){0}")]
     Forbidden(String),
 
@@ -49,7 +53,7 @@ pub enum ApiError {
     OfflineMode,
 
     #[error("Network error: {0}")]
-    NetworkError(#[from] reqwest::Error),
+    NetworkError(reqwest::Error),
 
     #[error("JSON parsing error: {0}")]
     ParseError(#[from] serde_json::Error),
@@ -65,6 +69,18 @@ pub enum ApiError {
 }
 
 impl ApiError {
+    /// Whether this is the exact terminal 404 sentinel emitted by
+    /// `QobuzClient::get_album`. Centralising the legacy string-shaped result
+    /// keeps UI callers from broad `contains("404")` guesses while avoiding a
+    /// new enum variant that would break every exhaustive error classifier.
+    pub fn is_album_unavailable(&self, album_id: &str) -> bool {
+        matches!(
+            self,
+            ApiError::ApiResponse(message)
+                if message == &format!("Album {album_id} not found (404)")
+        )
+    }
+
     /// True for errors worth retrying with backoff (issue #467): transport
     /// problems (timeout/connect/reset), 5xx server errors, and 429 rate
     /// limiting. Terminal errors — a real 404 `TrackUnavailable`, auth or
@@ -79,4 +95,30 @@ impl ApiError {
     }
 }
 
+impl From<reqwest::Error> for ApiError {
+    fn from(error: reqwest::Error) -> Self {
+        Self::NetworkError(error.without_url())
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ApiError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn album_unavailable_recognises_only_the_exact_get_album_404() {
+        assert!(ApiError::ApiResponse("Album old-id not found (404)".into())
+            .is_album_unavailable("old-id"));
+        assert!(
+            !ApiError::ApiResponse("get_album(old-id) status 500".into())
+                .is_album_unavailable("old-id")
+        );
+        assert!(
+            !ApiError::ApiResponse("Album another-id not found (404)".into())
+                .is_album_unavailable("old-id")
+        );
+        assert!(!ApiError::OfflineMode.is_album_unavailable("old-id"));
+    }
+}

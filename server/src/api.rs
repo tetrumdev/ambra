@@ -23,7 +23,7 @@ use axum::{
     http::{
         HeaderMap, HeaderValue, Method, StatusCode,
         header::{
-            ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
+            ACCEPT_ENCODING, ACCEPT_RANGES, AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
             CONTENT_TYPE, ETAG, LAST_MODIFIED, RANGE,
         },
     },
@@ -48,7 +48,7 @@ use crate::{
         HealthResponse, LibraryResponse, MusicProvider, SearchPage, TrackMetadata,
         TrackPlaybackMetadata,
     },
-    providers::qobuz::{QobuzLogin, QobuzProvider},
+    providers::qobuz::{PlaybackLocation as QobuzPlaybackLocation, QobuzLogin, QobuzProvider},
     providers::spotify::SpotifyProvider,
     providers::tidal::{PlaybackSource, TidalLogin, TidalProvider},
 };
@@ -316,6 +316,10 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
         .route(
             "/api/providers/{provider}/tracks/{track_id}/metadata",
             get(track_metadata),
+        )
+        .route(
+            "/api/providers/{provider}/tracks/{track_id}/radio",
+            get(track_radio),
         )
         .route(
             "/api/providers/{provider}/tracks/{track_id}/playback",
@@ -645,14 +649,26 @@ fn known_auth_status(state: &AppState) -> AuthStatusResponse {
 }
 
 /// Only an explicit live check asks Spotify whether its session still works.
-async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStatusQuery>) -> Json<AuthStatusResponse> {
+async fn auth_status(State(state): State<AppState>, Query(query): Query<AuthStatusQuery>) -> Json<AuthStatusDetails> {
     let mut status = known_auth_status(&state);
     if query.live && let Some(provider) = current_spotify(&state) {
         status.spotify = tokio::time::timeout(Duration::from_secs(5), provider.check_connection())
             .await
             .unwrap_or_else(|_| provider.is_connected());
     }
-    Json(status)
+    Json(AuthStatusDetails {
+        status,
+        qobuz_entitlements: state.qobuz.get().map(|provider| provider.entitlements().clone()),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthStatusDetails {
+    #[serde(flatten)]
+    status: AuthStatusResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qobuz_entitlements: Option<qbz_models::Entitlements>,
 }
 
 async fn start_auth(
@@ -2168,6 +2184,24 @@ fn valid_spotify_id(id: &str) -> bool {
             .all(|character| character.is_ascii_alphanumeric())
 }
 
+#[derive(Deserialize)]
+struct TrackRadioQuery {
+    limit: Option<usize>,
+}
+
+async fn track_radio(
+    State(state): State<AppState>,
+    Path((provider, track_id)): Path<(String, u64)>,
+    Query(query): Query<TrackRadioQuery>,
+) -> Result<Json<LibraryResponse>, ApiError> {
+    if provider != "qobuz" {
+        return Err(ApiError::not_found("Track radio is available for Qobuz".to_owned()));
+    }
+    let limit = query.limit.unwrap_or(12).clamp(1, 50);
+    let tracks = qobuz_provider(&state)?.track_radio(track_id, limit).await.map_err(ApiError::upstream)?;
+    Ok(Json(LibraryResponse::new(tracks)))
+}
+
 async fn stream_track(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
@@ -2207,7 +2241,19 @@ async fn stream_track(
                 .and_then(|range| range.to_str().ok())
                 .is_none_or(|range| range.starts_with("bytes=0-"));
             let (response, loudness) = tokio::join!(
-                proxy_direct_stream(&state.http_client, &source.url, &source.mime_type, &headers),
+                async {
+                    match source.location {
+                        QobuzPlaybackLocation::Direct(url) => {
+                            proxy_direct_stream(&state.download_http_client, &url, &source.mime_type, &headers).await
+                        }
+                        QobuzPlaybackLocation::Cmaf(source) => {
+                            let total = source.content_length();
+                            let (start, end, partial) = requested_byte_range(headers.get(RANGE), total)?;
+                            native_range_response("audio/flac", total, start, end, partial,
+                                Body::from_stream(source.bytes(start..end + 1)))
+                        }
+                    }
+                },
                 async {
                     if opening {
                         provider.loudness(&track_id).await
@@ -2252,10 +2298,17 @@ async fn stream_spotify_track(
     } else {
         Loudness::default()
     };
-    let response_length = end_inclusive.saturating_sub(start).saturating_add(1);
     let mime_type = prepared.mime_type();
     let stream = ReceiverStream::new(prepared.into_byte_stream(start, end_inclusive));
+    let mut response = native_range_response(mime_type, total_length, start, end_inclusive, partial, Body::from_stream(stream))?;
+    loudness.insert_into(response.headers_mut());
+    Ok(response)
+}
 
+fn native_range_response(
+    mime_type: &str, total_length: u64, start: u64, end_inclusive: u64, partial: bool, body: Body,
+) -> Result<Response, ApiError> {
+    let response_length = end_inclusive - start + 1;
     let mut response = Response::builder()
         .status(if partial {
             StatusCode::PARTIAL_CONTENT
@@ -2266,7 +2319,7 @@ async fn stream_spotify_track(
         .header(CONTENT_LENGTH, response_length)
         .header(ACCEPT_RANGES, "bytes")
         .header(CACHE_CONTROL, "no-store")
-        .body(Body::from_stream(stream))
+        .body(body)
         .map_err(ApiError::internal)?;
     if partial {
         response.headers_mut().insert(
@@ -2275,7 +2328,6 @@ async fn stream_spotify_track(
                 .map_err(ApiError::internal)?,
         );
     }
-    loudness.insert_into(response.headers_mut());
     Ok(response)
 }
 
@@ -2628,17 +2680,17 @@ async fn proxy_direct_stream(
     fallback_mime_type: &str,
     incoming_headers: &HeaderMap,
 ) -> Result<Response, ApiError> {
-    let mut request = client.get(url);
+    let mut request = client.get(url).header(ACCEPT_ENCODING, "identity");
     if let Some(range) = incoming_headers.get(RANGE) {
         request = request.header(RANGE, range);
     }
 
-    let upstream = request.send().await.map_err(ApiError::upstream)?;
+    let upstream = request.send().await.map_err(|error| ApiError::upstream(error.without_url()))?;
     let status = upstream.status();
     let upstream_headers = upstream.headers().clone();
     let stream = upstream
         .bytes_stream()
-        .map_err(|error| io::Error::other(error.to_string()));
+        .map_err(|error| io::Error::other(error.without_url()));
 
     let mut response = Response::builder()
         .status(status)

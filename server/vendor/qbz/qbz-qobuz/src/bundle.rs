@@ -6,8 +6,10 @@
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
+use tempfile::Builder;
 
 use super::error::{ApiError, Result};
 
@@ -55,15 +57,60 @@ impl From<CachedBundle> for BundleTokens {
     }
 }
 
-fn cache_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("qbz").join("bundle_tokens.json"))
+/// Where the token cache lives.
+///
+/// `cache_dir` is what an embedder supplied; without one this falls back to the
+/// platform cache directory, which is what the desktop has always used.
+fn cache_path(cache_dir: Option<&Path>) -> Option<PathBuf> {
+    let root = cache_dir.map(Path::to_path_buf).or_else(dirs::cache_dir)?;
+    Some(root.join("qbz").join("bundle_tokens.json"))
+}
+
+/// Replace `path` with whatever `write` produces, or leave it exactly as it was.
+///
+/// The bytes land in a sibling temp file that is flushed and then renamed over
+/// the target, so a reader either sees the previous cache or the new one and
+/// never the gap between them. Writing in place cannot offer that: it truncates
+/// the file before the first byte of the replacement is written.
+///
+/// This is process-crash atomicity, not a power-loss durability promise: the
+/// file contents are synced before the rename, but the parent directory is not.
+/// Concurrent writers are not serialized; the last successful rename wins,
+/// while every visible version remains a complete file.
+///
+/// `write` is a closure rather than a `&[u8]` so a test can fail partway through
+/// and assert what survives.
+fn atomic_write_with(
+    path: &Path,
+    write: impl FnOnce(&mut std::fs::File) -> io::Result<()>,
+) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "cache path has no parent"))?;
+    std::fs::create_dir_all(parent)?;
+
+    let mut temp = Builder::new()
+        .prefix(".bundle_tokens.")
+        .tempfile_in(parent)?;
+    write(temp.as_file_mut())?;
+    temp.as_file().sync_all()?;
+    temp.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    atomic_write_with(path, |file| file.write_all(bytes))
 }
 
 /// Load cached tokens if a valid cache file exists. Returns `None` on any error
 /// (missing file, malformed JSON, empty fields) so the caller falls back to a
 /// live fetch.
 pub fn load_cached_bundle() -> Option<CachedBundle> {
-    let path = cache_path()?;
+    load_cached_bundle_from(None)
+}
+
+pub(crate) fn load_cached_bundle_from(cache_dir: Option<&Path>) -> Option<CachedBundle> {
+    let path = cache_path(cache_dir)?;
     let data = std::fs::read(&path).ok()?;
     match serde_json::from_slice::<CachedBundle>(&data) {
         Ok(c) if !c.app_id.is_empty() && !c.secrets.is_empty() => Some(c),
@@ -78,16 +125,13 @@ pub fn load_cached_bundle() -> Option<CachedBundle> {
     }
 }
 
-fn save_cached_bundle(c: &CachedBundle) {
-    let Some(path) = cache_path() else {
+fn save_cached_bundle(c: &CachedBundle, cache_dir: Option<&Path>) {
+    let Some(path) = cache_path(cache_dir) else {
         log::warn!("[Bundle] No cache dir available, skipping token cache write");
         return;
     };
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
     match serde_json::to_vec_pretty(c) {
-        Ok(bytes) => match std::fs::write(&path, bytes) {
+        Ok(bytes) => match atomic_write(&path, &bytes) {
             Ok(_) => log::info!("[Bundle] Cached tokens (version {})", c.bundle_version),
             Err(e) => log::warn!("[Bundle] Failed to write token cache: {}", e),
         },
@@ -177,18 +221,28 @@ async fn extract_bundle_tokens_once(client: &Client) -> Result<(BundleTokens, St
 /// [`refresh_bundle_if_changed`] on warm starts so the UI never blocks on the
 /// 7 MB download.
 pub async fn extract_and_cache_bundle_tokens(client: &Client) -> Result<BundleTokens> {
+    extract_and_cache_bundle_tokens_in(client, None).await
+}
+
+pub(crate) async fn extract_and_cache_bundle_tokens_in(
+    client: &Client,
+    cache_dir: Option<&Path>,
+) -> Result<BundleTokens> {
     let mut last_err: Option<ApiError> = None;
     let attempts = BUNDLE_EXTRACTION_RETRIES + 1;
     for attempt in 1..=attempts {
         match extract_bundle_tokens_once(client).await {
             Ok((tokens, version)) => {
-                save_cached_bundle(&CachedBundle {
-                    bundle_version: version,
-                    app_id: tokens.app_id.clone(),
-                    secrets: tokens.secrets.clone(),
-                    private_key: tokens.private_key.clone(),
-                    fetched_at: now_unix(),
-                });
+                save_cached_bundle(
+                    &CachedBundle {
+                        bundle_version: version,
+                        app_id: tokens.app_id.clone(),
+                        secrets: tokens.secrets.clone(),
+                        private_key: tokens.private_key.clone(),
+                        fetched_at: now_unix(),
+                    },
+                    cache_dir,
+                );
                 return Ok(tokens);
             }
             Err(e) => {
@@ -222,11 +276,19 @@ pub async fn refresh_bundle_if_changed(
     client: &Client,
     cached_version: &str,
 ) -> Option<BundleTokens> {
+    refresh_bundle_if_changed_in(client, cached_version, None).await
+}
+
+pub(crate) async fn refresh_bundle_if_changed_in(
+    client: &Client,
+    cached_version: &str,
+    cache_dir: Option<&Path>,
+) -> Option<BundleTokens> {
     let (_, version) = fetch_bundle_url(client).await.ok()?;
     if version == cached_version {
-        if let Some(mut c) = load_cached_bundle() {
+        if let Some(mut c) = load_cached_bundle_from(cache_dir) {
             c.fetched_at = now_unix();
-            save_cached_bundle(&c);
+            save_cached_bundle(&c, cache_dir);
         }
         log::debug!("[Bundle] Background check: version {} unchanged", version);
         return None;
@@ -236,7 +298,9 @@ pub async fn refresh_bundle_if_changed(
         cached_version,
         version
     );
-    extract_and_cache_bundle_tokens(client).await.ok()
+    extract_and_cache_bundle_tokens_in(client, cache_dir)
+        .await
+        .ok()
 }
 
 /// Backwards-compatible one-shot extraction (no caching). Retained for callers
@@ -403,11 +467,139 @@ mod tests {
         assert_eq!(result.unwrap(), "/resources/7.0.1-b001/bundle.js");
     }
 
+    /// An embedder's root is used verbatim, and the `qbz/` namespace inside it
+    /// is kept, so the cache has the same name and shape wherever it lands.
+    #[test]
+    fn an_explicit_cache_root_keeps_the_qbz_namespace() {
+        let root = Path::new("/app/cache");
+        assert_eq!(
+            cache_path(Some(root)),
+            Some(root.join("qbz").join("bundle_tokens.json"))
+        );
+    }
+
+    /// Without one, nothing about the desktop's path changes.
+    #[test]
+    fn no_explicit_root_falls_back_to_the_platform_cache_dir() {
+        assert_eq!(
+            cache_path(None),
+            dirs::cache_dir().map(|d| d.join("qbz").join("bundle_tokens.json"))
+        );
+    }
+
+    /// The configurable root from #708 must cover the complete write/read path,
+    /// not only path construction. The atomic writer also creates its namespace
+    /// on first use.
+    #[test]
+    fn explicit_cache_root_round_trips_through_the_atomic_writer() {
+        let root = tempfile::tempdir().expect("cache root");
+        let expected = CachedBundle {
+            bundle_version: "8.1.0-b019".to_string(),
+            app_id: "123456789".to_string(),
+            secrets: vec!["secret".to_string()],
+            private_key: Some("private-key".to_string()),
+            fetched_at: 42,
+        };
+
+        save_cached_bundle(&expected, Some(root.path()));
+
+        let actual = load_cached_bundle_from(Some(root.path())).expect("cached bundle");
+        assert_eq!(actual.bundle_version, expected.bundle_version);
+        assert_eq!(actual.app_id, expected.app_id);
+        assert_eq!(actual.secrets, expected.secrets);
+        assert_eq!(actual.private_key, expected.private_key);
+        assert_eq!(actual.fetched_at, expected.fetched_at);
+    }
+
     #[test]
     fn test_extract_app_id() {
         let bundle = r#"production:{api:{appId:"123456789",appSecret:"abc"}"#;
         let result = extract_app_id(bundle);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "123456789");
+    }
+
+    /// The invariant the temp-file-and-rename buys: a write that dies partway
+    /// leaves the tokens that were already there.
+    ///
+    /// Swap `atomic_write` back to `std::fs::write` and this fails with an empty
+    /// file, which is the state a kill during the launch-time `fetched_at`
+    /// refresh used to leave behind.
+    #[test]
+    fn interrupted_cache_write_preserves_the_previous_file() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"previous cache").expect("initial cache write");
+
+        let result = atomic_write_with(&path, |file| {
+            file.write_all(b"partial replacement")?;
+            Err(io::Error::other("simulated interruption"))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read(&path).expect("previous cache remains readable"),
+            b"previous cache"
+        );
+    }
+
+    /// What losing the file costs, and why the invariant above is worth a temp
+    /// file: there is no partial recovery. Any truncated cache is simply gone,
+    /// and the next launch pays a full live bundle extraction.
+    #[test]
+    fn a_truncated_cache_cannot_be_salvaged() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("bundle_tokens.json");
+        let whole = serde_json::to_vec_pretty(&CachedBundle {
+            bundle_version: "8.1.0-b019".to_string(),
+            app_id: "123456789".to_string(),
+            secrets: vec!["secret".to_string()],
+            private_key: None,
+            fetched_at: 1,
+        })
+        .expect("serialize");
+
+        for kept in [0, whole.len() / 2] {
+            std::fs::write(&path, &whole[..kept]).expect("write truncated cache");
+            let data = std::fs::read(&path).expect("read truncated cache");
+            assert!(
+                serde_json::from_slice::<CachedBundle>(&data).is_err(),
+                "{kept} of {} bytes should not parse",
+                whole.len()
+            );
+        }
+    }
+
+    /// The replacement file is owner-only, where writing in place left it at
+    /// whatever the umask allowed (0644 on a default Linux setup). These are
+    /// app-level values scraped from a public bundle rather than user
+    /// credentials, so this is tidiness on a shared machine, not a fix for a
+    /// vulnerability.
+    #[cfg(unix)]
+    #[test]
+    fn cache_file_is_owner_readable_and_writable_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("bundle_tokens.json");
+        atomic_write(&path, b"cache").expect("cache write");
+
+        let mode = std::fs::metadata(path)
+            .expect("cache metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    /// The cache dir is created on demand, so a first run on a clean machine
+    /// caches its tokens rather than warning and moving on.
+    #[test]
+    fn a_missing_cache_directory_is_created() {
+        let root = tempfile::tempdir().expect("cache root");
+        let path = root.path().join("qbz").join("nested").join("tokens.json");
+
+        atomic_write(&path, b"cache").expect("cache write into a missing directory");
+
+        assert_eq!(std::fs::read(&path).expect("cache readable"), b"cache");
     }
 }

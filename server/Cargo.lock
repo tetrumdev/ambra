@@ -117,7 +117,6 @@ dependencies = [
  "quick-xml",
  "rayon",
  "realfft",
- "reqwest 0.12.28",
  "reqwest 0.13.5",
  "rpassword",
  "rusqlite",
@@ -127,6 +126,7 @@ dependencies = [
  "sha2 0.10.9",
  "symphonia",
  "tar",
+ "tempfile",
  "tidlers",
  "tokio",
  "tokio-stream",
@@ -1781,7 +1781,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -3220,10 +3219,10 @@ checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
 name = "qbz-cmaf"
-version = "2.0.2"
+version = "2.1.2"
 dependencies = [
  "aes",
- "base64 0.22.1",
+ "base64 0.23.1",
  "cbc",
  "ctr",
  "hkdf",
@@ -3235,7 +3234,7 @@ dependencies = [
 
 [[package]]
 name = "qbz-models"
-version = "2.0.2"
+version = "2.1.2"
 dependencies = [
  "async-trait",
  "chrono",
@@ -3249,10 +3248,10 @@ dependencies = [
 
 [[package]]
 name = "qbz-qobuz"
-version = "2.0.2"
+version = "2.1.2"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "chrono",
  "dirs",
  "futures-util",
@@ -3261,11 +3260,13 @@ dependencies = [
  "qbz-cmaf",
  "qbz-models",
  "regex",
- "reqwest 0.12.28",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "zeroize",
 ]
 
 [[package]]
@@ -3586,8 +3587,6 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64 0.22.1",
  "bytes",
- "cookie",
- "cookie_store",
  "futures-channel",
  "futures-core",
  "futures-util",
@@ -3595,7 +3594,6 @@ dependencies = [
  "http-body",
  "http-body-util",
  "hyper",
- "hyper-rustls",
  "hyper-tls",
  "hyper-util",
  "js-sys",
@@ -3603,8 +3601,6 @@ dependencies = [
  "native-tls",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
- "rustls",
  "rustls-pki-types",
  "serde",
  "serde_json",
@@ -3612,17 +3608,13 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-native-tls",
- "tokio-rustls",
- "tokio-util",
  "tower",
  "tower-http 0.6.11",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.4.2",
  "web-sys",
- "webpki-roots 1.0.11",
 ]
 
 [[package]]
@@ -3633,6 +3625,8 @@ checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "cookie",
+ "cookie_store",
  "encoding_rs",
  "futures-core",
  "futures-util",
@@ -3665,7 +3659,7 @@ dependencies = [
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
- "wasm-streams 0.5.0",
+ "wasm-streams",
  "web-sys",
 ]
 
@@ -5420,19 +5414,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "wasm-streams"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15053d8d85c7eccdbefef60f06769760a563c7f0a9d6902a13d35c7800b0ad65"
-dependencies = [
- "futures-util",
- "js-sys",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]

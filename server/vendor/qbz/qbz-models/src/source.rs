@@ -228,8 +228,17 @@ impl QueueTrack {
         }
         if raw.starts_with("http://") || raw.starts_with("https://") {
             ArtworkRef::Remote(raw.to_string())
-        } else if let Some(path) = raw.strip_prefix("file://") {
-            ArtworkRef::LocalFile(path.to_string())
+        } else if raw.starts_with("file://") {
+            // Queue builders hand this layer a URI, not a filesystem path.
+            // Decode it before `to_mpris_url` canonicalises it again; merely
+            // stripping the scheme turns `%23` into a literal filename and
+            // the second encode publishes `%2523` to MPRIS.
+            let path = url::Url::parse(raw)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+                .map(|path| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| raw.trim_start_matches("file://").to_string());
+            ArtworkRef::LocalFile(path)
         } else {
             ArtworkRef::LocalFile(raw.to_string())
         }
@@ -347,6 +356,8 @@ mod tests {
             source_item_id_hint: None,
             context_kind: None,
             context_id: None,
+            isrc: None,
+            recording_mbid: None,
         }
     }
 
@@ -370,6 +381,20 @@ mod tests {
         assert_eq!(
             track_with(Some("plex"), Some("/library/metadata/42/thumb/1")).artwork_ref(),
             ArtworkRef::LocalFile("/library/metadata/42/thumb/1".into())
+        );
+    }
+
+    #[test]
+    fn local_file_uri_round_trips_special_path_chars_for_mpris() {
+        let path = "/mnt/music/Disc 01 - Soundtrack #01/100%? cover.jpg";
+        let queue_uri = "file:///mnt/music/Disc 01 - Soundtrack %2301/100%25%3F cover.jpg";
+        let artwork = track_with(Some("local"), Some(queue_uri)).artwork_ref();
+        assert_eq!(artwork, ArtworkRef::LocalFile(path.into()));
+        assert_eq!(
+            artwork.to_mpris_url(),
+            url::Url::from_file_path(path)
+                .ok()
+                .map(|url| url.to_string())
         );
     }
 

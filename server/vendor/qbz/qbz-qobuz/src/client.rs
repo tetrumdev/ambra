@@ -2,6 +2,7 @@
 
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -10,6 +11,7 @@ use super::auth::{
     sign_request, sign_search, sign_session_start,
 };
 use super::bundle::{self, BundleTokens};
+use super::delegated::{DelegatedApiConfigError, DelegatedAppCredentials};
 use super::endpoints::{self, paths};
 use super::error::{ApiError, Result};
 use super::forbidden_breaker::ForbiddenBreaker;
@@ -17,25 +19,33 @@ use super::lyrics::{
     merge_translation_into, QobuzLyricsContent, QobuzLyricsDocument, QobuzLyricsUrls,
 };
 use qbz_models::*;
+use zeroize::Zeroizing;
+
+/// Only the token-restoration POST; shared streaming/download requests remain unbounded.
+const TOKEN_RESTORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 const USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:120.0) Gecko/20100101 Firefox/120.0";
 
-/// Read a short, log-safe preview of a response body — for diagnosing an
-/// unexpected non-2xx (e.g. distinguishing an edge/WAF HTML 403 from the API's
-/// JSON error envelope, issue #637). Bounded so a large/HTML body can't bloat
-/// the log; prefixed with " : " so it reads well appended to an error message.
+/// Return a bounded, content-free diagnostic for an unexpected response body.
+///
+/// Remote bodies are untrusted and can contain credentials or echo signed
+/// request parameters. They must never enter logs or a displayable `ApiError`.
+/// We retain only whether a body was present.
 async fn body_preview(response: reqwest::Response) -> String {
     match response.text().await {
         Ok(body) => {
-            let trimmed = body.trim();
-            if trimmed.is_empty() {
-                " : <empty body>".to_string()
-            } else {
-                let preview: String = trimmed.chars().take(200).collect();
-                format!(" : {preview}")
-            }
+            let body = Zeroizing::new(body);
+            redacted_body_diagnostic(body.as_str()).to_string()
         }
         Err(_) => String::new(),
+    }
+}
+
+fn redacted_body_diagnostic(body: &str) -> &'static str {
+    if body.trim().is_empty() {
+        " : <empty body>"
+    } else {
+        " : <response body omitted>"
     }
 }
 
@@ -46,14 +56,51 @@ struct CmafSession {
     expires_at: u64,
 }
 
+/// The app secret which has actually passed the API probe, together with the
+/// app ID of the bundle generation it belongs to.
+///
+/// Keeping the provenance beside the secret prevents a background bundle
+/// rotation from silently pairing a previously validated secret with a new
+/// app ID. The secret is app-level material, never a user session token, and
+/// is wiped when replaced or when the last client owner is dropped.
+struct ValidatedBundleSecret {
+    app_id: String,
+    signing_secret: Zeroizing<String>,
+}
+
+impl ValidatedBundleSecret {
+    fn new(app_id: String, signing_secret: String) -> Self {
+        Self {
+            app_id,
+            signing_secret: Zeroizing::new(signing_secret),
+        }
+    }
+
+    fn is_current_for(&self, tokens: &BundleTokens) -> bool {
+        self.app_id == tokens.app_id
+            && tokens
+                .secrets
+                .iter()
+                .any(|candidate| candidate == self.signing_secret.as_str())
+    }
+
+    fn copy_material(&self) -> (String, String) {
+        (self.app_id.clone(), self.signing_secret.to_string())
+    }
+}
+
 /// Qobuz API client
 pub struct QobuzClient {
     http: Client,
     tokens: Arc<RwLock<Option<BundleTokens>>>,
     session: Arc<RwLock<Option<UserSession>>>,
-    validated_secret: Arc<RwLock<Option<String>>>,
+    validated_secret: Arc<RwLock<Option<ValidatedBundleSecret>>>,
+    secret_validation: Arc<tokio::sync::Mutex<()>>,
     locale: Arc<RwLock<String>>,
     cmaf_session: Arc<RwLock<Option<CmafSession>>>,
+    /// Where the regenerable bundle-token cache goes, when the embedder rather
+    /// than the platform decides. `None` keeps `dirs::cache_dir()`.
+    bundle_cache_dir: Option<PathBuf>,
     /// Backs off the hot streaming/favorites paths after repeated 403s so a
     /// post-outage account hiccup can't be escalated into a per-IP edge block
     /// by the no-backoff prefetch scheduler (issue #637).
@@ -67,23 +114,37 @@ impl Clone for QobuzClient {
             tokens: Arc::clone(&self.tokens),
             session: Arc::clone(&self.session),
             validated_secret: Arc::clone(&self.validated_secret),
+            secret_validation: Arc::clone(&self.secret_validation),
             locale: Arc::clone(&self.locale),
             cmaf_session: Arc::clone(&self.cmaf_session),
+            bundle_cache_dir: self.bundle_cache_dir.clone(),
             forbidden_breaker: Arc::clone(&self.forbidden_breaker),
         }
     }
 }
 
 impl QobuzClient {
-    /// Create a new client
+    /// Create a new client, caching bundle tokens under the platform cache
+    /// directory.
     pub fn new() -> Result<Self> {
+        Self::build(None)
+    }
+
+    /// Create a client whose regenerable bundle-token cache lives beneath
+    /// `cache_dir`, for hosts that are handed their cache location rather than
+    /// deriving it from the environment.
+    pub fn with_cache_dir(cache_dir: PathBuf) -> Result<Self> {
+        Self::build(Some(cache_dir))
+    }
+
+    fn build(bundle_cache_dir: Option<PathBuf>) -> Result<Self> {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .cookie_store(true)
             // Bound the TCP connect phase so a dead route (e.g. a stale CDN
-            // address) can't hang startup. Does not affect body-read time, so
-            // long streaming reads are unaffected.
+            // address) can't hang startup. The read timeout only bounds stalls.
             .connect_timeout(std::time::Duration::from_secs(10))
+            .read_timeout(std::time::Duration::from_secs(15))
             .build()?;
 
         Ok(Self {
@@ -91,8 +152,10 @@ impl QobuzClient {
             tokens: Arc::new(RwLock::new(None)),
             session: Arc::new(RwLock::new(None)),
             validated_secret: Arc::new(RwLock::new(None)),
+            secret_validation: Arc::new(tokio::sync::Mutex::new(())),
             locale: Arc::new(RwLock::new("en".to_string())),
             cmaf_session: Arc::new(RwLock::new(None)),
+            bundle_cache_dir,
             forbidden_breaker: Arc::new(ForbiddenBreaker::new()),
         })
     }
@@ -147,10 +210,11 @@ impl QobuzClient {
     /// a live extraction (cold) — callers can use this to drive a "connecting"
     /// UI only when it actually matters.
     pub async fn init(&self) -> Result<bool> {
-        if let Some(cached) = bundle::load_cached_bundle() {
+        if let Some(cached) = bundle::load_cached_bundle_from(self.bundle_cache_dir.as_deref()) {
             let version = cached.bundle_version.clone();
             log::info!("[Bundle] Using cached tokens (version {})", version);
             *self.tokens.write().await = Some(cached.into());
+            *self.validated_secret.write().await = None;
 
             // Cache reads are never gated, but the background refresh is a
             // network request — gate it once before cloning the client into
@@ -160,11 +224,18 @@ impl QobuzClient {
                 Ok(client) => {
                     let client = client.clone();
                     let tokens_arc = Arc::clone(&self.tokens);
+                    let validated_secret = Arc::clone(&self.validated_secret);
+                    let cache_dir = self.bundle_cache_dir.clone();
                     tokio::spawn(async move {
-                        if let Some(fresh) =
-                            bundle::refresh_bundle_if_changed(&client, &version).await
+                        if let Some(fresh) = bundle::refresh_bundle_if_changed_in(
+                            &client,
+                            &version,
+                            cache_dir.as_deref(),
+                        )
+                        .await
                         {
                             *tokens_arc.write().await = Some(fresh);
+                            *validated_secret.write().await = None;
                             log::info!("[Bundle] Background refresh applied rotated tokens");
                         }
                     });
@@ -180,8 +251,13 @@ impl QobuzClient {
         // Cold start: a live bundle fetch is a network request — gated on
         // purpose so an offline cold start fails fast instead of waiting out
         // the network timeouts.
-        let tokens = bundle::extract_and_cache_bundle_tokens(self.http()?).await?;
+        let tokens = bundle::extract_and_cache_bundle_tokens_in(
+            self.http()?,
+            self.bundle_cache_dir.as_deref(),
+        )
+        .await?;
         *self.tokens.write().await = Some(tokens);
+        *self.validated_secret.write().await = None;
         Ok(false)
     }
 
@@ -232,40 +308,98 @@ impl QobuzClient {
         Ok(&self.http)
     }
 
-    /// Get validated secret (validates on first use)
-    pub(crate) async fn secret(&self) -> Result<String> {
-        // Check if we already have a validated secret
-        if let Some(secret) = self.validated_secret.read().await.clone() {
-            return Ok(secret);
+    /// Return app ID and signing secret from one validated bundle generation.
+    async fn validated_app_material(&self) -> Result<(String, String)> {
+        {
+            let tokens = self.tokens.read().await;
+            let validated = self.validated_secret.read().await;
+            if let (Some(tokens), Some(validated)) = (tokens.as_ref(), validated.as_ref()) {
+                if validated.is_current_for(tokens) {
+                    return Ok(validated.copy_material());
+                }
+            }
         }
+        let _validation = self.secret_validation.lock().await;
+        let (app_id, candidates) = {
+            let tokens = self.tokens.read().await;
+            let tokens = tokens.as_ref().ok_or_else(|| {
+                ApiError::BundleExtractionError("Client not initialized".to_string())
+            })?;
 
-        // Need to validate secrets
-        let tokens = self.tokens.read().await;
-        let tokens = tokens
-            .as_ref()
-            .ok_or_else(|| ApiError::BundleExtractionError("Client not initialized".to_string()))?;
+            if let Some(validated) = self.validated_secret.read().await.as_ref() {
+                if validated.is_current_for(tokens) {
+                    return Ok(validated.copy_material());
+                }
+            }
 
-        for secret in &tokens.secrets {
-            if self.test_secret(secret).await? {
-                *self.validated_secret.write().await = Some(secret.clone());
-                return Ok(secret.clone());
+            (
+                tokens.app_id.clone(),
+                Zeroizing::new(tokens.secrets.clone()),
+            )
+        };
+
+        for secret in candidates.iter() {
+            if self.test_secret(&app_id, secret).await? {
+                // A background refresh is allowed while the network probe is
+                // running. Accept its result only if the exact app material is
+                // still present in the current bundle generation.
+                let tokens = self.tokens.read().await;
+                let current = tokens.as_ref().ok_or_else(|| {
+                    ApiError::BundleExtractionError("Client not initialized".to_string())
+                })?;
+                if current.app_id != app_id
+                    || !current.secrets.iter().any(|candidate| candidate == secret)
+                {
+                    return Err(ApiError::BundleExtractionError(
+                        "Bundle credentials changed during validation".to_string(),
+                    ));
+                }
+
+                let validated = ValidatedBundleSecret::new(app_id.clone(), secret.clone());
+                let material = validated.copy_material();
+                *self.validated_secret.write().await = Some(validated);
+                return Ok(material);
             }
         }
 
         Err(ApiError::InvalidAppSecret)
     }
 
+    /// Get the validated signing secret (validates bundle candidates on first use).
+    pub(crate) async fn secret(&self) -> Result<String> {
+        self.validated_app_material()
+            .await
+            .map(|(_, signing_secret)| signing_secret)
+    }
+
+    /// Copy only validated app-level material into an isolated QConnect guest.
+    ///
+    /// The returned value does not contain, share, or copy this client's
+    /// [`UserSession`], user auth token, OAuth private key, cookies, or HTTP
+    /// client. In particular, it uses the secret selected by the existing API
+    /// validation probe; it never guesses by taking the first bundle secret.
+    pub async fn delegated_app_credentials(&self) -> Result<DelegatedAppCredentials> {
+        let (app_id, signing_secret) = self.validated_app_material().await?;
+        DelegatedAppCredentials::new(app_id, signing_secret).map_err(|error| match error {
+            DelegatedApiConfigError::InvalidAppId => ApiError::InvalidAppId,
+            _ => ApiError::InvalidAppSecret,
+        })
+    }
+
     /// Test if a secret is valid using a known track
-    async fn test_secret(&self, secret: &str) -> Result<bool> {
+    async fn test_secret(&self, app_id: &str, secret: &str) -> Result<bool> {
         let test_track_id = 5966783u64; // Known test track
         let timestamp = get_timestamp();
         let signature = sign_get_file_url(test_track_id, 5, timestamp, secret);
 
         let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
+        let mut headers = self.api_headers().await?;
+        headers.insert("X-App-Id", reqwest::header::HeaderValue::from_str(app_id)
+            .map_err(|_| ApiError::InvalidAppId)?);
         let response = self
             .http()?
             .get(&url)
-            .headers(self.api_headers().await?)
+            .headers(headers)
             .query(&[
                 ("track_id", test_track_id.to_string()),
                 ("format_id", "5".to_string()),
@@ -276,9 +410,6 @@ impl QobuzClient {
             .send()
             .await?;
 
-        // Only Qobuz's own verdict on the signature counts. A 403 from the CDN (a blocked
-        // VPN address), a 5xx or the like says nothing about the secret; treating it as
-        // valid would latch a wrong secret for the rest of the process.
         match response.status() {
             StatusCode::OK | StatusCode::UNAUTHORIZED => Ok(true),
             StatusCode::BAD_REQUEST => Ok(false),
@@ -318,6 +449,38 @@ impl QobuzClient {
         }
     }
 
+    /// Raw `POST /user/login` with an OAuth `user_auth_token`: HTTP status
+    /// and body, verbatim. Same request as [`Self::login_with_token`], but it
+    /// never parses the payload and never stores a session, so an account
+    /// the parser rejects today (`IneligibleUser`) can still be captured for
+    /// the redacted fixtures in `qbz-nix-docs/qobuz-api/`. Probe support
+    /// only (`examples/member_login_probe.rs`).
+    pub async fn login_with_token_raw(&self, token: &str) -> Result<(u16, String)> {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let app_id = self.app_id().await?;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-App-Id",
+            HeaderValue::from_str(&app_id).map_err(|_| ApiError::InvalidAppId)?,
+        );
+        let mut value = HeaderValue::from_str(token)
+            .map_err(|_| ApiError::AuthenticationError("Invalid token format".into()))?;
+        value.set_sensitive(true);
+        headers.insert("X-User-Auth-Token", value);
+        let response = self
+            .http
+            .post(endpoints::build_url(endpoints::paths::USER_LOGIN))
+            .headers(headers)
+            .header("Content-Type", "text/plain;charset=UTF-8")
+            .body("extra=partner")
+            .send()
+            .await?;
+        let status = response.status().as_u16();
+        let body = response.text().await?;
+        Ok((status, body))
+    }
+
     /// Check if logged in
     pub async fn is_logged_in(&self) -> bool {
         self.session.read().await.is_some()
@@ -345,25 +508,35 @@ impl QobuzClient {
             .and_then(|s| s.language_code.clone())
     }
 
+    /// A copy of the active session (entitlements included), `None` before
+    /// login. The shared session lifecycle reads the verdict from here.
+    pub async fn session(&self) -> Option<UserSession> {
+        self.session.read().await.clone()
+    }
+
     /// Exchange an OAuth code for a full user session.
     ///
     /// This implements the new Qobuz OAuth flow:
-    /// 1. GET /oauth/callback?code=CODE&private_key=KEY → { token }
-    /// 2. POST /user/login with X-User-Auth-Token: token, body=extra=partner → UserSession
-    pub async fn login_with_oauth_code(&self, code: &str) -> Result<UserSession> {
+    /// OAuth step 1 on its own: `GET /oauth/callback?code&private_key&app_id`
+    /// → the `user_auth_token`. Nothing is stored; `login_with_oauth_code`
+    /// is this plus the `/user/login` session fetch, and the member-mode
+    /// probe uses it alone so it can capture that second response raw.
+    pub async fn exchange_oauth_code(&self, code: &str) -> Result<String> {
         use reqwest::header::{HeaderMap, HeaderValue};
 
-        let tokens = self.tokens.read().await;
-        let tokens = tokens
-            .as_ref()
-            .ok_or_else(|| ApiError::BundleExtractionError("Client not initialized".to_string()))?;
-        let app_id = tokens.app_id.clone();
-        let private_key = tokens.private_key.clone().ok_or_else(|| {
-            ApiError::BundleExtractionError("OAuth private key not available in bundle".to_string())
-        })?;
-        let _ = tokens; // drop read lock
+        let (app_id, private_key) = {
+            let guard = self.tokens.read().await;
+            let tokens = guard.as_ref().ok_or_else(|| {
+                ApiError::BundleExtractionError("Client not initialized".to_string())
+            })?;
+            let private_key = tokens.private_key.clone().ok_or_else(|| {
+                ApiError::BundleExtractionError(
+                    "OAuth private key not available in bundle".to_string(),
+                )
+            })?;
+            (tokens.app_id.clone(), private_key)
+        };
 
-        // Step 1: Exchange code for token
         let callback_url = endpoints::build_url(endpoints::paths::OAUTH_CALLBACK);
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -394,12 +567,23 @@ impl QobuzClient {
         }
 
         let callback_json: serde_json::Value = callback_response.json().await?;
-        let token = callback_json["token"]
+        callback_json["token"]
             .as_str()
+            .map(str::to_string)
             .ok_or_else(|| {
                 ApiError::ApiResponse("OAuth callback: no token in response".to_string())
-            })?
-            .to_string();
+            })
+    }
+
+    /// 1. GET /oauth/callback?code=CODE&private_key=KEY → { token }
+    /// 2. POST /user/login with X-User-Auth-Token: token, body=extra=partner → UserSession
+    pub async fn login_with_oauth_code(&self, code: &str) -> Result<UserSession> {
+        use reqwest::header::{HeaderMap, HeaderValue};
+
+        let app_id = self.app_id().await?;
+
+        // Step 1: Exchange code for token
+        let token = self.exchange_oauth_code(code).await?;
 
         log::info!("[OAuth] Got token, fetching user session via /user/login");
 
@@ -450,8 +634,6 @@ impl QobuzClient {
     /// token was persisted. Calls POST /user/login with X-User-Auth-Token header.
     /// Returns an error if the token has expired.
     pub async fn login_with_token(&self, token: &str) -> Result<UserSession> {
-        use reqwest::header::{HeaderMap, HeaderValue};
-
         let tokens = self.tokens.read().await;
         let app_id = tokens
             .as_ref()
@@ -460,7 +642,23 @@ impl QobuzClient {
             .clone();
         drop(tokens);
 
-        let user_login_url = endpoints::build_url(endpoints::paths::USER_LOGIN);
+        let request = self.token_restore_request(
+            &endpoints::build_url(endpoints::paths::USER_LOGIN),
+            &app_id,
+            token,
+        )?;
+        self.complete_token_restore(request).await
+    }
+
+    /// Private request seam: tests substitute a loopback URL and override the
+    /// request's duration. Production always uses USER_LOGIN and 15 seconds.
+    fn token_restore_request(
+        &self,
+        url: &str,
+        app_id: &str,
+        token: &str,
+    ) -> Result<reqwest::RequestBuilder> {
+        use reqwest::header::{HeaderMap, HeaderValue};
         let mut headers = HeaderMap::new();
         headers.insert(
             "X-App-Id",
@@ -472,17 +670,25 @@ impl QobuzClient {
                 .map_err(|_| ApiError::AuthenticationError("Invalid token format".into()))?,
         );
 
-        log::info!("[OAuth] Restoring session from saved token");
-        // Auth exemption: raw client, bypasses the offline gate (sign-in is
-        // explicit user intent to reach Qobuz; the gate governs services).
-        let resp = self
+        // Reqwest carries this SAME deadline through headers AND body reads,
+        // including a body that keeps trickling bytes. No timeout surrounds
+        // session publication or the caller's subsequent store activation.
+        Ok(self
             .http
-            .post(&user_login_url)
+            .post(url)
             .headers(headers)
             .header("Content-Type", "text/plain;charset=UTF-8")
             .body("extra=partner")
-            .send()
-            .await?;
+            .timeout(TOKEN_RESTORE_TIMEOUT))
+    }
+
+    async fn complete_token_restore(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<UserSession> {
+        log::info!("[OAuth] Restoring session from saved token");
+        // Auth exemption: raw client bypasses the offline service gate.
+        let resp = request.send().await?;
 
         match resp.status() {
             StatusCode::OK => {
@@ -538,7 +744,8 @@ impl QobuzClient {
         );
 
         if let Ok(token) = self.auth_token().await {
-            if let Ok(val) = HeaderValue::from_str(&token) {
+            if let Ok(mut val) = HeaderValue::from_str(&token) {
+                val.set_sensitive(true);
                 headers.insert("X-User-Auth-Token", val);
             }
         }
@@ -558,11 +765,10 @@ impl QobuzClient {
         );
 
         let token = self.auth_token().await?;
-        headers.insert(
-            "X-User-Auth-Token",
-            HeaderValue::from_str(&token)
-                .map_err(|_| ApiError::AuthenticationError("Invalid auth token format".into()))?,
-        );
+        let mut value = HeaderValue::from_str(&token)
+            .map_err(|_| ApiError::AuthenticationError("Invalid auth token format".into()))?;
+        value.set_sensitive(true);
+        headers.insert("X-User-Auth-Token", value);
 
         Ok(headers)
     }
@@ -637,7 +843,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::ALBUM_SEARCH);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_search("albumsearch", query, limit, offset, search_type, timestamp, &secret);
+        let signature = sign_search(
+            "albumsearch",
+            query,
+            limit,
+            offset,
+            search_type,
+            timestamp,
+            &secret,
+        );
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
         let ts_str = timestamp.to_string();
@@ -683,7 +897,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::TRACK_SEARCH);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_search("tracksearch", query, limit, offset, search_type, timestamp, &secret);
+        let signature = sign_search(
+            "tracksearch",
+            query,
+            limit,
+            offset,
+            search_type,
+            timestamp,
+            &secret,
+        );
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
         let ts_str = timestamp.to_string();
@@ -729,7 +951,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::ARTIST_SEARCH);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_search("artistsearch", query, limit, offset, search_type, timestamp, &secret);
+        let signature = sign_search(
+            "artistsearch",
+            query,
+            limit,
+            offset,
+            search_type,
+            timestamp,
+            &secret,
+        );
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
         let ts_str = timestamp.to_string();
@@ -769,7 +999,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::CATALOG_SEARCH);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_search("catalogsearch", query, limit, offset, None, timestamp, &secret);
+        let signature = sign_search(
+            "catalogsearch",
+            query,
+            limit,
+            offset,
+            None,
+            timestamp,
+            &secret,
+        );
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
         let ts_str = timestamp.to_string();
@@ -801,11 +1039,15 @@ impl QobuzClient {
     ) -> Result<SearchResultsPage<Artist>> {
         let url = endpoints::build_url(paths::ARTIST_GET_SIMILAR);
         let http_response = self
-            .signed_get(&url, "artistgetSimilarArtists", &[
-                ("artist_id", artist_id.to_string()),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .signed_get(
+                &url,
+                "artistgetSimilarArtists",
+                &[
+                    ("artist_id", artist_id.to_string()),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
             .await?;
         log::debug!(
             "[API] get_similar_artists({}) status={}",
@@ -832,13 +1074,17 @@ impl QobuzClient {
         let locale = self.locale().await;
 
         let http_response = self
-            .signed_get(&url, "artistget", &[
-                ("artist_id", artist_id.to_string()),
-                ("extra", "tracks".to_string()),
-                ("lang", locale),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .signed_get(
+                &url,
+                "artistget",
+                &[
+                    ("artist_id", artist_id.to_string()),
+                    ("extra", "tracks".to_string()),
+                    ("lang", locale),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
             .await?;
         log::debug!(
             "[API] get_artist_tracks({}) status={}",
@@ -906,10 +1152,9 @@ impl QobuzClient {
             query.push(("genre_id".to_string(), gid.to_string()));
         }
 
-        let params: Vec<(&str, String)> = query.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
-        let http_response = self
-            .signed_get(&url, "albumgetFeatured", &params)
-            .await?;
+        let params: Vec<(&str, String)> =
+            query.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        let http_response = self.signed_get(&url, "albumgetFeatured", &params).await?;
         log::debug!(
             "[API] get_featured_albums({}) status={}",
             featured_type,
@@ -993,10 +1238,7 @@ impl QobuzClient {
         if let Some(items_arr) = items_value.as_array_mut() {
             for item in items_arr {
                 if let Some(obj) = item.as_object_mut() {
-                    let needs_backfill = obj
-                        .get("artist")
-                        .map(|v| v.is_null())
-                        .unwrap_or(true);
+                    let needs_backfill = obj.get("artist").map(|v| v.is_null()).unwrap_or(true);
                     if needs_backfill {
                         if let Some(first_artist) = obj
                             .get("artists")
@@ -1114,17 +1356,20 @@ impl QobuzClient {
     /// Qobuz radio for an artist (`/radio/artist`) — a generated track
     /// list. Ported from the legacy api client.
     pub async fn get_radio_artist(&self, artist_id: &str) -> Result<RadioResponse> {
-        self.get_radio(paths::RADIO_ARTIST, "artist_id", artist_id).await
+        self.get_radio(paths::RADIO_ARTIST, "artist_id", artist_id)
+            .await
     }
 
     /// Qobuz radio for a track (`/radio/track`).
     pub async fn get_radio_track(&self, track_id: &str) -> Result<RadioResponse> {
-        self.get_radio(paths::RADIO_TRACK, "track_id", track_id).await
+        self.get_radio(paths::RADIO_TRACK, "track_id", track_id)
+            .await
     }
 
     /// Qobuz radio for an album (`/radio/album`).
     pub async fn get_radio_album(&self, album_id: &str) -> Result<RadioResponse> {
-        self.get_radio(paths::RADIO_ALBUM, "album_id", album_id).await
+        self.get_radio(paths::RADIO_ALBUM, "album_id", album_id)
+            .await
     }
 
     async fn get_radio(&self, path: &str, key: &str, id: &str) -> Result<RadioResponse> {
@@ -1157,7 +1402,14 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .signed_get(&url, "genrelist", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "genrelist",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::debug!(
             "[API] get_genres(parent={:?}) status={}",
@@ -1195,7 +1447,14 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .signed_get_auth(&url, "discoverindex", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get_auth(
+                &url,
+                "discoverindex",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::info!(
             "[API] get_discover_index genre_ids={:?} status={}",
@@ -1249,7 +1508,14 @@ impl QobuzClient {
         // Derive method name from endpoint path: "/discover/newReleases" -> "discovernewReleases"
         let method_name = endpoint.replace('/', "").replace('.', "");
         let http_response = self
-            .signed_get_auth(&url, &method_name, &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get_auth(
+                &url,
+                &method_name,
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::info!(
             "[API] get_discover_albums({}) query={:?} status={}",
@@ -1307,7 +1573,14 @@ impl QobuzClient {
 
         // First get raw JSON to debug structure
         let raw_response: serde_json::Value = self
-            .signed_get_auth(&url, "discoverplaylists", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get_auth(
+                &url,
+                "discoverplaylists",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?
             .json()
             .await?;
@@ -1342,9 +1615,7 @@ impl QobuzClient {
     pub async fn get_playlist_tags(&self) -> Result<Vec<PlaylistTag>> {
         let url = endpoints::build_url(paths::PLAYLIST_GET_TAGS);
 
-        let http_response = self
-            .signed_get_auth(&url, "playlistgetTags", &[])
-            .await?;
+        let http_response = self.signed_get_auth(&url, "playlistgetTags", &[]).await?;
         log::info!("[API] get_playlist_tags status={}", http_response.status());
 
         let raw: PlaylistTagsResponse = http_response.json().await?;
@@ -1582,9 +1853,7 @@ impl QobuzClient {
         match serde_json::from_str::<QobuzLyricsDocument>(&body) {
             Ok(mut doc) if doc.original.is_some() || doc.translation.is_some() => {
                 if language.is_some() && doc.original.is_some() && doc.translation.is_none() {
-                    doc.translation = self
-                        .fetch_translation_fallback(track_id, &urls)
-                        .await;
+                    doc.translation = self.fetch_translation_fallback(track_id, &urls).await;
                 }
                 Ok(Some(doc))
             }
@@ -1656,7 +1925,14 @@ impl QobuzClient {
         ];
 
         let http_response = self
-            .signed_get(&url, "artistget", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artistget",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::debug!(
             "[API] get_artist_basic({}) status={}",
@@ -1696,7 +1972,14 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .signed_get(&url, "artistget", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artistget",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::debug!(
             "[API] get_artist_detail({}) status={}",
@@ -1747,7 +2030,14 @@ impl QobuzClient {
         }
 
         let http_response = self
-            .signed_get(&url, "artistget", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artistget",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?;
         log::debug!(
             "[API] get_artist({}, albums={}) status={}",
@@ -1766,10 +2056,14 @@ impl QobuzClient {
     pub async fn get_playlist_track_ids(&self, playlist_id: u64) -> Result<PlaylistWithTrackIds> {
         let url = endpoints::build_url(paths::PLAYLIST_GET);
         let http_response = self
-            .signed_get(&url, "playlistget", &[
-                ("playlist_id", playlist_id.to_string()),
-                ("extra", "track_ids".to_string()),
-            ])
+            .signed_get(
+                &url,
+                "playlistget",
+                &[
+                    ("playlist_id", playlist_id.to_string()),
+                    ("extra", "track_ids".to_string()),
+                ],
+            )
             .await?;
         log::debug!(
             "[API] get_playlist_track_ids({}) status={}",
@@ -1821,8 +2115,17 @@ impl QobuzClient {
         let headers = self.api_headers().await?;
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let ids_str: String = track_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
-        let sig = sign_request("trackgetList", &[("tracks_id", &ids_str)], timestamp, &secret);
+        let ids_str: String = track_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sig = sign_request(
+            "trackgetList",
+            &[("tracks_id", &ids_str)],
+            timestamp,
+            &secret,
+        );
 
         let body = serde_json::json!({ "tracks_id": track_ids });
         log::debug!("[API] get_tracks_batch POST ({} IDs)", track_ids.len());
@@ -1874,12 +2177,16 @@ impl QobuzClient {
 
         // First page — gives us metadata + total track count
         let http_response = self
-            .signed_get(&url, "playlistget", &[
-                ("playlist_id", playlist_id.to_string()),
-                ("limit", PAGE_SIZE.to_string()),
-                ("offset", "0".to_string()),
-                ("extra", "tracks".to_string()),
-            ])
+            .signed_get(
+                &url,
+                "playlistget",
+                &[
+                    ("playlist_id", playlist_id.to_string()),
+                    ("limit", PAGE_SIZE.to_string()),
+                    ("offset", "0".to_string()),
+                    ("extra", "tracks".to_string()),
+                ],
+            )
             .await?;
         log::debug!(
             "[API] get_playlist({}) status={}",
@@ -1927,7 +2234,12 @@ impl QobuzClient {
                         let ts = get_timestamp();
                         let sig = sign_request(
                             "playlistget",
-                            &[("extra", "tracks"), ("limit", &limit), ("offset", &offset_str), ("playlist_id", &pid)],
+                            &[
+                                ("extra", "tracks"),
+                                ("limit", &limit),
+                                ("offset", &offset_str),
+                                ("playlist_id", &pid),
+                            ],
                             ts,
                             &secret,
                         );
@@ -2010,21 +2322,18 @@ impl QobuzClient {
 
     /// Enumerate the award catalog (/award/explore). Paginated.
     /// Returns raw JSON items so callers can extract just (id, name).
-    pub async fn get_award_explore(
-        &self,
-        limit: u32,
-        offset: u32,
-    ) -> Result<serde_json::Value> {
+    pub async fn get_award_explore(&self, limit: u32, offset: u32) -> Result<serde_json::Value> {
         let url = endpoints::build_url(paths::AWARD_EXPLORE);
-        log::debug!("[API] get_award_explore(limit={}, offset={})", limit, offset);
+        log::debug!(
+            "[API] get_award_explore(limit={}, offset={})",
+            limit,
+            offset
+        );
         let response: serde_json::Value = self
             .signed_get_auth(
                 &url,
                 "awardexplore",
-                &[
-                    ("limit", limit.to_string()),
-                    ("offset", offset.to_string()),
-                ],
+                &[("limit", limit.to_string()), ("offset", offset.to_string())],
             )
             .await?
             .json()
@@ -2095,14 +2404,14 @@ impl QobuzClient {
         }
 
         // Current shape: V2AlbumGenericListDto {has_more, items}.
-        let mut items_value = response.get("items").cloned().unwrap_or(serde_json::Value::Null);
+        let mut items_value = response
+            .get("items")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         if let Some(items_arr) = items_value.as_array_mut() {
             for item in items_arr {
                 if let Some(obj) = item.as_object_mut() {
-                    let needs_backfill = obj
-                        .get("artist")
-                        .map(|v| v.is_null())
-                        .unwrap_or(true);
+                    let needs_backfill = obj.get("artist").map(|v| v.is_null()).unwrap_or(true);
                     if needs_backfill {
                         if let Some(first_artist) = obj
                             .get("artists")
@@ -2158,7 +2467,11 @@ impl QobuzClient {
             offset
         );
         let response: serde_json::Value = self
-            .signed_get(&url, "labelexplore", &[("limit", limit.to_string()), ("offset", offset.to_string())])
+            .signed_get(
+                &url,
+                "labelexplore",
+                &[("limit", limit.to_string()), ("offset", offset.to_string())],
+            )
             .await?
             .json()
             .await?;
@@ -2187,13 +2500,28 @@ impl QobuzClient {
             ("limit", limit.to_string()),
             ("offset", offset.to_string()),
         ];
-        if let Some(v) = sort { params.push(("sort", v.to_string())); }
-        if let Some(v) = order { params.push(("order", v.to_string())); }
-        if let Some(v) = genre_ids { params.push(("genre_ids", v.to_string())); }
-        if let Some(v) = from_date { params.push(("from_date", v.to_string())); }
-        if let Some(v) = to_date { params.push(("to_date", v.to_string())); }
+        if let Some(v) = sort {
+            params.push(("sort", v.to_string()));
+        }
+        if let Some(v) = order {
+            params.push(("order", v.to_string()));
+        }
+        if let Some(v) = genre_ids {
+            params.push(("genre_ids", v.to_string()));
+        }
+        if let Some(v) = from_date {
+            params.push(("from_date", v.to_string()));
+        }
+        if let Some(v) = to_date {
+            params.push(("to_date", v.to_string()));
+        }
 
-        log::debug!("[API] get_label_albums({}, limit={}, offset={})", label_id, limit, offset);
+        log::debug!(
+            "[API] get_label_albums({}, limit={}, offset={})",
+            label_id,
+            limit,
+            offset
+        );
         let response: Value = self
             .signed_get(&url, "labelgetalbums", &params)
             .await?
@@ -2216,7 +2544,9 @@ impl QobuzClient {
             ("limit", limit.to_string()),
             ("offset", offset.to_string()),
         ];
-        if let Some(v) = genre_ids { params.push(("genre_ids", v.to_string())); }
+        if let Some(v) = genre_ids {
+            params.push(("genre_ids", v.to_string()));
+        }
 
         log::debug!("[API] get_label_next_releases({})", label_id);
         let response: Value = self
@@ -2243,9 +2573,15 @@ impl QobuzClient {
             ("limit", limit.to_string()),
             ("offset", offset.to_string()),
         ];
-        if let Some(v) = sort { params.push(("sort", v.to_string())); }
-        if let Some(v) = order { params.push(("order", v.to_string())); }
-        if let Some(v) = genre_ids { params.push(("genre_ids", v.to_string())); }
+        if let Some(v) = sort {
+            params.push(("sort", v.to_string()));
+        }
+        if let Some(v) = order {
+            params.push(("order", v.to_string()));
+        }
+        if let Some(v) = genre_ids {
+            params.push(("genre_ids", v.to_string()));
+        }
 
         log::debug!("[API] get_label_awarded_releases({})", label_id);
         let response: Value = self
@@ -2266,11 +2602,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::LABEL_GET_PLAYLISTS);
         log::debug!("[API] get_label_playlists({})", label_id);
         let response: Value = self
-            .signed_get(&url, "labelgetplaylists", &[
-                ("label_id", label_id.to_string()),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .signed_get(
+                &url,
+                "labelgetplaylists",
+                &[
+                    ("label_id", label_id.to_string()),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
             .await?
             .json()
             .await?;
@@ -2287,11 +2627,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::LABEL_GET_TOP_ARTISTS);
         log::debug!("[API] get_label_top_artists({})", label_id);
         let response: Value = self
-            .signed_get(&url, "labelgettopartists", &[
-                ("label_id", label_id.to_string()),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .signed_get(
+                &url,
+                "labelgettopartists",
+                &[
+                    ("label_id", label_id.to_string()),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
             .await?
             .json()
             .await?;
@@ -2308,11 +2652,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::LABEL_STORY);
         log::debug!("[API] get_label_story({})", label_id);
         let response: Value = self
-            .signed_get(&url, "labelstory", &[
-                ("label_id", label_id.to_string()),
-                ("limit", limit.to_string()),
-                ("offset", offset.to_string()),
-            ])
+            .signed_get(
+                &url,
+                "labelstory",
+                &[
+                    ("label_id", label_id.to_string()),
+                    ("limit", limit.to_string()),
+                    ("offset", offset.to_string()),
+                ],
+            )
             .await?
             .json()
             .await?;
@@ -2334,7 +2682,12 @@ impl QobuzClient {
             .map(|id| id.to_string())
             .collect::<Vec<_>>()
             .join(",");
-        let sig = sign_request("labelgetList", &[("label_ids", &ids_str)], timestamp, &secret);
+        let sig = sign_request(
+            "labelgetList",
+            &[("label_ids", &ids_str)],
+            timestamp,
+            &secret,
+        );
 
         let body = serde_json::json!({ "label_ids": label_ids });
         log::debug!("[API] get_label_list POST ({} ids)", label_ids.len());
@@ -2355,6 +2708,38 @@ impl QobuzClient {
     // === Authenticated endpoints ===
 
     /// Get stream URL for a track (requires auth + signature)
+    /// Raw `/track/getFileUrl` (`intent=stream`): HTTP status and body,
+    /// verbatim, no parsing. Probe support only — the typed reader is
+    /// [`Self::get_stream_url`]. Same signing, same headers, same breaker.
+    pub async fn get_stream_url_raw(
+        &self,
+        track_id: u64,
+        quality: Quality,
+    ) -> Result<(u16, String)> {
+        self.forbidden_guard()?;
+        let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
+        let timestamp = get_timestamp();
+        let secret = self.secret().await?;
+        let signature = sign_get_file_url(track_id, quality.id(), timestamp, &secret);
+        let response = self
+            .http()?
+            .get(&url)
+            .headers(self.authenticated_headers().await?)
+            .query(&[
+                ("track_id", track_id.to_string()),
+                ("format_id", quality.id().to_string()),
+                ("intent", "stream".to_string()),
+                ("request_ts", timestamp.to_string()),
+                ("request_sig", signature),
+            ])
+            .send()
+            .await?;
+        let status = response.status();
+        self.note_forbidden_status(status);
+        let body = response.text().await?;
+        Ok((status.as_u16(), body))
+    }
+
     pub async fn get_stream_url(&self, track_id: u64, quality: Quality) -> Result<StreamUrl> {
         // Back off before the network if the 403 breaker is open (issue #637).
         self.forbidden_guard()?;
@@ -2366,15 +2751,19 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::TRACK_GET_FILE_URL);
         let timestamp = get_timestamp();
         log::debug!("Getting secret for signing...");
-        let secret = self.secret().await?;
+        let (app_id, secret) = self.validated_app_material().await?;
+        let secret = Zeroizing::new(secret);
         log::debug!("Secret obtained, signing request...");
         let signature = sign_get_file_url(track_id, quality.id(), timestamp, &secret);
 
+        let mut headers = self.authenticated_headers().await?;
+        headers.insert("X-App-Id", reqwest::header::HeaderValue::from_str(&app_id)
+            .map_err(|_| ApiError::InvalidAppId)?);
         log::debug!("Sending stream URL request...");
         let response = self
             .http()?
             .get(&url)
-            .headers(self.authenticated_headers().await?)
+            .headers(headers)
             .query(&[
                 ("track_id", track_id.to_string()),
                 ("format_id", quality.id().to_string()),
@@ -2425,12 +2814,15 @@ impl QobuzClient {
                     bit_depth: json["bit_depth"].as_u64().map(|v| v as u32),
                     track_id,
                     restrictions,
+                    sample: json["sample"].as_bool().unwrap_or(false),
                 })
             }
             StatusCode::BAD_REQUEST => {
-                // The secret this process settled on was rejected (for example after Qobuz
-                // rotated its bundle). Forget it so the next request picks again.
-                *self.validated_secret.write().await = None;
+                // An old request may fail after another request validated rotated credentials.
+                let mut validated = self.validated_secret.write().await;
+                if validated.as_ref().is_some_and(|current| current.app_id == app_id && current.signing_secret.as_str() == secret.as_str()) {
+                    *validated = None;
+                }
                 Err(ApiError::InvalidAppSecret)
             }
             StatusCode::UNAUTHORIZED => Err(ApiError::AuthenticationError(
@@ -2441,6 +2833,14 @@ impl QobuzClient {
                 log::warn!("Stream URL 403 for track {}{}", track_id, preview);
                 Err(ApiError::Forbidden(preview))
             }
+            StatusCode::NOT_FOUND => Err(ApiError::TrackUnavailable(track_id)),
+            StatusCode::TOO_MANY_REQUESTS => Err(ApiError::RateLimited(
+                response.headers().get(reqwest::header::RETRY_AFTER)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(|seconds| seconds.trim().parse().ok())
+                    .unwrap_or(2),
+            )),
+            status if status.is_server_error() => Err(ApiError::ServerError(status.as_u16())),
             status => Err(ApiError::ApiResponse(format!(
                 "Unexpected status: {}",
                 status
@@ -2454,6 +2854,53 @@ impl QobuzClient {
         track_id: u64,
         preferred: Quality,
     ) -> Result<StreamUrl> {
+        self.get_stream_url_with_acquisition(track_id, preferred)
+            .await
+            .map(|(url, _)| url)
+    }
+
+    /// Also return the quality of the successful request. The response's
+    /// format_id describes the available file, not whether fallback occurred.
+    pub async fn get_stream_url_with_acquisition(
+        &self,
+        track_id: u64,
+        preferred: Quality,
+    ) -> Result<(StreamUrl, Quality)> {
+        Self::resolve_stream_url_with_fallback(track_id, preferred, |quality| {
+            self.get_stream_url(track_id, quality)
+        }).await
+    }
+
+    /// Catalog playback and saves require a full track. Keep the public preview
+    /// behavior available to hosts that can distinguish samples from listening.
+    pub async fn get_full_stream_url(&self, track_id: u64, preferred: Quality) -> Result<StreamUrl> {
+        Self::resolve_stream_url(track_id, preferred, false, |quality| self.get_stream_url(track_id, quality))
+            .await
+            .map(|(url, _)| url)
+    }
+
+    async fn resolve_stream_url_with_fallback<F, Fut>(
+        track_id: u64,
+        preferred: Quality,
+        fetch: F,
+    ) -> Result<(StreamUrl, Quality)>
+    where
+        F: FnMut(Quality) -> Fut,
+        Fut: std::future::Future<Output = Result<StreamUrl>>,
+    {
+        Self::resolve_stream_url(track_id, preferred, true, fetch).await
+    }
+
+    async fn resolve_stream_url<F, Fut>(
+        track_id: u64,
+        preferred: Quality,
+        allow_sample: bool,
+        mut fetch: F,
+    ) -> Result<(StreamUrl, Quality)>
+    where
+        F: FnMut(Quality) -> Fut,
+        Fut: std::future::Future<Output = Result<StreamUrl>>,
+    {
         log::info!(
             "Getting stream URL with fallback for track {}, preferred quality: {:?}",
             track_id,
@@ -2463,16 +2910,18 @@ impl QobuzClient {
         let start_idx = qualities.iter().position(|q| *q == preferred).unwrap_or(0);
 
         let mut track_unavailable = false;
+        let mut saw_sample = false;
 
         for quality in &qualities[start_idx..] {
             log::info!("Trying quality: {:?}", quality);
-            match self.get_stream_url(track_id, *quality).await {
+            match fetch(*quality).await {
+                Ok(url) if !allow_sample && url.sample => saw_sample = true,
                 Ok(url) if !url.has_restrictions() => {
                     log::info!(
                         "Got stream URL for requested quality format_id={}",
                         quality.id()
                     );
-                    return Ok(url);
+                    return Ok((url, *quality));
                 }
                 Ok(_) => {
                     log::info!("Quality {:?} has restrictions, trying next", quality);
@@ -2486,9 +2935,15 @@ impl QobuzClient {
                 // restriction — every quality would 403 the same way. Abort the
                 // whole fallback loop immediately instead of firing 5 more
                 // requests per track and feeding the storm (issue #637).
-                Err(e @ (ApiError::Forbidden(_)
-                | ApiError::ForbiddenCircuitOpen(_)
-                | ApiError::AuthenticationError(_))) => {
+                Err(
+                    e @ (ApiError::Forbidden(_)
+                    | ApiError::ForbiddenCircuitOpen(_)
+                    | ApiError::AuthenticationError(_)
+                    | ApiError::OfflineMode
+                    | ApiError::RateLimited(_)
+                    | ApiError::ServerError(_)
+                    | ApiError::NetworkError(_)),
+                ) => {
                     log::warn!("Stream URL aborting quality fallback: {}", e);
                     return Err(e);
                 }
@@ -2502,6 +2957,10 @@ impl QobuzClient {
                     continue;
                 }
             }
+        }
+
+        if saw_sample {
+            return Err(ApiError::PreviewOnly(track_id));
         }
 
         // If all quality levels reported track unavailable, return that specific error
@@ -2604,7 +3063,15 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::PLAYLIST_SEARCH);
         let timestamp = get_timestamp();
         let secret = self.secret().await?;
-        let signature = sign_search("playlistsearch", query, limit, offset, None, timestamp, &secret);
+        let signature = sign_search(
+            "playlistsearch",
+            query,
+            limit,
+            offset,
+            None,
+            timestamp,
+            &secret,
+        );
         let limit_str = limit.to_string();
         let offset_str = offset.to_string();
         let ts_str = timestamp.to_string();
@@ -2663,8 +3130,12 @@ impl QobuzClient {
     pub async fn delete_playlist(&self, playlist_id: u64) -> Result<()> {
         let url = endpoints::build_url(paths::PLAYLIST_DELETE);
 
-        self.signed_get_auth(&url, "playlistdelete", &[("playlist_id", playlist_id.to_string())])
-            .await?;
+        self.signed_get_auth(
+            &url,
+            "playlistdelete",
+            &[("playlist_id", playlist_id.to_string())],
+        )
+        .await?;
 
         Ok(())
     }
@@ -2678,10 +3149,14 @@ impl QobuzClient {
             .collect::<Vec<_>>()
             .join(",");
 
-        self.signed_get_auth(&url, "playlistaddTracks", &[
-            ("playlist_id", playlist_id.to_string()),
-            ("track_ids", track_ids_str),
-        ])
+        self.signed_get_auth(
+            &url,
+            "playlistaddTracks",
+            &[
+                ("playlist_id", playlist_id.to_string()),
+                ("track_ids", track_ids_str),
+            ],
+        )
         .await?;
 
         Ok(())
@@ -2700,10 +3175,73 @@ impl QobuzClient {
             .collect::<Vec<_>>()
             .join(",");
 
-        self.signed_get_auth(&url, "playlistdeleteTracks", &[
-            ("playlist_id", playlist_id.to_string()),
-            ("playlist_track_ids", track_ids_str),
-        ])
+        self.signed_get_auth(
+            &url,
+            "playlistdeleteTracks",
+            &[
+                ("playlist_id", playlist_id.to_string()),
+                ("playlist_track_ids", track_ids_str),
+            ],
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Move tracks WITHIN a playlist — `/playlist/updateTracksPosition`.
+    ///
+    /// `playlist_track_ids` are MEMBERSHIP ids, the same id space
+    /// [`Self::remove_tracks_from_playlist`] takes — not catalog track ids.
+    /// `insert_before` is the 0-based slot the moved rows must land in front
+    /// of, counted against the playlist AS IT IS at call time.
+    ///
+    /// # Provenance, because this one is not in the current spec
+    ///
+    /// The argument shape is the DESKTOP web-player capture's
+    /// (`qbz-nix-docs/qobuz-api-delta-desktop-8.2.0-b015.md:95` —
+    /// `{playlist_id, playlist_track_ids, insert_before}`). The decompiled
+    /// Android route table lists the same path, and that entry is corroboration
+    /// and nothing more: CLAUDE.md forbids inferring endpoints from it.
+    ///
+    /// GET + [`Self::signed_get_auth`], exactly like the two neighbours this
+    /// call is sequenced with. The capture records a POST, but every playlist
+    /// write in this client is a signed GET against api.json/0.2 — including
+    /// `addTracks` and `deleteTracks`, whose captures were POSTs too — and the
+    /// signature method name follows the same `<namespace><Method>` rule the
+    /// neighbours use, hence `playlistupdateTracksPosition`.
+    ///
+    /// The exact reading of `insert_before` is the ONE part of this verb no
+    /// capture in the repo pins down, so the request is logged in full at debug
+    /// level and callers must treat a successful-but-wrong move as cosmetic —
+    /// never as a reason to abort a repair that already landed.
+    pub async fn update_playlist_tracks_position(
+        &self,
+        playlist_id: u64,
+        playlist_track_ids: &[u64],
+        insert_before: u32,
+    ) -> Result<()> {
+        let url = endpoints::build_url(paths::PLAYLIST_UPDATE_TRACKS_POSITION);
+        let track_ids_str = playlist_track_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        log::debug!(
+            "[API] updateTracksPosition playlist_id={} playlist_track_ids={} insert_before={}",
+            playlist_id,
+            track_ids_str,
+            insert_before
+        );
+
+        self.signed_get_auth(
+            &url,
+            "playlistupdateTracksPosition",
+            &[
+                ("playlist_id", playlist_id.to_string()),
+                ("playlist_track_ids", track_ids_str),
+                ("insert_before", insert_before.to_string()),
+            ],
+        )
         .await?;
 
         Ok(())
@@ -2745,7 +3283,11 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::PLAYLIST_SUBSCRIBE);
 
         let response = self
-            .signed_get_auth(&url, "playlistsubscribe", &[("playlist_id", playlist_id.to_string())])
+            .signed_get_auth(
+                &url,
+                "playlistsubscribe",
+                &[("playlist_id", playlist_id.to_string())],
+            )
             .await?;
 
         let status = response.status();
@@ -2765,7 +3307,11 @@ impl QobuzClient {
         let url = endpoints::build_url(paths::PLAYLIST_UNSUBSCRIBE);
 
         let response = self
-            .signed_get_auth(&url, "playlistunsubscribe", &[("playlist_id", playlist_id.to_string())])
+            .signed_get_auth(
+                &url,
+                "playlistunsubscribe",
+                &[("playlist_id", playlist_id.to_string())],
+            )
             .await?;
 
         let status = response.status();
@@ -2786,7 +3332,11 @@ impl QobuzClient {
         let type_key = format!("{}_ids", fav_type); // album_ids, track_ids, artist_ids
 
         let response = self
-            .signed_get_auth(&url, "favoritecreate", &[(type_key.as_str(), item_id.to_string())])
+            .signed_get_auth(
+                &url,
+                "favoritecreate",
+                &[(type_key.as_str(), item_id.to_string())],
+            )
             .await?;
 
         if response.status().is_success() {
@@ -2805,7 +3355,11 @@ impl QobuzClient {
         let type_key = format!("{}_ids", fav_type);
 
         let response = self
-            .signed_get_auth(&url, "favoritedelete", &[(type_key.as_str(), item_id.to_string())])
+            .signed_get_auth(
+                &url,
+                "favoritedelete",
+                &[(type_key.as_str(), item_id.to_string())],
+            )
             .await?;
 
         if response.status().is_success() {
@@ -2834,7 +3388,14 @@ impl QobuzClient {
 
         log::debug!("[API] get_artist_page({}) sort={:?}", artist_id, sort);
         let response: serde_json::Value = self
-            .signed_get(&url, "artistpage", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artistpage",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?
             .json()
             .await?;
@@ -2870,7 +3431,14 @@ impl QobuzClient {
             offset
         );
         let response: serde_json::Value = self
-            .signed_get(&url, "artistgetReleasesGrid", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artistgetReleasesGrid",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?
             .json()
             .await?;
@@ -2900,7 +3468,14 @@ impl QobuzClient {
             limit
         );
         let response: serde_json::Value = self
-            .signed_get(&url, "artiststory", &query.iter().map(|(k, v)| (*k, v.clone())).collect::<Vec<_>>())
+            .signed_get(
+                &url,
+                "artiststory",
+                &query
+                    .iter()
+                    .map(|(k, v)| (*k, v.clone()))
+                    .collect::<Vec<_>>(),
+            )
             .await?
             .json()
             .await?;
@@ -3010,11 +3585,7 @@ impl QobuzClient {
     ///
     /// This is the new streaming endpoint that returns encrypted CMAF segments
     /// instead of a direct file URL.
-    pub async fn get_file_url(
-        &self,
-        track_id: u64,
-        quality: Quality,
-    ) -> Result<TrackFileUrl> {
+    pub async fn get_file_url(&self, track_id: u64, quality: Quality) -> Result<TrackFileUrl> {
         let format_id = quality.id();
         let url = endpoints::build_url(paths::FILE_URL);
 
@@ -3075,11 +3646,7 @@ impl QobuzClient {
                         let code = status.as_u16();
                         if status == reqwest::StatusCode::FORBIDDEN {
                             let preview = body_preview(response).await;
-                            log::warn!(
-                                "[CMAF] file/url 403 for track {}{}",
-                                track_id,
-                                preview
-                            );
+                            log::warn!("[CMAF] file/url 403 for track {}{}", track_id, preview);
                             return Err(ApiError::Forbidden(preview));
                         }
                         return Err(if code == 404 {
@@ -3096,10 +3663,7 @@ impl QobuzClient {
                         } else if status.is_server_error() {
                             ApiError::ServerError(code)
                         } else {
-                            ApiError::ApiResponse(format!(
-                                "file/url failed with status {}",
-                                status
-                            ))
+                            ApiError::ApiResponse(format!("file/url failed with status {}", status))
                         });
                     }
 
@@ -3129,6 +3693,201 @@ impl Default for QobuzClient {
 mod tests {
     use super::*;
 
+    fn available_master(format_id: u32) -> StreamUrl {
+        StreamUrl {
+            url: "https://cdn.example.test/audio".into(), format_id,
+            mime_type: "audio/flac".into(),
+            sampling_rate: if format_id == 6 { 44.1 } else { 96.0 },
+            bit_depth: Some(if format_id == 6 { 16 } else { 24 }),
+            track_id: 7, restrictions: Vec::new(), sample: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn full_stream_skips_previews_but_still_checks_lower_tiers() {
+        let selected = QobuzClient::resolve_stream_url(31, Quality::HiRes, false, |tier| async move {
+            let mut url = available_master(tier.id());
+            url.sample = tier == Quality::HiRes;
+            Ok(url)
+        }).await.unwrap();
+        assert_eq!(selected.1, Quality::Lossless);
+
+        let error = QobuzClient::resolve_stream_url(31, Quality::Mp3, false, |_| async {
+            let mut url = available_master(5);
+            url.sample = true;
+            Ok(url)
+        }).await.unwrap_err();
+        assert!(matches!(error, ApiError::PreviewOnly(31)));
+    }
+
+    #[tokio::test]
+    async fn rate_limit_stops_the_entire_quality_ladder() {
+        let mut requests = 0;
+        let error = QobuzClient::resolve_stream_url(31, Quality::UltraHiRes, false, |_| {
+            requests += 1;
+            async { Err(ApiError::RateLimited(2)) }
+        }).await.unwrap_err();
+        assert!(matches!(error, ApiError::RateLimited(2)));
+        assert_eq!(requests, 1);
+    }
+
+    #[tokio::test]
+    async fn successful_request_keeps_available_format_without_extra_attempts() {
+        for format_id in [6, 7] {
+            let mut attempts = Vec::new();
+            let (url, actual) = QobuzClient::resolve_stream_url_with_fallback(
+                7, Quality::UltraHiRes, |quality| {
+                    attempts.push(quality);
+                    std::future::ready(Ok(available_master(format_id)))
+                },
+            ).await.unwrap();
+            assert_eq!(attempts, vec![Quality::UltraHiRes]);
+            assert_eq!(actual, Quality::UltraHiRes);
+            assert_eq!(url.format_id, format_id);
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_request_reports_actual_fallback_not_initial_preference() {
+        let mut attempts = Vec::new();
+        let (url, actual) = QobuzClient::resolve_stream_url_with_fallback(
+            7, Quality::UltraHiRes, |quality| {
+                attempts.push(quality);
+                let mut url = available_master(7);
+                if quality == Quality::UltraHiRes {
+                    url.restrictions.push(qbz_models::StreamRestriction {
+                        code: "FormatRestrictedByFormatAvailability".into(),
+                    });
+                }
+                std::future::ready(Ok(url))
+            },
+        ).await.unwrap();
+        assert_eq!(attempts, vec![Quality::UltraHiRes, Quality::HiRes]);
+        assert_eq!(actual, Quality::HiRes);
+        assert_eq!(url.format_id, 7);
+    }
+
+    #[tokio::test]
+    async fn successful_request_aborts_auth_failure_without_lower_quality_requests() {
+        for error in [ApiError::Forbidden("fixture".into()),
+            ApiError::ForbiddenCircuitOpen(30),
+            ApiError::AuthenticationError("fixture".into()), ApiError::InvalidAppSecret] {
+            let expected = std::mem::discriminant(&error);
+            let mut error = Some(error);
+            let mut attempts = Vec::new();
+            let result = QobuzClient::resolve_stream_url_with_fallback(
+                7, Quality::UltraHiRes, |quality| {
+                    attempts.push(quality);
+                    std::future::ready(Err(error.take().expect("must abort after first failure")))
+                },
+            ).await;
+            assert_eq!(std::mem::discriminant(&result.unwrap_err()), expected);
+            assert_eq!(attempts, vec![Quality::UltraHiRes]);
+        }
+    }
+
+    #[test]
+    fn remote_body_diagnostic_never_echoes_payload() {
+        let marker = "jwt=secret&request_sig=signed-value";
+        let diagnostic = redacted_body_diagnostic(marker);
+        assert_eq!(diagnostic, " : <response body omitted>");
+        assert!(!diagnostic.contains(marker));
+        assert!(!diagnostic.contains("secret"));
+        assert_eq!(redacted_body_diagnostic("  \n"), " : <empty body>");
+    }
+
+    /// Install the process-level rustls `CryptoProvider`, once.
+    ///
+    /// UNRELATED DRIVE-BY FIX, 2026-08-16: the two gate tests below were failing
+    /// on every run — `reqwest` is built with `rustls-tls-webpki-roots-no-provider`,
+    /// so BUILDING a client panics with "No provider set" until a provider is
+    /// installed, and a test binary has no application startup to do it. The
+    /// application installs it via `qbz_app::ensure_crypto_provider`, but this
+    /// crate sits below `qbz-app` and cannot call that, so it installs its own.
+    /// `install_default` is idempotent and returns `Err` if someone else won the
+    /// race, which is why the result is discarded.
+    fn ensure_crypto_provider() {
+        use std::sync::Once;
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        });
+    }
+
+    #[tokio::test]
+    async fn delegated_credentials_use_the_validated_secret_not_the_first_candidate() {
+        ensure_crypto_provider();
+        let client = QobuzClient::new().expect("client construction is local-only");
+        let app_id = "123456789";
+        let first_candidate = "first-unvalidated-secret";
+        let selected_secret = "second-validated-secret";
+
+        *client.tokens.write().await = Some(BundleTokens {
+            app_id: app_id.to_string(),
+            secrets: vec![first_candidate.to_string(), selected_secret.to_string()],
+            private_key: Some("owner-oauth-private-key".to_string()),
+        });
+        *client.validated_secret.write().await = Some(ValidatedBundleSecret::new(
+            app_id.to_string(),
+            selected_secret.to_string(),
+        ));
+        *client.session.write().await = Some(UserSession {
+            user_auth_token: "owner-token".to_string(),
+            user_id: 7,
+            email: "owner@example.test".to_string(),
+            display_name: "Owner".to_string(),
+            subscription_label: "Studio".to_string(),
+            country_code: Some("MX".to_string()),
+            language_code: Some("es".to_string()),
+            ..UserSession::default()
+        });
+
+        let credentials = client.delegated_app_credentials().await.unwrap();
+        let (delegated_app_id, delegated_secret) = credentials.values_for_test();
+        assert_eq!(delegated_app_id, app_id);
+        assert_eq!(delegated_secret, selected_secret);
+        assert_ne!(delegated_secret, first_candidate);
+        assert_ne!(delegated_secret, "owner-oauth-private-key");
+        assert_ne!(delegated_secret, "owner-token");
+    }
+
+    #[test]
+    fn validated_secret_is_bound_to_its_bundle_generation() {
+        let validated =
+            ValidatedBundleSecret::new("123456789".to_string(), "selected-secret".to_string());
+        let matching = BundleTokens {
+            app_id: "123456789".to_string(),
+            secrets: vec!["other-secret".to_string(), "selected-secret".to_string()],
+            private_key: None,
+        };
+        let rotated_secret = BundleTokens {
+            app_id: "123456789".to_string(),
+            secrets: vec!["replacement-secret".to_string()],
+            private_key: None,
+        };
+        let rotated_app = BundleTokens {
+            app_id: "987654321".to_string(),
+            secrets: vec!["selected-secret".to_string()],
+            private_key: None,
+        };
+
+        assert!(validated.is_current_for(&matching));
+        assert!(!validated.is_current_for(&rotated_secret));
+        assert!(!validated.is_current_for(&rotated_app));
+    }
+
+    #[tokio::test]
+    async fn delegated_credentials_require_an_initialized_owner_client() {
+        ensure_crypto_provider();
+        let client = QobuzClient::new().expect("client construction is local-only");
+
+        assert!(matches!(
+            client.delegated_app_credentials().await,
+            Err(ApiError::BundleExtractionError(message))
+                if message == "Client not initialized"
+        ));
+    }
+
     /// With the offline gate closed, any public API method must fail fast
     /// with the typed `ApiError::OfflineMode` — no network access, no
     /// connect timeout. The gate is process-global and tests run in
@@ -3136,6 +3895,7 @@ mod tests {
     /// drop guard reopens the gate even if the test panics.
     #[tokio::test]
     async fn offline_gate_fails_fast_with_typed_error() {
+        ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3169,6 +3929,7 @@ mod tests {
     /// and without touching the network.
     #[tokio::test]
     async fn offline_gate_exempts_login_methods() {
+        ensure_crypto_provider();
         let _lock = crate::offline_gate::test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -3209,3 +3970,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "saved_session_tests.rs"]
+mod saved_session_tests;

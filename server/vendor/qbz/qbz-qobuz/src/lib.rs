@@ -34,14 +34,17 @@ pub mod auth;
 pub mod bundle;
 pub mod client;
 pub mod cmaf;
+pub mod delegated;
 pub mod endpoints;
 pub mod error;
 pub mod forbidden_breaker;
 pub mod link_resolver;
 pub mod lyrics;
+pub mod net_diag;
 pub mod offline_gate;
 pub mod performers;
 pub mod purchases;
+pub mod qconnect_auth;
 pub mod retry;
 
 // Re-export main types
@@ -55,6 +58,10 @@ pub use cmaf::{
     setup_streaming as cmaf_setup_streaming, CmafProgressCallback, CmafProgressUpdate,
     CmafRawBundle, CmafStreamingInfo, CMAF_PREFETCH_CONCURRENCY,
 };
+pub use delegated::{
+    DelegatedApiConfig, DelegatedApiConfigError, DelegatedApiEndpoint, DelegatedApiError,
+    DelegatedApiResult, DelegatedAppCredentials, DelegatedQobuzClient,
+};
 pub use error::{ApiError, Result};
 pub use link_resolver::{resolve_link, LinkResolverError, ResolvedLink};
 pub use lyrics::{
@@ -62,3 +69,4 @@ pub use lyrics::{
     QobuzLyricsPlainLine, QobuzLyricsPublisher, QobuzLyricsTranslation, QobuzLyricsUrls,
     QobuzLyricsWord,
 };
+pub use qconnect_auth::QwsAuthToken;

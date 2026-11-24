@@ -36,11 +36,11 @@ test("ownership refresh omits unchanged queue and fetches a full snapshot after 
   const stop = new AbortController();
   await client.refreshSession(stop.signal);
   await client.refreshSession(stop.signal);
-  expect(paths).toEqual(["/api/session", "/api/session?queue=7"]);
+  expect(paths).toEqual(["/api/session", "/api/session?queue=7&patches=1"]);
   expect(client.sessionView()?.queue.tracks).toEqual([]);
   replacement = true;
   await client.refreshSession(stop.signal);
-  expect(paths.slice(-2)).toEqual(["/api/session?queue=7", "/api/session"]);
+  expect(paths.slice(-2)).toEqual(["/api/session?queue=7&patches=1", "/api/session"]);
   expect(client.sessionView()?.instanceId).toBe("replacement");
 });
 

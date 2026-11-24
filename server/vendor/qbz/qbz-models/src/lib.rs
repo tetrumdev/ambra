@@ -31,9 +31,11 @@
 
 pub mod error;
 pub mod events;
+pub mod fs_url;
 pub mod lenient;
 pub mod mixtape;
 pub mod playback;
+pub mod playback_cache;
 pub mod purchase_serde;
 pub mod source;
 pub mod traits;
@@ -54,6 +56,7 @@ pub use types::{
     RadioResponse,
     ArtistAlbums,
     ArtistBiography,
+    Goody,
     // Discover types
     DiscoverAlbum,
     DiscoverAlbumDates,
@@ -137,6 +140,7 @@ pub use types::{
     AssetOrigin,
     AudioParams,
     probe_streaminfo,
+    qobuz_cover_at_px,
     ExternalStreamAsset,
     StreamQualityInfo,
     StreamRestriction,
@@ -145,5 +149,6 @@ pub use types::{
     TrackFileUrl,
     TrackToAnalyse,
     TracksContainer,
+    Entitlements,
     UserSession,
 };

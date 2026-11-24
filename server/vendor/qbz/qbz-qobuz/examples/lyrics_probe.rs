@@ -1,7 +1,7 @@
 //! Read-only live probe for the Qobuz lyrics endpoint (Lyrics epic, slice S1).
 //!
 //! Validates the inferred contract (`/track/lyricsUrl` + CDN document) against
-//! the LIVE API using the owner's saved credentials, and prints the RAW JSON
+//! the live API using AMBRA_QOBUZ_USER_AUTH_TOKEN, and prints the RAW JSON
 //! of every response so the shapes can be captured into
 //! `qbz-nix-docs/qobuz-api/` before freezing the serde structs.
 //!
@@ -67,70 +67,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let warm = client.init().await?;
     eprintln!("[probe] init done (warm bundle cache: {})", warm);
 
-    // Load saved credentials on a PLAIN OS thread: qbz-credentials derives
-    // its AES key with the XDG portal secret only when a tokio runtime is
-    // ambient (`Handle::try_current()`); the app encrypts from non-async
-    // contexts, so decrypting here inside #[tokio::main] would derive a
-    // DIFFERENT key and fail. The plain thread reproduces the app's
-    // no-portal derivation. (The portal lookup result is cached per process,
-    // so this must happen before any other credential call.)
-    let (keyring_token, file_token, creds) = std::thread::spawn(|| {
-        let keyring_token = qbz_credentials::load_oauth_token().ok().flatten();
-        let file_token = qbz_credentials::load_oauth_token_from_file().ok().flatten();
-        let creds = qbz_credentials::load_qobuz_credentials().ok().flatten();
-        (keyring_token, file_token, creds)
-    })
-    .join()
-    .expect("credential loader thread panicked");
-
-    // Login: saved OAuth token (keyring-first, then the authoritative
-    // encrypted file — a stale keyring entry can shadow a fresh file), then
-    // saved email+password as the last resort.
-    let mut logged_in = false;
-    let mut tried: Vec<String> = Vec::new();
-    if let Some(token) = keyring_token {
-        tried.push(token.clone());
-        match client.login_with_token(&token).await {
-            Ok(session) => {
-                eprintln!(
-                    "[probe] logged in via OAuth token (user_id {})",
-                    session.user_id
-                );
-                logged_in = true;
-            }
-            Err(e) => eprintln!(
-                "[probe] OAuth token login failed ({}), trying the token file directly",
-                e
-            ),
-        }
-    }
-    if !logged_in {
-        if let Some(token) = file_token {
-            if !tried.contains(&token) {
-                match client.login_with_token(&token).await {
-                    Ok(session) => {
-                        eprintln!(
-                            "[probe] logged in via OAuth token file (user_id {})",
-                            session.user_id
-                        );
-                        logged_in = true;
-                    }
-                    Err(e) => eprintln!(
-                        "[probe] OAuth token-file login failed ({}), trying credentials",
-                        e
-                    ),
-                }
-            }
-        }
-    }
-    if !logged_in {
-        let creds = creds.ok_or("no usable saved OAuth token and no saved credentials")?;
-        let session = client.login(&creds.email, &creds.password).await?;
-        eprintln!(
-            "[probe] logged in via saved credentials (user_id {})",
-            session.user_id
-        );
-    }
+    let token = zeroize::Zeroizing::new(std::env::var("AMBRA_QOBUZ_USER_AUTH_TOKEN")?);
+    client.login_with_token(token.trim()).await?;
 
     for track_id in track_ids {
         println!("\n=== track {} ===", track_id);

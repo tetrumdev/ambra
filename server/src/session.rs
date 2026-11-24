@@ -1777,7 +1777,7 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         transport.queued_next = None;
         transport.set_position(status["currentTime"].as_f64().unwrap_or(0.0));
-        let count = transport.playing && status["isPlaying"] == true && status["buffering"] != true;
+        let count = transport.playing && is_audible_report(&status);
         if count { transport.counted = Some((next.clone().unwrap_or_default(), transport.generation)); }
         count
         };
@@ -1830,7 +1830,7 @@ async fn step(core: &Core) -> Result<(), String> {
         }
         let after = (transport.buffering, transport.error.clone(), transport.duration, transport.audio_quality.clone());
         let generation = transport.generation;
-        let count = transport.playing && engine_playing && !buffering && transport.counted.as_ref() != Some(&(canonical_source.clone(), generation));
+        let count = transport.playing && is_audible_report(&status) && transport.counted.as_ref() != Some(&(canonical_source.clone(), generation));
         if count {
             transport.counted = Some((canonical_source.clone(), generation));
         }
@@ -1860,6 +1860,16 @@ async fn step(core: &Core) -> Result<(), String> {
         core.changed();
     }
     Ok(())
+}
+
+/// Only an active native output can create a history entry. A warmed URL,
+/// failed output, or late completion report provides no proof of playback.
+fn is_audible_report(status: &Value) -> bool {
+    status["isPlaying"] == true
+        && status["buffering"] != true
+        && status["ended"] != true
+        && status["error"].is_null()
+        && status["currentTime"].as_f64().is_some_and(|position| position >= 0.0)
 }
 
 // ---------- Playing on several outputs in step ----------
@@ -3352,6 +3362,24 @@ mod driver_tests {
             Ok((Some(queue.to_string()), ()))
         }).await.unwrap();
         eventually!("the replaced queue", h.core.queue().await["current"]["globalTrackId"] == "b");
+    }
+
+    #[test]
+    fn history_requires_an_active_native_output_report() {
+        let playing = json!({ "currentTime": 0.5, "isPlaying": true });
+        assert!(is_audible_report(&playing));
+        for (key, value) in [
+            ("currentTime", Value::Null),
+            ("currentTime", json!(-1)),
+            ("isPlaying", json!(false)),
+            ("buffering", json!(true)),
+            ("ended", json!(true)),
+            ("error", json!("Audio output failed")),
+        ] {
+            let mut report = playing.clone();
+            report[key] = value;
+            assert!(!is_audible_report(&report), "{report}");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]
