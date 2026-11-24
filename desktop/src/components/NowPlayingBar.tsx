@@ -6,6 +6,7 @@ import type { PlaybackClock } from "../utils/playbackClock";
 import "./NowPlayingBar.css";
 import { AudioDecks } from "./AudioDecks";
 import { PlaybackProgress } from "./PlaybackProgress";
+import type { QueueStep } from "../hooks/useQueueStep";
 import { PlayerControls } from "./PlayerControls";
 import { SongInfo } from "./SongInfo";
 import { ExtraCtrls } from "./ExtraCtrls.tsx";
@@ -79,6 +80,8 @@ type NowPlayingBarProps = {
   onTogglePlayback: () => void | Promise<void>;
   onNext: () => void;
   canGoBack: boolean;
+  /** How the queue got to the song, for the progress bar. */
+  queueStep?: QueueStep | null;
   canSkip: boolean;
   onSeek: (time: number) => void;
   onOpenBigscreen?: () => void;
@@ -107,6 +110,7 @@ export function NowPlayingBar({
   onTogglePlayback,
   onNext,
   canGoBack,
+  queueStep,
   canSkip,
   onSeek,
   onToggleQueue,
@@ -183,6 +187,7 @@ export function NowPlayingBar({
             onSeek={onSeek}
             disabled={isEmpty}
             songKey={track?.globalId}
+            queueStep={queueStep}
           />
           {track && showAudioQuality && <QualityLight track={track} audioQuality={audioQuality} />}
         </div>

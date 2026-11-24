@@ -155,6 +155,8 @@ struct Selection {
     amll: Option<LyricsResponse>,
     red: Option<LyricsResponse>,
     lrclib: Option<LyricsResponse>,
+    /// The first line-timed lyrics, kept while a provider further down may have word timing.
+    timed: Option<LyricsResponse>,
     failed: Vec<&'static str>,
     answered: bool,
 }
@@ -165,11 +167,15 @@ impl Selection {
         provider: Provider,
         mut lyrics: LyricsResponse,
     ) -> Option<LyricsResponse> {
-        // Providers are asked in priority order (AMLL, lrc.red, LRCLIB), so the first
-        // timed lyrics win, even over finer timing from a provider further down.
+        // Providers are asked in priority order (AMLL, lrc.red, LRCLIB): the first word-timed
+        // lyrics win, then the first line-timed ones.
         if lyrics.status == "lyrics" && lyrics.sync != "none" {
-            lyrics.failed_providers = self.failed.clone();
-            return Some(lyrics);
+            if lyrics.has_word_sync {
+                lyrics.failed_providers = self.failed.clone();
+                return Some(lyrics);
+            }
+            self.timed.get_or_insert(lyrics);
+            return None;
         }
         if lyrics.status == "unavailable" {
             return None;
@@ -185,17 +191,19 @@ impl Selection {
     fn finish(self) -> LyricsResponse {
         // No provider had timed lyrics: plain lyrics beat "instrumental"; between equals,
         // AMLL, then lrc.red, then LRCLIB.
-        let mut lyrics = [self.amll, self.red, self.lrclib]
-            .into_iter()
-            .flatten()
-            .reduce(|best, next| {
-                if providers::quality(&next) > providers::quality(&best) {
-                    next
-                } else {
-                    best
-                }
-            })
-            .unwrap_or_else(|| LyricsResponse::empty(None));
+        let mut lyrics = self.timed.unwrap_or_else(|| {
+            [self.amll, self.red, self.lrclib]
+                .into_iter()
+                .flatten()
+                .reduce(|best, next| {
+                    if providers::quality(&next) > providers::quality(&best) {
+                        next
+                    } else {
+                        best
+                    }
+                })
+                .unwrap_or_else(|| LyricsResponse::empty(None))
+        });
         // A miss is only a failure when no provider could be asked at all. LRCLIB in particular
         // answers most misses with 503 "ServerOverloaded", so one failed provider beside others
         // that found nothing still means the song has no lyrics, not that the lookup broke.

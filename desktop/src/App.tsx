@@ -32,6 +32,7 @@ import { useAudioSettings } from "./hooks/AudioSettingsContext";
 import { useStaleTrackRefresh } from "./hooks/useStaleTrackRefresh";
 import { useTrackSearch } from "./hooks/useTrackSearch";
 import { useQueue } from "./hooks/useQueue";
+import { useQueueStep } from "./hooks/useQueueStep";
 import { NowPlayingProvider } from "./hooks/useNowPlaying";
 import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -194,6 +195,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     }
     return localOnly ? tracks.filter(isDeviceTrack) : tracks;
   }, [availableTracks, queue.entries, queue.historyEntries, localOnly, usingCore]);
+  const queueStep = useQueueStep(queue);
   // Which way the queue last moved, so the player cover slides in from that side.
   const skipDirectionRef = useRef({ direction: 1, at: 0 });
   const skipDirection = useCallback(() =>
@@ -204,7 +206,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     previous: () => { skipDirectionRef.current = { direction: -1, at: performance.now() }; return queue.previous()?.track; },
     peekNext: () => queue.peekNext()?.track,
     nextTrack: queue.upcomingEntries[0]?.track,
-  }, listeningHistory.recordPlay);
+  }, listeningHistory.recordPlay, !awaitingSharedPlayback);
   /* eslint-enable react-hooks/rules-of-hooks */
   useStaleTrackRefresh(
     playlistStore.tracks,
@@ -733,6 +735,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
         onTogglePlayback={player.togglePlayback}
         onNext={player.next}
         canGoBack={queue.historyEntries.length > 0}
+        queueStep={queueStep}
         canSkip={queue.upcomingEntries.length > 0}
         onSeek={player.seek}
         onOpenBigscreen={openPlayer}

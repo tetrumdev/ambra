@@ -102,6 +102,8 @@ export function useAudioPlayer(
   initialPlayback: InitialPlayback,
   queueNavigation: AudioQueueNavigation,
   onTrackPlayed: (track: Track) => void,
+  /** False holds back restoring the saved song, as `useQueue`'s `ready` does. */
+  restoreReady = true,
 ): AudioPlayer {
   const firstAudioRef = useRef<HTMLAudioElement>(null);
   const secondAudioRef = useRef<HTMLAudioElement>(null);
@@ -704,7 +706,7 @@ export function useAudioPlayer(
   );
 
   useEffect(() => {
-    if (restoreStartedRef.current) return;
+    if (restoreStartedRef.current || !restoreReady) return;
     const restored = playbackRestore(tracks, initialPlaybackRef.current);
     if (!restored) return;
     restoreStartedRef.current = true;
@@ -733,7 +735,7 @@ export function useAudioPlayer(
     if (tracks.length > 1) {
       prepareDeck(1, (initialTrackIndex + 1) % tracks.length);
     }
-  }, [tracks, loadNativeTrack, prepareDeck, releaseDeck, usesNativeAudio]);
+  }, [tracks, restoreReady, loadNativeTrack, prepareDeck, releaseDeck, usesNativeAudio]);
 
   const queuedNextTrackId = queueNavigation.nextTrack?.globalId ?? null;
   useEffect(() => {

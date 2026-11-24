@@ -172,7 +172,7 @@ export function Root() {
   return <ClientConnectionContext.Provider value={client}>
     <div className="appViewport"><AudioSettingsProvider>
       <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!showServerLibrary} sharedPlayback={sharedPlayback}
-        awaitingSharedPlayback={!sharedPlayback && settling && preferSharedPlayback} onPlaybackRelease={registerPlaybackRelease} />
+        awaitingSharedPlayback={!sharedPlayback && reachable && preferSharedPlayback && !modeError} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>
     {serverConnection?.server && !connected && !settling && <div className="stateSaveError" role="status">
       <span>{serverConnection.server.name} disconnected. Local music remains available.</span>
