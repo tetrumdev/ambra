@@ -208,11 +208,17 @@ function clearCursorMark() {
   for (const previous of document.querySelectorAll("[data-nav-cursor]")) previous.removeAttribute("data-nav-cursor");
 }
 
+// Controls that Space and Enter press. Lists and open popups keep focus, as their own keys move through them.
+const PRESSABLE = "button, summary, a[href], input[type='checkbox'], input[type='radio'], [role='button'], [role='checkbox'], [role='switch'], [role='radio'], [role='tab']";
+const POPUP_CONTROLS = "[role='dialog'] *, [role='menu'] *, [role='listbox'] *";
+
 /** The pointer takes over: clicking an item moves the cursor there, without showing it. */
 export function installPointerCursor() {
   let pressed: EventTarget | null = null;
+  let pointerInput = false;
   const onPointerDown = (event: PointerEvent) => {
     pressed = event.target;
+    pointerInput = true;
     showKeyboardCursor(false);
     const item = event.target instanceof Element ? event.target.closest<HTMLElement>(NAV_ITEMS) : null;
     if (!item) return;
@@ -235,7 +241,14 @@ export function installPointerCursor() {
       requestAnimationFrame(() => { root.style.pointerEvents = ""; });
     });
   };
+  // A control the pointer pressed, or one a closing popup hands focus back to, doesn't keep it:
+  // Space would light it up and Enter would press it again.
+  const onFocusIn = (event: FocusEvent) => {
+    const target = event.target;
+    if (pointerInput && target instanceof HTMLElement && target.matches(PRESSABLE) && !target.matches(NAV_ITEMS) && !target.closest(POPUP_CONTROLS)) target.blur();
+  };
   const onKeyDown = (event: KeyboardEvent) => {
+    pointerInput = false;
     // Letters typed into a field aren't shortcuts, even when they share a key with one.
     if (isTypingTarget(event.target) && !event.metaKey && !event.ctrlKey && !event.altKey) return;
     if (matchingShortcut(event, POINTER_HIDING_SHORTCUTS)) showKeyboardCursor(true);
@@ -244,7 +257,9 @@ export function installPointerCursor() {
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerup", onPointerUp, true);
   window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("focusin", onFocusIn, true);
   return () => {
+    window.removeEventListener("focusin", onFocusIn, true);
     window.removeEventListener("pointerup", onPointerUp, true);
     window.removeEventListener("pointerdown", onPointerDown, true);
     window.removeEventListener("pointermove", onPointerMove, true);

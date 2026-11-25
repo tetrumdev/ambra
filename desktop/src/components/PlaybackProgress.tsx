@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { haptic } from "../utils/haptics";
 import { motion } from "../utils/motion";
 import { reducedMotion } from "../utils/reducedMotion";
-import { usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
+import { skipHeld, usePlaybackTime, type PlaybackClock } from "../utils/playbackClock";
 import type { QueueStep } from "../hooks/useQueueStep";
 import "./PlaybackProgress.css";
 
@@ -36,15 +36,13 @@ function cubicBezier([x1, y1, x2, y2]: number[]) {
 const glideEase = cubicBezier(motion.smooth.easing.match(/[\d.]+/g)!.map(Number));
 /** A jump bigger than this many seconds glides instead of snapping. */
 const GLIDE_AFTER_SECONDS = 1.5;
-/** Skipping ahead, the old bar fills the rest of the way, then leaves right: this long per bar
-    length it travels, so a skip from the start shows the whole song going. */
-const EXIT_MS_PER_BAR = 220;
-/** Speed builds from almost nothing to fast, so the bar shoots off rather than drifting. */
-const exitEase = (t: number) => Math.min(1, t) ** 3;
 /** Going back, a bar comes in from the right over the old one, then draws back onto the new
     playhead: easing in so its first frames don't leap, and slowing to a stop as it lands. */
-const BACK_MS = 750;
+const WIPE_MS = 750;
 const backEase = cubicBezier([0.45, 0, 0.15, 1]);
+/** Skipping ahead, the old bar fills the rest of the way, then leaves right: going back played in
+    reverse, so the two move at the same speeds. */
+const exitEase = (t: number) => 1 - backEase(1 - Math.min(1, t));
 /** The most a wipe moves on per drawn frame, so a stalled frame doesn't jump it ahead. */
 const MAX_FRAME_MS = 1000 / 30;
 /** How far, as a share of the bar, the wiping bar's faded edge reaches at most. */
@@ -112,6 +110,14 @@ export function PlaybackProgress({
       shown.current = target;
     }
   }
+  // Mid-skip the clock already reads the next song's start while this one still shows: the bar
+  // stays where it was until the next song arrives and wipes it off from there.
+  const holdSong = useRef<{ song: string | undefined } | null>(null);
+  const heldForSkip = () => {
+    if (!skipHeld()) { holdSong.current = null; return false; }
+    holdSong.current ??= { song: song.current };
+    return holdSong.current.song === song.current;
+  };
   // The duration the bar was last drawn with: the next song's can arrive with its start, or be
   // unknown (0) for a moment, and the jump is measured against the song it left.
   const shownDuration = useRef(duration);
@@ -134,7 +140,7 @@ export function PlaybackProgress({
     if (press.current === "down") press.current = "glided";
     return true;
   };
-  follow(target, duration, now);
+  if (!heldForSkip()) follow(target, duration, now);
   const gliding = glide.current !== null;
   // The bar is drawn every frame from the clock's smoothed time, so it moves steadily rather than
   // stepping with each position report; it is set on the element, without rerendering.
@@ -146,18 +152,20 @@ export function PlaybackProgress({
       const { scrub, duration } = latest.current;
       const time = scrub ?? clock.getSmooth();
       const target = duration > 0 ? Math.min(1, Math.max(0, time / duration)) : 0;
+      const holding = heldForSkip();
       // A glide started here shows its moving time too.
-      if (follow(target, duration, now)) setFrame(count => count + 1);
-      if (duration > 0) shownDuration.current = duration;
-      shown.current = glide.current
-        ? glide.current.from + (target - glide.current.from) * glideEase((now - glide.current.start) / motion.smooth.duration)
-        : target;
+      if (!holding && follow(target, duration, now)) setFrame(count => count + 1);
+      if (!holding && duration > 0) shownDuration.current = duration;
+      if (!holding) {
+        shown.current = glide.current
+          ? glide.current.from + (target - glide.current.from) * glideEase((now - glide.current.start) / motion.smooth.duration)
+          : target;
+      }
       input.current?.style.setProperty("--progress", `${shown.current * 100}%`);
       // The old bar: clear until `clear`, fading in to solid at `solid`, solid until `end`,
       // fading out to clear at `fadeOut`.
-      const wipeMs = !wipe.current ? 0 : wipe.current.back ? BACK_MS : EXIT_MS_PER_BAR * (2 - wipe.current.from);
       if (wipe.current) wipe.current.elapsed += frameMs;
-      if (wipe.current && wipe.current.elapsed >= wipeMs) wipe.current = null;
+      if (wipe.current && wipe.current.elapsed >= WIPE_MS) wipe.current = null;
       // The old bar, left as it was until covered.
       let held = 0;
       let clear = 1, solid = 1, end = 1, fadeOut = 1;
@@ -168,7 +176,7 @@ export function PlaybackProgress({
           // faded tail, which starts beyond the right edge, draws back onto the new playhead
           // (`p`, itself still arriving), the fade narrowing to nothing as it lands.
           const p = shown.current;
-          const moved = (2 - p) * backEase(elapsed / wipeMs);
+          const moved = (2 - p) * backEase(elapsed / WIPE_MS);
           clear = solid = Math.max(0, 1 - moved);
           end = Math.min(1, 2 - moved);
           fadeOut = end + WIPE_FADE * Math.max(0, end - p) / Math.max(1 - p, 0.01);
@@ -176,7 +184,7 @@ export function PlaybackProgress({
         } else {
           // Leaving right from `from`: the front runs to the end, then the back follows it out, so
           // the further in the song was, the less the front has left to cover first.
-          const moved = (2 - from) * exitEase(elapsed / wipeMs);
+          const moved = (2 - from) * exitEase(elapsed / WIPE_MS);
           end = fadeOut = Math.min(1, from + moved);
           clear = Math.max(0, moved - (1 - from));
           // The back's faded edge grows from nothing at the start and runs past the end, so it

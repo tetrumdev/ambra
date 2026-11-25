@@ -15,6 +15,17 @@ export function setLowGraphics() {
   document.documentElement.setAttribute("data-graphics", "low");
 }
 
+/**
+ * Marks the root `data-window-inactive` while another app has focus, so the glass turns
+ * to the low tier's plain surfaces (lowGraphics.css) until the window is active again.
+ */
+export function followWindowFocus() {
+  const update = () => document.documentElement.toggleAttribute("data-window-inactive", !document.hasFocus());
+  window.addEventListener("focus", update);
+  window.addEventListener("blur", update);
+  update();
+}
+
 /** Drawing on the processor rather than a GPU, where every blurred pixel is paid for in full. */
 export function softwareRendered(gl: WebGLRenderingContextBase) {
   const info = gl.getExtension("WEBGL_debug_renderer_info");

@@ -79,13 +79,14 @@ export function usePlaybackTime<T = number>(
 }
 
 // Mid-skip the clock already describes the next song while the queue still shows the one being
-// left; that song's lyrics hold still until it leaves, instead of scrolling back to its start.
+// left; that song's lyrics and progress bar hold still until it leaves, instead of going back to
+// its start.
 let skipHold: { song: string } | null = null;
 const skipHoldListeners = new Set<() => void>();
 const notifySkipHold = () => { for (const listener of skipHoldListeners) listener(); };
 
-/** Holds the song's lyrics where they are; the returned function lets them go. */
-export function holdLyricsForSkip(song: string | undefined) {
+/** Holds the song's lyrics and progress where they are; the returned function lets them go. */
+export function holdSongForSkip(song: string | undefined) {
   const hold = song ? { song } : null;
   skipHold = hold;
   notifySkipHold();
@@ -95,6 +96,9 @@ export function holdLyricsForSkip(song: string | undefined) {
     notifySkipHold();
   };
 }
+
+/** Whether a skip is holding the song being left. */
+export const skipHeld = () => skipHold !== null;
 
 export function useLyricsHeldForSkip(song: string | undefined) {
   return useSyncExternalStore(

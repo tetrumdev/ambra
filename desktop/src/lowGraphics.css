@@ -1,35 +1,42 @@
 /* The low graphics tier (utils/graphicsTier.ts): set only on a device that can't keep up.
    Blurring what lies behind a surface, or a whole line of lyrics, is the most expensive
    thing the app asks of a GPU, so here the glass turns to plain dark surfaces, opaque
-   enough to stay readable over whatever scrolls beneath, and the lyrics stay sharp. */
-:root[data-graphics="low"] *,
-:root[data-graphics="low"] *::before,
-:root[data-graphics="low"] *::after {
+   enough to stay readable over whatever scrolls beneath, and the lyrics stay sharp.
+   A window in the background (followWindowFocus) gets the same plain surfaces: glass
+   behind another window flickers and spends the GPU on a view nobody is using. */
+:root:is([data-graphics="low"], [data-window-inactive]) *,
+:root:is([data-graphics="low"], [data-window-inactive]) *::before,
+:root:is([data-graphics="low"], [data-window-inactive]) *::after {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
 }
 
-:root[data-graphics="low"] .settingsSaveBar,
-:root[data-graphics="low"] .shortcutToastBody,
-:root[data-graphics="low"] .musicDropZoneBody,
-:root[data-graphics="low"] .lyricsNotice {
+:root:is([data-graphics="low"], [data-window-inactive]) .settingsSaveBar,
+:root:is([data-graphics="low"], [data-window-inactive]) .shortcutToastBody,
+:root:is([data-graphics="low"], [data-window-inactive]) .musicDropZoneBody,
+:root:is([data-graphics="low"], [data-window-inactive]) .lyricsNotice {
     background: rgba(22, 22, 22, 0.92);
 }
 
-:root[data-graphics="low"] .ambraTooltip {
+:root:is([data-graphics="low"], [data-window-inactive]) .ambraTooltip {
     background: rgba(26, 26, 26, 0.96);
 }
 
 /* The now-playing bar: about the tone its glass has over the app's dark pages. With no
    blur there is no kernel to feed, so the layer shrinks to the bar and needs no mask. */
-:root[data-graphics="low"] .bottomInfoBarSurface::before {
+:root:is([data-graphics="low"], [data-window-inactive]) .bottomInfoBarSurface::before {
     inset: 0;
     background-color: rgba(38, 38, 38, 0.97);
     mask-image: none;
     -webkit-mask-image: none;
 }
 
+/* The dark strip under the bar only steadies the blur's edge; without blur it shows through. */
+:root:is([data-graphics="low"], [data-window-inactive]) #bottomInfoBar::after {
+    display: none;
+}
+
 /* Lines away from the current one still recede by fading; only their blur goes. */
-:root[data-graphics="low"] .lyricGroup {
+:root:is([data-graphics="low"], [data-window-inactive]) .lyricGroup {
     filter: none;
 }

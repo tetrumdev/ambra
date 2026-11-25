@@ -68,7 +68,7 @@
     --weight-semibold: 600;
 }
 
-:root[data-graphics="low"] {
+:root:is([data-graphics="low"], [data-window-inactive]) {
     --glass-control: rgb(22 22 22 / 0.86);
     --glass-menu: #1a1a1a;
     --glass-dialog: #1a1a1a;

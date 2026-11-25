@@ -43,6 +43,26 @@ export function isTypingTarget(target: EventTarget | null) {
     && (target.isContentEditable || target.matches("input:not([type='range']):not([type='checkbox']):not([type='radio']), textarea, select"));
 }
 
+/**
+ * Tab moves between text fields, as in a native Mac window: never onto buttons, rows or links.
+ * Within a dialog it stays in that dialog, wrapping around.
+ */
+export function moveBetweenFields(event: KeyboardEvent) {
+  if (event.key !== "Tab" || event.metaKey || event.ctrlKey || event.altKey) return;
+  blockBrowserDefault(event);
+  const current = event.target;
+  if (!(current instanceof HTMLElement) || !isTypingTarget(current) || current.matches("select")) return;
+  const scope = current.closest("[role='dialog'], dialog") ?? document;
+  const fields = Array.from(scope.querySelectorAll<HTMLElement>("input, textarea, [contenteditable='true']")).filter(field =>
+    isTypingTarget(field) && !field.matches(":disabled, [readonly]") && !field.closest("[hidden], [inert]")
+    && field.getClientRects().length > 0);
+  const index = fields.indexOf(current);
+  const next = fields[(index + (event.shiftKey ? -1 : 1) + fields.length) % fields.length];
+  if (!next || next === current) return;
+  next.focus();
+  if (next instanceof HTMLInputElement || next instanceof HTMLTextAreaElement) next.select();
+}
+
 /** The WebView's find-in-page, which Ambra's search replaces everywhere, development included. */
 export function isBrowserFindShortcut(event: KeyPress) {
   return event.code === "F3" || ((event.ctrlKey || event.metaKey) && !event.altKey && (event.code === "KeyF" || event.code === "KeyG"));

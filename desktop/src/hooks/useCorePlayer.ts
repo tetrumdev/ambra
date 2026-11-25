@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { coreCommand, coreOutputs, coreView, coreViewAge, followCore, subscribeCore, type CoreOutput, type CoreView } from "../api/core";
 import { restoreGeneralOutputs } from "./useStages";
 import { serverConnection } from "../api/serverConnection";
-import { createPlaybackClock, holdLyricsForSkip } from "../utils/playbackClock";
+import { createPlaybackClock, holdSongForSkip } from "../utils/playbackClock";
 import { useAudioSettings } from "./AudioSettingsContext";
 import type { AudioDeckController, AudioPlayer } from "./useAudioPlayer";
 import type { QueueController } from "./useQueue";
@@ -227,6 +227,9 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   const setPlaying = useCallback((playing: boolean) => {
     if (playing) ensureOutput();
     setPendingPlaying({ playing, at: performance.now() });
+    // The clock's listeners run before the next render and publish to Now Playing. A stale
+    // "playing" right after a headset pause makes macOS drop it from the AirPods' auto-resume.
+    playingNow.current = playing;
     clock.setRunning(playing && !!coreView()?.output);
     return control(playing ? "play" : "pause");
   }, [clock, control, ensureOutput]);
@@ -259,7 +262,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       if (!next) { queue.next(); return; }
       const pending = { to: serverAudioSource(next), outputId: coreView()?.output?.endpointId, at: performance.now() };
       skipping.current = pending;
-      const release = holdLyricsForSkip(queue.currentEntry?.track.globalId);
+      const release = holdSongForSkip(queue.currentEntry?.track.globalId);
       clock.setRunning(false);
       clock.set(0);
       void invoke<boolean>("shared_output_skip").catch(() => false).then(skipped => {
@@ -275,7 +278,10 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
       return;
     }
     const local = followsEngine();
+    const release = holdSongForSkip(queue.currentEntry?.track.globalId);
     const moved = direction === "next" ? queue.next() : queue.previous();
+    // Let go once the move has rendered, as above.
+    requestAnimationFrame(release);
     if (!moved) return;
     if (local) holdForSkip();
     skipping.current = { to: serverAudioSource(moved.track), outputId: coreView()?.output?.endpointId, at: performance.now() };

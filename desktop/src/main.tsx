@@ -12,11 +12,11 @@ import { Root } from "./Root";
 import "./interaction.css";
 import "./scrollbars.css";
 import { installTooltips } from "./utils/tooltips";
-import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut } from "./utils/keyboard";
+import { blockBrowserDefault, isBrowserFindShortcut, isBrowserShortcut, moveBetweenFields } from "./utils/keyboard";
 import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/perf";
 import { desktopPlatform, installWindowDragRegions } from "./utils/windowChrome";
 import { startDownloads } from "./utils/offlineDownloads";
-import { detectGraphicsTier } from "./utils/graphicsTier";
+import { detectGraphicsTier, followWindowFocus } from "./utils/graphicsTier";
 import "./lowGraphics.css";
 
 mark("js-start");
@@ -34,9 +34,11 @@ installWindowDragRegions();
 installTooltips();
 startDownloads();
 detectGraphicsTier();
+followWindowFocus();
 window.addEventListener("keydown", (event) => {
   if (isBrowserFindShortcut(event)) blockBrowserDefault(event);
 }, true);
+window.addEventListener("keydown", moveBetweenFields, true);
 // Development blocks them too; code changes still reload through Vite.
 window.addEventListener("keydown", (event) => {
   if (isBrowserShortcut(event)) blockBrowserDefault(event);

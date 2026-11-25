@@ -55,7 +55,7 @@
     pointer-events: none;
 }
 
-:root[data-graphics="low"] .playbackSidebar[data-floating] {
+:root:is([data-graphics="low"], [data-window-inactive]) .playbackSidebar[data-floating] {
     background: rgba(22, 22, 22, 0.86);
 }
 
