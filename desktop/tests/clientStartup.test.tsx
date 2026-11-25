@@ -77,8 +77,8 @@ test("Server settings opens optional setup, discovers external servers and accep
   localStorage.setItem("ambra.playlists.v1", "keep local playlists");
   const container = document.createElement("div"); const root = createRoot(container);
   await act(async () => { root.render(<ServerSettings active />); });
-  const connectionType = container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
-  expect(connectionType.value).toBe("");
+  const connectionType = container.querySelector<HTMLButtonElement>('button[aria-label^="Connection type:"]')!;
+  expect(connectionType.textContent).toBe("Automatic");
   expect(connectionType.disabled).toBe(true);
   expect(container.textContent).toContain("Current: Local.");
   const connect = [...container.querySelectorAll("button")].find(button => button.textContent === "Add a server")!;
@@ -113,8 +113,8 @@ test("Server tab shows current transport separately from selection and keeps cli
     [false, "Offline", null, "Offline"],
   ] as const) {
     await act(async () => root.render(<ClientConnectionContext.Provider value={{ connected, network: { state, method }, sharedPlayback: false, setSharedPlayback: async () => {}, reconnect: () => {} }}><ServerSettings active /></ClientConnectionContext.Provider>));
-    const connectionType = container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
-    expect(connectionType.value).toBe("");
+    const connectionType = container.querySelector<HTMLButtonElement>('button[aria-label^="Connection type:"]')!;
+    expect(connectionType.textContent).toBe("Automatic");
     expect(container.textContent).toContain(`Current: ${expected}.`);
     expect(connectionType.disabled).toBe(false);
   }
@@ -129,27 +129,35 @@ test("connection dropdown applies every transport, restores automatic and retain
   const { connectToServer } = await import("../src/api/serverConnection"); await connectToServer();
   const container = document.createElement("div"); const root = createRoot(container);
   await act(async () => root.render(<ServerSettings active />));
-  const select = () => container.querySelector<HTMLSelectElement>('select[aria-label="Connection type"]')!;
-  const choose = async (value: string) => {
-    await act(async () => {
-      select().value = value;
-      select().dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
-    });
+  const trigger = () => container.querySelector<HTMLButtonElement>('button[aria-label^="Connection type:"]')!;
+  const options = () => [...container.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+  const open = () => act(async () => { trigger().click(); });
+  const choose = async (label: string) => {
+    await open();
+    await act(async () => { options().find(option => option.textContent === label)!.click(); });
   };
+  const methods = [
+    ["Lan", "Local network"], ["Public", "Internet (direct)"], ["HyperDHT", "HyperDHT"],
+    ["TcpPunch", "Direct TCP (Nostr)"], ["Pwnat", "pwnat"], ["Tailcat", "Tailcat"], ["", "Automatic"],
+  ] as const;
   const start = methodSelections.length;
   try {
-    expect([...select().options].map(option => option.value)).toEqual(["", "Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat"]);
-    for (const method of ["Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat", ""]) {
-      await choose(method);
-      expect(select().value).toBe(method);
+    expect(container.querySelector("select")).toBeNull();
+    await open();
+    expect(options().map(option => option.textContent)).toEqual(["Automatic", ...methods.slice(0, -1).map(([, label]) => label)]);
+    expect(options()[0].getAttribute("aria-checked")).toBe("true");
+    await open();
+    for (const [method, label] of methods) {
+      await choose(label);
+      expect(trigger().textContent).toBe(label);
       expect(connectionMethod).toBe(method || null);
     }
     expect(methodSelections.slice(start)).toEqual(["Lan", "Public", "HyperDHT", "TcpPunch", "Pwnat", "Tailcat", null]);
     commandFailure = "set_connection_method";
     await choose("HyperDHT");
-    expect(select().value).toBe("");
+    expect(trigger().textContent).toBe("Automatic");
     expect(container.textContent).toContain("Connection failed safely");
-    expect(select().disabled).toBe(false);
+    expect(trigger().disabled).toBe(false);
   } finally {
     commandFailure = null; connectionMethod = null;
     await act(async () => root.unmount());

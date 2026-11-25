@@ -2,7 +2,7 @@ import "./SearchBar.css";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import type { SearchProvider, StreamingProvider } from "../api/server";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { FadeOutOnClose } from "../hooks/useFadeOutOnUnmount";
+import { Dropdown } from "./Dropdown";
 
 const providerNames: Record<SearchProvider, string> = {
   all: "All services",
@@ -54,13 +54,9 @@ export function SearchBar({
   summoned = false,
   onLeave,
 }: SearchBarProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
   const [searchExpanded, setSearchExpanded] = useState(Boolean(query));
   const input = useRef<HTMLInputElement>(null);
   const inputControl = useRef<HTMLDivElement>(null);
-  const control = useRef<HTMLDivElement>(null);
-  const trigger = useRef<HTMLButtonElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
   const pendingFocus = useRef<SearchFocusRequest["caret"] | null>(null);
 
   useEffect(() => {
@@ -82,7 +78,6 @@ export function SearchBar({
   useLayoutEffect(() => {
     if (!focusRequest) return;
     pendingFocus.current = focusRequest.caret;
-    setMenuOpen(false);
     if (input.current) {
       focusPending();
       return;
@@ -91,18 +86,6 @@ export function SearchBar({
     void inputControl.current?.offsetWidth;
     setSearchExpanded(true);
   }, [focusRequest]);
-
-  useEffect(() => {
-    if (!menuOpen) return;
-    menu.current
-      ?.querySelector<HTMLButtonElement>('[aria-checked="true"]')
-      ?.focus();
-    const closeOutside = (event: PointerEvent) => {
-      if (!control.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", closeOutside);
-    return () => document.removeEventListener("pointerdown", closeOutside);
-  }, [menuOpen]);
 
   const options: SearchProvider[] = ["all", ...providers];
 
@@ -186,103 +169,9 @@ export function SearchBar({
           </button>
         )}
       </div>
-      <div
-        className="searchProviderControl"
-        ref={control}
-        onKeyDown={(event) => {
-          if (event.key === "Escape" && menuOpen) {
-            event.preventDefault();
-            event.stopPropagation();
-            setMenuOpen(false);
-            trigger.current?.focus();
-            return;
-          }
-          if (
-            !menuOpen &&
-            event.target === trigger.current &&
-            (event.key === "ArrowDown" || event.key === "ArrowUp")
-          ) {
-            event.preventDefault();
-            setMenuOpen(true);
-            return;
-          }
-          if (
-            !menuOpen ||
-            !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)
-          )
-            return;
-          const items = [
-            ...(menu.current?.querySelectorAll<HTMLButtonElement>(
-              '[role="menuitemradio"]',
-            ) ?? []),
-          ];
-          const index = items.indexOf(
-            document.activeElement as HTMLButtonElement,
-          );
-          const next =
-            event.key === "Home"
-              ? 0
-              : event.key === "End"
-                ? items.length - 1
-                : (index + (event.key === "ArrowDown" ? 1 : items.length - 1)) %
-                  items.length;
-          event.preventDefault();
-          items[next]?.focus();
-        }}
-      >
-        <button
-          id="searchProvider"
-          ref={trigger}
-          type="button"
-          aria-label={`Search service: ${providerNames[provider]}`}
-          data-tooltip={`Searching ${providerNames[provider]}`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          aria-controls={menuOpen ? "searchProviderMenu" : undefined}
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          <img
-            className="searchProviderIcon"
-            src={providerIcons[provider]}
-            alt=""
-            aria-hidden="true"
-          />
-        </button>
-        {menuOpen && (
-          <FadeOutOnClose>
-            <div
-              id="searchProviderMenu"
-              className="searchProviderMenu"
-              ref={menu}
-              role="menu"
-              aria-label="Search service"
-            >
-              {options.map((option) => (
-                <button
-                  key={option}
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={provider === option}
-                  aria-label={providerNames[option]}
-                  data-tooltip={providerNames[option]}
-                  onClick={() => {
-                    onProviderChange(option);
-                    setMenuOpen(false);
-                    trigger.current?.focus();
-                  }}
-                >
-                  <img
-                    className="searchProviderIcon"
-                    src={providerIcons[option]}
-                    alt=""
-                    aria-hidden="true"
-                  />
-                </button>
-              ))}
-            </div>
-          </FadeOutOnClose>
-        )}
-      </div>
+      <Dropdown label="Search service" className="searchProviderControl" iconOnly value={provider} disabled={away !== undefined}
+        options={options.map(value => ({ value, label: providerNames[value], icon: providerIcons[value] }))}
+        onChange={onProviderChange} />
     </div>
   );
 }

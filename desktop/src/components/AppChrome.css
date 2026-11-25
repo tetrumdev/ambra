@@ -45,6 +45,67 @@
     -webkit-user-select: none;
 }
 
+.pageHistoryControls {
+    position: absolute;
+    top: 5px;
+    left: 24px;
+    z-index: 12;
+    display: flex;
+    gap: 2px;
+}
+
+.pageHistoryControls[data-in-titlebar] {
+    top: 2px;
+    left: 80px;
+    z-index: 51;
+}
+
+.pageHistoryControls[data-player] {
+    border-radius: 100px;
+    background: rgba(22, 22, 22, 0.55);
+}
+
+.pageHistoryControls button {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px;
+    color: var(--ink);
+    background: transparent;
+    transition: background-color var(--motion-hover);
+}
+
+.pageHistoryControls button:disabled {
+    opacity: 0.3;
+}
+
+.pageHistoryControls button:enabled:is(:hover, :focus-visible) {
+    background: rgb(255 255 255 / 16%);
+}
+
+.pageHistoryControls svg {
+    width: 18px;
+    height: 18px;
+}
+
+.pageHistoryControls [data-direction="forward"] svg {
+    transform: scaleX(-1);
+}
+
+/* With a native title bar, the arrows sit above the sidebar's first item. */
+.appViewport:has(> .pageHistoryControls:not([data-in-titlebar])) :is(#libraryContainer, .settingsSidebar) {
+    padding-top: 48px;
+}
+
+@media screen and (width <= 799px) {
+    .appViewport:has(> .pageHistoryControls:not([data-in-titlebar])) > .appScreen {
+        inset-block-start: 40px;
+    }
+}
+
 .bigscreenCtrls {
     --bigscreen-control-size: 40px;
     position: absolute;

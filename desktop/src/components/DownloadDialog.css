@@ -25,56 +25,6 @@
     color: #bdbdbd;
 }
 
-.downloadQualityTrigger {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 40px;
-    padding: 10px 16px;
-    font: inherit;
-    font-size: 14px;
-    color: var(--ink);
-    background: rgba(22, 22, 22, 0.6);
-    border: 1px solid #535353;
-    border-radius: 100px;
-    text-align: left;
-}
-
-.downloadQualityTrigger:hover:not(:disabled),
-.downloadQualityTrigger:focus-visible {
-    border-color: rgb(140, 140, 140);
-}
-
-.downloadQualityTrigger .dropdownChevron {
-    transform: rotate(0);
-}
-
-.downloadQualityTrigger[aria-expanded="true"] .dropdownChevron {
-    transform: rotate(180deg);
-}
-
-.downloadQualityMenu {
-    inset: auto;
-    margin: 0;
-    padding: 6px;
-    max-width: calc(100vw - 24px);
-    max-height: calc(100dvh - 24px);
-    overflow-y: auto;
-    transform-origin: center top;
-}
-
-.downloadQualityMenu:not(:popover-open) {
-    display: none;
-}
-
-.downloadQualityMenu .audioDeviceOption {
-    width: 100%;
-    height: auto;
-    min-height: 36px;
-    padding-block: 8px;
-}
-
 .downloadTargets {
     align-self: stretch;
     margin-top: 4px;

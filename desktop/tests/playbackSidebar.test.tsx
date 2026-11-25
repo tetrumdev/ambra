@@ -133,7 +133,7 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await click('[aria-label="Upcoming songs"] .trackTitleText.entityLink');
     expect(viewport.querySelector(".albumView h1")?.textContent).toBe("Album");
     expect(menu()).toBeNull();
-    await click(".browseBack");
+    await click('.pageHistoryControls [aria-label="Back"]');
 
     await click('[aria-label="Actions for Second"].trackCollectionMenuTrigger');
     expect(menu()?.textContent).toContain("Credits");
@@ -142,7 +142,7 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await menuAction("Sidebar song");
     expect(savedPlaylist("sidebar-song")).toEqual([next[1].globalId]);
 
-    await click('[aria-label="Upcoming songs"] .libraryItem:has([aria-label="Play Second"]) .coverImgContainer');
+    await click('[aria-label="Upcoming songs"] .libraryItem:has([aria-label="Play Second"]) .trackName');
     expect(menu()?.textContent).toContain("Play from Here");
     await menuAction("Move to Front");
     expect(upcoming()).toEqual(["Play Second", "Play First", "Play Third", "Play Fourth"]);
@@ -189,14 +189,14 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await click('.playbackSidebarTabs button:nth-child(1)');
     await click(".playbackSidebarHistoryToggle");
     expect(trackPlays("Played songs")).toEqual(expect.arrayContaining(["Play Older", "Play Latest"]));
-    const latestArtwork = '[aria-label="Played songs"] .libraryItem:has([aria-label="Play Latest"]) .coverImgContainer';
-    await click(latestArtwork);
+    const latestRow = '[aria-label="Played songs"] .libraryItem:has([aria-label="Play Latest"])';
+    await click(`${latestRow} .trackName`);
     expect(menu()?.textContent).toContain("Standalone Play");
     expect(menu()?.textContent).toContain("Add to Queue");
     await menuAction("Play Next");
     expect(upcoming()).toEqual(["Play Latest", "Play Fourth"]);
     await act(async () => {
-      pane()!.querySelector(latestArtwork)!
+      pane()!.querySelector(latestRow)!
         .dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as MouseEvent);
     });
     await click('[aria-label="Played songs"] [aria-label="Select Older"]');
@@ -209,7 +209,8 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
 
     await press("f", "KeyF");
     expect(viewport.querySelector('#bottomInfoBar[data-variant="expanded"]')).not.toBeNull();
-    await press("f", "KeyF");
+    expect(viewport.querySelector('.pageHistoryControls[data-player] [aria-label="Forward"]')).not.toBeNull();
+    await click('.pageHistoryControls[data-player] [aria-label="Back"]');
     expect(viewport.querySelector("main.appScreen")).toBe(main);
     expect(pane()?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Queue");
     await click('[aria-label="Close playback sidebar"]');
@@ -217,13 +218,13 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await press("q", "KeyQ");
     expect(pane()?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Queue");
     await click(".playbackSidebarHistoryToggle");
-    await click('[aria-label="Played songs"] [aria-label="Play Latest"]');
+    await click(`${latestRow} .coverImgContainer`);
     expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
 
     await click("#songName");
     expect(viewport.querySelector(".albumView h1")?.textContent).toBe("Album");
     expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
-    await click(".browseBack");
+    await click('.pageHistoryControls [aria-label="Back"]');
   } finally {
     await act(async () => root.unmount());
     viewport.remove();
@@ -355,7 +356,7 @@ test("General can combine song menus without triggering actions from single clic
     expect((find(trigger) as HTMLInputElement).checked).toBe(false);
     await click(trigger);
     expect(loadPreferences().ui.songContextMenu).toBe(true);
-    await click(".settingsBack");
+    await click('.pageHistoryControls [aria-label="Back"]');
     await openPlaylist();
 
     const nestedTrigger = find(".trackCollectionMenuTrigger", row(second));
@@ -433,7 +434,7 @@ test("General can combine song menus without triggering actions from single clic
     await click(".sidebarSettingsButton");
     await click(trigger);
     expect(loadPreferences().ui.songContextMenu).toBe(false);
-    await click(".settingsBack");
+    await click('.pageHistoryControls [aria-label="Back"]');
     await openPlaylist();
     await mouse(find(".trackName", row(second)), "click", 1);
     expect(menu()?.querySelector("#trackPlaybackMenu")).not.toBeNull();
@@ -504,7 +505,7 @@ test("page history restores scroll positions and clears the page filter across v
     await act(async () => specs.click());
     expect(loadPreferences().ui.showAudioQuality).toBe(!previous);
     await act(async () => specs.click());
-    await click(".settingsBack");
+    await click('.pageHistoryControls [aria-label="Back"]');
     expect(libraryPage().querySelector("h1")?.textContent).toContain("Tracks");
     expect(libraryPage().scrollTop).toBe(60);
   } finally {

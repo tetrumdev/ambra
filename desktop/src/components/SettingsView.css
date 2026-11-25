@@ -28,7 +28,7 @@
 }
 
 .settingsSidebar h2 {
-    margin: 26px 0 18px;
+    margin: 4px 0 18px;
     color: var(--ink);
     font-size: 1rem;
     font-weight: 600;
@@ -49,34 +49,6 @@
     font-size: 1rem;
     text-align: left;
 }
-
-.settingsBack {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 0;
-    border: 0;
-    background: none;
-    color: #b3b3b3;
-    font: inherit;
-    font-size: 0.9rem;
-}
-
-.settingsBack svg {
-    width: 8px;
-    height: 12px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 1.8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-}
-
-.settingsBack:hover,
-.settingsBack:focus-visible {
-    color: var(--ink);
-}
-
 
 /* ---------- Page ---------- */
 .settingsView {
@@ -366,8 +338,7 @@
 }
 
 .settingsView button:disabled,
-.settingsView input:disabled,
-.settingsView select:disabled {
+.settingsView input:disabled {
     opacity: var(--disabled-opacity);
 }
 
@@ -408,8 +379,7 @@
 
 .settingsView input[type="number"],
 .settingsView input[type="text"],
-.settingsView input:not([type]),
-.settingsView select {
+.settingsView input:not([type]) {
     box-sizing: border-box;
     height: 34px;
     min-width: 0;
@@ -425,8 +395,7 @@
     user-select: text;
 }
 
-.settingsView input:focus-visible,
-.settingsView select:focus-visible {
+.settingsView input:focus-visible {
     border-color: #8a8a8a;
 }
 
@@ -514,8 +483,9 @@
     font-size: 0.8rem;
 }
 
-.settingsOutput select {
+.settingRowControl .dropdown {
     width: 200px;
+    max-width: 100%;
 }
 .settingsFieldRow {
     display: flex;
@@ -1295,7 +1265,6 @@
 }
 
 /* Soloist uses the existing Services controls and stays within that panel. */
-.settingsCallbackForm select { width: 100%; min-height: 36px; padding: 6px 10px; color: inherit; background: #171717; border: 1px solid #333; border-radius: 6px; }
 .settingsCallbackForm .soloistActions { flex-wrap: wrap; }
 
 /* Keyboard: each shortcut's keys as a pill like the segmented controls', recorded by clicking it (KeyboardSettings.tsx). */

@@ -13,6 +13,7 @@ import { musicProviderName } from "../utils/musicProviderName";
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
 import { DspPanel } from "./settings/DspPanel";
+import { Dropdown } from "./Dropdown";
 import { LocalSettings } from "./settings/LocalSettings";
 import { Segmented, SettingRow, Toggle } from "./settings/SettingsControls";
 import "./SettingsView.css";
@@ -302,11 +303,11 @@ function OutputCard({ output, presets, on, playing, busy = false, canPlay, onPla
     </div>
     <SettingRow label="DSP preset" help={on ? `Presets are kept on each computer; these are ${on}'s.` : undefined}>
       {output.presetId && onEditPreset && <button type="button" className="settingsLink" onClick={() => onEditPreset(output.presetId!)}>Edit</button>}
-      <select aria-label={`DSP preset for ${output.name}${where}`} value={output.presetId ?? ""} disabled={busy}
-        onChange={e => void update({ presetId: e.currentTarget.value || null })}>
-        <option value="">None</option>
-        {presets.map(preset => <option key={preset.id} value={preset.id}>{preset.name}{preset.enabled ? "" : " (bypassed)"}</option>)}
-      </select>
+      <Dropdown label={`DSP preset for ${output.name}${where}`} value={output.presetId ?? ""} disabled={busy}
+        options={[{ value: "", label: "None" }, ...presets.map(preset => ({
+          value: preset.id, label: preset.enabled ? preset.name : `${preset.name} (bypassed)`,
+        }))]}
+        onChange={presetId => void update({ presetId: presetId || null })} />
     </SettingRow>
     <SettingRow label="Mode" help="Shared plays alongside other apps' sounds. Exclusive takes the device for Ambra alone, and is bit-perfect when nothing changes the samples.">
       <Segmented label={`Output mode for ${output.name}${where}`} value={output.exclusiveMode ? "exclusive" : "shared"} disabled={busy}

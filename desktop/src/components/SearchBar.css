@@ -1,7 +1,7 @@
 #searchBar {
     position: absolute;
     /* The screen's right edge moves when the scrollbar column collapses. */
-    right: calc(34px - var(--scrollbar-column-width));
+    inset-inline-end: var(--workspace-control-inset);
     z-index: 10;
     display: flex;
     top: 10px;
@@ -139,11 +139,7 @@
     height: 12px;
 }
 
-.searchProviderControl {
-    position: relative;
-}
-
-#searchProvider {
+.searchProviderControl .dropdownTrigger {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -158,42 +154,7 @@
     font-size: 16px;
 }
 
-.searchProviderIcon {
-    display: block;
-    max-width: 22px;
-    max-height: 22px;
-    object-fit: contain;
-    flex: none;
-}
-
-.searchProviderMenu {
-    position: absolute;
-    top: calc(100% + 5px);
-    right: 0;
-    width: 44px;
-    box-sizing: border-box;
-    padding: 4px;
-    border: 1px solid #535353;
-    border-radius: 14px;
-    background: #171717;
-}
-
-.searchProviderMenu button {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    height: 38px;
-    padding: 4px;
-    border: 0;
-    border-radius: 8px;
-    color: var(--ink);
-    background: transparent;
-    font: inherit;
-    text-align: left;
-}
-
-.searchProviderMenu button:hover,
-.searchProviderMenu button[aria-checked="true"] {
-    background: #303030;
+.searchProviderControl .dropdownTrigger .dropdownIcon {
+    width: 22px;
+    height: 22px;
 }

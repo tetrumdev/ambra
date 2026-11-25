@@ -140,7 +140,6 @@ export function ArtistView({ artist, ...props }: EntityViewProps<"artist"> & { a
     registerScrollElement={props.registerScrollElement} playTrack={id => props.onAction("play", playable, id)}
     playStandalone={id => props.onAction("standalone", playable, id)} addToQueue={id => props.onAction("queue", playable.filter(track => track.globalId === id))} playNext={id => props.onAction("next", playable, id)}
     shuffleCollection={() => props.onAction("shuffle", playable)}
-    headerNavigation={<button type="button" className="browseBack" onClick={props.onBack}>Back</button>}
     headerArtwork={<ArtistPortrait artist={profile?.artist ?? artist} eager expandable />}
     headerContent={<p className="entityByline">Artist{artist.provider !== "local" &&
       <button type="button" className="entityBylineAction" aria-haspopup="dialog" onClick={() => setShowAbout(true)}>About</button>}

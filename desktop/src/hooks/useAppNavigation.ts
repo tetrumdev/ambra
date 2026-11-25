@@ -9,7 +9,7 @@ import { entityKey, type BrowseEntity } from "../utils/browse";
 import { isTypingTarget, wasKeyHandled } from "../utils/keyboard";
 import { isPlayerScreen, type AppPreferences, type AppScreen } from "../utils/preferences";
 import { announceShortcut, matchesShortcut, matchingShortcut } from "../utils/shortcuts";
-import { usePageNavigation } from "./usePageNavigation";
+import { usePageNavigation, type AppPage } from "./usePageNavigation";
 import { useStableCallback } from "./useStableCallback";
 
 /** Sessions saved before Settings stood apart could return to it; those go to the library instead. */
@@ -66,17 +66,20 @@ export function useAppNavigation({
     screen: AppScreen;
     playerReturnScreen: typeof playerReturnScreenRef.current;
   } | null>(null);
-  const { back: goBack, forward: goForward, canGo: canGoInHistory } = usePageNavigation({
+  const page: AppPage = {
     screen: libraryScreen,
     entity: browseEntity, playlistId: selectedPlaylistId, section: librarySection,
     settingsTab, search: preferences.search,
-  }, page => {
+  };
+  const homeFallback = browseEntity?.kind === "mix" || (browseEntity?.kind === "album" && (browseEntity.fromRecommendations || browseEntity.revealTrack))
+    ? { ...page, screen: "home" as const, entity: null, playlistId: null } : undefined;
+  const { back: goBack, forward: goForward, canGo: canGoInHistory, backAvailable, forwardAvailable } = usePageNavigation(page, page => {
     setBrowseEntity(page.entity);
     setSelectedPlaylistId(page.playlistId);
     setLibrarySection(page.section);
     setSettingsTab(page.settingsTab);
     setPreferences(current => ({ ...current, search: page.search, ui: { ...current.ui, screen: page.screen } }));
-  });
+  }, homeFallback);
   // Re-save after local-only mode changes because persistence can now target a different source.
   const sessionPreferences = useMemo(() => ({
     ...preferences,
@@ -397,7 +400,9 @@ export function useAppNavigation({
     screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
     sidebarView, setPlaybackSidebarView, closePlaybackSidebar, sidebarWidth, setSidebarWidth,
-    sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
+    sessionPreferences, canNavigate, navigate, closeCurrentScreen, changeScreen,
+    canGoBack: isSettingsView || isPlayerView || backAvailable,
+    canGoForward: !isPlayerView && forwardAvailable,
     openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
     confirmSearch, dismissSearch,

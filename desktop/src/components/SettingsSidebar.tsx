@@ -14,11 +14,8 @@ const tabs: Array<{ id: SettingsTab; name: string }> = [
   { id: "about", name: "About" },
 ];
 
-export function SettingsSidebar({ tab, onSelect, onBack }: { tab: SettingsTab; onSelect: (tab: SettingsTab) => void; onBack: () => void }) {
+export function SettingsSidebar({ tab, onSelect }: { tab: SettingsTab; onSelect: (tab: SettingsTab) => void }) {
   return <aside className="settingsSidebar" aria-label="Settings navigation">
-    <button type="button" className="settingsBack" onClick={onBack}>
-      <svg viewBox="0 0 8 12" aria-hidden="true"><path d="M6.5 1 1.5 6l5 5" /></svg>Back
-    </button>
     <h2>Settings</h2>
     <nav>{tabs.map(item =>
       <button type="button" key={item.id} id={`settings-tab-${item.id}`} className="sidebarBtn"

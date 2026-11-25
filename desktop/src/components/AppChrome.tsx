@@ -10,6 +10,9 @@ type AppChromeProps = {
   playerView: "bigscreen" | "lyrics";
   lyricsAvailability: LyricsAvailability;
   isFullscreen: boolean | null;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onNavigate: (direction: "back" | "forward") => void;
   onExit?: () => void;
   onSelectPlayerView: (screen: "bigscreen" | "lyrics") => void;
 };
@@ -18,12 +21,19 @@ const playerViews = [
   { screen: "bigscreen", label: "Album art", icon: "/album.svg" },
   { screen: "lyrics", label: "Lyrics", icon: "/lyrics.svg" },
 ] as const;
+const directions = [
+  { direction: "back", label: "Back" },
+  { direction: "forward", label: "Forward" },
+] as const;
 
 export function AppChrome({
   currentScreen,
   playerView,
   lyricsAvailability,
   isFullscreen,
+  canGoBack,
+  canGoForward,
+  onNavigate,
   onExit,
   onSelectPlayerView,
 }: AppChromeProps) {
@@ -36,23 +46,26 @@ export function AppChrome({
       : lyricsAvailability === "chosenNone" ? "No lyrics from the chosen source" : undefined);
   return (
     <>
-      {(currentScreen === "home" ||
-        currentScreen === "library" ||
-        currentScreen === "search" ||
-        currentScreen === "settings") &&
-        canDragWindow && (
-          <div
-            className="libraryTitlebar"
-            data-content-layout="library"
-            data-window-drag-region
-          />
-        )}
+      {canDragWindow && (isPlayerScreen
+        ? <div className="bigscreenTitlebar" data-window-drag-region />
+        : <div className="libraryTitlebar" data-content-layout="library" data-window-drag-region />
+      )}
+      <nav className="pageHistoryControls" aria-label="Page history"
+        data-in-titlebar={canDragWindow || undefined} data-player={isPlayerScreen || undefined}>
+        {directions.map(({ direction, label }) => (
+          <button key={direction} type="button" aria-label={label} data-tooltip={label} data-direction={direction}
+            disabled={direction === "back" ? !canGoBack : !canGoForward}
+            onClick={() => onNavigate(direction)}>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8"
+              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 4.5 3.5 10 9 15.5M4 10h12.5" />
+            </svg>
+          </button>
+        ))}
+      </nav>
 
       {isPlayerScreen && (
         <>
-          {canDragWindow && (
-            <div className="bigscreenTitlebar" data-window-drag-region />
-          )}
           <div className="bigscreenCtrls">
             <button
               className="bigscreenClose xContainer"

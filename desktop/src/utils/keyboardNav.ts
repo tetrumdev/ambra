@@ -253,7 +253,7 @@ export function installPointerCursor() {
 }
 
 // The sidebar's own stops: its pages, playlists, dropdowns and buttons, and the filter when shown.
-const SIDEBAR_ITEMS = ".sidebarFilterInput, .sidebarBtn, .sidebarPlaylistGroup > summary, #createPlaylistBtn, .settingsBack";
+const SIDEBAR_ITEMS = ".sidebarFilterInput, .sidebarBtn, .sidebarPlaylistGroup > summary, #createPlaylistBtn";
 export const SIDEBAR_ROOT = "#sidebarMain, .settingsSidebar";
 
 export function sidebarRoot(container: Element | null | undefined) {

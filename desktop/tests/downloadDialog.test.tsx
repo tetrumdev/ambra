@@ -27,20 +27,6 @@ beforeAll(() => {
     HTMLElement: dom.HTMLElement, Node: dom.Node, IS_REACT_ACT_ENVIRONMENT: true,
   });
   setReducedMotion(true);
-  // Happy DOM does not implement the popover API. Supply its visibility/toggle
-  // events so these tests exercise the component's focus and selection behavior.
-  const toggle = (element: HTMLElement, open: boolean) => {
-    if (element.hasAttribute("data-test-open") === open) return;
-    element.toggleAttribute("data-test-open", open);
-    const event = new dom.Event("toggle");
-    Object.assign(event, { newState: open ? "open" : "closed" });
-    element.dispatchEvent(event);
-  };
-  Object.assign(dom.HTMLElement.prototype, {
-    showPopover(this: HTMLElement) { toggle(this, true); },
-    hidePopover(this: HTMLElement) { toggle(this, false); },
-    togglePopover(this: HTMLElement) { toggle(this, !this.hasAttribute("data-test-open")); },
-  });
   globalThis.fetch = (async (input, init) => {
     const url = String(input);
     if (url.endsWith("/api/downloads/clients")) return Response.json([{ id: "laptop", name: "Laptop" }]);
@@ -75,9 +61,8 @@ async function mount() {
     openDownloadDialog(["qobuz:1", "tidal:2"], "MEGA");
   });
 }
-const trigger = () => host.querySelector<HTMLButtonElement>(".downloadQualityTrigger")!;
-const picker = () => host.querySelector<HTMLDivElement>(".downloadQualityMenu")!;
-const option = (index: number) => picker().querySelectorAll<HTMLButtonElement>('[role="radio"]')[index];
+const trigger = () => host.querySelector<HTMLButtonElement>(".downloadQuality .dropdownTrigger")!;
+const option = (index: number) => host.querySelectorAll<HTMLButtonElement>('.downloadQuality [role="menuitemradio"]')[index];
 const button = (label: string) => [...host.querySelectorAll<HTMLButtonElement>("button")]
   .find(element => element.textContent?.trim() === label)!;
 async function key(value: string) {
@@ -117,6 +102,8 @@ test("Escape dismisses only the quality popup and restores trigger focus", async
   expect(trigger().getAttribute("aria-expanded")).toBe("false");
   expect(document.activeElement).toBe(trigger());
   expect(host.querySelector("dialog")!.open).toBe(true);
+  expect(option(0)).toBeUndefined();
+  await key("ArrowDown");
   expect(option(0).getAttribute("aria-checked")).toBe("true");
   expect(requests).toEqual([]);
 });

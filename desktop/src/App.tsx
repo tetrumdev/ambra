@@ -271,7 +271,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     screen, isPlayerView, isSettingsView, isHomeView, isSearchView,
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
     sidebarView, setPlaybackSidebarView, closePlaybackSidebar, sidebarWidth, setSidebarWidth,
-    sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
+    sessionPreferences, canNavigate, navigate, canGoBack, canGoForward, closeCurrentScreen, changeScreen,
     openEntity: openBrowseEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
     confirmSearch, dismissSearch,
@@ -379,7 +379,6 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     if (entity.kind === "album" && entity.revealTrack) pageFilter?.onClose();
     openBrowseEntity(entity);
   });
-  const backFromRecommendation = useCallback(() => { if (!goBack()) openHome(); }, [goBack, openHome]);
 
   const collectionSortKey = selectedPlaylist
     ? `playlist:${selectedPlaylist.id}`
@@ -589,6 +588,9 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
         animateSwirl={preferences.ui.animateSwirl}
         skipDirection={skipDirection}
         openedByKey={playerOpenedByKeyRef}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        onNavigate={navigate}
         onExit={closeCurrentScreen}
         onSelectView={changeScreen}
       />
@@ -615,7 +617,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
           onLeave={dismissSearch}
         />}
         {!isSettingsView && playlistStore.error && <p role="alert">{playlistStore.error}</p>}
-        {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} onBack={closeCurrentScreen} /> : <Sidebar
+        {isSettingsView ? <SettingsSidebar tab={settingsTab} onSelect={setSettingsTab} /> : <Sidebar
           isHomeActive={isHomeView}
           onOpenHome={openHome}
           isSettingsActive={isSettingsView}
@@ -658,7 +660,6 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
           />
         ) : browseEntity && browseEntity.kind !== "mix" ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current}
           libraryTracks={library.tracks} catalogTracks={browseEntity.kind === "album" && browseEntity.revealTrack && browseEntity.album.provider === "local" ? library.catalogTracks : undefined}
-          onBack={browseEntity.kind === "album" && (browseEntity.fromRecommendations || browseEntity.revealTrack) ? backFromRecommendation : goBack}
           onOpenEntity={openEntity} onAction={onEntityAction}
           onAddTrack={addEntityTrack} onAddTracks={addEntityTracks}
           rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
@@ -707,7 +708,6 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
             playlist={selectedPlaylist}
             artworkTracks={baseCollectionTracks}
             headerArtwork={mix?.imageUrl ? <AlbumArtwork src={mix.imageUrl} title={mix.title} /> : undefined}
-            headerNavigation={mix && <button type="button" className="browseBack" onClick={backFromRecommendation}>Back</button>}
             headerContent={mix && (mixError ? (
               <p className="entityStatus" role="alert">
                 Could not load this mix. <button type="button" className="entityLink" onClick={retryMix}>Retry</button>

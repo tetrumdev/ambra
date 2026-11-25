@@ -30,11 +30,15 @@ type PlayerStageProps = {
   openedByKey: RefObject<boolean>;
   onExit: () => void;
   onSelectView: (view: PlayerView) => void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onNavigate: (direction: "back" | "forward") => void;
 };
 
 export const PlayerStage = memo(function PlayerStage({
   screen, preferredView, isFullscreen, track, clock, duration, playing, onSeek,
   motion, autoSync, globalOffsetMs, animateSwirl, skipDirection, openedByKey, onExit, onSelectView,
+  canGoBack, canGoForward, onNavigate,
 }: PlayerStageProps) {
   const isPlayerView = isPlayerScreen(screen);
   // Lyrics are the chosen view, but a song without synced ones shows its cover until one with them comes back.
@@ -161,6 +165,9 @@ export const PlayerStage = memo(function PlayerStage({
         playerView={showLyrics ? "lyrics" : "bigscreen"}
         lyricsAvailability={lyricsAvailability}
         isFullscreen={isFullscreen}
+        canGoBack={canGoBack}
+        canGoForward={canGoForward}
+        onNavigate={onNavigate}
         onExit={onExit}
         onSelectPlayerView={selectView}
       />

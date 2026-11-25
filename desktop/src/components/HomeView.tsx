@@ -10,7 +10,8 @@ import {
 import { createPortal } from "react-dom";
 import { ArtworkImage } from "./ArtworkImage";
 import { ArtistLinks } from "./ArtistLinks";
-import { DropdownChevron } from "./DropdownChevron";
+import { Dropdown } from "./Dropdown";
+import { MenuDotsIcon } from "./MenuDotsIcon";
 import {
   loadProviderRecommendations, loadRecommendationArtwork, type RecommendationMix, type StreamingProvider,
 } from "../api/server";
@@ -18,7 +19,7 @@ import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
-import { SongContextMenu, isKeyboardMenuClick, playSongOnDoubleClick, songMenuPosition, suppressSongClick } from "../utils/trackMenu";
+import { SongContextMenu, isKeyboardMenuClick, songMenuPosition } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability, useServiceStatus } from "../hooks/useServiceAvailability";
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
@@ -35,6 +36,7 @@ const recommendationProviders = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qo
 export type RecommendationSource = "ambra" | StreamingProvider;
 const providers = Object.keys(recommendationProviders) as StreamingProvider[];
 const playlistSources = ["ambra", ...providers] as const;
+const sourceNames = { ambra: "Ambra", ...recommendationProviders };
 
 function HomeRow({
   title,
@@ -119,7 +121,7 @@ function HomeRow({
 
 type OnAction = (action: EntityAction, tracks: Track[], id?: string) => void;
 
-/** The song and artist links sit alongside the artwork's playback menu. */
+/** The cover plays the song. The menu offers other playback and queue actions. */
 function SongCards({
   tracks,
   onAction,
@@ -145,26 +147,33 @@ function SongCards({
             className="homeCardButton"
             disabled={!isTrackAvailable(track, connected)}
             type="button"
-            aria-haspopup="menu"
-            aria-label={`Options for ${track.name} by ${track.artist}`}
-            onClickCapture={combinedMenu ? suppressSongClick : undefined}
-            onDoubleClick={combinedMenu ? event =>
-              playSongOnDoubleClick(event, () => onAction("play", tracks, track.globalId)) : undefined}
-            onClick={(event) => {
-              const bounds = event.currentTarget.getBoundingClientRect();
-              // Keyboard presses have no pointer position.
-              setMenu({
-                id: track.globalId,
-                openedWithKeyboard: isKeyboardMenuClick(event),
-                x: event.detail ? event.clientX : bounds.left,
-                y: event.detail ? event.clientY : bounds.bottom,
-              });
-            }}
+            aria-label={`Play ${track.name} by ${track.artist}`}
+            onClick={event => { if (event.detail <= 1) onAction("play", tracks, track.globalId); }}
           >
             <div className="homeArtwork">
               <TrackArtwork track={track} alt="" />
               <span className="homeShade" aria-hidden="true" />
+              <span className="homePlay" aria-hidden="true"><img src="/play.svg" alt="" /></span>
             </div>
+          </button>
+          <button
+            className="homeCardOptions"
+            disabled={!isTrackAvailable(track, connected)}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={menu?.id === track.globalId}
+            aria-label={`Options for ${track.name} by ${track.artist}`}
+            onClick={(event) => {
+              const bounds = event.currentTarget.getBoundingClientRect();
+              setMenu({
+                id: track.globalId,
+                openedWithKeyboard: isKeyboardMenuClick(event),
+                x: bounds.left,
+                y: bounds.bottom,
+              });
+            }}
+          >
+            <MenuDotsIcon />
           </button>
           <TrackTitleLink track={track} onOpenEntity={onOpenEntity} className="homeCardTitle" />
           <div className="homeCardDetail homeCardArtists">
@@ -307,16 +316,9 @@ export function HomeView({ registerScrollElement, onOpenEntity, selectedSource, 
     <div className="libraryView homeView smoothScroll" ref={registerScrollElement}>
       <header className="homeHeader">
         <h1 className="libraryTitle">Home</h1>
-        <div className="homeSource">
-          <select aria-label="Recommendation source" value={source}
-            onChange={event => onSelectSource(event.currentTarget.value as RecommendationSource)}>
-            <option value="ambra">Ambra</option>
-            {providers.filter(provider => connected?.[provider]).map(provider => (
-              <option key={provider} value={provider}>{recommendationProviders[provider]}</option>
-            ))}
-          </select>
-          <DropdownChevron />
-        </div>
+        <Dropdown label="Recommendation source" className="homeSource" value={source} onChange={onSelectSource}
+          options={playlistSources.filter(value => value === "ambra" || connected?.[value])
+            .map(value => ({ value, label: sourceNames[value] }))} />
       </header>
       {source === "ambra" ? <AmbraHome {...props} onOpenEntity={onOpenEntity} /> : (
         <ProviderHome key={source} provider={source} onOpenEntity={onOpenEntity} />

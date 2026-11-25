@@ -32,15 +32,19 @@ export function isEntityLink(target: EventTarget) {
   return target instanceof Element && target.closest(".entityLink") !== null;
 }
 
+function hasDirectSongAction(target: EventTarget) {
+  return target instanceof Element && target.closest(".entityLink, [data-track-cover-play]") !== null;
+}
+
 /** Suppress pointer clicks that precede a playback double-click. */
 export function suppressSongClick(event: MouseEvent) {
-  if (isKeyboardMenuClick(event) || isEntityLink(event.target)) return;
+  if (isKeyboardMenuClick(event) || hasDirectSongAction(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
 }
 
 export function playSongOnDoubleClick(event: MouseEvent, play: () => void) {
-  if (event.button !== 0 || isEntityLink(event.target)) return;
+  if (event.button !== 0 || hasDirectSongAction(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
   play();

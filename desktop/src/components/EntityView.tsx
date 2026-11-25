@@ -46,7 +46,6 @@ export type EntityViewProps<Kind extends CatalogEntity["kind"] = CatalogEntity["
   cache: Map<string, EntityPage>;
   libraryTracks: Track[];
   catalogTracks?: Track[];
-  onBack: () => void;
   onOpenEntity: (entity: BrowseEntity) => void;
   onAction: (action: EntityAction, tracks: Track[], id?: string) => void;
   onAddTrack: (track: Track) => void;
@@ -149,11 +148,6 @@ function AlbumView({
       tracks={tracks}
       revealTrack={revealTrack}
       playlistOptions={props.playlistOptions}
-      headerNavigation={
-        <button type="button" className="browseBack" onClick={props.onBack}>
-          Back
-        </button>
-      }
       headerArtwork={
         <AlbumArtwork
           src={album.imageUrl}

@@ -214,19 +214,24 @@ function SearchResult({
           }}>
           <img src={state === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
-        <div className="searchResultArtwork">
+        <button type="button" className="searchResultArtwork" data-track-cover-play disabled={!available}
+          aria-label={`${state === "playing" ? "Pause" : "Play"} ${track.name} (cover)`}
+          onClick={event => {
+            event.stopPropagation();
+            if (event.detail <= 1) playSong(true);
+          }}>
           <TrackArtwork
             preferProviderThumbnail
             className="searchResultCover"
             track={track}
-            alt={`${track.album} album cover`}
+            alt=""
             width={124}
             height={124}
             loading={variant === "featured" ? "eager" : "lazy"}
             fetchPriority={variant === "featured" ? "high" : "auto"}
             decoding="async"
           />
-        </div>
+        </button>
       </div>
 
       <div className="searchResultInfo" inert={!available}>

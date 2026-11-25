@@ -48,7 +48,6 @@ type HeaderGeometry = {
 export type TrackCollectionViewProps = TrackListProps & {
   title: string;
   className?: string;
-  headerNavigation?: ReactNode;
   playbackActions?: ReactNode;
   /** Icon-only versions of playbackActions, beside the title once the header collapses. */
   compactActions?: ReactNode;
@@ -76,7 +75,6 @@ export type TrackCollectionViewProps = TrackListProps & {
 export function TrackCollectionView({
   title,
   className = "",
-  headerNavigation,
   playbackActions,
   compactActions,
   registerScrollElement,
@@ -262,7 +260,7 @@ export function TrackCollectionView({
       if (actions) actions.inert = false;
       if (compactActions) compactActions.inert = false;
     };
-  }, [collapsibleHeader, updateCollapsibleHeader, title, headerNavigation, showPlaybackActions, summary === null]);
+  }, [collapsibleHeader, updateCollapsibleHeader, title, showPlaybackActions, summary === null]);
 
   function handlePlay() {
     if (firstTrack) playTrack(firstTrack.globalId);
@@ -310,7 +308,6 @@ export function TrackCollectionView({
       {collapsibleHeader && (
         <div className="playlistHeaderAnchor" aria-hidden="true" />
       )}
-      {headerNavigation && <div className="libraryHeaderNavigation">{headerNavigation}</div>}
       <div className="libraryHeader">
         {headerArtwork && (
           <div className="libraryHeaderArtwork">{headerArtwork}</div>

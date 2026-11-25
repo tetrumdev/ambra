@@ -5,6 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import App from "../src/App";
 import { playableTrack, type RemoteTrack } from "../src/api/server";
 import { HomeView, type RecommendationSource } from "../src/components/HomeView";
+import { SearchBar } from "../src/components/SearchBar";
 import { updateServiceAvailability } from "../src/hooks/useServiceAvailability";
 import type { Playlist, Track } from "../src/types/music";
 import { defaultPreferences, savePreferences } from "../src/utils/preferences";
@@ -57,6 +58,20 @@ async function mount(combinedMenu = false, playlists: Playlist[] = []) {
   await render(<Harness />);
 }
 
+test("Search service choices show only icons and retain accessible names", async () => {
+  const changed: string[] = [];
+  await render(<SearchBar query="" provider="all" providers={["spotify", "tidal", "qobuz"]}
+    focusRequest={null} onQueryChange={() => {}} onConfirm={() => {}} onProviderChange={provider => changed.push(provider)} />);
+  const trigger = container.querySelector<HTMLButtonElement>('.searchProviderControl .dropdownTrigger')!;
+  await act(async () => { trigger.click(); });
+  const options = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitemradio"]')];
+  expect(options.map(option => [option.textContent, option.getAttribute("aria-label"), option.querySelector("img")?.getAttribute("src")]))
+    .toEqual([["", "All services", "/routed-search.svg"], ["", "Spotify", "/spotify.svg"], ["", "Tidal", "/tidal.svg"], ["", "Qobuz", "/qobuz.svg"]]);
+  expect(options[0].getAttribute("aria-checked")).toBe("true");
+  await act(async () => { options[1].click(); });
+  expect(changed).toEqual(["spotify"]);
+});
+
 test("Discover stays last, renders real track cards, and preserves Home empty states", async () => {
   next = { ...next, tracks: [track], status: "ready" };
   await mount();
@@ -99,7 +114,19 @@ test("keyboard menu supports playback, queue, next, standalone and Escape", asyn
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
-test("combined song menu opens instantly on right-click and double-clicking the artwork plays the song", async () => {
+test("Home artwork plays the song on a single click without opening playback options", async () => {
+  next = { ...next, tracks: [track], status: "ready" };
+  await mount();
+  const cover = container.querySelector<HTMLButtonElement>('section[aria-label="Discover"] button.homeCardButton')!;
+  await act(async () => {
+    cover.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as MouseEvent);
+  });
+  expect(actions.map(([action, tracks, id]) => [action, tracks.map(song => song.globalId), id]))
+    .toEqual([["play", [track.globalId], track.globalId]]);
+  expect(document.querySelector("#trackPlaybackMenu")).toBeNull();
+});
+
+test("combined song menus keep single-click cover playback and open instantly on right-click", async () => {
   next = { ...next, tracks: [track], status: "ready" };
   await mount(true);
   const card = container.querySelector('section[aria-label="Discover"] .homeArtwork')!;
@@ -109,6 +136,7 @@ test("combined song menu opens instantly on right-click and double-clicking the 
   });
   await mouse("click", 1);
   expect(menu()).toBeNull();
+  expect(actions).toHaveLength(1);
   await mouse("contextmenu", 0, 2, 65, 115);
   expect(menu()?.textContent).toContain("Add to Queue");
   expect(menu()?.style.animation).toBe("none");
@@ -119,11 +147,10 @@ test("combined song menu opens instantly on right-click and double-clicking the 
   await act(async () => document.querySelector<HTMLElement>("#trackMenuBackdrop")!.click());
   await mouse("click", 1);
   await mouse("click", 2);
-  expect(actions).toHaveLength(0);
   await mouse("dblclick", 2);
   expect(menu()).toBeNull();
   expect(actions.map(([action, tracks, id]) => [action, tracks.map(song => song.globalId), id]))
-    .toEqual([["play", [track.globalId], track.globalId]]);
+    .toEqual([["play", [track.globalId], track.globalId], ["play", [track.globalId], track.globalId]]);
 });
 
 test("Home song cards open the album and reveal the exact track, and each artist opens their own page", async () => {
@@ -163,7 +190,7 @@ test("Home song cards open the album and reveal the exact track, and each artist
   const click = (button: HTMLButtonElement) => act(async () => {
     button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as MouseEvent);
   });
-  const back = () => click(container.querySelector<HTMLButtonElement>(".browseBack")!);
+  const back = () => click(container.querySelector<HTMLButtonElement>('.pageHistoryControls [aria-label="Back"]')!);
   const historyKey = "ambra.listening-history.v1";
   localStorage.setItem(historyKey, JSON.stringify({ version: 1, entries: [
     { track: playableTrack(recent), lastPlayedAt: Date.now() },
@@ -310,21 +337,44 @@ test("Provider shelves open mixes as playlists and releases as albums, then retu
   try {
     savePreferences({ ...defaultPreferences, ui: { ...defaultPreferences.ui, reduceMotion: true } });
     await render(<App localOnly />);
-    const select = () => container.querySelector<HTMLSelectElement>('select[aria-label="Recommendation source"]')!;
-    const choose = (value: string) => act(async () => {
-      select().value = value;
-      select().dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+    const trigger = () => container.querySelector<HTMLButtonElement>('.homeSource button[aria-haspopup="menu"]')!;
+    const options = () => [...container.querySelectorAll<HTMLButtonElement>('.homeSource [role="menuitemradio"]')];
+    const key = (target: Element, value: string) => act(async () => {
+      target.dispatchEvent(new dom.KeyboardEvent("keydown", { key: value, bubbles: true, cancelable: true }) as unknown as KeyboardEvent);
     });
+    const open = () => act(async () => { trigger().click(); });
+    const choose = async (value: string) => {
+      await open();
+      await act(async () => { options().find(option => option.textContent === value)!.click(); });
+      expect(document.activeElement).toBe(trigger());
+    };
     const card = (section: string) => container.querySelector<HTMLButtonElement>(`section[aria-label="${section}"] .homeCardButton`)!;
-    const back = () => act(async () => { container.querySelector<HTMLButtonElement>(".browseBack")!.click(); });
+    const navigate = (label: string) => act(async () => {
+      container.querySelector<HTMLButtonElement>(`.pageHistoryControls [aria-label="${label}"]`)!.click();
+    });
     const ambraCalls = discoverCalls;
     expect(container.querySelector("h1")?.textContent).toBe("Home");
-    expect(select().value).toBe("ambra");
-    expect([...select().options].map(option => option.text)).toEqual(["Ambra", "Spotify", "TIDAL", "Qobuz"]);
+    expect(trigger().textContent).toBe("Ambra");
+    await key(trigger(), "ArrowDown");
+    expect(options().map(option => option.textContent)).toEqual(["Ambra", "Spotify", "TIDAL", "Qobuz"]);
+    expect(document.activeElement).toBe(options()[0]);
+    await key(options()[0], "ArrowDown");
+    expect(document.activeElement).toBe(options()[1]);
+    await key(options()[1], "Escape");
+    expect(options()).toHaveLength(0);
+    expect(document.activeElement).toBe(trigger());
+    await open();
+    expect(trigger().getAttribute("aria-expanded")).toBe("true");
+    // WebKit can blur the focused option without focusing the trigger on a pointer click.
+    await act(async () => {
+      document.activeElement!.dispatchEvent(new dom.FocusEvent("focusout", { bubbles: true }));
+    });
+    await open();
+    expect(trigger().getAttribute("aria-expanded")).toBe("false");
     expect(calls).toEqual([]);
 
-    await choose("spotify");
-    await choose("tidal");
+    await choose("Spotify");
+    await choose("TIDAL");
     expect(spotifySignal?.aborted).toBe(true);
     await act(async () => { spotifyReply(Response.json({ mixes: [mix("daylist", "daylist")], albums: [] })); });
     expect(container.textContent).not.toContain("daylist");
@@ -342,11 +392,14 @@ test("Provider shelves open mixes as playlists and releases as albums, then retu
     expect(mixPage.textContent).toContain("TIDAL recommendation");
     expect(mixPage.querySelector<HTMLButtonElement>(".libraryPlayBtn")?.disabled).toBe(false);
     expect(mixPage.querySelector<HTMLButtonElement>(".libraryShuffleBtn")?.disabled).toBe(false);
-    await back();
-    expect(select().value).toBe("tidal");
+    await navigate("Back");
+    expect(trigger().textContent).toBe("TIDAL");
     expect(card("Discovery").querySelector(".homeCardTitle")?.textContent).toBe("Daily Discovery");
+    await navigate("Forward");
+    expect(container.querySelector(".playlistView h1")?.textContent).toBe("Daily Discovery");
+    await navigate("Back");
 
-    await choose("qobuz");
+    await choose("Qobuz");
     expect(container.textContent).toContain("WeeklyQ");
     expect(container.textContent).toContain("Qobuz release");
     expect(container.textContent).not.toContain("TIDAL recommendation");
@@ -357,12 +410,17 @@ test("Provider shelves open mixes as playlists and releases as albums, then retu
     expect(calls.at(-1)).toBe("providers/qobuz/albums/album/tracks");
     expect(container.querySelector(".albumView h1")?.textContent).toBe("Qobuz release");
     expect(container.querySelector(".albumView")?.textContent).toContain("Release song");
-    await back();
-    expect(select().value).toBe("qobuz");
+    await navigate("Back");
+    expect(trigger().textContent).toBe("Qobuz");
 
     await act(async () => { updateServiceAvailability({ tidal: true, qobuz: false, spotify: false }); });
-    expect([...select().options].map(option => option.text)).toEqual(["Ambra", "TIDAL"]);
-    expect(select().value).toBe("ambra");
+    expect(trigger().textContent).toBe("Ambra");
+    await open();
+    expect(options().map(option => option.textContent)).toEqual(["Ambra", "TIDAL"]);
+    await act(async () => {
+      container.querySelector("h1")!.dispatchEvent(new dom.PointerEvent("pointerdown", { bubbles: true }) as unknown as PointerEvent);
+    });
+    expect(options()).toHaveLength(0);
     expect(container.textContent).toContain("Discovery Song");
     expect(container.textContent).not.toContain("WeeklyQ");
   } finally {

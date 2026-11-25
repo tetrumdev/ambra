@@ -1,7 +1,6 @@
-import "./ExtraCtrls.css";
 import "./DownloadDialog.css";
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
-import { DropdownChevron } from "./DropdownChevron";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { Dropdown } from "./Dropdown";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import { getServerConnection, subscribeServerConnection } from "../api/serverConnection";
 import {
@@ -20,93 +19,7 @@ function songs(count: number) {
   return `${count} ${count === 1 ? "song" : "songs"}`;
 }
 
-function QualityPicker({ quality, disabled, onChange }: {
-  quality: DownloadQuality; disabled: boolean; onChange: (quality: DownloadQuality) => void;
-}) {
-  const id = useId();
-  const trigger = useRef<HTMLButtonElement>(null);
-  const menu = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [position, setPosition] = useState({ left: 0, top: 0, width: 0 });
-
-  useLayoutEffect(() => {
-    if (!open) return;
-    const reposition = () => {
-      const bounds = trigger.current!.getBoundingClientRect();
-      const width = Math.min(bounds.width, window.innerWidth - 24);
-      // Measure at the trigger's width, before text wrapping determines placement.
-      menu.current!.style.width = `${width}px`;
-      const height = menu.current!.offsetHeight;
-      const below = bounds.bottom + 6;
-      setPosition({
-        left: Math.max(12, Math.min(bounds.left, window.innerWidth - width - 12)),
-        top: Math.max(12, below + height <= window.innerHeight - 12 ? below : bounds.top - height - 6),
-        width,
-      });
-    };
-    reposition();
-    menu.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
-    return () => {
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
-  }, [open]);
-
-  const close = () => {
-    menu.current?.hidePopover();
-    trigger.current?.focus();
-  };
-
-  return <div className="downloadQuality">
-    <span id={`${id}-label`}>Quality</span>
-    <button ref={trigger} type="button" className="downloadQualityTrigger" disabled={disabled}
-      aria-labelledby={`${id}-label ${id}-value`} aria-haspopup="dialog" aria-expanded={open} aria-controls={id}
-      onClick={() => menu.current?.togglePopover()}
-      onKeyDown={event => {
-        if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-        event.preventDefault();
-        menu.current?.showPopover();
-      }}>
-      <span id={`${id}-value`}>{downloadQualities.find(option => option.id === quality)?.label}</span>
-      <DropdownChevron />
-    </button>
-    {/* A popover stays above the modal without being clipped by the dialog's scrolling area. */}
-    <div ref={menu} id={id} popover="auto" className="devAudioControls downloadQualityMenu"
-      role="dialog" aria-label="Download quality" style={{ ...position, visibility: open ? "visible" : "hidden" }}
-      onToggle={event => setOpen(event.newState === "open")}
-      onBlur={event => {
-        if (event.relatedTarget !== trigger.current && !event.currentTarget.contains(event.relatedTarget as Node | null)) {
-          menu.current?.hidePopover();
-        }
-      }}
-      onKeyDown={event => {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          close();
-          return;
-        }
-        if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-        event.preventDefault();
-        const options = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-        const current = options.indexOf(document.activeElement as HTMLButtonElement);
-        const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
-          : (current + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
-        options[next]?.focus();
-      }}>
-      <div role="radiogroup" aria-label="Quality">
-        {downloadQualities.map(option => <button key={option.id} type="button" className="audioDeviceOption"
-          role="radio" aria-checked={option.id === quality} tabIndex={option.id === quality ? 0 : -1}
-          onClick={() => { onChange(option.id); close(); }}>
-          <span className="audioDeviceCheck" aria-hidden="true" />
-          <span>{option.label}</span>
-        </button>)}
-      </div>
-    </div>
-  </div>;
-}
+const qualityOptions = downloadQualities.map(({ id, label }) => ({ value: id, label }));
 
 /** The menu every Download action opens: where to download to, and at what quality. */
 export function DownloadDialog() {
@@ -187,7 +100,10 @@ export function DownloadDialog() {
           <p role="alert">Connect to a server to download.</p>
         ) : (
           <>
-            <QualityPicker quality={quality} disabled={busy} onChange={setQuality} />
+            <div className="downloadQuality">
+              <span aria-hidden="true">Quality</span>
+              <Dropdown label="Download quality" value={quality} options={qualityOptions} disabled={busy} onChange={setQuality} />
+            </div>
             {step === "target" ? (
               <div className="playlistEditButtons downloadTargets">
                 <button type="button" disabled={busy} onClick={() => void start({ kind: "server" })}>

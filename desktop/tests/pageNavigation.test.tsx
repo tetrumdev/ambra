@@ -4,6 +4,7 @@ import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { usePageNavigation, type AppPage } from "../src/hooks/usePageNavigation";
 import { SettingsSidebar } from "../src/components/SettingsSidebar";
+import { AppChrome } from "../src/components/AppChrome";
 
 const dom = new Window({ url: "http://localhost/" });
 beforeAll(() => {
@@ -43,30 +44,38 @@ for (const origin of origins) {
       current = page;
       visit = setPage;
       navigation = usePageNavigation(page, setPage);
-      return page.screen === "settings" ? <SettingsSidebar
-        tab={page.settingsTab}
-        onSelect={settingsTab => setPage(current => ({ ...current, settingsTab }))}
-        onBack={() => navigation.back()}
-      /> : <div>{page.screen}</div>;
+      return <>
+        <AppChrome currentScreen={page.screen} playerView="bigscreen" lyricsAvailability="none" isFullscreen={false}
+          canGoBack={navigation.backAvailable} canGoForward={navigation.forwardAvailable}
+          onNavigate={direction => navigation[direction]()} onSelectPlayerView={() => {}} />
+        {page.screen === "settings" ? <SettingsSidebar tab={page.settingsTab}
+          onSelect={settingsTab => setPage(current => ({ ...current, settingsTab }))} /> : <div>{page.screen}</div>}
+      </>;
     }
     const container = document.createElement("div");
     const root = createRoot(container);
+    const arrow = (label: string) => container.querySelector<HTMLButtonElement>(`.pageHistoryControls button[aria-label="${label}"]`)!;
+    const clickArrow = (label: string) => act(async () => { arrow(label).click(); });
     try {
       await act(async () => root.render(<Harness />));
+      expect(arrow("Back").disabled).toBe(true);
+      expect(arrow("Forward").disabled).toBe(true);
       await act(async () => visit({ ...origin, screen: "settings", entity: null, playlistId: null }));
       for (const tab of ["outputs", "dsp", "services"]) {
         await act(async () => container.querySelector<HTMLButtonElement>(`#settings-tab-${tab}`)!.click());
       }
       expect(current.screen).toBe("settings");
       expect(current.settingsTab).toBe("services");
-      await act(async () => container.querySelector<HTMLButtonElement>(".settingsBack")!.click());
+      expect(arrow("Back").disabled).toBe(false);
+      await clickArrow("Back");
       expect(current).toEqual(origin);
-      expect(navigation.canGo("back")).toBe(false);
-      expect(navigation.canGo("forward")).toBe(true);
-      await act(async () => { expect(navigation.forward()).toBe(true); });
+      expect(arrow("Back").disabled).toBe(true);
+      expect(arrow("Forward").disabled).toBe(false);
+      await clickArrow("Forward");
       expect(current.screen).toBe("settings");
       expect(current.settingsTab).toBe("services");
-      await act(async () => { expect(navigation.back()).toBe(true); });
+      expect(arrow("Forward").disabled).toBe(true);
+      await clickArrow("Back");
       expect(current).toEqual(origin);
     } finally {
       await act(async () => root.unmount());

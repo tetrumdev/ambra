@@ -18,6 +18,92 @@
     transition: transform var(--motion-snappy);
 }
 
+.dropdown {
+    min-width: 0;
+}
+
+.dropdownTrigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    box-sizing: border-box;
+    width: 100%;
+    height: 42px;
+    padding: 0 16px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--ink);
+    background: rgba(22, 22, 22, 0.6);
+    border: 1px solid #535353;
+    border-radius: 8px;
+    text-align: left;
+    cursor: default;
+}
+
+.dropdownTrigger:hover:not(:disabled),
+.dropdownTrigger:focus-visible {
+    border-color: rgb(140, 140, 140);
+}
+
+.dropdownTrigger .dropdownChevron {
+    transform: rotate(0);
+    transition-duration: 100ms;
+}
+
+.dropdownTrigger[aria-expanded="true"] .dropdownChevron {
+    transform: rotate(180deg);
+}
+
+.dropdownValue {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.dropdown .dropdownMenu {
+    inset: auto;
+    margin: 0;
+    width: max-content;
+    max-width: calc(100vw - 24px);
+    padding: 6px;
+    animation: menuEnter 100ms ease-out both;
+}
+
+.dropdownMenu::backdrop {
+    background: transparent;
+    pointer-events: none;
+}
+
+.dropdownMenu .audioDeviceOption {
+    min-height: 36px;
+    height: auto;
+    padding-block: 6px;
+    cursor: default;
+}
+
+.dropdownOptionLabel {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.dropdownIcon {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    flex: none;
+}
+
+.dropdownMenu[data-icon-only] .audioDeviceOption {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding-inline: 4px;
+}
+
+.dropdownMenu[data-icon-only] .audioDeviceOption[aria-checked="true"] {
+    background: #303030;
+}
+
 .playlistDropdown[open] > summary .dropdownChevron {
     transform: rotate(0);
 }

@@ -5,6 +5,7 @@ import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { Help, SettingRow, Toggle } from "./SettingsControls";
+import { Dropdown } from "../Dropdown";
 import {
   MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore, syncCoreSettings,
   type CoreSession,
@@ -15,7 +16,8 @@ type PairingStarted = { requestId: string; code: string; address: string; server
 type SavedServer = { id: string; name: string; address: string; publicKey: string | null; selected: boolean };
 type ConnectionCommand = "join_server" | "leave_server" | "connect_saved_server" | "forget_saved_server" | "set_connection_method";
 
-const connectionMethods: { value: ConnectionMethod; label: string }[] = [
+const connectionMethods: { value: ConnectionMethod | ""; label: string }[] = [
+  { value: "", label: "Automatic" },
   { value: "Lan", label: "Local network" },
   { value: "Public", label: "Internet (direct)" },
   { value: "HyperDHT", label: "HyperDHT" },
@@ -305,11 +307,9 @@ export function ServerSettings({ active }: { active: boolean }) {
       <div className="settingsGroup">
         <SettingRow label="Connection type" hint={`Current: ${connectionType}.`}
           help="Automatic chooses the best available connection. A manual type never falls back to another. Changing the type reconnects and turns off shared playback.">
-          <select aria-label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} disabled={!server || changing || !isTauri()}
-            onChange={event => void change("set_connection_method", { method: event.currentTarget.value || null })}>
-            <option value="">Automatic</option>
-            {connectionMethods.map(method => <option key={method.value} value={method.value}>{method.label}</option>)}
-          </select>
+          <Dropdown label="Connection type" value={server ? connection?.connectionMethod ?? "" : ""} options={connectionMethods}
+            disabled={!server || changing || !isTauri()}
+            onChange={method => void change("set_connection_method", { method: method || null })} />
         </SettingRow>
         {server ? <>
           <SettingRow label={server.name} hint={server.address}>

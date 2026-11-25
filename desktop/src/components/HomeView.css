@@ -9,6 +9,11 @@
     flex-wrap: wrap;
     gap: 12px 18px;
     padding: 34px 30px 32px;
+    padding-inline-end: var(--workspace-control-inset);
+}
+
+:root[data-window-fullscreen] .homeHeader {
+    padding-block-start: 54px;
 }
 
 .homeHeader .libraryTitle {
@@ -18,10 +23,10 @@
 }
 
 .homeSource {
-    position: relative;
+    margin-inline-start: auto;
+    min-width: 130px;
 }
 
-.homeSource select,
 .homeRetry {
     border: 1px solid #535353;
     border-radius: 6px;
@@ -30,23 +35,6 @@
     font: inherit;
     font-size: 0.9rem;
     padding: 7px 12px;
-}
-
-.homeSource select {
-    appearance: none;
-    padding-inline-end: 30px;
-    cursor: pointer;
-}
-
-.homeSource .dropdownChevron {
-    position: absolute;
-    inset-inline-end: 11px;
-    top: calc(50% - 5px);
-    transform: none;
-    pointer-events: none;
-}
-
-.homeRetry {
     margin: -20px 30px 28px;
 }
 
@@ -166,6 +154,57 @@
     inset: 0;
     background: #0006;
     opacity: 0;
+}
+
+.homePlay {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    opacity: 0;
+}
+
+.homePlay img {
+    width: 28px;
+    height: 28px;
+}
+
+.homeCardButton:focus-visible :is(.homePlay, .homeShade) {
+    opacity: 1;
+}
+
+.homeCardOptions {
+    position: absolute;
+    inset-block-start: 8px;
+    inset-inline-end: 8px;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    color: var(--ink);
+    background: #191919dd;
+    opacity: 0;
+}
+
+.homeCard:hover .homeCardOptions:not(:disabled),
+.homeCardOptions:focus-visible,
+.homeCardOptions[aria-expanded="true"] {
+    opacity: 1;
+}
+
+.homeCardOptions svg {
+    width: 16px;
+    height: 16px;
+    fill: currentColor;
+}
+
+@media (hover: none) {
+    .homeCardOptions:not(:disabled) {
+        opacity: 1;
+    }
 }
 
 .homeCardButton:hover .homeCardTitle,

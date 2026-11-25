@@ -68,10 +68,6 @@
     text-decoration: underline;
     text-underline-offset: 4px;
 }
-.libraryHeaderNavigation {
-    padding: 0 30px 16px;
-}
-.browseBack,
 .browseScope button {
     border: 0;
     background: transparent;
@@ -85,8 +81,7 @@
     margin: 12px 0;
     flex-wrap: wrap;
 }
-.browseScope [aria-current="page"],
-.browseBack:hover {
+.browseScope [aria-current="page"] {
     color: var(--ink);
     text-decoration: underline;
     text-underline-offset: 4px;

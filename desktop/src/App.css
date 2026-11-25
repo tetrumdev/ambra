@@ -43,6 +43,7 @@
     cursor: default;
     --player-height: 100px;
     --scrollbar-column-width: 14px;
+    --workspace-control-inset: calc(34px - var(--scrollbar-column-width));
     --library-titlebar-height: 0px;
     --content-top-spacer: 20px;
     /* Shared states, so every screen shows errors and unavailable controls alike. */

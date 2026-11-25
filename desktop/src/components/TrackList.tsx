@@ -532,9 +532,16 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
           onMouseLeave={nowPlaying ? undefined : event => onAction("cancelWarm", event, index)}>
           <img src={nowPlaying === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
-        {showArtwork && <div className="coverImgContainer" data-playback-menu-trigger>
-          <TrackArtwork track={track} alt={`${track.album} album cover`} className="coverImg" draggable={false} />
-        </div>}
+        {showArtwork && (
+          <button type="button" className="coverImgContainer" data-track-cover-play data-drag-handle
+            disabled={!available} aria-label={`${nowPlaying === "playing" ? "Pause" : "Play"} ${track.name} (cover)`}
+            onClick={event => {
+              event.stopPropagation();
+              if (event.detail <= 1) onAction("play", event, index);
+            }}>
+            <TrackArtwork track={track} alt="" className="coverImg" draggable={false} />
+          </button>
+        )}
       </div>
       <span
         className={`trackName trackDescriptor${showProviderIcon ? " trackNameWithProvider" : ""}`}

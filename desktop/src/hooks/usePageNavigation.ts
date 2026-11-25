@@ -23,8 +23,12 @@ function pageKey(page: AppPage) {
 }
 
 /** Track committed pages, keeping overlays out of history and edits within the current page. */
-export function usePageNavigation(page: AppPage, restore: (page: AppPage) => void) {
-  const history = useRef({ back: [] as AppPage[], current: page, forward: [] as AppPage[] });
+export function usePageNavigation(page: AppPage, restore: (page: AppPage) => void, initialBack?: AppPage) {
+  const history = useRef({ back: initialBack ? [initialBack] : [], current: page, forward: [] as AppPage[] });
+  // A new visit will add the current page to history and clear Forward when it commits.
+  const visiting = pageKey(history.current.current) !== pageKey(page);
+  const backAvailable = visiting || history.current.back.length > 0;
+  const forwardAvailable = !visiting && history.current.forward.length > 0;
   useLayoutEffect(() => {
     const state = history.current;
     if (pageKey(state.current) !== pageKey(page)) {
@@ -48,5 +52,5 @@ export function usePageNavigation(page: AppPage, restore: (page: AppPage) => voi
   const back = useStableCallback(() => move("back"));
   const forward = useStableCallback(() => move("forward"));
   const canGo = useStableCallback((direction: "back" | "forward") => history.current[direction].length > 0);
-  return { back, forward, canGo };
+  return { back, forward, canGo, backAvailable, forwardAvailable };
 }
