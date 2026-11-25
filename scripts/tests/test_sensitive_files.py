@@ -5,10 +5,6 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-REPORT = pathlib.Path(
-    "docs/networking/results/tailcat-2026-11-13/invalid-credential.json"
-)
-
 
 class SensitiveFilesTest(unittest.TestCase):
     def check_file(self, name, content, expected):
@@ -27,11 +23,14 @@ class SensitiveFilesTest(unittest.TestCase):
             )
             self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
 
-    def test_reviewed_report_allowed(self):
-        self.check_file(REPORT, (ROOT / REPORT).read_bytes(), 0)
+    def test_network_capture_blocked(self):
+        self.check_file(pathlib.Path("diagnostic.pcapng"), b"capture", 1)
 
-    def test_changed_report_blocked(self):
-        self.check_file(REPORT, (ROOT / REPORT).read_bytes() + b"\n", 1)
+    def test_raw_network_results_blocked(self):
+        self.check_file(pathlib.Path("docs/networking/results/report.json"), b"{}", 1)
+
+    def test_sanitized_report_allowed(self):
+        self.check_file(pathlib.Path("docs/networking/validation.md"), b"Three tests passed.", 0)
 
     def test_credential_file_blocked(self):
         self.check_file(pathlib.Path("credentials.json"), b"{}", 1)

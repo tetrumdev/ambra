@@ -35,18 +35,6 @@ Build the launcher without elevation:
 cc -O2 -Wall -Wextra -Werror scripts/pwnat/icmp-launch.c -o /tmp/ambra-icmp-launch
 ```
 
-For an explicitly opted-in Linux installation, an administrator can install a protected copy for one user. These commands use the disposable Kubuntu test account:
-
-```sh
-sudo install -d -o root -g root -m 0755 /usr/local/libexec
-sudo install -o root -g example -m 0750 /tmp/ambra-icmp-launch /usr/local/libexec/ambra-icmp-launch
-sudo setcap cap_net_raw=ep /usr/local/libexec/ambra-icmp-launch
-getcap /usr/local/libexec/ambra-icmp-launch
-/usr/local/libexec/ambra-icmp-launch /home/example/ambra/server/target/debug/ambra-server serve
-```
-
-The filesystem must support capability xattrs and honor executable capabilities; a `nosuid` mount or a restricted capability bounding set can prevent this. Replacing the helper can remove its capability and requires an administrator to grant it again. Roll back by removing the installed helper or running `sudo setcap -r /usr/local/libexec/ambra-icmp-launch`. No capability is applied to Ambra itself.
-
 On macOS, launch the installed helper explicitly through sudo. Only socket creation runs privileged; the test probe runs as the invoking user. The helper does not request, store, or process a password. macOS datagram ping sockets are insufficient: the tested OS permits Echo but rejects the required Time Exceeded transmission with `Invalid argument`.
 
 The installer accepts a prebuilt launcher and makes a root-owned copy. Linux grants only `CAP_NET_RAW` to a copy executable by the invoking user's group. macOS installs an ordinary executable without a setuid bit, daemon, or sudoers change. A one-shot sudo invocation remains necessary on macOS:
@@ -99,22 +87,21 @@ cargo test --manifest-path crates/ambra-net/Cargo.toml --tests
 On disposable Kubuntu, after installing the helper, the opt-in lab runs actual Ambra Server and the native pairing probe through isolated network namespaces:
 
 ```sh
-cd /home/example/ambra
 CARGO_TARGET_DIR=server/target cargo build --manifest-path crates/ambra-net/Cargo.toml --examples
 sudo python3 scripts/pwnat/test-nat.py
 ```
 
 The lab tests ordinary Linux client SNAT failure, independently blocks Time Exceeded traffic and checks the firewall counter, then models a compatible client NAT with an **explicit stateless ICMP translation rule inside its namespace**. The positive result is conditional simulation, not proof that default Linux NAT or a physical router supports this protocol. Its transit namespace has no Internet route and no Tailscale interface. All namespaces and processes are removed in `finally`; logs remain in its printed artifact directory. Host firewall and forwarding settings are not changed.
 
-`scripts/pwnat/test-macos.py` is the prepared physical-device test. Run it only through the launcher, with a separately running isolated Kubuntu server. It obtains a signed endpoint record automatically, disables LAN and HyperDHT data attempts, performs server-approved pairing over the pwnat stream, checks exact WAV/range bytes, and reconnects. SSH is used only for management and approval. The script refuses to run as root and never requests or processes a password. See the dated investigation report for the prepared command and results.
+`scripts/pwnat/test-macos.py` is the prepared physical-device test. Run it only through the launcher, with a separately running isolated Kubuntu server. It obtains a signed endpoint record automatically, disables LAN and HyperDHT data attempts, performs server-approved pairing over the pwnat stream, checks exact WAV/range bytes, and reconnects. SSH is used only for management and approval. The script refuses to run as root and never requests or processes a password. Pass `--remote-server` with the path to the checkout-built server executable on the SSH host. The [validation report](validation.md) describes the physical and simulated results.
 
 The newer `cross-network.py` manages its own isolated server and automates approval and cleanup. Its default mode checks real HyperDHT pairing, authorization, exact WAV/range bytes, repeated reconnects, and both peers' physical routes. pwnat-only mode needs the inherited ICMP descriptor and the installed Linux helper. Neither mode touches the normal server profile:
 
 ```sh
-python3 scripts/pwnat/cross-network.py operator@server.example --rounds 8
+python3 scripts/pwnat/cross-network.py operator@server.example --remote-root /path/to/ambra --rounds 8
 sudo /usr/local/libexec/ambra-icmp-launch /usr/bin/python3 \
   "$PWD/scripts/pwnat/cross-network.py" operator@server.example \
-  --transport pwnat --rounds 2
+  --remote-root /path/to/ambra --transport pwnat --rounds 2
 ```
 
 Artifacts use a private temporary directory. Preserve that directory for debugging; it can contain test pairing credentials. Only sanitized aggregates should be committed. `udp-peer.py` separately tests authenticated, bounded direct UDP with an explicitly selected physical source address; its coordination token travels over stdin and is never logged.

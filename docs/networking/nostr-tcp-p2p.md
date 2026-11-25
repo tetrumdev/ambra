@@ -2,8 +2,8 @@
 
 ## Result and qualification
 
-On November 13, 2026, the school Mac connected automatically to the home Kubuntu
-server using Nostr signaling, TCP simultaneous opening, Ambra Noise, and Ambra's
+On November 13, 2026, a macOS client connected automatically to a Linux
+server on a separate network using Nostr signaling, TCP simultaneous opening, Ambra Noise, and Ambra's
 real HTTP/2 handlers. Three batches completed **9/9 TCP/443 connections**,
 including six immediate reconnections without re-pairing. They verified **448 MiB** of WAV
 file responses, uploads, concurrent API requests, and byte ranges. The final
@@ -26,8 +26,7 @@ general NAT success rate, physical mobile result, Windows result across the
 internet, audible playback test, or physical network-handoff test. The optional
 privileged-port launcher supplies a finite socket pool. See the limitations below.
 
-Sanitized measurements are in [evidence.json](results/nostr-tcp-2026-11-13/evidence.json).
-Private keys, tokens, raw logs, and packet captures are excluded.
+See [networking validation](validation.md) for the comparative measurements and test conditions.
 
 A final instrumented run adds one authenticated connection, 48 MiB of exact audio,
 18 concurrent requests, and a 3.544-second setup. Noise takes 81.2 ms. Candidate
@@ -43,29 +42,9 @@ These control measurements are separate from TCP/Noise and application throughpu
 
 ## Baseline and earlier evidence
 
-Both checkouts started clean at historical `c10b38f`. The Mac's local `main` had
-63 commits absent from the current origin and lacked 281 origin commits. Neither
-checkout was reset. Both switched to `feat/nostr-tcp-p2p`, based on current
-`origin/main`, `d94258887c840b2a1941332a28293e080528c91f`. The old branches and
-commits remain available. No applicable repository or ancestor `AGENTS.md` was
-present. Nothing was pushed during implementation and physical validation.
-
-The October [school report](school-wifi-2026-10-29.md) supplies the starting
-mechanism: TCP STUN at Nextcloud TCP/443, a retained mapping socket, shared local
-ports, simultaneous active opens, and a home TCP/443 candidate. Its warning about
-SYN proxies and sequence translation still applies. A fast `connect()` is not
-proof of reaching the peer. Every new path must finish pinned Noise and device
-authorization. This implementation removes the Python stream adapters and
-out-of-band candidate files from that experiment.
-
-The [November public TCP report](public-tcp-2026-11-06.md) describes a different
-method: router-forwarded TCP with a signed admission knock. That method remains
-available as `Public`. TCP punching uses its paired-device admission invariant,
-not its router configuration or endpoint cache. The earlier
-[cross-network report](cross-network-2026-10-28.md) also remains relevant to UDP
-filtering, transport buffering, and the difference between management and data
-paths. Neither old throughput figures nor the absence of a relay flag qualifies
-a new native path by itself.
+The [router-forwarded TCP guide](public-tcp.md) describes the `Public` method.
+Both TCP methods use paired-device admission. TCP punching exchanges candidates
+through signed Nostr events and verifies the peer with Noise and device authorization.
 
 ## Architecture
 
@@ -112,7 +91,7 @@ exchanges. At least one relay must work for both peers. Defaults are not an
 availability guarantee. Operators can change the library caller's explicit relay
 list; ordinary desktop/mobile users need no relay configuration.
 
-| Relay | School ready, ms | Home ready, ms | Encrypted round trips, ms | Qualification |
+| Relay | Client ready, ms | Server ready, ms | Encrypted round trips, ms | Qualification |
 | --- | ---: | ---: | --- | --- |
 | relay.primal.net | 580.9 | 1116.4 | 484.2, 365.3, 606.4 | Passed |
 | relay.nostr.net | 955.0 | 942.1 | 611.4, 602.2, 634.6 | Passed |
@@ -122,7 +101,7 @@ list; ordinary desktop/mobile users need no relay configuration.
 | relay.nostr.band, nostr.mom, relay.nostr.bg | — | — | — | Publications timed out; not qualified |
 | relay.ditto.pub | — | — | — | Capability probe could not connect |
 
-A separate school capability probe tested several custom event kinds. It confirmed
+A separate client-side capability probe tested several custom event kinds. It confirmed
 that reaching HTTPS or receiving `EOSE` does not establish publish/delivery support.
 Oxtr initially acknowledged a binding marker without independent delivery in that
 probe, although the later real binding/encrypted exchange passed. Two demonstrated
@@ -231,7 +210,7 @@ negotiation, not a second application/music protocol.
 ## TCP/443 and optional privileges
 
 Normal mode uses an ephemeral source/listener port on both devices. It requires
-no helper. That mode failed in two completed school-to-home trials during this
+no helper. That mode failed in two completed cross-network trials during this
 session. TCP/443 on the home side succeeded. The Mac always used an unprivileged
 source port; its full application never needed root.
 
@@ -516,7 +495,7 @@ Implementation and tests:
 - `crates/ambra-mobile-bridge/Cargo.lock`
 - `scripts/tcp-punch-bind.py`
 - `scripts/test-native-network.py` (explicitly disables router mapping in isolated regression runs)
-- This report and `results/nostr-tcp-2026-11-13/evidence.json`.
+- [Networking validation](validation.md).
 
 The isolated server/probe processes, private profiles, test tokens/keys, synthetic
 uploads, and raw diagnostics are removed after evidence extraction. The installed

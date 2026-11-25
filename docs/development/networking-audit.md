@@ -1,6 +1,6 @@
 # Networking audit before implementation
 
-Audited commit: `8e5df17` (latest checked-out main, including ewph/eggwithpants's server and mobile work). No application code had been changed when this audit was written.
+This audit describes the client and server boundaries before the shared Rust networking implementation.
 
 ## Existing behavior and reuse
 

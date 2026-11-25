@@ -7,8 +7,8 @@ if [[ "$mode" != "working-tree" && "$mode" != "--staged" && "$mode" != "--histor
   exit 2
 fi
 
-history_baseline="fef0ca048041eb5e4953ccd5ea8be69c5576210c"
-blocked_path='(^|/)(\.env($|\.)|[^/]*(credential|credentials|session|secret)s?\.(json|ya?ml|toml)|[^/]*metadata-cache\.json|\.?streaming-library\.json|\.?library-track-ids\.json|desktop-state\.json)$|(^|/)\.?spotify-cache/'
+history_baseline="5b939b6f852d3396d469d38716e71e14c71bd5b1"
+blocked_path='(^|/)(\.env($|\.)|[^/]*(credential|credentials|session|secret)s?\.(json|ya?ml|toml)|[^/]*metadata-cache\.json|\.?streaming-library\.json|\.?library-track-ids\.json|desktop-state\.json)$|(^|/)\.?spotify-cache/|^docs/(networking|p2p)/results/|\.(har|pcap|pcapng)$'
 secret_content='-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9_]{30,}|xox[baprs]-[A-Za-z0-9-]{20,}|sk-(proj-)?[A-Za-z0-9_-]{20,}'
 assigned_secret="(\"?(access_token|refresh_token|user_auth_token|client_secret|password|auth_data)\"?[[:space:]]*[:=][[:space:]]*(\"[A-Za-z0-9_+/.=-]{16,}\"|'[A-Za-z0-9_+/.=-]{16,}'|[A-Za-z0-9_+/.=-]{16,}[[:space:]]*$))"
 failed=0
@@ -35,12 +35,7 @@ check_path() {
   else
     git show "$source:$path" >"$temporary_file" 2>/dev/null || true
   fi
-  # This immutable, sanitized failure report contains no credentials. Its name
-  # matches the credential-file rule; permit only the reviewed Git blob.
-  if [[ "$path" =~ $blocked_path ]] && ! {
-    [[ "$path" == "docs/networking/results/tailcat-2026-11-13/invalid-credential.json" ]] &&
-      [[ "$(git hash-object "$temporary_file")" == "e63ad0432be363fb7f9fda6e4ea2570da231d0ed" ]]
-  }; then
+  if [[ "$path" =~ $blocked_path ]]; then
     echo "sensitive-file guard: blocked path $path ($context)" >&2
     failed=1
   fi

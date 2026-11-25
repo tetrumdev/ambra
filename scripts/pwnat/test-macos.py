@@ -21,6 +21,7 @@ def main():
     parser.add_argument("host", help="Authorized SSH management host")
     parser.add_argument("remote_directory", help="Isolated server test directory")
     parser.add_argument("audio", type=Path, help="WAV fixture to verify byte for byte")
+    parser.add_argument("--remote-server", required=True, help="Absolute checkout-built server executable on the SSH host")
     args = parser.parse_args()
     if os.getuid() == 0 or os.geteuid() == 0:
         raise SystemExit("Refusing to run the probe as root. Use icmp-launch to drop privileges first.")
@@ -43,7 +44,7 @@ def main():
         remote = Path(args.remote_directory)
         assignments = [f"AMBRA_{kind}_DIR={remote / kind.lower()}" for kind in ("CONFIG", "DATA", "CACHE")]
         command = "env " + " ".join(shlex.quote(value) for value in assignments)
-        command += " /home/example/ambra/server/target/debug/ambra-server "
+        command += f" {shlex.quote(args.remote_server)} "
         command += " ".join(shlex.quote(word) for word in words)
         return subprocess.check_output(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", args.host, command], text=True, timeout=20)
     capability = subprocess.check_output([str(diagnostics), "capability"], env=environment, pass_fds=(descriptor,), text=True)

@@ -1,58 +1,64 @@
-# Validation ledger
+# Networking validation
 
-Validation date: October 26, 2026. Host: Apple Silicon macOS 27.0.1 (26A434), native Rust target `aarch64-apple-darwin`, Rust 1.97.1. No iOS/Android hardware or separate router was available. See the implementation report for limitations rather than interpreting compilation as device support.
+These are historical measurements from isolated Ambra fixtures and physical tests. Each result describes the tested transport and topology. Throughput and timing depend on the network, traffic mix, and build profile.
 
-## Final automated results
+## HyperDHT and UDX
 
-- `cargo test --manifest-path crates/ambra-net/Cargo.toml`: 16 tests pass (5 unit, 1 authenticated relay-rejection test over UDP/Noise, 10 native integration tests). QUIC/Noise loopback compatibility is explicitly separate from pwnat NAT proof.
-- `cargo test --manifest-path server/Cargo.toml -- --test-threads=1`: 151 tests pass.
-- `cargo test --manifest-path desktop/src-tauri/Cargo.toml`: 29 tests pass. A subsequent `cargo check` also passes after final shared-library changes.
-- `cargo test --manifest-path crates/ambra-mobile-bridge/Cargo.toml`: 1 host C ABI test passes; native library compilation succeeds on macOS. This does not validate JNI/Swift device linkage.
-- `cargo test --manifest-path vendor/peeroxide-dht/Cargo.toml --lib`: 389 upstream/patched tests pass, including golden byte fixtures and malformed frame limits.
-- `cd desktop && bun test`: 70 tests pass, including mobile protocol/playback/lyrics and bridge URL persistence regressions.
-- `cd desktop && bun run build`: passes TypeScript and Vite production build. Existing large-chunk advisory remains.
-- `cd mobile && bunx tsc --noEmit` and `bun run lint`: pass.
-- Expo autolinking recognizes `AmbraNetworkModule` for Apple and Android. `expo prebuild --platform ios --no-install` succeeds.
-- `python3 scripts/test-native-network.py`: passes against the built real server and native client with isolated temporary config/data/cache. Covers encrypted approval, real session access, audio upload/range, enrollment replay rejection, bridge administration denial, CLI identity/QR/list/revoke, live P2P toggles and clean process shutdown.
-- `git diff --check`: passes.
+A physical separate-network test paired Desktop with an independent Linux server, resumed after reconnect, and verified lossless WAV responses and byte ranges. Limiting UDP payloads to 1,472 bytes on a 1,500-byte IPv4 path resolved fragmentation and stalled transfers. Reusing the encrypted enrollment connection avoided competing sessions with the same device key.
 
-The initial parallel server run failed lease-release and write-behind timing tests while several builds ran concurrently. The final serialized suite passes. This does not establish stability of those tests under heavy parallel load. A transient disk-full build failure was resolved by removing task-created build artifacts; the mobile host ABI test subsequently passes.
+Same-router release-build tests used pinned Noise sessions and 2 MiB transfers. They exercised public discovery and NAT hairpinning.
 
-## Public network checks
+| Metric | Before | After |
+| --- | --- | --- |
+| Completed rounds | 2 of 4 | 10 of 10 |
+| Cold connection, one observation | 4,481 ms | 5,664 ms |
+| Successful warm connection, p50 / p95 | 1,405 / 1,405 ms, one success | 488 / 523 ms, nine successes |
+| 2 MiB throughput, p50 / p95 | 0.421 / 0.429 MiB/s | 0.433 / 0.454 MiB/s |
 
-Temporary development infrastructure used Node 24.18.1 with reference `hyperdht@6.34.1`; it is not a production dependency.
+The modified Linux and macOS fixtures completed twelve 256-socket allocation rounds each. The Linux baseline exhausted resources at 246 sockets during round four. Lifecycle fixes stopped unused background tasks and released connections and sockets on failure or cancellation. The samples support improved warm reliability and resource cleanup. Cold setup and transfer throughput varied.
 
-1. Public bootstrap/announcement and Rust-to-Node known-key Noise/UDX exact echo: passed.
-2. Public announcement from native Rust acceptor and native Rust HTTP/2 client: passed, including a 2,097,152-byte synthetic response.
-3. Node client to native acceptor: direct Noise/UDX handshake passed after endpoint-hint and duplicate-handshake patches. The Node HTTP/2 harness received a 46-byte initial frame and stalled; full streaming in this direction remains unverified.
+### Separate-network pacing and playback
 
-All peers ran on the same host/network. Public DHT traffic was real. These results do not verify separate NAT traversal, carrier-grade NAT, roaming, or cellular connectivity. No relay was configured. The authenticated relay-instruction test verifies rejection before a relay connection can be opened.
+Windows-to-macOS tests found four throughput bottlenecks in UDX: ACK-gated writes, RTT samples taken from the start of a burst, pacing credit lost while the scheduler slept, and the Windows timer interval. The adaptive write path reached 0.44 MiB/s, compared with 0.24 MiB/s originally. A fixed 1 MiB write size reached 0.47 MiB/s while raising the fixture’s p95 control latency from 1.271 to 3.152 seconds. The adaptive path kept p95 at 1.381 seconds.
 
-Reproduce the public reference echo with:
+The October 29 matched debug workload measured the effect of pacing changes during encrypted HTTP/2 transfer and concurrent control requests.
+
+| Metric | Baseline | Updated pacing |
+| --- | --- | --- |
+| Transfer rate | 0.508 MiB/s | 2.376 MiB/s |
+| API latency, p50 | 514.3 ms | 289.7 ms |
+| API latency, p95 | 622.1 ms | 762.4 ms |
+| Body delivery gaps over 250 ms | 1 | 17 |
+
+An earlier separate-network run transferred 44 MiB at 0.469 MiB/s before the October 28 changes and 0.488 MiB/s afterward. The smaller gain reflects a different revision and workload.
+
+The final physical run after the stream close-notice fix verified five fresh reconnects, six exact WAV transfers, and 20 native-confirmed controls. Median WAV transfer time fell from 19.564 to 3.486 seconds. Median fresh authenticated reconnect was 2.475 seconds, compared with 2.261 seconds originally. The final 45-second playback sample reported zero post-start buffering samples and zero cumulative underruns. Probe peak RSS rose from 36,560 to 62,320 KiB.
+
+A separate stress run completed all twelve authenticated connections across four concurrent fixture clients. Its subsequent 120-second single-stream stage transferred 314 MiB at 2.609 MiB/s while completing 307 API polls. The p50 and p95 poll latencies were 257.4 and 479.6 ms. Network conditions and workloads differed from the matched pacing test.
+
+## Other remote transports
+
+| Method | Observed result | Test limits |
+| --- | --- | --- |
+| [Router-forwarded TCP](public-tcp.md) | The public listener required authenticated admission and carried the normal encrypted API and audio traffic. | Depends on the router and upstream connectivity. |
+| [Nostr-signaled TCP](nostr-tcp-p2p.md) | Nine of nine physical TCP connections in three batches. The final five-round batch authenticated in 3.509–4.305 seconds and transferred 1.713–3.466 MiB/s. | One physical network pair. Windows WAN, mobile device, and roaming coverage was incomplete. |
+| [pwnat](pwnat.md) | A compatible isolated NAT fixture passed end-to-end. A physical hotspot-to-home test stopped before QUIC setup because no ICMP quotations reached the server. | Requires compatible NAT behavior and raw ICMP on each participating host. |
+| [Tailcat](tailcat.md) | Seven authenticated DERP audio runs transferred exact bytes at 0.415–2.409 MiB/s. In a same-session comparison, three native TCP runs reached 4.663–5.312 MiB/s. | Short, bounded transfers. No direct Tailcat upgrade was observed in the 45-second physical observation. |
+
+A restricted-network report recorded selective UDP reachability and successful native TCP on a particular network pair. Treat each result as evidence about that route. The authenticated handshake and verified application bytes established the working path.
+
+Tailcat qualification also covered authorization failure, offline deadlines, ranges, uploads, and replacement by a native transport while a response was in flight. At the time, physical iOS and Android execution and sustained relay playback remained open.
+
+## Reproduce with your own fixture
+
+Run the automated transport and server tests from the repository root.
 
 ```sh
-npm ci --prefix scripts/network-interop
-python3 scripts/network-interop/check.py
+cargo test --locked --manifest-path crates/ambra-net/Cargo.toml
+cargo test --locked --manifest-path server/Cargo.toml
+cargo test --locked --manifest-path crates/ambra-mobile-bridge/Cargo.toml
 ```
 
-Other probes are in `crates/ambra-net/examples/`. Production builds do not start Node reference processes.
+The [network smoke test](../../scripts/test-native-network.py) uses the real server and client with isolated state. The [interop scripts](../../scripts/network-interop) and [native examples](../../crates/ambra-net/examples) exercise individual paths. Early public DHT interoperability passed Rust-to-Node exact echo and Rust-to-Rust HTTP/2. The Node-to-Rust transport handshake passed, but the Node harness stalled during the HTTP/2 stream.
 
-## Performance sample
-
-Optimized synthetic loopback test:
-
-```sh
-cargo test --release --manifest-path crates/ambra-net/Cargo.toml \
-  encrypted_streaming_ranges_uploads_and_concurrent_polling_use_same_http_handlers -- --nocapture
-```
-
-Observed authentication: 3.991375 ms. An 8 MiB transfer concurrent with a 100 ms poll completed in 120.658416 ms. The test also checked a 1 MiB upload and byte-range response.
-
-Optimized public-DHT acceptor snapshot, five seconds after announcement: `ps` reported 0.0% CPU and 1,456 KiB RSS. Unstripped example executable: 7,053,488 bytes. Clean shutdown: 0.544 seconds. This is one short networking-only sample, not full-server overhead or a sustained benchmark. OS paging/compression and concurrent compilation affect these numbers.
-
-## Blocked or unperformed checks
-
-- `bash mobile/scripts/build-network.sh ios`: stops with `Full Xcode is required.` The host has Command Line Tools, not full Xcode/iOS SDKs.
-- `bash mobile/scripts/build-network.sh android`: stops with `Install cargo-ndk and Android NDK first.`
-- pwnat capability: `Raw ICMP unavailable without elevation: Operation not permitted (os error 1)`. No privilege change was attempted. Packet validation and QUIC/Noise compatibility tests are not router traversal tests.
-- Windows/Linux compilation, Android/iOS device builds, camera scanning, real music providers/audio, separate NATs, long-duration sessions, background playback, network transitions and battery measurements: not performed.
+For physical reports, record the platforms, selected transport, topology, build profile, fixture size, sample count, latency percentiles, and integrity checks. Store raw logs and test configuration privately.

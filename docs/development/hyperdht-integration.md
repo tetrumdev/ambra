@@ -18,6 +18,6 @@ Validation of the combined source on Mac:
 - Clippy for Ambra-net library/examples completed with the existing pwnat collapsible-if warning.
 - `git diff --check` passed. Repository sensitive-file guards are enforced for commit and push.
 
-The physical measurements in `overnight-report.md` and `results/` describe the original overnight tree before integration with these five origin commits. They were not rerun for the combined commit. The original report's unrelated server/desktop failures, missing external interop fixtures, and unverified physical topologies remain applicable unless separately retested.
+The original HyperDHT measurements in the [validation report](../networking/validation.md) describe the original overnight tree before integration with these five origin commits. They were not rerun for the combined commit. The original report's unrelated server/desktop failures, missing external interop fixtures, and unverified physical topologies remain applicable unless separately retested.
 
 Kubuntu's pre-integration worktree was checked against the saved overnight commit: all 45 changed files matched and there were no additional changes. Its duplicate uncommitted snapshot can therefore be preserved in a named Git stash while fast-forwarding to the published combined commit, without modifying application configuration or running services.

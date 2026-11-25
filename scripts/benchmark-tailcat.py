@@ -32,7 +32,7 @@ def main():
     parser.add_argument("--profile", type=Path, required=True)
     parser.add_argument("--server-key", required=True)
     parser.add_argument("--audio", type=Path, required=True)
-    parser.add_argument("--host", default="operator@server.example")
+    parser.add_argument("--host", required=True, help="SSH host used to collect socket diagnostics")
     parser.add_argument("--mode", choices=["native", "tailcat", "roam"], required=True)
     parser.add_argument("--rounds", type=int, default=1)
     parser.add_argument("--output", type=Path, required=True)
@@ -48,7 +48,7 @@ def main():
             raise RuntimeError("Physical baseline requires WARP disconnected")
         route = subprocess.check_output(["route", "-n", "get", "default"], text=True)
         if "interface: en0" not in route:
-            raise RuntimeError("Physical baseline requires school Wi-Fi en0")
+            raise RuntimeError("Physical baseline requires the Wi-Fi interface en0")
     environment = os.environ.copy()
     environment["AMBRA_BENCH_AUDIO"] = str(args.audio.resolve())
     environment["RUST_LOG"] = "ambra_net=debug"

@@ -4,7 +4,7 @@ Ambra embeds the real Tailcat implementation as its last connection method. Norm
 users install only Ambra. There is no Tailcat CLI, Tailscale account, VPN, daemon,
 helper executable, administrative forwarding service, or separate music protocol.
 
-The verified physical combination is a macOS client on school Wi-Fi and a Kubuntu
+The verified physical combination is a macOS client and a Linux
 server on home Wi-Fi. Windows GNU networking builds, but Windows runtime and MSVC
 release packaging remain unverified. Android ARM64, ARMv7, and x86-64 native
 libraries build with NDK r27c/API 24; Android device operation remains unverified.
@@ -183,7 +183,8 @@ cargo build --locked --manifest-path server/Cargo.toml
 cargo build --locked --manifest-path crates/ambra-net/Cargo.toml --example tcp_punch_probe
 python3 scripts/benchmark-tailcat.py --probe /absolute/tcp_punch_probe \
   --profile /private/enrolled-profile --server-key PUBLIC_AMBRA_KEY \
-  --audio /private/music-excerpt.flac --mode native --physical --output native.json
+  --host operator@server.example --audio /private/music-excerpt.flac \
+  --mode native --physical --output native.json
 # Repeat with --mode tailcat or --mode roam.
 # AMBRA_BENCH_IDLE_SECONDS=45 observes path discovery before audio transfer.
 # TS_DEBUG_NEVER_DIRECT_UDP=true TS_DEBUG_ALWAYS_USE_DERP=true forces a DERP test.
@@ -196,7 +197,7 @@ the operator's original processes and network state afterward. SSH is for proces
 control and socket inspection; it must not forward benchmark application traffic.
 
 Sanitized physical reports and acceptance gaps are in
-[the results directory](results/tailcat-2026-11-13/). HTTP byte validation is not
+[networking validation](validation.md). HTTP byte validation is not
 audible playback validation. Direct Tailcat, physical mobile roaming, Windows
 runtime, long-duration private-DERP throughput, and arbitrary network interruptions
 remain distinct from the demonstrated results.

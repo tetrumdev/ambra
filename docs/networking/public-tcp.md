@@ -1,4 +1,4 @@
-# Router-forwarded public TCP (November 6, 2026)
+# Router-forwarded public TCP
 
 ## Why P2P stopped working
 

@@ -30,7 +30,7 @@ sys.dont_write_bytecode = True
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("host")
-    parser.add_argument("--remote-root", default="/home/example/ambra")
+    parser.add_argument("--remote-root", required=True, help="Absolute Ambra checkout path on the SSH host")
     parser.add_argument("--probe", type=Path)
     parser.add_argument("--remote-server", help="Absolute checkout-built server executable on the SSH host")
     parser.add_argument("--transport", choices=("hyperdht", "pwnat"), default="hyperdht")
