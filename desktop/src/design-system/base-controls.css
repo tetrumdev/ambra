@@ -1,10 +1,46 @@
-/* Keep keyboard focus visible on glass, dark surfaces and artwork. */
-:where(
-    button, a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"]),
-    [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]
-):focus-visible {
-    outline: var(--focus-width) solid var(--focus-ring);
-    outline-offset: var(--focus-offset);
+/* No focus rings anywhere, including WebKit's default one. */
+:focus,
+:focus-visible {
+    outline: none;
+}
+
+/* The gliding caret (utils/smoothCaret.ts) stands in for the native one. */
+input[data-smooth-caret] {
+    caret-color: transparent;
+}
+
+.smoothCaret {
+    position: absolute;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.smoothCaretBar {
+    position: absolute;
+    left: 0;
+    width: 2px;
+    border-radius: 1px;
+    transition: transform var(--motion-hover);
+}
+
+:root[data-reduce-motion] .smoothCaretBar {
+    transition: none;
+}
+
+/* Like the native caret, it disappears while another app has focus. */
+:root[data-window-inactive] .smoothCaret {
+    visibility: hidden;
+}
+
+.smoothCaretMirror {
+    position: fixed;
+    top: 0;
+    left: -10000px;
+    display: inline-block;
+    line-height: normal;
+    white-space: pre;
+    visibility: hidden;
+    pointer-events: none;
 }
 
 .uiButton {

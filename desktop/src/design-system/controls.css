@@ -76,10 +76,6 @@
     animation: none;
 }
 
-.uiMenu :focus-visible {
-    outline-offset: calc(-1 * (var(--focus-width) + 1px));
-}
-
 /* Output and dropdown options share a rounded highlight and a check for the active choice. */
 .uiMenuOption {
     display: grid;

@@ -25,9 +25,6 @@
     --border-control: #535353;
     --border-input: #666;
     --border-hover: #8a8a8a;
-    --focus-ring: var(--accent-warm);
-    --focus-width: 2px;
-    --focus-offset: 2px;
 
     --glass-control: rgb(22 22 22 / 0.4);
     --glass-menu: rgb(29 29 29 / 0.85);
@@ -74,10 +71,4 @@
     --glass-dialog: #1a1a1a;
     --glass-blur: none;
     --glass-dialog-blur: none;
-}
-
-@media (forced-colors: active) {
-    :root {
-        --focus-ring: Highlight;
-    }
 }

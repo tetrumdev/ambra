@@ -17,6 +17,7 @@ import { mark, perfEnabled, setProcessOffset, startPerfTracing } from "./utils/p
 import { desktopPlatform, installWindowDragRegions } from "./utils/windowChrome";
 import { startDownloads } from "./utils/offlineDownloads";
 import { detectGraphicsTier, followWindowFocus } from "./utils/graphicsTier";
+import { installSmoothCaret } from "./utils/smoothCaret";
 import "./lowGraphics.css";
 
 mark("js-start");
@@ -35,6 +36,7 @@ installTooltips();
 startDownloads();
 detectGraphicsTier();
 followWindowFocus();
+installSmoothCaret();
 window.addEventListener("keydown", (event) => {
   if (isBrowserFindShortcut(event)) blockBrowserDefault(event);
 }, true);

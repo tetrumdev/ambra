@@ -224,7 +224,7 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await click(`${latestRow} .coverImgContainer`);
     expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
 
-    await click("#songName");
+    await click("#albumName button");
     expect(viewport.querySelector(".albumView h1")?.textContent).toBe("Album");
     expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
     await click('.pageHistoryControls [aria-label="Back"]');

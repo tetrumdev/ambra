@@ -152,9 +152,6 @@
     opacity: 1;
 }
 
-.playbackSidebar button:focus-visible {
-    outline-offset: -2px;
-}
 
 .playbackSidebarPanel {
     position: relative;

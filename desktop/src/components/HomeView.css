@@ -213,9 +213,6 @@
     text-underline-offset: 3px;
 }
 
-.homeCardButton:focus-visible .homeArtwork {
-    box-shadow: 0 0 0 2px var(--ink);
-}
 
 .homeCardTitle,
 .homeCardDetail {

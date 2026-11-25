@@ -416,9 +416,6 @@
     scale: 1;
 }
 
-#queueBtn:focus-visible {
-    outline-offset: -2px;
-}
 
 #queueImg {
     display: block;
