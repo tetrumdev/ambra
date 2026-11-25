@@ -30,20 +30,11 @@
 }
 
 .devAudioControls {
-    position: fixed;
-    z-index: 20;
-    box-sizing: border-box;
     flex-direction: column;
     display: flex;
     overflow-y: auto;
-    gap: 4px;
+    gap: var(--space-1);
     padding: 10px;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    color: var(--ink);
-    background: rgba(29, 29, 29, 0.7);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
 }
 
 .audioDeviceList {
@@ -57,45 +48,9 @@
 .audioDeviceHeading {
     padding: 0 8px 4px;
     text-align: left;
-    color: #a3a2a3;
-    font-family: "Stack Sans Text", sans-serif;
+    color: var(--ink-muted);
+    font-family: var(--font-sans);
     font-size: 0.7rem;
-}
-
-/* Rows like the search service menu: rounded #303030 highlight, check on the active one. */
-.audioDeviceOption {
-    display: grid;
-    grid-template-columns: 14px minmax(0, 1fr);
-    align-items: center;
-    gap: 8px;
-    height: 30px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: 8px;
-    color: var(--ink);
-    background: transparent;
-    font-family: "Stack Sans Text", sans-serif;
-    font-size: 0.8rem;
-    text-align: left;
-}
-
-.audioDeviceOption:hover:not(:disabled),
-.audioDeviceOption:focus-visible {
-    background: #303030;
-}
-
-.audioDeviceOption:disabled {
-    color: #a3a2a3;
-}
-
-.audioDeviceCheck {
-    width: 12px;
-    height: 12px;
-}
-
-.audioDeviceOption[aria-checked="true"] .audioDeviceCheck,
-.audioDeviceOption[aria-current="true"] .audioDeviceCheck {
-    background: url("/check.svg") center / contain no-repeat;
 }
 
 /* With a server, each output has a box of its own, over the check column: ticking it adds the
@@ -105,8 +60,8 @@
     display: grid;
 }
 
-.audioDeviceRow:hover .audioDeviceOption:not(:disabled) {
-    background: #303030;
+.audioDeviceRow:hover .uiMenuOption:not(:disabled) {
+    background: var(--surface-selected);
 }
 
 .audioDeviceToggle {
@@ -138,7 +93,7 @@
     box-sizing: border-box;
     width: 12px;
     height: 12px;
-    border: 1.5px solid #a3a2a3;
+    border: 1.5px solid var(--ink-muted);
     border-radius: 3px;
 }
 
@@ -168,7 +123,7 @@
 }
 
 /* A stage's outputs are shown, not picked: no highlight under the pointer. */
-.audioDeviceRow:hover .audioDeviceOption.audioDeviceFixed {
+.audioDeviceRow:hover .uiMenuOption.audioDeviceFixed {
     background: transparent;
 }
 
@@ -185,11 +140,11 @@
 .audioStageAdd {
     box-sizing: border-box;
     height: 30px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    color: #b3b3b3;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
+    color: var(--ink-secondary);
     background: transparent;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     font-size: 0.8rem;
     font-weight: 600;
 }
@@ -230,10 +185,6 @@
     white-space: nowrap;
 }
 
-.audioStagePick:focus-visible {
-    outline: none;
-}
-
 .audioStageIconButton {
     display: grid;
     flex-shrink: 0;
@@ -242,7 +193,7 @@
     height: 24px;
     padding: 0;
     border: 0;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: transparent;
     opacity: 0.5;
 }
@@ -288,7 +239,7 @@
     width: calc(100% - 16px);
     margin: 6px 8px;
     border: 0;
-    border-top: 1px solid #2f2f2f;
+    border-top: 1px solid var(--border-subtle);
 }
 
 .audioStageEditor {
@@ -297,7 +248,7 @@
     gap: 6px;
     width: 260px;
     padding: 4px 0;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
 }
 
 .audioStageEditorHeader {
@@ -313,25 +264,7 @@
 
 .audioStageName,
 .audioStageLufs input {
-    box-sizing: border-box;
-    height: 34px;
     margin: 0 8px 4px;
-    padding: 0 12px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    outline: none;
-    color: var(--ink);
-    background: none;
-    color-scheme: dark;
-    font: inherit;
-    font-size: 0.8rem;
-    user-select: text;
-    -webkit-user-select: text;
-}
-
-.audioStageName:focus-visible,
-.audioStageLufs input:focus-visible {
-    border-color: rgb(140, 140, 140);
 }
 
 .audioStageChips {
@@ -362,10 +295,10 @@
 .audioStageLufs {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     padding-right: 8px;
-    color: #a3a2a3;
-    font-size: 0.75rem;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .audioStageLufs input {
@@ -378,38 +311,6 @@
     justify-content: flex-end;
     gap: 6px;
     padding: 6px 8px 0;
-}
-
-.audioStageCancel,
-.audioStageSave {
-    height: 32px;
-    padding: 0 16px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    color: var(--ink);
-    background: transparent;
-    font: inherit;
-    font-size: 0.8rem;
-}
-
-.audioStageCancel:hover,
-.audioStageCancel:focus-visible {
-    border-color: rgb(140, 140, 140);
-}
-
-/* The primary action, as in the app's other dialogs. */
-.audioStageSave {
-    border-color: transparent;
-    color: black;
-    background: var(--ink);
-}
-
-.audioStageSave:hover:not(:disabled) {
-    background: #dedede;
-}
-
-.audioStageSave:disabled {
-    opacity: var(--disabled-opacity);
 }
 
 .audioDeviceName {
@@ -428,13 +329,12 @@
     appearance: none;
     -webkit-appearance: none;
     background: transparent;
-    outline: none;
     cursor: default;
 }
 
 .volumeSlider::-webkit-slider-runnable-track {
     height: 4px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: linear-gradient(
         to right,
         var(--ink) 0%,
@@ -458,7 +358,7 @@
 
 .volumePercentage {
     min-width: 35px;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     font-size: 0.65rem;
     font-variant-numeric: tabular-nums;
     line-height: 1;
@@ -482,7 +382,7 @@
 #extraCtrls #queueBtn {
     position: relative;
     align-self: flex-start;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
 }
 
 /* Open, the queue shows it the way the player's view picker does: the icon at full strength,
@@ -517,8 +417,7 @@
 }
 
 #queueBtn:focus-visible {
-    outline: 1px solid #b3b3b3;
-    outline-offset: -1px;
+    outline-offset: -2px;
 }
 
 #queueImg {
@@ -558,10 +457,10 @@
     min-width: 92px;
     padding: 5px 8px;
     border: 1px solid var(--ink);
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     color: var(--ink);
     background: transparent;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 650;
     letter-spacing: 0.08em;
@@ -573,5 +472,5 @@
     cursor: wait;
 }
 
-.audioControlsError { color: var(--error-text); max-width: 260px; font-size: 12px; overflow-wrap: anywhere; }
+.audioControlsError { color: var(--error-text); max-width: 260px; font-size: var(--text-caption); overflow-wrap: anywhere; }
 .audioControlsNote { color: #aaa; font-size: 11px; margin: 4px 8px; max-width: 260px; }

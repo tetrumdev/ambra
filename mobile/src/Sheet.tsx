@@ -5,11 +5,10 @@ import Animated, { cancelAnimation, Easing, useAnimatedStyle, useSharedValue, wi
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { scheduleOnRN } from "react-native-worklets";
 import { BlurView } from "expo-blur";
-import { colors, haptic } from "./theme";
+import { colors, haptic, motion, radius, space } from "./theme";
 
-const rise = { damping: 32, stiffness: 340, mass: 1, overshootClamping: true };
-const settle = { damping: 22, stiffness: 300, mass: 0.8 };
-const fall = { duration: 200, easing: Easing.in(Easing.quad) };
+const fall = { duration: motion.sheetOut, easing: Easing.in(Easing.quad) };
+const flick = { duration: motion.sheetFlick, easing: Easing.out(Easing.quad) };
 
 /**
  * A black sheet that rises over everything, follows a drag on its grip and drops away when
@@ -36,7 +35,7 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
   const passed = useSharedValue(false);
 
   useEffect(() => {
-    shown.set(withSpring(1, rise));
+    shown.set(withSpring(1, motion.sheetIn));
     return () => { cancelAnimation(shown); cancelAnimation(drag); };
   }, [shown, drag]);
   const close = useCallback(() => {
@@ -67,11 +66,11 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
       passed.set(false);
       if (!event.canceled && !closing.get() && (event.translationY > Math.min(120, height.get() * 0.3) || (event.translationY > 20 && event.velocityY > 700))) {
         closing.set(true);
-        shown.set(withTiming(0, { duration: 180, easing: Easing.out(Easing.quad) }, finished => { if (finished) scheduleOnRN(onClose); }));
-      } else drag.set(withSpring(0, settle));
+        shown.set(withTiming(0, flick, finished => { if (finished) scheduleOnRN(onClose); }));
+      } else drag.set(withSpring(0, motion.sheetSettle));
     },
     onFinalize: event => {
-      if (event.canceled) drag.set(withSpring(0, settle));
+      if (event.canceled) drag.set(withSpring(0, motion.sheetSettle));
     },
   });
 
@@ -94,7 +93,7 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
         accessibilityLabel={label}
         onAccessibilityEscape={close}
         onLayout={event => height.set(event.nativeEvent.layout.height)}
-        style={[styles.sheet, tall ? { height: screenHeight - insets.top - 16 } : { maxHeight: screenHeight - insets.top - 16 }, { paddingBottom: insets.bottom + 12 }, variant === "menu" && [styles.menu, { bottom: insets.bottom + 12 }], sheetStyle]}
+        style={[styles.sheet, tall ? { height: screenHeight - insets.top - space.lg } : { maxHeight: screenHeight - insets.top - space.lg }, { paddingBottom: insets.bottom + space.md }, variant === "menu" && [styles.menu, { bottom: insets.bottom + space.md }], sheetStyle]}
       >
         {variant === "menu" && <BlurView pointerEvents="none" tint="dark" intensity={60} style={StyleSheet.absoluteFill} />}
         {dragAnywhere
@@ -109,21 +108,33 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
 }
 
 const styles = StyleSheet.create({
-  backdrop: { backgroundColor: "rgba(0, 0, 0, 0.7)" },
+  backdrop: { backgroundColor: colors.scrim },
   sheet: {
     position: "absolute",
     left: 0,
     right: 0,
     bottom: 0,
     backgroundColor: colors.black,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
+    borderTopLeftRadius: radius.sheet,
+    borderTopRightRadius: radius.sheet,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
     borderBottomWidth: 0,
-    borderColor: "#2f2f2f",
-    paddingHorizontal: 16,
+    borderColor: colors.line,
+    paddingHorizontal: space.lg,
   },
   handle: { width: 36, height: 4, borderRadius: 2, backgroundColor: "#3a3a3a", alignSelf: "center", marginTop: 8, marginBottom: 6 },
-  menu: { left: 16, right: 16, borderRadius: 12, borderTopLeftRadius: 12, borderTopRightRadius: 12, borderWidth: 1, borderBottomWidth: 1, backgroundColor: "rgba(19, 19, 19, 0.82)", paddingHorizontal: 0, paddingBottom: 4, overflow: "hidden" },
+  menu: {
+    left: space.lg,
+    right: space.lg,
+    borderRadius: radius.md,
+    borderTopLeftRadius: radius.md,
+    borderTopRightRadius: radius.md,
+    borderWidth: 1,
+    borderBottomWidth: 1,
+    backgroundColor: colors.menu,
+    paddingHorizontal: 0,
+    paddingBottom: space.xs,
+    overflow: "hidden",
+  },
 });

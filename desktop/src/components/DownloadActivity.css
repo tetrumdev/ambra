@@ -5,7 +5,7 @@
     z-index: 12;
     max-width: calc(100vw - 40px);
     color: var(--ink);
-    font: 13px/1.4 "Stack Sans Text", Inter, sans-serif;
+    font: 13px/1.4 var(--font-sans);
     text-align: left;
 }
 
@@ -13,13 +13,12 @@ body:has(.updateNotice) .downloadActivity {
     bottom: calc(var(--player-height, 90px) + 72px);
 }
 
-.downloadActivitySummary,
-.downloadActivityPanel {
+.downloadActivitySummary {
     box-sizing: border-box;
-    border: 1px solid #535353;
-    background: rgba(22, 22, 22, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid var(--border-control);
+    background: var(--glass-menu);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.25);
 }
 
@@ -31,7 +30,7 @@ body:has(.updateNotice) .downloadActivity {
     max-width: 100%;
     min-height: 42px;
     padding: 10px 16px;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     overflow: hidden;
     color: inherit;
     font: inherit;
@@ -39,7 +38,7 @@ body:has(.updateNotice) .downloadActivity {
 
 .downloadActivitySummary:hover,
 .downloadActivitySummary:focus-visible {
-    border-color: #8a8a8a;
+    border-color: var(--ink-subtle);
 }
 
 .downloadActivitySummary > img {
@@ -49,7 +48,7 @@ body:has(.updateNotice) .downloadActivity {
 }
 
 .downloadActivityCount {
-    color: #bdbdbd;
+    color: var(--ink-secondary);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
 }
@@ -68,7 +67,7 @@ body:has(.updateNotice) .downloadActivity {
     width: 100%;
     height: 4px;
     border: 0;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     overflow: hidden;
     background: #393939;
     color: var(--ink);
@@ -80,12 +79,12 @@ body:has(.updateNotice) .downloadActivity {
 
 .downloadActivity progress::-webkit-progress-value {
     background: var(--ink);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
 }
 
 .downloadActivity progress::-moz-progress-bar {
     background: var(--ink);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
 }
 
 .downloadActivitySummary > progress {
@@ -99,7 +98,7 @@ body:has(.updateNotice) .downloadActivity {
     width: min(360px, calc(100vw - 40px));
     margin-bottom: 8px;
     padding: 16px;
-    border-radius: 16px;
+    box-shadow: 0 8px 28px rgb(0 0 0 / 0.25);
     max-height: max(160px, calc(100dvh - var(--player-height, 90px) - 100px));
     overflow-y: auto;
 }
@@ -109,29 +108,15 @@ body:has(.updateNotice) .downloadActivity {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
 }
 
 .downloadActivityPanel h2 {
     margin: 0;
-    font-size: 16px;
+    font-size: var(--text-body);
     font-weight: 600;
 }
 
-.downloadActivityPanel button {
-    padding: 6px 10px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    font-size: 12px;
-}
-
-.downloadActivityPanel button:hover,
-.downloadActivityPanel button:focus-visible {
-    background: #303030;
-}
 
 .downloadActivityPanel ul {
     display: flex;
@@ -145,7 +130,7 @@ body:has(.updateNotice) .downloadActivity {
 .downloadActivityPanel li {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
 }
 
@@ -157,7 +142,7 @@ body:has(.updateNotice) .downloadActivity {
 
 .downloadActivityDestination small {
     margin-left: 8px;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 11px;
     font-weight: 400;
 }
@@ -165,8 +150,8 @@ body:has(.updateNotice) .downloadActivity {
 .downloadActivityMuted,
 .downloadActivityTrack,
 .downloadActivityPanel footer {
-    color: #bdbdbd;
-    font-size: 12px;
+    color: var(--ink-secondary);
+    font-size: var(--text-caption);
 }
 
 .downloadActivityRow > :last-child {
@@ -183,7 +168,7 @@ body:has(.updateNotice) .downloadActivity {
 
 .downloadActivityError {
     color: var(--error-text);
-    font-size: 12px;
+    font-size: var(--text-caption);
 }
 
 .downloadActivityError p {
@@ -195,7 +180,7 @@ body:has(.updateNotice) .downloadActivity {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
+    gap: var(--space-3);
     padding-top: 12px;
     border-top: 1px solid #393939;
 }

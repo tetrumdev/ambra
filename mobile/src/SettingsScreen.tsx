@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import Constants from "expo-constants";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ServiceAuthStatus } from "../../desktop/src/api/server";
@@ -7,12 +7,13 @@ import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
 import { serverInfo, serviceStatus } from "./catalog";
 import { networkStatus } from "./client";
 import { loadServicePreferences, services, servicePreferences, setServiceEnabled, subscribeServicePreferences, type Service } from "./servicePreferences";
+import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
 import { useNavigation } from "./navigation";
 import { useDownloads } from "./downloads";
 import { signIn, signOut } from "./playlistTools";
 import { refreshLibrary } from "./library";
-import { colors, fonts } from "./theme";
+import { colors, fonts, radius, space, textSize } from "./theme";
 
 export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: number; onChangeServer: () => void }) {
   const insets = useSafeAreaInsets();
@@ -80,9 +81,7 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
     <View style={styles.card}>
       <Text style={styles.name}>{server}</Text>
       <Text style={styles.detail}>{connection}</Text>
-      <Touchable accessibilityRole="button" accessibilityLabel="Connect to a different server" onPress={onChangeServer} style={styles.button}>
-        <Text style={styles.buttonText}>Change server</Text>
-      </Touchable>
+      <Button title="Change server" accessibilityLabel="Connect to a different server" onPress={onChangeServer} style={styles.button} />
     </View>
     <Text style={styles.note}>Scan another server’s QR code or paste its pairing link. You can cancel and return to this server.</Text>
     <Text accessibilityRole="header" style={styles.sectionTitle}>Music services</Text>
@@ -93,9 +92,9 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
           <Text style={styles.detail}>{!enabled[service] ? "Off on this phone" : connected ? connected[service] ? "Connected on server" : "Not connected on server" : "Checking server…"}</Text>
         </View>
         {connected && (connected[service]
-          ? <Touchable accessibilityRole="button" accessibilityLabel={`Sign out of ${musicProviderName(service)}`} disabled={busy !== null || signingIn !== null} onPress={() => disconnect(service)} style={styles.pill}><Text style={styles.pillText}>Sign out</Text></Touchable>
-          : <Touchable accessibilityRole="button" accessibilityLabel={`Sign in to ${musicProviderName(service)}`} disabled={signingIn !== null} onPress={() => startSignIn(service)} style={[styles.pill, styles.pillPrimary]}><Text style={[styles.pillText, styles.pillPrimaryText]}>{signingIn === service ? "Waiting…" : "Sign in"}</Text></Touchable>)}
-        <Switch accessibilityLabel={`Use ${musicProviderName(service)} on this phone`} value={enabled[service]} disabled={busy !== null} onValueChange={value => toggle(service, value)} trackColor={{ false: "#343434", true: "#876428" }} thumbColor="white" />
+          ? <Button title="Sign out" accessibilityLabel={`Sign out of ${musicProviderName(service)}`} disabled={busy !== null || signingIn !== null} onPress={() => disconnect(service)} />
+          : <Button title={signingIn === service ? "Waiting…" : "Sign in"} variant="primary" accessibilityLabel={`Sign in to ${musicProviderName(service)}`} disabled={signingIn !== null} onPress={() => startSignIn(service)} />)}
+        <Switch accessibilityLabel={`Use ${musicProviderName(service)} on this phone`} value={enabled[service]} disabled={busy !== null} onValueChange={value => toggle(service, value)} trackColor={{ false: "#343434", true: "#876428" }} thumbColor={colors.text} />
       </View>)}
     </View>
     <Text style={styles.note}>Switches hide a service’s songs and exclude it from search on this phone. They do not sign out the server, stop another device, or change the shared queue.</Text>
@@ -103,10 +102,10 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
       <Text style={styles.note}>Finish signing in to {musicProviderName(signingIn)} in the browser.</Text>
       {paste && <>
         <Text style={styles.note}>After signing in to Tidal, copy the final address from the browser’s address bar and paste it here.</Text>
-        <TextInput value={pasted} onChangeText={setPasted} placeholder="https://tidal.com/android/login/auth?code=…" placeholderTextColor={colors.faint} autoCapitalize="none" autoCorrect={false} keyboardAppearance="dark" style={styles.input} accessibilityLabel="Tidal sign-in address" />
-        <Touchable accessibilityRole="button" disabled={!pasted.trim()} onPress={() => void paste(pasted).catch(failure => setError(failure instanceof Error ? failure.message : String(failure)))} style={styles.button}><Text style={styles.buttonText}>Finish sign-in</Text></Touchable>
+        <Field value={pasted} onChangeText={setPasted} placeholder="https://tidal.com/android/login/auth?code=…" autoCapitalize="none" autoCorrect={false} style={styles.input} accessibilityLabel="Tidal sign-in address" />
+        <Button title="Finish sign-in" disabled={!pasted.trim()} onPress={() => void paste(pasted).catch(failure => setError(failure instanceof Error ? failure.message : String(failure)))} style={styles.button} />
       </>}
-      <Touchable accessibilityRole="button" onPress={cancelSignIn} style={styles.button}><Text style={styles.buttonText}>Cancel</Text></Touchable>
+      <Button title="Cancel" onPress={cancelSignIn} style={styles.button} />
     </View>}
     {serviceMessage && <Text accessibilityRole="alert" style={styles.note}>{serviceMessage}</Text>}
     <Text style={styles.note}>Sign in here or on desktop. Credentials stay on your server.</Text>
@@ -114,9 +113,7 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
     <View style={styles.card}>
       <Text style={styles.name}>{phone.size} {phone.size === 1 ? "song" : "songs"} on this phone</Text>
       <Text style={styles.detail}>{(downloadedBytes / 1024 ** 3).toFixed(2)} GB, encrypted{active ? ` · downloading ${active.done + 1} of ${active.total}` : ""}</Text>
-      <Touchable accessibilityRole="button" onPress={() => push({ kind: "downloads" })} style={styles.button}>
-        <Text style={styles.buttonText}>Manage downloads</Text>
-      </Touchable>
+      <Button title="Manage downloads" onPress={() => push({ kind: "downloads" })} style={styles.button} />
     </View>
     <Text style={styles.note}>Downloaded songs play without a server. They are encrypted with this phone’s own key, so the files can’t be copied out and played elsewhere.</Text>
     {loading && <ActivityIndicator color={colors.muted} style={styles.loading} />}
@@ -127,27 +124,23 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 38 },
-  intro: { color: colors.muted, fontFamily: fonts.sans, fontSize: 14, marginTop: 8, marginBottom: 12 },
-  sectionTitle: { color: "white", fontFamily: fonts.sans, fontSize: 18, fontWeight: "600", marginTop: 28, marginBottom: 12 },
-  card: { backgroundColor: "#151515", borderColor: "#2f2f2f", borderWidth: StyleSheet.hairlineWidth, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 8 },
-  name: { color: "white", fontFamily: fonts.sans, fontSize: 16, marginTop: 8 },
-  detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13, marginTop: 5, marginBottom: 8 },
-  note: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13, lineHeight: 20, marginTop: 12 },
-  button: { minHeight: 44, justifyContent: "center", alignItems: "center", backgroundColor: "#292929", borderRadius: 8, marginVertical: 8 },
-  buttonText: { color: "white", fontFamily: fonts.sans, fontSize: 14, fontWeight: "500" },
-  service: { flexDirection: "row", alignItems: "center", minHeight: 72, gap: 16 },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: textSize.page },
+  intro: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, marginTop: 8, marginBottom: 12 },
+  sectionTitle: { color: colors.text, fontFamily: fonts.sans, fontSize: 18, fontWeight: "600", marginTop: 28, marginBottom: 12 },
+  card: { backgroundColor: colors.field, borderColor: colors.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
+  name: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.body, marginTop: 8 },
+  detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, marginTop: 5, marginBottom: 8 },
+  note: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, marginTop: 12 },
+  button: { marginVertical: 8 },
+  buttonText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.small, fontWeight: "500" },
+  service: { flexDirection: "row", alignItems: "center", minHeight: 72, gap: space.lg },
   serviceText: { flex: 1 },
   divider: { borderTopColor: colors.line, borderTopWidth: StyleSheet.hairlineWidth },
-  errorBox: { marginTop: 20, gap: 8 },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 14 },
+  errorBox: { marginTop: 20, gap: space.sm },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.small },
   retry: { alignSelf: "flex-start", paddingVertical: 12, paddingRight: 24 },
   loading: { marginTop: 16 },
-  pill: { minHeight: 34, paddingHorizontal: 14, borderRadius: 100, borderWidth: 1, borderColor: "#3a3a3a", alignItems: "center", justifyContent: "center" },
-  pillPrimary: { backgroundColor: "white", borderColor: "white" },
-  pillText: { color: "white", fontFamily: fonts.sans, fontSize: 13, fontWeight: "600" },
-  pillPrimaryText: { color: "black" },
-  signIn: { marginTop: 12, gap: 4 },
-  input: { minHeight: 44, borderRadius: 10, borderWidth: 1, borderColor: "#2f2f2f", backgroundColor: "#151515", color: "white", fontFamily: fonts.sans, fontSize: 14, paddingHorizontal: 12, marginTop: 8 },
-  version: { color: colors.faint, fontFamily: fonts.sans, fontSize: 12, marginTop: 32 },
+  signIn: { marginTop: 12, gap: space.xs },
+  input: { marginTop: 8 },
+  version: { color: colors.faint, fontFamily: fonts.sans, fontSize: textSize.caption, marginTop: 32 },
 });

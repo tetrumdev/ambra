@@ -1,10 +1,8 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * Ambra's own "Reduce motion" setting (Settings → Player), which makes transitions instant.
- * Deliberately not the system's prefers-reduced-motion: people turn system animations off to
- * make their machine feel snappier, not to stop the player moving. Stylesheets read it as
- * `:root[data-reduce-motion]`.
+ * Desktop uses the Reduce motion setting in Settings → Player. The browser remote
+ * uses the system preference. Stylesheets read `:root[data-reduce-motion]`.
  */
 let reduced = false;
 const listeners = new Set<() => void>();

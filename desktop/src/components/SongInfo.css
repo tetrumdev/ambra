@@ -5,7 +5,7 @@
     min-width: 0;
     max-width: 100%;
     overflow: visible;
-    font-family: "Stack Sans Text";
+    font-family: var(--font-sans);
     display: flex;
     flex-direction: column;
     text-align: left;
@@ -21,7 +21,7 @@
 .songNameRow {
     display: flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--space-1);
     width: fit-content;
     max-width: 100%;
     min-width: 0;
@@ -39,7 +39,7 @@
     background: transparent;
     color: rgba(255, 255, 255, 0.5);
     opacity: 0;
-    transition: opacity 150ms ease, color 150ms ease;
+    transition: opacity var(--motion-feedback), color var(--motion-feedback);
 }
 
 .songMenuButton svg {

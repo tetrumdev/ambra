@@ -1,7 +1,11 @@
 import React from "react";
+import "../design-system/tokens.css";
+import "../design-system/fonts.css";
+import "../design-system/base-controls.css";
 import ReactDOM from "react-dom/client";
 import { connect } from "./client";
 import { RemoteApp } from "./RemoteApp";
+import { setReducedMotion } from "../utils/reducedMotion";
 import "./remote.css";
 
 // A phone has no console to read, so anything that breaks the page is shown on it.
@@ -11,6 +15,10 @@ function showError(error: unknown) {
 }
 window.addEventListener("error", event => showError(event.error ?? event.message));
 window.addEventListener("unhandledrejection", event => showError(event.reason));
+
+const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+setReducedMotion(motionPreference.matches);
+motionPreference.addEventListener?.("change", event => setReducedMotion(event.matches));
 
 class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { failed: boolean }> {
   state = { failed: false };

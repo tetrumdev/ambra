@@ -5,7 +5,7 @@ import { Icon } from "./Icons";
 import { phoneEndpointInfo, subscribePhoneEndpoint } from "./phoneEndpoint";
 import { PHONE_DEVICE_ID } from "./phonePlayback";
 import { Sheet } from "./Sheet";
-import { colors, fonts, haptic } from "./theme";
+import { colors, fonts, haptic, space, textSize } from "./theme";
 import { Touchable } from "./Touchable";
 
 type Row = { output: Output; heading: string; disabled: boolean; detail?: string };
@@ -90,7 +90,7 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
                 <Text numberOfLines={1} style={[styles.device, selected && styles.selected]}>{item.output.deviceName}</Text>
                 {item.detail && <Text style={styles.detail}>{item.detail}</Text>}
               </View>
-              <View style={styles.check}>{waiting ? <ActivityIndicator color="white" size="small" /> : selected ? <Icon name="check" size={16} /> : null}</View>
+              <View style={styles.check}>{waiting ? <ActivityIndicator color={colors.text} size="small" /> : selected ? <Icon name="check" size={16} /> : null}</View>
             </Touchable>
           </View>;
         })}
@@ -102,21 +102,21 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
 }
 
 const styles = StyleSheet.create({
-  title: { fontFamily: fonts.serif, color: "white", fontSize: 32, fontWeight: "500", paddingHorizontal: 8, paddingTop: 6, paddingBottom: 4 },
+  title: { fontFamily: fonts.serif, color: colors.text, fontSize: 32, fontWeight: "500", paddingHorizontal: 8, paddingTop: 6, paddingBottom: 4 },
   list: { flexGrow: 0 },
   listContent: { paddingBottom: 8 },
-  heading: { fontFamily: fonts.sans, fontSize: 12, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", color: colors.secondary, paddingHorizontal: 8, paddingTop: 18, paddingBottom: 6 },
-  row: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, borderCurve: "continuous" },
+  heading: { fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", color: colors.secondary, paddingHorizontal: 8, paddingTop: 18, paddingBottom: 6 },
+  row: { minHeight: 56, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 14, borderCurve: "continuous" },
   selectedRow: { backgroundColor: "rgba(255, 255, 255, 0.06)" },
   check: { width: 22, alignItems: "center" },
-  name: { flex: 1, gap: 4 },
-  device: { fontFamily: fonts.sans, fontSize: 16, color: colors.secondary },
-  selected: { color: "white", fontWeight: "600" },
-  detail: { fontFamily: fonts.sans, color: colors.muted, fontSize: 12 },
+  name: { flex: 1, gap: space.xs },
+  device: { fontFamily: fonts.sans, fontSize: textSize.body, color: colors.secondary },
+  selected: { color: colors.text, fontWeight: "600" },
+  detail: { fontFamily: fonts.sans, color: colors.muted, fontSize: textSize.caption },
   errorRow: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8 },
-  error: { flex: 1, fontFamily: fonts.sans, color: colors.error, fontSize: 13, lineHeight: 20 },
+  error: { flex: 1, fontFamily: fonts.sans, color: colors.error, fontSize: textSize.detail, lineHeight: 20 },
   retry: { minHeight: 44, justifyContent: "center", paddingHorizontal: 8 },
-  retryText: { fontFamily: fonts.sans, color: "white", fontWeight: "600", fontSize: 14 },
+  retryText: { fontFamily: fonts.sans, color: colors.text, fontWeight: "600", fontSize: textSize.small },
   empty: { fontFamily: fonts.sans, color: colors.muted, paddingVertical: 24, paddingHorizontal: 8 },
   loading: { paddingVertical: 24 },
 });

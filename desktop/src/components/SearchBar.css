@@ -6,19 +6,6 @@
     display: flex;
     top: 10px;
     overflow: visible;
-    border-radius: 100px;
-    border: none;
-    outline: none;
-    color: var(--ink);
-    /* The same glass as the player's controls (AppChrome.css). */
-    background: rgba(22, 22, 22, 0.4);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border: 1px solid #535353;
-    font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
-    /* A filter here (the old drop-shadow glow) gave WebKitGTK a square layer at the expanded size
-       that it never cleared once the bar collapsed; box-shadow follows the pill and repaints. */
-    transition: box-shadow 0.25s ease, border-color 0.25s ease;
 }
 
 /* Pages without search leave it out at once; one summoned there fades in, and out again when dismissed. */
@@ -34,16 +21,6 @@
 }
 #searchBar[data-away="dismissed"] {
     transition: opacity 0.2s ease, visibility 0s linear 0.2s;
-}
-
-#searchBar:focus-within {
-    outline: none;
-}
-
-#searchBar:has(#input:focus),
-#searchBar:has(.searchExpandButton:focus) {
-    box-shadow: 0 0 7px rgba(255, 255, 255, 0.3);
-    border: 1px solid rgb(100, 100, 100);
 }
 
 .searchInputControl {
@@ -93,10 +70,9 @@
     height: 40px;
     border-radius: 20px 0 0 20px;
     border: none;
-    outline: none;
     color: var(--ink);
     padding: 0 30px 0 43px;
-    font-size: 16px;
+    font-size: var(--text-body);
     font-family: inherit;
     background-color: transparent;
     user-select: text;
@@ -115,28 +91,7 @@
     position: absolute;
     top: 50%;
     right: 2px;
-    display: grid;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    place-items: center;
-    border: 0;
-    border-radius: 50%;
-    background: transparent;
-    cursor: default;
-    opacity: 0.45;
     transform: translateY(-50%);
-    transition: opacity 0.15s ease;
-}
-
-.searchClearButton:hover,
-.searchClearButton:focus-visible {
-    opacity: 0.8;
-}
-
-.searchClearButton img {
-    width: 12px;
-    height: 12px;
 }
 
 .searchProviderControl .dropdownTrigger {
@@ -144,14 +99,15 @@
     align-items: center;
     justify-content: center;
     width: 44px;
-    height: 40px;
+    min-height: var(--control-regular);
+    height: var(--control-regular);
     padding: 0 9px;
     border: none;
     border-radius: 0 20px 20px 0;
     color: var(--ink);
     background-color: transparent;
     font: inherit;
-    font-size: 16px;
+    font-size: var(--text-body);
 }
 
 .searchProviderControl .dropdownTrigger .dropdownIcon {

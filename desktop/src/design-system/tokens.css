@@ -1,0 +1,83 @@
+/* Native equivalents are defined in mobile/src/theme.ts. */
+:root {
+    color-scheme: dark;
+
+    /* Match the compositor and the Tauri window for seamless transitions. */
+    --surface-black-rgb: 10 10 10;
+    --surface-black: rgb(var(--surface-black-rgb));
+    --surface-raised: #121212;
+    --surface-field: #151515;
+    --surface-selected: #303030;
+    --surface-hover: rgb(255 255 255 / 0.07);
+    --surface-selection: #352000;
+    --ink: #ebebeb;
+    --ink-inverse: #000;
+    --ink-secondary: #bdbdbd;
+    --ink-muted: #a3a2a3;
+    --ink-subtle: #8a8a8a;
+    --accent-warm: #e6d3b1;
+    --error-text: #ffb4b4;
+    --action-hover: #dcdcdc;
+    --disabled-opacity: 0.5;
+
+    --border-width: 1px;
+    --border-subtle: #2f2f2f;
+    --border-control: #535353;
+    --border-input: #666;
+    --border-hover: #8a8a8a;
+    --focus-ring: var(--accent-warm);
+    --focus-width: 2px;
+    --focus-offset: 2px;
+
+    --glass-control: rgb(22 22 22 / 0.4);
+    --glass-menu: rgb(29 29 29 / 0.85);
+    --glass-dialog: rgb(22 22 22 / 0.88);
+    --glass-blur: blur(20px);
+    --glass-dialog-blur: blur(10px);
+    --dialog-backdrop: rgb(0 0 0 / 0.55);
+    --dialog-shadow: 0 20px 64px rgb(0 0 0 / 0.45);
+
+    --radius-xs: 4px;
+    --radius-sm: 8px;
+    --radius-field: 10px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-pill: 999px;
+
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --control-compact: 34px;
+    --control-regular: 40px;
+    --control-touch: 44px;
+    --icon-sm: 12px;
+    --icon-md: 16px;
+
+    --font-sans: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
+    --font-serif: "Source Serif 4", Georgia, serif;
+    --font-mono: ui-monospace, Menlo, Consolas, monospace;
+    --text-caption: 0.75rem;
+    --text-control: 0.85rem;
+    --text-small: 0.875rem;
+    --text-body: 1rem;
+    --text-heading: 1.25rem;
+    --weight-semibold: 600;
+}
+
+:root[data-graphics="low"] {
+    --glass-control: rgb(22 22 22 / 0.86);
+    --glass-menu: #1a1a1a;
+    --glass-dialog: #1a1a1a;
+    --glass-blur: none;
+    --glass-dialog-blur: none;
+}
+
+@media (forced-colors: active) {
+    :root {
+        --focus-ring: Highlight;
+    }
+}

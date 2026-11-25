@@ -4,6 +4,7 @@ import { FluidGradientBackground } from "../components/FluidGradientBackground";
 import { PlayerControls } from "../components/PlayerControls";
 import { artworkPalettePath, parseArtworkPalette, swirlPalette, type ArtworkPalette } from "../utils/artworkPalette";
 import { SURFACE_BLACK } from "../utils/surfaceBlack";
+import { useReducedMotion } from "../utils/reducedMotion";
 import type { Track } from "../types/music";
 import {
   Unpaired,
@@ -24,6 +25,7 @@ const blackPalette: ArtworkPalette = { colors: [SURFACE_BLACK, SURFACE_BLACK, SU
 
 /** The bigscreen's swirl, colored from the cover. */
 function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
+  const reduceMotion = useReducedMotion();
   const [palette, setPalette] = useState(blackPalette);
   const path = track ? artworkPalettePath(track.provider, track.nativeCover, track.cover) : null;
   useEffect(() => {
@@ -41,7 +43,7 @@ function Swirl({ track, playing }: { track: Track | null; playing: boolean }) {
         colors={track ? palette.colors : blackPalette.colors}
         weights={track ? palette.weights : blackPalette.weights}
         active
-        animate={!!track}
+        animate={!!track && !reduceMotion}
         playing={playing}
       />
     </div>
@@ -61,6 +63,7 @@ function Progress({ position, duration, onSeek, disabled }: {
 }) {
   const bar = useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = useState<number | null>(null);
+  const canSeek = !disabled && duration > 0;
   const at = (event: PointerEvent) => {
     const rect = bar.current!.getBoundingClientRect();
     return Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width)) * duration;
@@ -72,8 +75,33 @@ function Progress({ position, duration, onSeek, disabled }: {
       <div
         ref={bar}
         className="remoteProgressHit"
+        role="slider"
+        tabIndex={canSeek ? 0 : -1}
+        aria-label="Playback position"
+        aria-disabled={!canSeek}
+        aria-valuemin={0}
+        aria-valuemax={duration}
+        aria-valuenow={shown}
+        aria-valuetext={`${clock(shown)} of ${clock(duration)}`}
+        onKeyDown={event => {
+          if (!canSeek) return;
+          let seek: number;
+          switch (event.key) {
+            case "ArrowLeft":
+            case "ArrowDown": seek = shown - 5; break;
+            case "ArrowRight":
+            case "ArrowUp": seek = shown + 5; break;
+            case "PageDown": seek = shown - 30; break;
+            case "PageUp": seek = shown + 30; break;
+            case "Home": seek = 0; break;
+            case "End": seek = duration; break;
+            default: return;
+          }
+          event.preventDefault();
+          onSeek(Math.max(0, Math.min(duration, seek)));
+        }}
         onPointerDown={event => {
-          if (disabled || duration <= 0) return;
+          if (!canSeek) return;
           event.currentTarget.setPointerCapture(event.pointerId);
           setDragging(at(event));
         }}
@@ -191,7 +219,7 @@ function Pairing({ onPaired }: { onPaired: () => void }) {
         <h1>Pair with Ambra</h1>
         {error ? <>
           <p>{error}</p>
-          <button type="button" onClick={() => setAttempt(value => value + 1)}>Try again</button>
+          <button type="button" className="uiButton" onClick={() => setAttempt(value => value + 1)}>Try again</button>
         </> : pairing ? <>
           <p>Approve this code on the computer running the server:</p>
           <div className="remoteCode">{pairing.code}</div>

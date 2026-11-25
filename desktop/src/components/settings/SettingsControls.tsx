@@ -61,7 +61,7 @@ function HelpPopover({ anchor, topic, onClose, children }: { anchor: RefObject<H
       event.stopPropagation();
       onClose();
     }}>
-      <div ref={panel} className="settingsHelpPanel" role="dialog" aria-label={topic} tabIndex={-1}
+      <div ref={panel} className="settingsHelpPanel uiMenu" role="dialog" aria-label={topic} tabIndex={-1}
         style={{ left: position?.left ?? 0, top: position?.top ?? 0, visibility: position ? "visible" : "hidden" }}
         onClick={event => event.stopPropagation()}>
         <strong>{topic}</strong>

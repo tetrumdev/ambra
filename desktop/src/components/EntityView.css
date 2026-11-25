@@ -1,7 +1,7 @@
 .entityView .libraryHeader {
     display: flex;
     align-items: flex-start;
-    gap: 20px;
+    gap: var(--space-5);
 }
 /* Album rows have no artwork; doubled class outranks .libraryView's 100px default. */
 .libraryView.albumView {
@@ -31,7 +31,7 @@
     width: 145px;
     height: 145px;
     margin: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
 }
 .entityView .libraryHeaderArtwork > img {
     width: 100%;
@@ -51,7 +51,7 @@
 .entityByline {
     margin: 12px 0 24px;
     color: #aaa;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 .entityBylineAction {
     margin-left: 14px;
@@ -77,7 +77,7 @@
 }
 .browseScope {
     display: flex;
-    gap: 20px;
+    gap: var(--space-5);
     margin: 12px 0;
     flex-wrap: wrap;
 }
@@ -88,7 +88,7 @@
 }
 .entityStatus {
     color: #aaa;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 .entityView .libraryPlayActions {
     flex-wrap: wrap;
@@ -128,7 +128,7 @@
 }
 .trackNumber,
 .savedTrackBadge {
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     opacity: 0.6;
     font-weight: 400;
 }

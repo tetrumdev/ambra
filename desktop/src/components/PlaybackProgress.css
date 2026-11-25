@@ -23,7 +23,7 @@
 }
 
 #currentTime {
-    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-family: var(--font-sans);
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
@@ -34,7 +34,7 @@
 }
 
 #otherTime {
-    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-family: var(--font-sans);
     font-weight: 300;
     font-size: 0.7rem;
     font-variant-numeric: tabular-nums;
@@ -62,7 +62,6 @@
     appearance: none;
     -webkit-appearance: none;
     background: transparent;
-    outline: none;
     /*filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));*/
 }
 
@@ -74,7 +73,7 @@
 
 #progressBar::-webkit-slider-runnable-track {
     height: 6px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     transition: height var(--motion-snappy);
     /* The new song's bar over the last one's, which wipes off as a new song starts, its
        trailing edge fading rather than cut off. */

@@ -399,7 +399,7 @@ export function TrackList({
         />
       )}
       {selection.isSelecting && (
-        <div className="selectionActionMenu" role="group" aria-label="Selected tracks">
+        <div className="selectionActionMenu uiMenu" role="group" aria-label="Selected tracks">
           <button
             className="selectionRemoveAction"
             type="button"
@@ -572,6 +572,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
         className="trackCollectionMenuTrigger"
         disabled={!available && !removable}
         aria-label={`${selecting && !combinedMenu ? selected ? "Deselect" : "Select" : "Actions for"} ${track.name}`}
+        aria-haspopup={selecting && !combinedMenu ? undefined : "menu"}
         aria-expanded={selecting && !combinedMenu ? undefined : collectionMenuOpen}
         onClick={(event) => onAction("collection", event, index)}
         data-collection-menu-trigger

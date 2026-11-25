@@ -5,7 +5,7 @@ import { useClientConnection } from "../../hooks/ClientConnectionContext";
 import { flushPersistentState } from "../../utils/persistentStorage";
 import { flushServerState, withServerStateTransition } from "../../utils/serverState";
 import { Help, SettingRow, Toggle } from "./SettingsControls";
-import { Dropdown } from "../Dropdown";
+import { Dropdown } from "../../design-system/Dropdown";
 import {
   MAIN_SESSION, coreOutputs, coreSession, coreSessions, createCoreSession, removeCoreSession, renameCoreSession, setCoreSession, subscribeCore, syncCoreSettings,
   type CoreSession,
@@ -107,14 +107,14 @@ function FindServers({ onConnected }: { onConnected: () => void }) {
   if (joining) return <JoinFlow key={joining.address} server={joining} onCancel={() => setJoining(null)} onConnected={onConnected} />;
   return <>
     {servers.map(server => <SettingRow key={server.id} label={server.name} hint={`${server.address} · version ${server.version}`}>
-      <button type="button" className="settingsPill" onClick={() => setJoining(server)}>Connect</button>
+      <button type="button" className="uiButton" onClick={() => setJoining(server)}>Connect</button>
     </SettingRow>)}
     {!servers.length && !searching && <p className="settingsMuted">No Ambra servers answered on this network.</p>}
     <SettingRow label="Server address or pairing link" help="An IP address, a hostname, or the ambra://pair/ link from the server's QR code.">
       <span className="settingsActions">
-        <input className="serverAddressInput" aria-label="Server address or pairing link" placeholder="ambra://pair/… or music.local" value={address}
+        <input className="uiField serverAddressInput" aria-label="Server address or pairing link" placeholder="ambra://pair/… or music.local" value={address}
           onChange={event => setAddress(event.currentTarget.value)} onKeyDown={event => { if (event.key === "Enter") join(); }} />
-        <button type="button" className="settingsPill" disabled={!address.trim()} onClick={join}>Connect</button>
+        <button type="button" className="uiButton" disabled={!address.trim()} onClick={join}>Connect</button>
       </span>
     </SettingRow>
     <SettingRow label="Import pairing link" help="A text file holding the pairing link the server made.">
@@ -152,9 +152,9 @@ function SavedServers({ saved, changing, onChange }: {
     <h2>Saved servers</h2>
     {others.map(server => <SettingRow key={server.publicKey ?? server.id} label={server.name} hint={server.address}>
       <span className="settingsActions">
-        <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+        <button type="button" className="uiButton" disabled={changing || !server.publicKey}
           onClick={() => onChange("connect_saved_server", { publicKey: server.publicKey })}>Connect</button>
-        <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+        <button type="button" className="uiButton" disabled={changing || !server.publicKey}
           onClick={() => onChange("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
       </span>
     </SettingRow>)}
@@ -203,33 +203,33 @@ function PlaybackSessions() {
       <span className="settingsActions">
         {session.id === current
           ? <span className="settingsChip" data-state="connected">Following</span>
-          : <button type="button" className="settingsPill" onClick={() => setCoreSession(session.id)}>Follow</button>}
-        <button type="button" className="settingsPill" onClick={() => setNaming({ id: session.id, name: session.name })}>Rename</button>
-        {session.id !== MAIN_SESSION && <button type="button" className="settingsPill"
+          : <button type="button" className="uiButton" onClick={() => setCoreSession(session.id)}>Follow</button>}
+        <button type="button" className="uiButton" onClick={() => setNaming({ id: session.id, name: session.name })}>Rename</button>
+        {session.id !== MAIN_SESSION && <button type="button" className="uiButton"
           onClick={() => void act(() => removeCoreSession(session.id))}>Remove</button>}
         {session.settingsFrom
-          ? <button type="button" className="settingsPill" onClick={() => void act(() => syncCoreSettings(session.id, null))}>Stop syncing</button>
-          : sessions.length > 1 && <button type="button" className="settingsPill" aria-expanded={linking === session.id}
+          ? <button type="button" className="uiButton" onClick={() => void act(() => syncCoreSettings(session.id, null))}>Stop syncing</button>
+          : sessions.length > 1 && <button type="button" className="uiButton" aria-expanded={linking === session.id}
             onClick={() => setLinking(linking === session.id ? null : session.id)}>Sync with</button>}
       </span>
     </SettingRow>
     {linking === session.id && !session.settingsFrom && <SettingRow label="Sync settings with">
       <span className="settingsActions">
         {sessions.filter(other => (other.settingsFrom ?? other.id) !== session.id && other.id !== session.id).map(other =>
-          <button key={other.id} type="button" className="settingsPill"
+          <button key={other.id} type="button" className="uiButton"
             onClick={() => void act(async () => { await syncCoreSettings(session.id, other.id); setLinking(null); })}>{other.name}</button>)}
       </span>
     </SettingRow>}
     </Fragment>)}
     {naming ? <SettingRow label={naming.id ? "Rename session" : "New session"}>
       <span className="settingsActions">
-        <input type="text" aria-label="Session name" value={naming.name} maxLength={60} autoFocus
+        <input className="uiField" type="text" aria-label="Session name" value={naming.name} maxLength={60} autoFocus
           onChange={event => setNaming({ ...naming, name: event.target.value })}
           onKeyDown={event => { if (event.key === "Enter") save(); else if (event.key === "Escape") setNaming(null); }} />
-        <button type="button" className="settingsPill" disabled={!naming.name.trim()} onClick={save}>Save</button>
+        <button type="button" className="uiButton" disabled={!naming.name.trim()} onClick={save}>Save</button>
         <button type="button" className="settingsLink" onClick={() => setNaming(null)}>Cancel</button>
       </span>
-    </SettingRow> : <button type="button" className="settingsPill" onClick={() => setNaming({ id: null, name: "" })}>New session</button>}
+    </SettingRow> : <button type="button" className="uiButton" onClick={() => setNaming({ id: null, name: "" })}>New session</button>}
     {error && <p className="settingsError" role="alert">{error}</p>}
   </div>;
 }
@@ -257,7 +257,7 @@ function ServerCommandInstall() {
     <SettingRow label="Run a server on this computer"
       hint={command.installed ? `Installed at ${command.path}` : undefined}
       help="Downloads the ambra-server command for this computer and adds it to your PATH.">
-      <button type="button" className="settingsPill" disabled={installing} onClick={() => void install()}>
+      <button type="button" className="uiButton" disabled={installing} onClick={() => void install()}>
         {installing ? "Downloading…" : command.installed ? "Update" : "Download"}
       </button>
     </SettingRow>
@@ -320,17 +320,17 @@ export function ServerSettings({ active }: { active: boolean }) {
             <Toggle label="Shared playback session" checked={sharedPlayback} disabled={!connected && !sharedPlayback} onChange={shared => void setSharedPlayback(shared).catch(reason => setError(String(reason)))} />
           </SettingRow>
           <div className="settingsActions">
-            <button type="button" className="settingsPill" onClick={reconnect}>Reconnect</button>
-            <button type="button" className="settingsPill" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
-            <button type="button" className="settingsPill" disabled={changing || !server.publicKey}
+            <button type="button" className="uiButton" onClick={reconnect}>Reconnect</button>
+            <button type="button" className="uiButton" disabled={changing} onClick={() => void change("leave_server")}>Disconnect</button>
+            <button type="button" className="uiButton" disabled={changing || !server.publicKey}
               onClick={() => void change("forget_saved_server", { publicKey: server.publicKey })}>Forget</button>
-            <button type="button" className="settingsPill" onClick={() => {
+            <button type="button" className="uiButton" onClick={() => {
               void flushServerState().then(() => setSetup(true)).catch(reason => setError(String(reason)));
             }}>Add a server</button>
           </div>
         </> : <>
           <p className="settingsMuted">No server connected. Local music, playlists, queues, and settings stay on this device.</p>
-          <button type="button" className="settingsPill settingsPillPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
+          <button type="button" className="uiButton uiButtonPrimary" disabled={!isTauri()} onClick={() => setSetup(true)}>Add a server</button>
         </>}
       </div>
       {server && sharedPlayback && connected && <PlaybackSessions />}

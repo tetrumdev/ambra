@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import Constants from "expo-constants";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
 import { awaitPairing, requestPairing, type PairingStarted } from "./client";
 import { Swirl } from "./Swirl";
-import { colors, fonts, haptic } from "./theme";
+import { colors, fonts, haptic, space, textSize } from "./theme";
+import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
@@ -65,23 +66,22 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
           <Touchable accessibilityRole="button" onPress={() => void (async () => { const next = permission?.granted ? permission : await requestPermission(); if (next.granted) { scanned.current = false; setScanning(value => !value); } else setError("Allow camera access to scan, or paste the pairing link."); })()} style={styles.secondary}>
             <Text style={styles.secondaryText}>{scanning ? "Close camera" : "Scan server QR code"}</Text>
           </Touchable>
-          <TextInput
+          <Field
             value={address}
             onChangeText={setAddress}
             placeholder="ambra://pair/…"
-            placeholderTextColor="rgba(255, 255, 255, 0.35)"
+            accessibilityLabel="Server pairing link"
             autoCapitalize="none"
             autoCorrect={false}
             keyboardType="url"
-            keyboardAppearance="dark"
             returnKeyType="go"
             onSubmitEditing={() => void start()}
-            style={styles.input}
           />
           {error && <Text style={styles.error}>{error}</Text>}
-          <Touchable accessibilityRole="button" haptic="firm" hapticOnPressIn onPress={() => void start()} disabled={busy || !address.trim()} style={styles.primary}>
-            {busy ? <ActivityIndicator color="black" /> : <Text style={styles.primaryText}>Connect</Text>}
-          </Touchable>
+          <Button title={busy ? "Connecting" : "Connect"} variant="primary" haptic="firm" hapticOnPressIn
+            onPress={() => void start()} disabled={busy || !address.trim()}>
+            {busy && <ActivityIndicator color={colors.black} />}
+          </Button>
         </>}
       </KeyboardAvoidingView>
     </View>
@@ -90,25 +90,12 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
-  content: { flex: 1, justifyContent: "center", paddingHorizontal: 32, gap: 16 },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 40, fontWeight: "500", textAlign: "center" },
+  content: { flex: 1, justifyContent: "center", paddingHorizontal: 32, gap: space.lg },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 40, fontWeight: "500", textAlign: "center" },
   body: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 15, lineHeight: 22, textAlign: "center" },
-  code: { color: "white", fontFamily: fonts.sans, fontSize: 52, fontWeight: "700", letterSpacing: 6, textAlign: "center", fontVariant: ["tabular-nums"] },
-  hint: { color: colors.muted, fontSize: 13, textAlign: "center", fontFamily: "Menlo" },
-  input: {
-    color: "white",
-    fontFamily: fonts.sans,
-    fontSize: 17,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 100,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: "#2f2f2f",
-    backgroundColor: colors.raised,
-  },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 14, textAlign: "center" },
-  primary: { alignItems: "center", justifyContent: "center", height: 50, borderRadius: 100, backgroundColor: "white" },
-  primaryText: { color: "black", fontFamily: fonts.sans, fontSize: 16, fontWeight: "600" },
+  code: { color: colors.text, fontFamily: fonts.sans, fontSize: 52, fontWeight: "700", letterSpacing: 6, textAlign: "center", fontVariant: ["tabular-nums"] },
+  hint: { color: colors.muted, fontSize: textSize.detail, textAlign: "center", fontFamily: "Menlo" },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.small, textAlign: "center" },
   secondary: { alignSelf: "center", padding: 12 },
   secondaryText: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 15, fontWeight: "600" },
 });

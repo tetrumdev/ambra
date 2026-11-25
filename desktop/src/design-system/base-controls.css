@@ -1,0 +1,80 @@
+/* Keep keyboard focus visible on glass, dark surfaces and artwork. */
+:where(
+    button, a[href], input, textarea, select, summary, [tabindex]:not([tabindex="-1"]),
+    [role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]
+):focus-visible {
+    outline: var(--focus-width) solid var(--focus-ring);
+    outline-offset: var(--focus-offset);
+}
+
+.uiButton {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    min-height: var(--control-compact);
+    padding: 0 var(--space-4);
+    border: var(--border-width) solid var(--border-input);
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--text-control);
+    font-weight: var(--weight-semibold);
+    line-height: 1.25;
+    text-align: center;
+    transition: background-color var(--motion-feedback), border-color var(--motion-feedback), color var(--motion-feedback);
+}
+
+.uiButton:hover:not(:disabled) {
+    border-color: var(--border-hover);
+}
+
+.uiButtonPrimary {
+    border-color: transparent;
+    background: var(--ink);
+    color: var(--ink-inverse);
+}
+
+.uiButtonPrimary:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--action-hover);
+}
+
+.uiButton:disabled {
+    opacity: var(--disabled-opacity);
+}
+
+.uiIconButton {
+    flex: none;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+}
+
+.uiIconButtonQuiet {
+    width: 28px;
+    height: 28px;
+    opacity: 0.6;
+    transition: opacity var(--motion-feedback);
+}
+
+.uiIconButtonQuiet:is(:hover, :focus-visible) {
+    opacity: 1;
+}
+
+.uiIconButtonQuiet img {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+    pointer-events: none;
+}
+
+:root[data-reduce-motion] :is(.uiButton, .uiIconButton) {
+    --motion-press-up: 0s;
+    --motion-press-down: 0s;
+    transition: none;
+}

@@ -20,13 +20,13 @@
     align-items: center;
     max-width: min(480px, 80vw);
     padding: 8px 16px;
-    border: 1px solid #535353;
-    border-radius: 100px;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
     background: rgba(22, 22, 22, 0.6);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     color: var(--ink);
-    font: 500 0.9rem "Stack Sans Text", Inter, sans-serif;
+    font: 500 0.9rem var(--font-sans);
     white-space: nowrap;
     animation: shortcutToastIn 0.2s var(--motion-ease-out, ease-out);
 }

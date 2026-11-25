@@ -1,12 +1,13 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { createAudioPlayer } from "expo-audio";
-import { Alert, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Alert, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { configureAudioSession } from "./audioSession";
 import { LocalMusic } from "./localLibrary";
 import { importLocalFiles, loadLocalLibrary, saveLocalLibrary, removeLocalFile } from "./localFiles";
+import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
-import { colors, fonts } from "./theme";
+import { colors, fonts, space, textSize } from "./theme";
 
 let closing: Promise<void> = Promise.resolve();
 
@@ -28,9 +29,6 @@ export function LocalLibraryScreen() {
   }, []);
   if (!music) return <View style={styles.screen}><Text style={styles.body}>{error ?? "Loading local music…"}</Text></View>;
   return <LocalLibraryView music={music} />;
-}
-function Button({ title, onPress, disabled = false }: { title: string; onPress: () => void; disabled?: boolean }) {
-  return <Touchable accessibilityRole="button" accessibilityLabel={title} disabled={disabled} onPress={onPress} style={styles.button}><Text style={styles.buttonText}>{title}</Text></Touchable>;
 }
 const time = (seconds: number) => `${Math.floor(seconds / 60)}:${Math.floor(seconds % 60).toString().padStart(2, "0")}`;
 function LocalLibraryView({ music }: { music: LocalMusic }) {
@@ -59,7 +57,7 @@ function LocalLibraryView({ music }: { music: LocalMusic }) {
       }} />
       {(error || view.error) && <Text accessibilityRole="alert" style={styles.error}>{error ?? view.error}</Text>}
       <Text style={styles.heading}>Playlists</Text>
-      <View style={styles.row}><TextInput accessibilityLabel="Playlist name" placeholder="Playlist name" placeholderTextColor={colors.muted} value={name} onChangeText={setName} style={styles.input} />
+      <View style={styles.row}><Field accessibilityLabel="Playlist name" placeholder="Playlist name" value={name} onChangeText={setName} style={styles.input} />
         <Button title="Create" disabled={!name.trim()} onPress={() => {
           const id = `playlist-${Date.now()}`;
           edit(state => ({ ...state, playlists: [...state.playlists, { id, name: name.trim(), trackIds: [] }] })); setName(""); setPlaylistId(id);
@@ -106,10 +104,9 @@ function LocalLibraryView({ music }: { music: LocalMusic }) {
 }
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black }, content: { padding: 24, gap: 14 },
-  title: { fontFamily: fonts.serif, fontSize: 36, color: "white" }, heading: { fontFamily: fonts.sans, color: "white", fontSize: 20 },
-  body: { fontFamily: fonts.sans, color: colors.secondary, fontSize: 14 }, song: { fontFamily: fonts.sans, color: "white", fontSize: 16 },
-  row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }, track: { paddingVertical: 10, gap: 8 },
-  button: { backgroundColor: colors.raised, borderRadius: 20, paddingVertical: 12, paddingHorizontal: 16 }, buttonText: { color: "white", fontFamily: fonts.sans },
-  input: { color: "white", backgroundColor: colors.raised, padding: 12, borderRadius: 16, flex: 1 },
+  title: { fontFamily: fonts.serif, fontSize: 36, color: colors.text }, heading: { fontFamily: fonts.sans, color: colors.text, fontSize: textSize.heading },
+  body: { fontFamily: fonts.sans, color: colors.secondary, fontSize: textSize.small }, song: { fontFamily: fonts.sans, color: colors.text, fontSize: textSize.body },
+  row: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }, track: { paddingVertical: 10, gap: space.sm },
+  input: { flex: 1 },
   error: { color: colors.error }, player: { padding: 16, gap: 10, borderTopWidth: 1, borderTopColor: colors.raised },
 });

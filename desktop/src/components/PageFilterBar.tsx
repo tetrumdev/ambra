@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { IconButton } from "../design-system/IconButton";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { usePageFilter } from "../hooks/usePageFilter";
 import "./PageFilterBar.css";
@@ -21,7 +22,7 @@ export function PageFilterBar({ query, onQueryChange, onClose, focusRequest }: P
     input.current?.select();
   }, [focusRequest]);
 
-  return <div className="pageFilter" role="search" aria-label="Filter songs on this page">
+  return <div className="pageFilter uiSearch" role="search" aria-label="Filter songs on this page">
     <input ref={input} className="pageFilterInput" value={query} placeholder="Filter"
       aria-label="Filter songs on this page" spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
       onChange={event => onQueryChange(event.target.value)}
@@ -40,7 +41,7 @@ export function PageFilterBar({ query, onQueryChange, onClose, focusRequest }: P
     {query.trim() && <span className="pageFilterCount" aria-live="polite">
       {matches === 0 ? "No matches" : `${matches.toLocaleString()} ${matches === 1 ? "song" : "songs"}`}
     </span>}
-    <button type="button" className="pageFilterClose" aria-label="Close filter" data-tooltip="Close (Esc)"
+    <IconButton icon="/x.svg" label="Close filter" data-tooltip="Close (Esc)"
       onMouseDown={event => event.preventDefault()} onClick={onClose} />
   </div>;
 }

@@ -1,3 +1,4 @@
+import { Dialog } from "../design-system/Dialog";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import type { Playlist } from "../types/music";
@@ -85,19 +86,16 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], do
         />,
         document.body,
       )}
-      <dialog
+      <Dialog
         ref={dialog}
         className="playlistEditDialog"
         aria-label={action === "rename" ? "Rename playlist" : "Delete playlist"}
-        onCancel={(event) => {
-          event.preventDefault();
-          close();
-        }}
+        onDismiss={close}
         onKeyDown={(event) => event.stopPropagation()}
       >
         <button
           type="button"
-          className="playlistEditCancel"
+          className="uiDialogClose"
           autoFocus={action === "delete"}
           onClick={close}
         >
@@ -115,12 +113,12 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], do
             else setError(true);
           }}
         >
-          <div className="playlistEditContent">
+          <div className="uiDialogContent">
             <h2>
               {action === "rename" ? "Rename playlist" : "Delete playlist?"}
             </h2>
             {action === "rename" ? (
-              <input
+              <input className="uiField"
                 spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off"
                 autoFocus
                 aria-label="Playlist name"
@@ -137,6 +135,7 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], do
           </div>
           <div className="playlistEditButtons">
             <button
+              className="uiButton uiButtonPrimary"
               type="submit"
               disabled={saving || (action === "rename" && !name.trim())}
             >
@@ -144,7 +143,7 @@ export function PlaylistActions({ playlist, onRename, onDelete, actions = [], do
             </button>
           </div>
         </form>
-      </dialog>
+      </Dialog>
     </>
   );
 }

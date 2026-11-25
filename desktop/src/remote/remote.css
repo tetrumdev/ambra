@@ -1,15 +1,7 @@
-@font-face {
-    font-family: "Stack Sans Text";
-    src: url(../assets/fonts/StackSansText-VariableFont_wght.ttf);
-    font-style: normal;
-    font-display: block;
-}
-
 :root {
-    --ink: #ebebeb;
     color: var(--ink);
-    background: #0a0a0a;
-    font-family: "Stack Sans Text", -apple-system, Helvetica, Arial, sans-serif;
+    background: var(--surface-black);
+    font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
     -webkit-tap-highlight-color: transparent;
     -webkit-text-size-adjust: 100%;
@@ -115,11 +107,12 @@ body,
     padding: 12px 0;
     margin: -12px 0;
     touch-action: none;
+    border-radius: var(--radius-sm);
 }
 
 .remoteProgressTrack {
     height: 7px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     overflow: hidden;
     background: rgba(255, 255, 255, 0.45);
     transition: transform var(--motion-snappy);
@@ -168,7 +161,7 @@ body,
 .remotePairing {
     justify-content: center;
     text-align: center;
-    gap: 16px;
+    gap: var(--space-4);
 }
 
 .remotePairing h1 {
@@ -178,7 +171,7 @@ body,
 
 .remotePairing p {
     margin: 0;
-    font-size: 16px;
+    font-size: var(--text-body);
     opacity: 0.8;
 }
 
@@ -190,21 +183,24 @@ body,
 }
 
 .remotePairing code {
-    font-size: 14px;
+    font-size: var(--text-small);
     opacity: 0.7;
     user-select: text;
     -webkit-user-select: text;
 }
 
-.remotePairing button {
+.remotePairing .uiButton {
     align-self: center;
-    padding: 12px 24px;
-    border: 0;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.18);
-    color: var(--ink);
-    font: inherit;
-    font-size: 16px;
+    min-height: var(--control-touch);
+    padding-inline: var(--space-6);
+}
+
+:root[data-reduce-motion] .remoteCover img {
+    animation: none;
+}
+
+:root[data-reduce-motion] .remoteProgressTrack {
+    transition: none;
 }
 
 #remoteError {
@@ -217,7 +213,7 @@ body,
     padding: 16px 16px calc(env(safe-area-inset-bottom) + 16px);
     background: rgba(120, 0, 0, 0.92);
     color: var(--ink);
-    font: 12px/1.4 ui-monospace, Menlo, monospace;
+    font: var(--text-caption)/1.4 var(--font-mono);
     white-space: pre-wrap;
     user-select: text;
     -webkit-user-select: text;

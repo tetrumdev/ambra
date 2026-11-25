@@ -1,3 +1,4 @@
+import { Dialog } from "../design-system/Dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadTrackCredits, type CatalogArtist, type TrackCredits } from "../api/server";
 import type { Track } from "../types/music";
@@ -39,18 +40,15 @@ export function TrackCreditsDialog({ onOpenArtist }: { onOpenArtist: (artist: Ca
   }, [shown, attempt]);
 
   return (
-    <dialog
+    <Dialog
       ref={dialog}
-      className="playlistEditDialog creditsDialog"
+      className="creditsDialog"
       aria-label={track ? `Credits for ${track.name}` : "Credits"}
-      onCancel={event => {
-        event.preventDefault();
-        showTrackCredits(null);
-      }}
+      onDismiss={() => showTrackCredits(null)}
       onKeyDown={event => event.stopPropagation()}
     >
-      <button type="button" className="playlistEditCancel" onClick={() => showTrackCredits(null)}>Close</button>
-      <div className="playlistEditContent">
+      <button type="button" className="uiDialogClose" onClick={() => showTrackCredits(null)}>Close</button>
+      <div className="uiDialogContent">
         <div>
           <h2>{track?.name}</h2>
           <p>{track?.artist}</p>
@@ -74,6 +72,6 @@ export function TrackCreditsDialog({ onOpenArtist }: { onOpenArtist: (artist: Ca
           <p>No credits are available for this song.</p>
         )}
       </div>
-    </dialog>
+    </Dialog>
   );
 }

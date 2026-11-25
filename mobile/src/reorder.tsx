@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { StyleSheet, View, type FlatList, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
-import { haptic } from "./theme";
+import { haptic, radius } from "./theme";
 import { HOLD_MS } from "./Touchable";
 
 /** Rows are this tall (TrackRow), so a finger's position names the row under it. */
@@ -222,7 +222,7 @@ const styles = StyleSheet.create({
     left: 12,
     right: 12,
     height: ROW_HEIGHT,
-    borderRadius: 12,
+    borderRadius: radius.md,
     backgroundColor: "#1c1c1c",
     shadowColor: "black",
     shadowRadius: 18,

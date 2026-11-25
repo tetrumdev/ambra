@@ -292,7 +292,7 @@ test("the sidebar divider clamps drag and keyboard resizing and restores the cho
   }
 });
 
-test("General can combine song menus without triggering actions from single clicks", async () => {
+test("Combined song menus open from the dots without starting playback", async () => {
   const { default: App } = await import("../src/App");
   const { AudioSettingsProvider } = await import("../src/hooks/AudioSettingsContext");
   const { defaultAudioSettings } = await import("../src/utils/audioSettings");
@@ -361,12 +361,19 @@ test("General can combine song menus without triggering actions from single clic
 
     const nestedTrigger = find(".trackCollectionMenuTrigger", row(second));
     await mouse(find(".trackPlayButton", row(second)), "click", 1);
-    await mouse(nestedTrigger, "click", 1);
     expect(menu()).toBeNull();
     expect(loadPreferences().playback.trackId).toBe(first.globalId);
 
+    await mouse(find("img", nestedTrigger), "click", 1);
+    const dotsActions = labels();
+    expect(dotsActions).toContain("Play from Here");
+    expect(nestedTrigger.getAttribute("aria-expanded")).toBe("true");
+    expect(loadPreferences().playback.trackId).toBe(first.globalId);
+    await click("#trackMenuBackdrop");
+
     await mouse(row(second), "contextmenu", 0, 2, 35, 40);
     const combinedActions = labels();
+    expect(combinedActions).toEqual(dotsActions);
     expect(combinedActions).toEqual(expect.arrayContaining(["Play from Here", "Add to Queue", "Add to Playlist", "Select Song"]));
     expect(combinedActions.filter(label => label && removedActions.includes(label))).toEqual([]);
     expect(viewport.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
@@ -407,6 +414,9 @@ test("General can combine song menus without triggering actions from single clic
 
     await click("#queueBtn");
     const queued = find('#playbackSidebar [aria-label="Upcoming songs"] .libraryItem');
+    await mouse(find(".trackCollectionMenuTrigger", queued), "click", 1);
+    expect(labels()).toContain("Remove from Queue");
+    await click("#trackMenuBackdrop");
     await mouse(row(second), "contextmenu", 0, 2, 35, 40);
     await mouse(queued, "contextmenu", 0, 2);
     expect(viewport.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
@@ -419,10 +429,12 @@ test("General can combine song menus without triggering actions from single clic
 
     const firstTrigger = find(".trackCollectionMenuTrigger", row(first));
     await mouse(firstTrigger, "click", 1);
-    await mouse(firstTrigger, "click", 2);
+    expect(labels()).toContain("Play from Here");
+    await click("#trackMenuBackdrop");
+    await mouse(firstTrigger, "dblclick", 2);
     expect(menu()).toBeNull();
     expect(loadPreferences().playback.trackId).toBe(second.globalId);
-    await mouse(firstTrigger, "dblclick", 2);
+    await mouse(row(first), "dblclick", 2);
     expect(menu()).toBeNull();
     expect(loadPreferences().playback.trackId).toBe(first.globalId);
 

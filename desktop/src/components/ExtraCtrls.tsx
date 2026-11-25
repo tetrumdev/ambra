@@ -425,7 +425,7 @@ export function ExtraCtrls({
     const level = memberVolume(output);
     const name = (
       <>
-        <span className="audioDeviceCheck" aria-hidden="true" />
+        <span className="uiMenuCheck" aria-hidden="true" />
         <span className="audioDeviceName" data-tooltip={label}>
           {offline ? `${output.deviceName} (offline)` : output.deviceName}
         </span>
@@ -436,14 +436,14 @@ export function ExtraCtrls({
         <div className="audioDeviceRow">
           {fixed ? (
             <div
-              className="audioDeviceOption audioDeviceFixed"
+              className="uiMenuOption audioDeviceFixed"
               aria-current={playing || undefined}
             >
               {name}
             </div>
           ) : (
             <button
-              className="audioDeviceOption"
+              className="uiMenuOption"
               type="button"
               aria-current={(!picking && playing) || undefined}
               aria-label={label}
@@ -623,7 +623,7 @@ export function ExtraCtrls({
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
     const options = [
       ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
-        ".audioDeviceOption:not(:disabled)",
+        ".uiMenuOption:not(:disabled)",
       ),
     ];
     if (options.length === 0) return;
@@ -749,7 +749,7 @@ export function ExtraCtrls({
                 </div>
                 <input
                   id="audioStageName"
-                  className="audioStageName"
+                  className="uiField audioStageName"
                   type="text"
                   maxLength={60}
                   autoFocus
@@ -807,6 +807,7 @@ export function ExtraCtrls({
                   <span className="audioDeviceHeading">Target loudness</span>
                   <span className="audioStageLufs">
                     <input
+                      className="uiField"
                       type="number"
                       min={MIN_TARGET_LUFS}
                       max={MAX_TARGET_LUFS}
@@ -821,14 +822,14 @@ export function ExtraCtrls({
                 </label>
                 <div className="audioStageEditorFooter">
                   <button
-                    className="audioStageCancel"
+                    className="uiButton"
                     type="button"
                     onClick={() => setEditing(null)}
                   >
                     Cancel
                   </button>
                   <button
-                    className="audioStageSave"
+                    className="uiButton uiButtonPrimary"
                     type="submit"
                     disabled={!draftValid}
                   >
@@ -901,13 +902,13 @@ export function ExtraCtrls({
                   </span>
                   {isLoadingDevices ? (
                     <button
-                      className="audioDeviceOption"
+                      className="uiMenuOption"
                       type="button"
                       role="radio"
                       aria-checked={false}
                       disabled
                     >
-                      <span className="audioDeviceCheck" aria-hidden="true" />
+                      <span className="uiMenuCheck" aria-hidden="true" />
                       <span className="audioDeviceName">Loading devices…</span>
                     </button>
                   ) : here && activeStage && activeStage !== general ? (
@@ -937,14 +938,14 @@ export function ExtraCtrls({
                     audioDevices.map((device) => (
                       <button
                         key={device.id || "system-default"}
-                        className="audioDeviceOption"
+                        className="uiMenuOption"
                         type="button"
                         role="radio"
                         aria-checked={isPlayingHere(device.id)}
                         disabled={isChangingDevice}
                         onClick={() => pickHere(device.id, device.name)}
                       >
-                        <span className="audioDeviceCheck" aria-hidden="true" />
+                        <span className="uiMenuCheck" aria-hidden="true" />
                         <span
                           className="audioDeviceName"
                           data-tooltip={device.name}

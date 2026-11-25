@@ -1,6 +1,7 @@
+import { Dialog } from "../design-system/Dialog";
 import "./DownloadDialog.css";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Dropdown } from "./Dropdown";
+import { Dropdown } from "../design-system/Dropdown";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import { getServerConnection, subscribeServerConnection } from "../api/serverConnection";
 import {
@@ -79,19 +80,19 @@ export function DownloadDialog() {
   }
 
   return (
-    <dialog
+    <Dialog
       ref={dialog}
-      className="playlistEditDialog downloadDialog"
+      className="downloadDialog"
       aria-label="Download"
-      onCancel={event => { event.preventDefault(); closeDownloadDialog(); }}
+      onDismiss={closeDownloadDialog}
       onKeyDown={event => event.stopPropagation()}
     >
-      <button type="button" className="playlistEditCancel" onClick={() => {
+      <button type="button" className="uiDialogClose" onClick={() => {
         if (step === "clients") { setStep("target"); setError(null); } else closeDownloadDialog();
       }}>
         {step === "clients" ? "Back" : "Cancel"}
       </button>
-      <div className="downloadDialogContent">
+      <div className="uiDialogContent">
         <h2>Download {request?.title ?? ""}</h2>
         <p>{songs(count)}</p>
         {count === 0 ? (
@@ -106,11 +107,11 @@ export function DownloadDialog() {
             </div>
             {step === "target" ? (
               <div className="playlistEditButtons downloadTargets">
-                <button type="button" disabled={busy} onClick={() => void start({ kind: "server" })}>
+                <button type="button" className="uiButton uiButtonPrimary" disabled={busy} onClick={() => void start({ kind: "server" })}>
                   <img src="/download.svg" alt="" aria-hidden="true" />
                   Download to Server
                 </button>
-                <button type="button" className="downloadClientTarget" disabled={busy} onClick={() => { setClients(null); setError(null); setStep("clients"); }}>
+                <button type="button" className="uiButton downloadClientTarget" disabled={busy} onClick={() => { setClients(null); setError(null); setStep("clients"); }}>
                   <img src="/download.svg" alt="" aria-hidden="true" />
                   Download to Client
                 </button>
@@ -137,7 +138,7 @@ export function DownloadDialog() {
                   ))}
                 </fieldset>
                 <div className="playlistEditButtons downloadStart">
-                  <button type="button" disabled={busy || chosen.size === 0}
+                  <button type="button" className="uiButton uiButtonPrimary" disabled={busy || chosen.size === 0}
                     onClick={() => void start({ kind: "clients", clientIds: [...chosen] })}>
                     {busy ? "Starting…" : "Download"}
                   </button>
@@ -148,6 +149,6 @@ export function DownloadDialog() {
         )}
         {error && <p role="alert">{error}</p>}
       </div>
-    </dialog>
+    </Dialog>
   );
 }

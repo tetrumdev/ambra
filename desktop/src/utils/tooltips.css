@@ -1,4 +1,4 @@
-/* Same glass as the track menus (translucent #1d1d1d over a blur, #2f2f2f
+/* Same glass as the track menus (translucent #1d1d1d over a blur, var(--border-subtle)
    hairline), at the size of a system tooltip. */
 .ambraTooltip {
     position: fixed;
@@ -8,13 +8,13 @@
     box-sizing: border-box;
     max-width: 240px;
     padding: 3px 7px;
-    border: 1px solid #2f2f2f;
+    border: 1px solid var(--border-subtle);
     border-radius: 6px;
     color: #e6e6e6;
     background: rgba(29, 29, 29, 0.8);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    font-family: "Stack Sans Text", sans-serif;
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+    font-family: var(--font-sans);
     font-size: 0.72rem;
     line-height: 1.3;
     overflow-wrap: anywhere;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchSession, SearchSnapshot } from "../../desktop/src/utils/searchSession";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
@@ -15,8 +15,9 @@ import { albumCard, artistCard } from "./screens/Pages";
 import { searchText, textRelevance } from "../../desktop/src/utils/catalogRanking";
 import { servicePreferences, services, subscribeServicePreferences, type Service } from "./servicePreferences";
 import { Icon } from "./Icons";
+import { Field, fieldFrame } from "./DesignControls";
 import { Touchable } from "./Touchable";
-import { colors, fonts } from "./theme";
+import { colors, fonts, radius, space, textSize } from "./theme";
 
 const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], isSearching: false, hasMore: false, error: null, canRetry: false };
 
@@ -34,6 +35,7 @@ export function SearchScreen() {
   const { view, bottomInset, push } = useNavigation();
   const insets = useSafeAreaInsets();
   const selected = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
+  const [searchFocused, setSearchFocused] = useState(false);
   const [query, setQuery] = useState("");
   const [filter, setProvider] = useState<"all" | Service>("all");
   const provider = filter !== "all" && !selected[filter] ? "all" : filter;
@@ -87,9 +89,9 @@ export function SearchScreen() {
     <View style={{ paddingTop: insets.top + 24, paddingHorizontal: 24 }}>
       <Text accessibilityRole="header" style={styles.title}>Search</Text>
       <Text style={styles.subtitle}>One search. All your music services.</Text>
-      <View style={styles.searchBox}>
+      <View style={[styles.searchBox, searchFocused && styles.searchFocused]}>
         <Icon name="search" size={18} color={colors.muted} />
-        <TextInput accessibilityLabel="Search Ambra" value={query} onChangeText={setQuery} placeholder="Songs, artists, albums…" placeholderTextColor={colors.faint} autoCorrect={false} autoCapitalize="none" returnKeyType="search" keyboardAppearance="dark" clearButtonMode="while-editing" style={styles.input} />
+        <Field bare onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} accessibilityLabel="Search Ambra" value={query} onChangeText={setQuery} placeholder="Songs, artists, albums…" autoCorrect={false} autoCapitalize="none" returnKeyType="search" clearButtonMode="while-editing" style={styles.input} />
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filters}>
         {(["all", ...services.filter(service => selected[service])] as const).map(value => <Touchable key={value} accessibilityRole="button" accessibilityLabel={value === "all" ? "Search all music services" : `Search ${musicProviderName(value)}`} accessibilityState={{ selected: provider === value }} onPress={() => setProvider(value)} style={[styles.filter, provider === value && styles.selected]}>
@@ -114,22 +116,23 @@ export function SearchScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 38 },
-  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: 14, marginTop: 8, marginBottom: 24 },
-  searchBox: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 48, borderRadius: 12, borderColor: "#2f2f2f", borderWidth: 1, backgroundColor: "#151515", paddingHorizontal: 14 },
-  input: { flex: 1, color: "white", fontFamily: fonts.sans, fontSize: 16, minHeight: 48 },
-  filters: { gap: 8, paddingVertical: 16 },
-  filter: { borderRadius: 8, minHeight: 40, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", backgroundColor: "#191919" },
-  selected: { backgroundColor: "#e6d3b1" },
-  filterText: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13 },
-  selectedText: { color: "#241b0e", fontWeight: "600" },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: textSize.page },
+  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, marginTop: 8, marginBottom: 24 },
+  searchBox: { ...fieldFrame, flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: 14 },
+  searchFocused: { borderColor: colors.accent },
+  input: { flex: 1, paddingVertical: 8 },
+  filters: { gap: space.sm, paddingVertical: 16 },
+  filter: { borderRadius: radius.sm, minHeight: 40, paddingHorizontal: 14, alignItems: "center", justifyContent: "center", backgroundColor: "#191919" },
+  selected: { backgroundColor: colors.accent },
+  filterText: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail },
+  selectedText: { color: colors.accentInk, fontWeight: "600" },
   provider: { color: colors.faint, fontFamily: fonts.sans, fontSize: 10, marginLeft: 70, marginTop: -9, marginBottom: 6 },
   empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: 15, lineHeight: 23, padding: 24, textAlign: "center" },
   loading: { margin: 24 },
   notice: { padding: 12 },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 14, lineHeight: 21 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 21 },
   retry: { minHeight: 44, justifyContent: "center" },
-  retryText: { color: "white", fontFamily: fonts.sans, fontSize: 14 },
+  retryText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.small },
   catalog: { marginHorizontal: -12 },
-  songsHeading: { color: "white", fontFamily: fonts.sans, fontSize: 20, fontWeight: "600", paddingHorizontal: 12, paddingTop: 20, paddingBottom: 8 },
+  songsHeading: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.heading, fontWeight: "600", paddingHorizontal: 12, paddingTop: 20, paddingBottom: 8 },
 });

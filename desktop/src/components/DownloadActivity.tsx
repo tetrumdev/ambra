@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Track } from "../types/music";
 import { downloadQualities, useDownloadJobs, type DownloadJob } from "../utils/offlineDownloads";
-import { DropdownChevron } from "./DropdownChevron";
+import { DropdownChevron } from "../design-system/DropdownChevron";
 import "./DownloadActivity.css";
 
 const jobKey = (job: DownloadJob) => `${job.createdAt}:${job.id}:${job.target}:${job.clientId ?? ""}`;
@@ -40,10 +40,10 @@ export function DownloadActivity({ tracks = [], hidden = false }: { tracks?: Pic
       event.stopPropagation();
       collapse();
     }}>
-    <section id={id} className="downloadActivityPanel" aria-label="Download details" hidden={!expanded}>
+    <section id={id} className="downloadActivityPanel uiMenu" aria-label="Download details" hidden={!expanded}>
       <header>
         <h2>Downloads</h2>
-        <button type="button" onClick={collapse} aria-label="Collapse downloads">Hide</button>
+        <button className="uiButton" type="button" onClick={collapse} aria-label="Collapse downloads">Hide</button>
       </header>
       <ul>
         {visible.map(job => {
@@ -71,7 +71,7 @@ export function DownloadActivity({ tracks = [], hidden = false }: { tracks?: Pic
       </ul>
       <footer>
         <span>Keep browsing. Downloads continue in the background.</span>
-        {visible.some(job => job.finished) && <button type="button" onClick={() => {
+        {visible.some(job => job.finished) && <button className="uiButton" type="button" onClick={() => {
           setDismissed(current => new Set([...current, ...visible.filter(job => job.finished).map(jobKey)]));
         }}>Clear completed</button>}
       </footer>

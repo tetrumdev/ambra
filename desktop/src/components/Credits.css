@@ -7,8 +7,8 @@
 
 .creditRow dt {
     margin-bottom: 4px;
-    color: #a3a2a3;
-    font-size: 12px;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -17,14 +17,14 @@
 .creditRow dd {
     margin: 0;
     color: var(--ink);
-    font-size: 14px;
+    font-size: var(--text-small);
     line-height: 1.5;
 }
 
 .creditDetail {
     margin-left: 6px;
-    color: #a3a2a3;
-    font-size: 12px;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .creditsDialog {
@@ -39,7 +39,7 @@
 
 .creditsSource {
     color: #8a898a;
-    font-size: 12px;
+    font-size: var(--text-caption);
 }
 
 .creditsRetry {
@@ -58,10 +58,10 @@
     list-style: none;
     padding: 0;
     margin: 0;
-    border-top: 1px solid #535353;
+    border-top: 1px solid var(--border-control);
 }
 .albumVersionList li {
-    border-bottom: 1px solid #535353;
+    border-bottom: 1px solid var(--border-control);
 }
 .albumVersion {
     display: grid;
@@ -79,39 +79,39 @@
 }
 .albumVersion:hover,
 .albumVersion:focus-visible {
-    background-color: #151515;
+    background-color: var(--surface-field);
 }
 .albumVersion[aria-current="true"] {
-    background-color: #352000;
+    background-color: var(--surface-selection);
 }
 .albumVersionCover {
     width: 48px;
     height: 48px;
-    border-radius: 4px;
+    border-radius: var(--radius-xs);
     object-fit: cover;
     background: #1d1d1d;
 }
 .albumVersionText {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
     min-width: 0;
 }
 .albumVersionTitle {
     overflow: hidden;
-    font-size: 14px;
+    font-size: var(--text-small);
     white-space: nowrap;
     text-overflow: ellipsis;
 }
 .albumVersionEdition {
-    color: #a3a2a3;
+    color: var(--ink-muted);
 }
 .albumVersionExplicit {
     display: inline-block;
     margin-left: 6px;
     padding: 0 4px;
     border-radius: 3px;
-    background: #a3a2a3;
+    background: var(--ink-muted);
     color: black;
     font-size: 10px;
     font-weight: 700;
@@ -121,10 +121,10 @@
 .albumVersionDetails {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
-    color: #a3a2a3;
-    font-size: 12px;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 .albumVersionDetails .providerIcon {
     width: 14px;
@@ -132,8 +132,8 @@
     flex: none;
 }
 .albumVersionState {
-    color: #a3a2a3;
-    font-size: 12px;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .aboutDialog .aboutContent p {
@@ -143,7 +143,7 @@
 
 .aboutDialog .aboutContent .creditsSource {
     color: #8a898a;
-    font-size: 12px;
+    font-size: var(--text-caption);
 }
 
 .aboutDialog .aboutContent > :last-child,

@@ -49,7 +49,7 @@ export function TrackPlaybackMenu({
     <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose}>
       <div
         ref={menu}
-        id="trackPlaybackMenu"
+        id="trackPlaybackMenu" className="uiMenu uiMenuPopup"
         role="menu"
         tabIndex={-1}
         data-navigation={keyboardNavigation ? "keyboard" : "pointer"}

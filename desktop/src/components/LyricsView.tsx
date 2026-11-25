@@ -1127,7 +1127,7 @@ function SyncMenu({
         {timed ? "Sync" : "Source"}
       </button>
       {open && (
-        <div ref={panel} className="lyricsSyncPanel" role="menu" aria-label="Lyric sync">
+        <div ref={panel} className="lyricsSyncPanel uiMenu" role="menu" aria-label="Lyric sync">
           <div className="lyricsSources" role="group" aria-label="Lyrics source">
             <span className="lyricsSourcesLabel">Source</span>
             {([undefined, ...lyricsSources] as const).map((option) => {

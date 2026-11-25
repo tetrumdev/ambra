@@ -1,31 +1,24 @@
-.qualityLight {
+:is(.qualityLight, .qualityPanel) {
     --tier-bitPerfect: #b37cff;
     --tier-hiRes: #4fa8ff;
     --tier-lossless: #4cd18a;
     --tier-lossy: #f2b544;
-    --tier-unknown: #8a8a8a;
+    --tier-unknown: var(--ink-subtle);
+}
+
+.qualityLight {
     display: grid;
     place-items: center;
 }
 
 .qualityLightButton {
-    display: grid;
-    place-items: center;
     width: 28px;
     height: 28px;
-    padding: 0;
-    border: 0;
-    border-radius: 999px;
-    background: transparent;
     appearance: none;
     -webkit-appearance: none;
     cursor: default;
-    outline: none;
 }
 
-.qualityLightButton:focus-visible {
-    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
-}
 
 /* Hovering brightens the light itself instead of drawing a backdrop. */
 .qualityLightButton:hover .qualityLightDot,
@@ -42,7 +35,7 @@
     --tint: color-mix(in srgb, var(--tier) 45%, var(--ink));
     width: 9px;
     height: 9px;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: radial-gradient(circle,
         color-mix(in srgb, var(--tint) 70%, var(--ink)) 0%,
         var(--tint) 45%,
@@ -57,39 +50,33 @@
 [data-tier="lossless"] .qualityLightDot { --tier: var(--tier-lossless); }
 [data-tier="lossy"] .qualityLightDot { --tier: var(--tier-lossy); }
 
-/* The panel is portalled out of .qualityLight, so it carries the tier colors itself. */
 .qualityPanel {
-    --tier-bitPerfect: #b37cff;
-    --tier-hiRes: #4fa8ff;
-    --tier-lossless: #4cd18a;
-    --tier-lossy: #f2b544;
-    --tier-unknown: #8a8a8a;
     width: max-content;
     min-width: 260px;
     max-width: min(420px, calc(100vw - 8px));
-    gap: 8px;
+    gap: var(--space-2);
     text-align: left;
     padding: 12px;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     outline: none;
 }
 
 .qualityPanelHeader {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 0 2px 8px;
-    border-bottom: 1px solid #2f2f2f;
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .qualityPanelTitle {
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     font-weight: 600;
 }
 
 .qualityPanelSubtitle {
     margin-left: auto;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 0.7rem;
 }
 
@@ -104,13 +91,13 @@
 .qualityPanelRow {
     display: grid;
     grid-template-columns: 110px max-content;
-    gap: 16px;
-    font-size: 0.75rem;
+    gap: var(--space-4);
+    font-size: var(--text-caption);
     line-height: 1.4;
 }
 
 .qualityPanelRow dt {
-    color: #a3a2a3;
+    color: var(--ink-muted);
 }
 
 .qualityPanelRow dd {
@@ -122,7 +109,7 @@
 .qualityPanelNote {
     margin: 0;
     padding: 0 2px;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 0.7rem;
     line-height: 1.4;
 }

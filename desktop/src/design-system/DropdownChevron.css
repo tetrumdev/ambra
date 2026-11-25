@@ -1,7 +1,7 @@
 .playlistDropdown > summary {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     list-style: none;
 }
 
@@ -26,24 +26,13 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
-    box-sizing: border-box;
+    gap: var(--space-3);
     width: 100%;
-    height: 42px;
-    padding: 0 16px;
-    font: inherit;
-    font-size: 14px;
-    color: var(--ink);
-    background: rgba(22, 22, 22, 0.6);
-    border: 1px solid #535353;
-    border-radius: 8px;
+    min-height: 42px;
+    padding-inline: var(--space-4);
+    border-radius: var(--radius-sm);
     text-align: left;
     cursor: default;
-}
-
-.dropdownTrigger:hover:not(:disabled),
-.dropdownTrigger:focus-visible {
-    border-color: rgb(140, 140, 140);
 }
 
 .dropdownTrigger .dropdownChevron {
@@ -67,7 +56,10 @@
     width: max-content;
     max-width: calc(100vw - 24px);
     padding: 6px;
-    animation: menuEnter 100ms ease-out both;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    overflow-y: auto;
 }
 
 .dropdownMenu::backdrop {
@@ -75,7 +67,7 @@
     pointer-events: none;
 }
 
-.dropdownMenu .audioDeviceOption {
+.dropdownMenu .uiMenuOption {
     min-height: 36px;
     height: auto;
     padding-block: 6px;
@@ -94,14 +86,14 @@
     flex: none;
 }
 
-.dropdownMenu[data-icon-only] .audioDeviceOption {
+.dropdownMenu[data-icon-only] .uiMenuOption {
     grid-template-columns: 1fr;
     justify-items: center;
     padding-inline: 4px;
 }
 
-.dropdownMenu[data-icon-only] .audioDeviceOption[aria-checked="true"] {
-    background: #303030;
+.dropdownMenu[data-icon-only] .uiMenuOption[aria-checked="true"] {
+    background: var(--surface-selected);
 }
 
 .playlistDropdown[open] > summary .dropdownChevron {

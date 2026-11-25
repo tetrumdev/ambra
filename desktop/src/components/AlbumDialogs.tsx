@@ -1,3 +1,4 @@
+import { Dialog } from "../design-system/Dialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { loadAlbumInfo, type AlbumInfo, type CatalogAlbum, type CatalogArtist } from "../api/server";
 import type { Track } from "../types/music";
@@ -59,15 +60,15 @@ export function AlbumCreditsDialog({ album, tracks, open, onClose, onOpenArtist 
   const artistFor = useCreditArtists(names, info?.source ?? null, catalogIds, tracks);
 
   return (
-    <dialog
+    <Dialog
       ref={dialog}
-      className="playlistEditDialog creditsDialog"
+      className="creditsDialog"
       aria-label={`Credits for ${album.title}`}
-      onCancel={event => { event.preventDefault(); onClose(); }}
+      onDismiss={onClose}
       onKeyDown={event => event.stopPropagation()}
     >
-      <button type="button" className="playlistEditCancel" onClick={onClose}>Close</button>
-      <div className="playlistEditContent">
+      <button type="button" className="uiDialogClose" onClick={onClose}>Close</button>
+      <div className="uiDialogContent">
         <div>
           <h2>{album.title}</h2>
           <p>{album.artist}</p>
@@ -90,7 +91,7 @@ export function AlbumCreditsDialog({ album, tracks, open, onClose, onOpenArtist 
           <p>No credits are available for this album.</p>
         )}
       </div>
-    </dialog>
+    </Dialog>
   );
 }
 
@@ -117,15 +118,15 @@ export function AlbumVersionsDialog({ album, open, onClose, onSelect }: {
   }, [open, album.id, album.provider, attempt]);
 
   return (
-    <dialog
+    <Dialog
       ref={dialog}
-      className="playlistEditDialog creditsDialog albumVersionsDialog"
+      className="creditsDialog albumVersionsDialog"
       aria-label={`Versions of ${album.title}`}
-      onCancel={event => { event.preventDefault(); onClose(); }}
+      onDismiss={onClose}
       onKeyDown={event => event.stopPropagation()}
     >
-      <button type="button" className="playlistEditCancel" onClick={onClose}>Close</button>
-      <div className="playlistEditContent">
+      <button type="button" className="uiDialogClose" onClick={onClose}>Close</button>
+      <div className="uiDialogContent">
         <div>
           <h2>Versions</h2>
           <p>{album.title} · {album.artist}</p>
@@ -174,6 +175,6 @@ export function AlbumVersionsDialog({ album, open, onClose, onSelect }: {
           </ul>
         )}
       </div>
-    </dialog>
+    </Dialog>
   );
 }

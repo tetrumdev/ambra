@@ -1,0 +1,167 @@
+.uiField {
+    box-sizing: border-box;
+    min-width: 0;
+    min-height: var(--control-compact);
+    padding: 0 var(--space-3);
+    border: var(--border-width) solid var(--border-input);
+    border-radius: var(--radius-field);
+    background: var(--surface-field);
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--text-control);
+    -webkit-user-select: text;
+    user-select: text;
+}
+
+.uiField:disabled {
+    opacity: var(--disabled-opacity);
+}
+
+.uiField:focus {
+    border-color: var(--border-hover);
+}
+
+.uiField::placeholder {
+    color: var(--ink-subtle);
+}
+
+.uiSearch {
+    box-sizing: border-box;
+    border: var(--border-width) solid var(--border-input);
+    border-radius: var(--radius-pill);
+    background: var(--glass-control);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    transition: box-shadow var(--motion-feedback), border-color var(--motion-feedback);
+}
+
+.uiSearch:focus-within {
+    border-color: var(--border-hover);
+    background: var(--glass-menu);
+    box-shadow: 0 0 7px rgb(255 255 255 / 0.3);
+}
+
+.uiSearch input::placeholder {
+    color: var(--ink-secondary);
+}
+
+.uiMenu {
+    box-sizing: border-box;
+    border: var(--border-width) solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--glass-menu);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    text-align: left;
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+}
+
+.uiMenu :focus-visible {
+    outline-offset: calc(-1 * (var(--focus-width) + 1px));
+}
+
+/* Output and dropdown options share a rounded highlight and a check for the active choice. */
+.uiMenuOption {
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-2);
+    height: 30px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    background: transparent;
+    font-family: var(--font-sans);
+    font-size: var(--text-control);
+    text-align: left;
+}
+
+.uiMenuOption:hover:not(:disabled),
+.uiMenuOption:focus-visible {
+    background: var(--surface-selected);
+}
+
+.uiMenuOption:disabled {
+    color: var(--ink-muted);
+}
+
+.uiMenuCheck {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+}
+
+.uiMenuOption[aria-checked="true"] .uiMenuCheck,
+.uiMenuOption[aria-current="true"] .uiMenuCheck {
+    background: url("/check.svg") center / contain no-repeat;
+}
+
+.uiDialog {
+    box-sizing: border-box;
+    width: min(460px, calc(100vw - var(--space-8)));
+    max-height: calc(100% - var(--space-8));
+    padding: var(--space-6);
+    border: var(--border-width) solid var(--border-control);
+    border-radius: var(--radius-lg);
+    background: var(--glass-dialog);
+    -webkit-backdrop-filter: var(--glass-dialog-blur);
+    backdrop-filter: var(--glass-dialog-blur);
+    box-shadow: var(--dialog-shadow);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    text-align: left;
+}
+
+.uiDialog::backdrop {
+    background: var(--dialog-backdrop);
+}
+
+.uiDialog h2 {
+    margin: 0;
+    font-size: var(--text-heading);
+    line-height: 1.3;
+    font-weight: var(--weight-semibold);
+}
+
+.uiDialogClose {
+    display: block;
+    margin: 0 0 var(--space-4);
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--ink-secondary);
+    font: inherit;
+    font-size: var(--text-caption);
+    line-height: 1.5;
+}
+
+.uiDialogClose:is(:hover, :focus-visible) {
+    color: var(--ink);
+    text-decoration: underline;
+}
+
+.uiDialogContent {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.uiDialogContent p {
+    margin: 0;
+    color: var(--ink-secondary);
+    font-size: var(--text-small);
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+}
+
+.uiDialogContent [role="alert"] {
+    color: var(--error-text);
+}
+
+:root[data-reduce-motion] .uiSearch {
+    transition: none;
+}

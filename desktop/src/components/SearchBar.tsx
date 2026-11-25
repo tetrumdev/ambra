@@ -1,8 +1,9 @@
+import { IconButton } from "../design-system/IconButton";
 import "./SearchBar.css";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import type { SearchProvider, StreamingProvider } from "../api/server";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Dropdown } from "./Dropdown";
+import { Dropdown } from "../design-system/Dropdown";
 
 const providerNames: Record<SearchProvider, string> = {
   all: "All services",
@@ -92,6 +93,7 @@ export function SearchBar({
   return (
     <div
       id="searchBar"
+      className="uiSearch"
       role="search"
       data-away={away}
       data-summoned={summoned || undefined}
@@ -139,19 +141,17 @@ export function SearchBar({
               aria-label="Search songs"
             />
             {query && (
-              <button
+              <IconButton
                 className="searchClearButton"
-                type="button"
-                aria-label="Clear search"
+                icon="/x.svg"
+                label="Clear search"
                 // Keeps focus in the field so typing carries on after clearing.
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={() => {
                   onQueryChange("");
                   input.current?.focus();
                 }}
-              >
-                <img src="/x.svg" alt="" aria-hidden="true" />
-              </button>
+              />
             )}
           </>
         ) : (

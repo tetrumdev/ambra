@@ -1,4 +1,5 @@
 import { Image } from "expo-image";
+import { colors, sizes } from "./theme";
 
 // These are the original app assets, shared directly with desktop.
 const assets = {
@@ -30,7 +31,7 @@ const assets = {
 
 export type IconName = keyof typeof assets;
 
-export function Icon({ name, size = 22, color = "white", rotation = 0 }: { name: IconName; size?: number; color?: string; rotation?: number }) {
+export function Icon({ name, size = sizes.icon, color = colors.text, rotation = 0 }: { name: IconName; size?: number; color?: string; rotation?: number }) {
   return (
     <Image
       source={assets[name]}

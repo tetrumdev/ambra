@@ -6,11 +6,11 @@
     display: grid;
     place-items: center;
     border: 2px dashed rgba(255, 255, 255, 0.35);
-    border-radius: 16px;
+    border-radius: var(--radius-lg);
     background: rgba(10, 10, 10, 0.55);
     pointer-events: none;
     opacity: 0;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--motion-feedback);
 }
 
 .musicDropZone[data-shown] {
@@ -19,12 +19,12 @@
 
 .musicDropZoneBody {
     padding: 12px 24px;
-    border: 1px solid #535353;
-    border-radius: 100px;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
     background: rgba(22, 22, 22, 0.6);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     color: var(--ink);
-    font: 500 1rem "Stack Sans Text", Inter, sans-serif;
+    font: 500 1rem var(--font-sans);
 }
 

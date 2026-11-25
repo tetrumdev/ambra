@@ -1,6 +1,6 @@
 import { Image } from "expo-image";
 import { FlatList, ScrollView, StyleSheet, Text, View, useWindowDimensions } from "react-native";
-import { colors, fonts } from "../theme";
+import { colors, fonts, space, textSize } from "../theme";
 import { Touchable } from "../Touchable";
 
 const placeholder = require("../../assets/ambra.png");
@@ -53,12 +53,12 @@ export function CardGrid({ cards, header, bottomInset }: { cards: Card[]; header
 
 const styles = StyleSheet.create({
   section: { paddingTop: 20 },
-  heading: { color: "white", fontFamily: fonts.sans, fontSize: 20, fontWeight: "600", paddingHorizontal: 24, paddingBottom: 12 },
+  heading: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.heading, fontWeight: "600", paddingHorizontal: 24, paddingBottom: 12 },
   row: { gap: 14, paddingHorizontal: 24 },
-  gridRow: { gap: 16, marginBottom: 20 },
+  gridRow: { gap: space.lg, marginBottom: 20 },
   image: { backgroundColor: "#141414", borderCurve: "continuous" },
-  title: { color: "white", fontFamily: fonts.sans, fontSize: 14, fontWeight: "500", marginTop: 8 },
-  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: 12, marginTop: 3 },
+  title: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.small, fontWeight: "500", marginTop: 8 },
+  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption, marginTop: 3 },
   centered: { textAlign: "center" },
-  empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: 14, lineHeight: 20, paddingHorizontal: 24 },
+  empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 20, paddingHorizontal: 24 },
 });

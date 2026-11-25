@@ -42,11 +42,10 @@
     .libraryItem,
     .libraryOverviewCard,
     .menuItem,
-    .audioDeviceOption,
+    .uiMenuOption,
     .selectionActionMenu button,
     .selectionDeleteButton,
-    .playlistEditButtons button,
-    .lyricsSyncNudges button,
+        .lyricsSyncNudges button,
     .lyricsMessage button,
     .playbackError button,
     .sidebarBtn,
@@ -56,7 +55,7 @@
     .columnSortButton,
     .librarySectionButton,
     .artistTextAction,
-    .playlistEditCancel,
+    .uiDialogClose,
     .trackPlayButton,
     .homePlay,
     .homeShade,
@@ -71,11 +70,10 @@
     .libraryItem,
     .libraryOverviewCard,
     .menuItem,
-    .audioDeviceOption,
+    .uiMenuOption,
     .selectionActionMenu button,
     .selectionDeleteButton,
-    .playlistEditButtons button,
-    .lyricsSyncNudges button,
+        .lyricsSyncNudges button,
     .lyricsMessage button,
     .playbackError button,
     .sidebarBtn,
@@ -85,7 +83,7 @@
     .columnSortButton,
     .librarySectionButton,
     .artistTextAction,
-    .playlistEditCancel,
+    .uiDialogClose,
     .trackPlayButton
 ):hover,
 :where(.homeCard:hover .homePlay, .homeCard:hover .homeShade, .sidebarSettingsButton:hover img) {
@@ -95,9 +93,9 @@
 
 /* Menus grow out of the point they were opened from (each sets its transform-origin)
    and fade out as they close (hooks/useFadeOutOnUnmount.ts). */
-#trackPlaybackMenu,
-#trackCollectionMenu,
-.devAudioControls {
+.uiMenuPopup {
+    position: fixed;
+    z-index: 20;
     animation: menuEnter var(--motion-snappy) both;
 }
 
@@ -112,7 +110,7 @@
 dialog[open],
 dialog[open]::backdrop {
     opacity: 1;
-    transition: opacity 0.15s ease;
+    transition: opacity var(--motion-feedback);
 }
 
 dialog[data-closing],
@@ -127,9 +125,7 @@ dialog[data-closing]::backdrop {
     }
 }
 
-:root[data-reduce-motion] #trackPlaybackMenu,
-:root[data-reduce-motion] #trackCollectionMenu,
-:root[data-reduce-motion] .devAudioControls {
+:root[data-reduce-motion] .uiMenuPopup {
     animation: none;
 }
 

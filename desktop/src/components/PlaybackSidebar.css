@@ -3,9 +3,9 @@
    full queue used. Beside the library it is a column of the page, divided off like the
    library sidebar; over the player it floats as the player's glass (AppChrome.css). */
 .playbackSidebar {
-    --sidebar-divider: #535353;
+    --sidebar-divider: var(--border-control);
     --sidebar-surface: var(--surface-black);
-    --sidebar-hover: #151515;
+    --sidebar-hover: var(--surface-field);
     position: absolute;
     inset: var(--library-titlebar-height) 0 var(--player-height) auto;
     width: var(--playback-sidebar-width);
@@ -15,7 +15,7 @@
     background: var(--sidebar-surface);
     border-left: 1px solid var(--sidebar-divider);
     color: var(--ink);
-    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-family: var(--font-sans);
     font-size: 0.9rem;
     font-weight: 300;
     text-align: left;
@@ -34,9 +34,9 @@
     overflow: hidden;
     border: 1px solid rgba(100, 100, 100, 0.4);
     border-radius: 20px;
-    background: rgba(22, 22, 22, 0.4);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: var(--glass-control);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
     transition: opacity 0.25s ease, visibility 0.25s;
 }
@@ -76,15 +76,15 @@
     top: calc(50% - 16px);
     width: 3px;
     height: 32px;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: transparent;
     content: "";
     pointer-events: none;
-    transition: background-color 0.15s ease;
+    transition: background-color var(--motion-feedback);
 }
 
 .playbackSidebarResize:is(:hover, :focus-visible, [data-resizing])::after {
-    background: #b3b3b3;
+    background: var(--ink-secondary);
 }
 
 :root:has(.playbackSidebarResize[data-resizing]) * {
@@ -98,7 +98,7 @@
     flex: none;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
     height: 64px;
     padding: 0 12px 0 15px;
 }
@@ -106,7 +106,7 @@
 .playbackSidebarTabs {
     display: flex;
     align-items: center;
-    gap: 20px;
+    gap: var(--space-5);
     min-width: 0;
     overflow: hidden;
 }
@@ -116,7 +116,7 @@
     padding: 4px 0;
     border: 0;
     background: transparent;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font: inherit;
     font-size: 1rem;
     /* The sidebar's light 300 reads thin and spread out at tab size; match the library sidebar's 400. */
@@ -153,7 +153,6 @@
 }
 
 .playbackSidebar button:focus-visible {
-    outline: 1px solid #b3b3b3 !important;
     outline-offset: -2px;
 }
 
@@ -196,8 +195,8 @@
     margin: 0;
     padding: 0 15px 10px;
     border-bottom: 1px solid var(--sidebar-divider);
-    color: #b3b3b3;
-    font-size: 12px;
+    color: var(--ink-secondary);
+    font-size: var(--text-caption);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -225,7 +224,7 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font: inherit;
     letter-spacing: inherit;
     text-transform: inherit;
@@ -239,7 +238,7 @@
 .playbackSidebarMessage {
     margin: 0;
     padding: 14px 15px;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     line-height: 1.5;
 }
 
@@ -265,14 +264,14 @@
 
 .playbackSidebar[data-floating] .playbackSidebarHistoryBar:has(.playbackSidebarHistoryToggle[aria-expanded="true"]) {
     background: rgb(22 22 22 / 0.75);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
 }
 
 .playbackSidebarHistoryToggle {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 0;
     border: 0;
     background: transparent;
@@ -304,7 +303,7 @@
 .playbackSidebar .playbackSidebarRow {
     --library-columns: 86px minmax(0, 1fr) 40px;
     height: 64px;
-    gap: 12px;
+    gap: var(--space-3);
     border-bottom-color: var(--sidebar-divider);
     background-color: var(--sidebar-surface);
 }
@@ -315,7 +314,7 @@
 }
 
 .playbackSidebar .playbackSidebarRow[data-selected="true"] {
-    background-color: #352000;
+    background-color: var(--surface-selection);
 }
 
 .playbackSidebarRow .coverImgContainer {
@@ -340,7 +339,7 @@
 .playbackSidebarArtists {
     min-width: 0;
     overflow: hidden;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 0.8rem;
     font-weight: 300;
     line-height: 1.3;

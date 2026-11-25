@@ -6,19 +6,19 @@
     z-index: 12;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     box-sizing: border-box;
     height: 42px;
     padding: 0 6px 0 14px;
     border: 1px solid rgb(255 255 255 / 0.14);
-    border-radius: 10px;
+    border-radius: var(--radius-field);
     background: rgb(14 14 14 / 0.9);
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.55);
     color: var(--ink);
-    font-family: "Stack Sans Text", Inter, sans-serif;
-    font-size: 0.85rem;
+    font-family: var(--font-sans);
+    font-size: var(--text-control);
     white-space: nowrap;
 }
 

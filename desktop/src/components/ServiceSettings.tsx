@@ -61,7 +61,7 @@ export function ServiceSettings({ active, onServiceConnected, playlistVisibility
     {(["tidal", "qobuz", "spotify"] as const).map(provider => <div className="settingsGroup" key={provider}>
       <h2>{provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"}</h2>
       <p role="status">{connected && status?.[provider] ? "Connected on server" : "Unavailable"}</p>
-      <button type="button" className={`settingsPill${status?.[provider] ? " settingsPillDone" : " settingsPillPrimary"}`}
+      <button type="button" className={`uiButton${status?.[provider] ? " settingsPillDone" : " uiButtonPrimary"}`}
         disabled={!connected || !isTauri() || busy !== null || status?.[provider] === true}
         onClick={() => void signIn(provider)} aria-label={`Sign in to ${provider === "tidal" ? "Tidal" : provider === "qobuz" ? "Qobuz" : "Spotify"}`}>
         {status?.[provider] ? "Connected" : busy === provider ? "Waiting for sign-in…" : "Sign in"}
@@ -71,7 +71,7 @@ export function ServiceSettings({ active, onServiceConnected, playlistVisibility
           checked={playlistVisibility[provider]} onChange={visible => onPlaylistVisibilityChange(provider, visible)} />
       </SettingRow>
     </div>)}
-    {busy && <p role="status" className="settingsMuted">Finish signing in in your browser. <button type="button" className="settingsPill" onClick={cancel}>Cancel</button></p>}
+    {busy && <p role="status" className="settingsMuted">Finish signing in in your browser. <button type="button" className="uiButton" onClick={cancel}>Cancel</button></p>}
     {busy === "tidal" && manualSubmit && <form className="settingsCallbackForm" onSubmit={event => {
       event.preventDefault();
       if (submitting || !callbackUrl.trim()) return;
@@ -84,9 +84,9 @@ export function ServiceSettings({ active, onServiceConnected, playlistVisibility
       }).finally(() => { if (pending.current === controller) setSubmitting(false); });
     }}>
       <p className="settingsMuted">After signing in to Tidal, copy the final URL from your browser’s address bar and paste it here.</p>
-      <input type="text" aria-label="Tidal callback URL" placeholder="https://tidal.com/android/login/auth?code=…"
+      <input className="uiField" type="text" aria-label="Tidal callback URL" placeholder="https://tidal.com/android/login/auth?code=…"
         value={callbackUrl} onChange={event => setCallbackUrl(event.currentTarget.value)} autoComplete="off" spellCheck={false} />
-      <button type="submit" className="settingsPill settingsPillPrimary" disabled={submitting || !callbackUrl.trim()}>Finish sign-in</button>
+      <button type="submit" className="uiButton uiButtonPrimary" disabled={submitting || !callbackUrl.trim()}>Finish sign-in</button>
     </form>}
     {message && <p className="settingsServiceMessage" role="status">{message}</p>}
     {error && <p className="settingsError" role="alert">{error}</p>}

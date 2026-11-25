@@ -1,5 +1,5 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Track } from "../../desktop/src/types/music";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
 import { clientId } from "./client";
@@ -9,7 +9,8 @@ import { addToPlaylist, addToServicePlaylist, createPlaylist, trackCredits, useL
 import { reason, showToast } from "./navigation";
 import { services } from "./servicePreferences";
 import { Sheet } from "./Sheet";
-import { colors, fonts, haptic } from "./theme";
+import { colors, fonts, haptic, radius, space, textSize } from "./theme";
+import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
 
 type DownloadRequest = { tracks: Track[]; title: string };
@@ -84,7 +85,7 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
               <Text style={styles.detail}>{job.finished ? job.failed ? `${job.done} downloaded, ${job.failed} failed` : "Done" : `${job.done + job.failed} of ${job.total}`}</Text>
               {job.error && <Text style={styles.error}>{job.error}</Text>}
             </View>)}
-            <Touchable accessibilityRole="button" onPress={close} style={styles.primary}><Text style={styles.primaryText}>Done</Text></Touchable>
+            <Button title="Done" variant="primary" onPress={close} style={styles.primary} />
           </> : <>
             <Text style={styles.section}>Quality</Text>
             {downloadQualities.map(option => <Touchable key={option.id} accessibilityRole="radio" accessibilityState={{ checked: quality === option.id }} highlight haptic="select" onPress={() => setQuality(option.id)} style={styles.option}>
@@ -106,12 +107,10 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
               {clients?.length === 0 && <Text style={styles.detail}>No apps are open on this server.</Text>}
               {clients?.map(client => <Touchable key={client.id} accessibilityRole="checkbox" accessibilityState={{ checked: chosen.has(client.id) }} highlight haptic="select"
                 onPress={() => setChosen(current => { const next = new Set(current); if (next.has(client.id)) next.delete(client.id); else next.add(client.id); return next; })} style={styles.option}>
-                <View style={[styles.box, chosen.has(client.id) && styles.boxChecked]}>{chosen.has(client.id) && <Icon name="check" size={12} color="black" />}</View>
+                <View style={[styles.box, chosen.has(client.id) && styles.boxChecked]}>{chosen.has(client.id) && <Icon name="check" size={12} color={colors.black} />}</View>
                 <Text style={styles.label}>{client.name}{client.id === self ? " (this phone)" : ""}</Text>
               </Touchable>)}
-              <Touchable accessibilityRole="button" disabled={busy || chosen.size === 0} haptic="firm" onPress={() => void start({ kind: "clients", clientIds: [...chosen] })} style={styles.primary}>
-                <Text style={styles.primaryText}>{busy ? "Starting…" : "Download"}</Text>
-              </Touchable>
+              <Button title={busy ? "Starting…" : "Download"} variant="primary" disabled={busy || chosen.size === 0} haptic="firm" onPress={() => void start({ kind: "clients", clientIds: [...chosen] })} style={styles.primary} />
             </>}
           </>}
         {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
@@ -137,8 +136,8 @@ export function PlaylistPicker({ tracks, onClose }: { tracks: Track[]; onClose: 
     <Sheet label="Add to Playlist" tall onClose={onClose} grip={<View style={styles.heading}><Text style={styles.title}>Add to Playlist</Text></View>}>
       {() => <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent} keyboardShouldPersistTaps="handled">
         <View style={styles.create}>
-          <TextInput value={name} onChangeText={setName} placeholder="New playlist" placeholderTextColor={colors.faint} keyboardAppearance="dark" style={styles.input} accessibilityLabel="New AMBRA playlist name" />
-          <Touchable accessibilityRole="button" disabled={!name.trim() || busy} onPress={() => add(() => createPlaylist(name, tracks), name.trim())} style={styles.createButton}><Text style={styles.primaryText}>Create</Text></Touchable>
+          <Field value={name} onChangeText={setName} placeholder="New playlist" style={styles.input} accessibilityLabel="New AMBRA playlist name" />
+          <Button title="Create" variant="primary" disabled={!name.trim() || busy} onPress={() => add(() => createPlaylist(name, tracks), name.trim())} />
         </View>
         <Text style={styles.section}>AMBRA</Text>
         {library.playlists.length === 0 && <Text style={styles.detail}>No playlists yet. Create one above.</Text>}
@@ -208,39 +207,34 @@ export function PromptSheet({ title, message, initial, confirmLabel, destructive
     <Sheet label={title} onClose={onClose} grip={<View style={styles.heading}><Text style={styles.title}>{title}</Text></View>}>
       {close => <View style={styles.bodyContent}>
         {message && <Text style={styles.detail}>{message}</Text>}
-        {initial !== undefined && <TextInput autoFocus value={value} onChangeText={setValue} keyboardAppearance="dark" selectTextOnFocus style={styles.input} accessibilityLabel={title} />}
+        {initial !== undefined && <Field autoFocus value={value} onChangeText={setValue} selectTextOnFocus accessibilityLabel={title} />}
         {error && <Text style={styles.error}>{error}</Text>}
-        <Touchable accessibilityRole="button" disabled={busy || (initial !== undefined && !value.trim())} haptic={destructive ? "warning" : "firm"}
+        <Button title={busy ? "Saving…" : confirmLabel} variant={destructive ? "destructive" : "primary"} disabled={busy || (initial !== undefined && !value.trim())} haptic={destructive ? "warning" : "firm"}
           onPress={() => { setBusy(true); setError(null); void onSubmit(value).then(close).catch(failure => { setError(reason(failure, "Couldn't save this change.")); setBusy(false); }); }}
-          style={[styles.primary, destructive && styles.destructive]}>
-          <Text style={[styles.primaryText, destructive && { color: "white" }]}>{busy ? "Saving…" : confirmLabel}</Text>
-        </Touchable>
+          style={styles.primary} />
       </View>}
     </Sheet>
   );
 }
 
 const styles = StyleSheet.create({
-  heading: { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 10, gap: 4 },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 28, fontWeight: "500" },
+  heading: { paddingHorizontal: 8, paddingTop: 6, paddingBottom: 10, gap: space.xs },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 28, fontWeight: "500" },
   body: { flexGrow: 0 },
-  bodyContent: { paddingHorizontal: 8, paddingBottom: 12, gap: 4 },
-  section: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 12, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingTop: 16, paddingBottom: 6 },
-  option: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 48, paddingHorizontal: 8, borderRadius: 10 },
-  label: { flex: 1, color: "white", fontFamily: fonts.sans, fontSize: 15 },
+  bodyContent: { paddingHorizontal: 8, paddingBottom: 12, gap: space.xs },
+  section: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingTop: 16, paddingBottom: 6 },
+  option: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 48, paddingHorizontal: 8, borderRadius: radius.field },
+  label: { flex: 1, color: colors.text, fontFamily: fonts.sans, fontSize: 15 },
   selected: { fontWeight: "600" },
-  detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13, lineHeight: 19 },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 13, lineHeight: 19, paddingTop: 8 },
-  primary: { marginTop: 16, minHeight: 48, borderRadius: 100, backgroundColor: "white", alignItems: "center", justifyContent: "center" },
-  primaryText: { color: "black", fontFamily: fonts.sans, fontSize: 15, fontWeight: "600" },
-  destructive: { backgroundColor: "#7a2323" },
+  detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 19 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 19, paddingTop: 8 },
+  primary: { marginTop: 16 },
   job: { paddingVertical: 8, gap: 2 },
   backRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36 },
   box: { width: 20, height: 20, borderRadius: 5, borderWidth: 1, borderColor: "#5a5a5a", alignItems: "center", justifyContent: "center" },
-  boxChecked: { backgroundColor: "white", borderColor: "white" },
+  boxChecked: { backgroundColor: colors.text, borderColor: colors.text },
   loading: { padding: 16 },
-  create: { flexDirection: "row", gap: 8, alignItems: "center", paddingTop: 4 },
-  input: { flex: 1, minHeight: 44, borderRadius: 100, borderWidth: 1, borderColor: "#535353", color: "white", fontFamily: fonts.sans, fontSize: 15, paddingHorizontal: 16 },
-  createButton: { minHeight: 44, paddingHorizontal: 18, borderRadius: 100, backgroundColor: "white", alignItems: "center", justifyContent: "center" },
+  create: { flexDirection: "row", gap: space.sm, alignItems: "center", paddingTop: 4 },
+  input: { flex: 1 },
   credit: { gap: 2 },
 });

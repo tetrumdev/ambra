@@ -13,7 +13,7 @@ import { musicProviderName } from "../utils/musicProviderName";
 import type { SettingsTab } from "./SettingsSidebar";
 import { ServiceSettings } from "./ServiceSettings";
 import { DspPanel } from "./settings/DspPanel";
-import { Dropdown } from "./Dropdown";
+import { Dropdown } from "../design-system/Dropdown";
 import { LocalSettings } from "./settings/LocalSettings";
 import { Segmented, SettingRow, Toggle } from "./settings/SettingsControls";
 import "./SettingsView.css";
@@ -139,7 +139,7 @@ export function SettingsView({
         </SettingRow>}
         {audio.settings.normalization !== "off" && <SettingRow label="Target loudness" help="The loudness songs are brought to. Higher is louder; quiet songs only rise as far as their peaks allow, so nothing clips.">
           <span className="settingsFieldRow settingsUnitInput">
-            <input type="number" aria-label="Target loudness (LUFS)" min={MIN_TARGET_LUFS} max={MAX_TARGET_LUFS} step={0.1} required
+            <input className="uiField" type="number" aria-label="Target loudness (LUFS)" min={MIN_TARGET_LUFS} max={MAX_TARGET_LUFS} step={0.1} required
               key={targetLufs} defaultValue={targetLufs} disabled={audio.saving}
               onBlur={async e => {
                 const input = e.currentTarget;
@@ -211,7 +211,7 @@ export function SettingsView({
         <VocalTimingSetting />
         <SettingRow label="Lyrics offset" help="For a delay in your speakers or headphones, like Bluetooth. A positive offset shows lyrics earlier, on every song.">
           <span className="settingsFieldRow settingsUnitInput">
-            <input type="number" aria-label="Lyrics offset (milliseconds)" min={-MAX_LYRICS_OFFSET_MS} max={MAX_LYRICS_OFFSET_MS} step={10} required
+            <input className="uiField" type="number" aria-label="Lyrics offset (milliseconds)" min={-MAX_LYRICS_OFFSET_MS} max={MAX_LYRICS_OFFSET_MS} step={10} required
               key={lyricsOffsetMs} defaultValue={lyricsOffsetMs}
               onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
               onBlur={e => {
@@ -228,7 +228,7 @@ export function SettingsView({
     <section id="settings-panel-outputs" role="region" aria-labelledby="settings-tab-outputs" hidden={tab !== "outputs"}>
       <header className="settingsPageHeader">
         <h1 className="settingsTitle">Outputs</h1>
-        <button type="button" className="settingsPill" onClick={() => void audio.refresh()} disabled={audio.loading || audio.saving}>Refresh</button>
+        <button type="button" className="uiButton" onClick={() => void audio.refresh()} disabled={audio.loading || audio.saving}>Refresh</button>
       </header>
       <div className="settingsGroup">
         <h2>{serverConnection?.clientName ?? "This computer"}</h2>
@@ -290,13 +290,13 @@ function OutputCard({ output, presets, on, playing, busy = false, canPlay, onPla
   const where = on ? ` on ${on}` : "";
   return <article className="settingsOutput" data-selected={playing || undefined}>
     <div className="settingsOutputHeader">
-      <input className="settingsOutputName" aria-label={`Name for ${output.name}${where}`} key={output.name} defaultValue={output.name} maxLength={200}
+      <input className="uiField settingsOutputName" aria-label={`Name for ${output.name}${where}`} key={output.name} defaultValue={output.name} maxLength={200}
         disabled={busy} onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
         onBlur={e => { const name = e.currentTarget.value.trim(); if (name && name !== output.name) void update({ name }); else e.currentTarget.value = output.name; }} />
       {playing && <span className="settingsChip settingsChipActive">Playing</span>}
       {output.id === "" && <span className="settingsChip">Follows system</span>}
       <span className="settingsOutputSpacer" />
-      {!playing && <button type="button" className="settingsPill" disabled={!canPlay || busy || !output.enabled} onClick={onPlayHere}>Play here</button>}
+      {!playing && <button type="button" className="uiButton" disabled={!canPlay || busy || !output.enabled} onClick={onPlayHere}>Play here</button>}
       <label className="settingsShowInPlayer">In player
         <Toggle label={`Show ${output.name}${where} in player`} checked={output.enabled} disabled={busy} onChange={enabled => void update({ enabled })} />
       </label>
@@ -342,7 +342,7 @@ function LocalOutputCard({ output, onEditPreset }: { output: OutputSettings; onE
 /** A whole number of milliseconds, saved when the field is left; put back when refused. */
 function MillisecondsInput({ label, value, max, disabled, onChange }: { label: string; value: number; max: number; disabled?: boolean; onChange: (milliseconds: number) => Promise<unknown> }) {
   return <span className="settingsFieldRow settingsUnitInput">
-    <input type="number" aria-label={label} min={0} max={max} step={1} required
+    <input className="uiField" type="number" aria-label={label} min={0} max={max} step={1} required
       key={value} defaultValue={value} disabled={disabled}
       onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
       onBlur={async e => {
@@ -372,8 +372,8 @@ function UpdateSettings() {
     <h2>Updates</h2>
     <SettingRow label={version ? `AMBRA ${version}` : "AMBRA"} hint={status}>
       {update.status === "available"
-        ? <button type="button" className="settingsPill settingsPillPrimary" onClick={() => void installUpdate()}>Update and restart</button>
-        : <button type="button" className="settingsPill" disabled={!updatesSupported || update.status === "checking" || update.status === "installing"}
+        ? <button type="button" className="uiButton uiButtonPrimary" onClick={() => void installUpdate()}>Update and restart</button>
+        : <button type="button" className="uiButton" disabled={!updatesSupported || update.status === "checking" || update.status === "installing"}
           onClick={() => void checkForUpdate()}>Check for updates</button>}
     </SettingRow>
     <SettingRow label="Check automatically" help="Ambra only looks for updates; it never installs one without asking.">

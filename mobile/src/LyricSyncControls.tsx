@@ -3,7 +3,7 @@ import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "reac
 import type { LyricSync } from "./lyricSync";
 import { Touchable } from "./Touchable";
 import { Icon } from "./Icons";
-import { fonts } from "./theme";
+import { fonts, colors, radius, space, textSize } from "./theme";
 
 export function LyricSyncControls({ value, loaded, error, following, plain, height, onResume, onResync, onNudge, onReset, onToggle }: {
   value: LyricSync; loaded: boolean; error: string | null; following: boolean; plain: boolean; height: number;
@@ -51,15 +51,15 @@ export function LyricSyncControls({ value, loaded, error, following, plain, heig
 }
 
 const styles = StyleSheet.create({
-  controls: { position: "absolute", bottom: 8, alignSelf: "center", flexDirection: "row", borderRadius: 100, borderWidth: StyleSheet.hairlineWidth, borderColor: "#454545", backgroundColor: "rgba(22,22,22,0.96)", paddingHorizontal: 5 },
-  control: { minHeight: 44, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: 8 },
+  controls: { position: "absolute", bottom: 8, alignSelf: "center", flexDirection: "row", borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: "#454545", backgroundColor: "rgba(22,22,22,0.96)", paddingHorizontal: 5 },
+  control: { minHeight: 44, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: space.sm },
   panel: { position: "absolute", bottom: 64, alignSelf: "center", width: 280, maxWidth: "94%", backgroundColor: "#181818", borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: "#484848", overflow: "hidden" },
-  panelContent: { padding: 16, gap: 12 },
-  title: { color: "white", fontFamily: fonts.sans, fontSize: 17, fontWeight: "600" },
-  detail: { color: "#b3b3b3", fontFamily: fonts.sans, fontSize: 12, lineHeight: 17 },
-  label: { color: "white", fontFamily: fonts.sans, fontSize: 13, fontWeight: "500" },
-  action: { minHeight: 44, justifyContent: "center", paddingHorizontal: 12, borderRadius: 10, backgroundColor: "#272727" },
+  panelContent: { padding: 16, gap: space.md },
+  title: { color: colors.text, fontFamily: fonts.sans, fontSize: 17, fontWeight: "600" },
+  detail: { color: "#b3b3b3", fontFamily: fonts.sans, fontSize: textSize.caption, lineHeight: 17 },
+  label: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.detail, fontWeight: "500" },
+  action: { minHeight: 44, justifyContent: "center", paddingHorizontal: 12, borderRadius: radius.field, backgroundColor: "#272727" },
   nudges: { flexDirection: "row", gap: 6 },
-  nudge: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: "#303030" },
-  failure: { color: "#ffb4b4", fontFamily: fonts.sans, fontSize: 12, lineHeight: 17 },
+  nudge: { flex: 1, minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 9, backgroundColor: colors.selected },
+  failure: { color: "#ffb4b4", fontFamily: fonts.sans, fontSize: textSize.caption, lineHeight: 17 },
 });

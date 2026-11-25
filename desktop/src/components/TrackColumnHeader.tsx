@@ -242,7 +242,7 @@ function ColumnPicker() {
       <MenuDotsIcon />
     </button>
     {/* On the page itself: a scroller around the list would otherwise place this fixed menu relative to it. */}
-    {position && createPortal(<div ref={menu} className="columnPickerMenu" role="menu" aria-label="Columns" onKeyDown={moveFocus}
+    {position && createPortal(<div ref={menu} className="columnPickerMenu uiMenu uiMenuPopup" role="menu" aria-label="Columns" onKeyDown={moveFocus}
       style={{ top: position.top, right: position.right }}>
       <span className="columnPickerHeading" aria-hidden="true">Show columns</span>
       {trackColumns.filter(column => column.key !== "track" && !excluded.includes(column.key)).map(column => {
@@ -252,9 +252,9 @@ function ColumnPicker() {
           if (isOptionalColumn(key)) setExtra(checked ? extra.filter(other => other !== key) : [...extra, key]);
           else if (isHideableColumn(key)) setHidden(checked ? [...hidden, key] : hidden.filter(other => other !== key));
         };
-        return <button key={key} type="button" role="menuitemcheckbox" aria-checked={checked} className="columnPickerOption"
+        return <button key={key} type="button" role="menuitemcheckbox" aria-checked={checked} className="uiMenuOption"
           onClick={toggle}>
-          <span className="columnPickerCheck" aria-hidden="true" />{column.label}
+          <span className="uiMenuCheck" aria-hidden="true" />{column.label}
         </button>;
       })}
     </div>, document.body)}

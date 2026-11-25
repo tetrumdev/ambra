@@ -35,7 +35,7 @@
     min-height: 0;
     overflow: hidden;
     z-index: 1;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     text-align: left;
     background: linear-gradient(
         110deg,
@@ -311,11 +311,10 @@ button.lyricLine:hover {
     color: var(--ink);
     background: rgba(255, 255, 255, 0.12);
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     padding: 10px 20px;
     font:
-        500 13px/1.4 "Stack Sans Text",
-        sans-serif;
+        500 13px/1.4 var(--font-sans);
     cursor: default;
     transition:
         background 200ms ease,
@@ -340,7 +339,7 @@ button.lyricLine:hover {
     height: 42px;
     padding: 0 6px;
     border: 1px solid rgba(100, 100, 100, 0.4);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     box-shadow: 0 0 25px 0 rgba(255, 255, 255, 0.1);
     transform: translateX(-50%);
     animation: lyricsResumeAppear 250ms ease both;
@@ -352,9 +351,9 @@ button.lyricLine:hover {
     inset: 0;
     z-index: -1;
     border-radius: inherit;
-    background: rgba(22, 22, 22, 0.4);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    background: var(--glass-control);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
 }
 /* Keep opacity off the shared parent so both the pill and its menu can sample
    the lyrics behind them, including after the entrance animation finishes. */
@@ -382,7 +381,7 @@ button.lyricLine:hover {
 .lyricsSyncTrigger {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     height: 40px;
     padding: 0 12px;
     border: 0;
@@ -390,8 +389,7 @@ button.lyricLine:hover {
     color: var(--ink);
     background: transparent;
     font:
-        500 13px/1.4 "Stack Sans Text",
-        sans-serif;
+        500 13px/1.4 var(--font-sans);
     cursor: default;
     transition:
         opacity 0.25s ease,
@@ -425,42 +423,30 @@ button.lyricLine:hover {
     position: absolute;
     bottom: calc(100% + 12px);
     left: 50%;
-    box-sizing: border-box;
     width: 220px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    color: var(--ink);
-    font-family: "Stack Sans Text", Inter, sans-serif;
-    background: none;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     transform: translateX(-50%);
 }
 .lyricsSyncPanel .menuItem:disabled {
     opacity: var(--disabled-opacity);
 }
-.lyricsSyncPanel .menuItem:disabled:hover {
-    background-color: rgba(29, 29, 29, 0.7);
-}
 .lyricsSources {
     display: flex;
     flex-direction: column;
-    border-bottom: 1px solid #2f2f2f;
+    border-bottom: 1px solid var(--border-subtle);
 }
 .lyricsSourcesLabel {
     padding: 10px 15px 2px;
-    color: #b3b3b3;
-    font-size: 12px;
-    background-color: rgba(29, 29, 29, 0.7);
+    color: var(--ink-secondary);
+    font-size: var(--text-caption);
 }
 .lyricsSources .menuItem {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
     height: 38px;
     min-height: 38px;
 }
@@ -468,26 +454,25 @@ button.lyricLine:hover {
     font-weight: 600;
 }
 .lyricsSources .menuItem strong {
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font-size: 0.8rem;
     font-weight: 400;
 }
 .lyricsSyncTiming {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 12px 15px;
     font-size: 0.9rem;
-    background-color: rgba(29, 29, 29, 0.7);
 }
 .lyricsSyncTimingLabel {
     display: flex;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
 }
 .lyricsSyncTimingLabel strong {
     font-weight: 400;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font-variant-numeric: tabular-nums;
 }
 .lyricsSyncNudges {
@@ -509,16 +494,15 @@ button.lyricLine:hover {
 .lyricsSyncNudges button:hover,
 .lyricsSyncNudges button:focus-visible {
     background: #424242;
-    outline: none;
 }
 .lyricsSyncHint {
-    color: #b3b3b3;
-    font-size: 12px;
+    color: var(--ink-secondary);
+    font-size: var(--text-caption);
 }
 .lyricsCredits {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--space-1);
     margin-top: 56px;
     /* Moves with the last line's ripple; see LyricsView.tsx. */
     will-change: transform;
@@ -529,7 +513,7 @@ button.lyricLine:hover {
     color: rgba(255, 255, 255, 0.6);
 }
 .lyricsCredit {
-    font-size: 12px;
+    font-size: var(--text-caption);
     line-height: 1.4;
     color: rgba(255, 255, 255, 0.4);
 }
@@ -540,15 +524,14 @@ button.lyricLine:hover {
     z-index: 1;
     padding: 8px 16px;
     border: 1px solid rgba(255, 255, 255, 0.12);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     white-space: nowrap;
     color: var(--ink);
     font:
-        500 13px/1.4 "Stack Sans Text",
-        sans-serif;
+        500 13px/1.4 var(--font-sans);
     background: rgba(30, 30, 30, 0.75);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
     pointer-events: none;
     transform: translateX(-50%);
@@ -627,14 +610,14 @@ button.lyricLine:hover {
     animation: none;
 }
 .lyricsView[data-reduced-motion="true"] .lyricGroup {
-    transition: opacity 150ms ease;
+    transition: opacity var(--motion-feedback);
     filter: none;
 }
 .lyricsView[data-reduced-motion="true"] .lyricPauseGroup {
     transition: none;
 }
 .lyricsView[data-reduced-motion="true"] .lyricLine {
-    transition: color 150ms ease;
+    transition: color var(--motion-feedback);
 }
 
 #lyricsPage[data-shown="false"] .lyricsStage {

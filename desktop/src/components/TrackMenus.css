@@ -19,23 +19,11 @@
 
 #trackPlaybackMenu,
 #trackCollectionMenu {
-    box-sizing: border-box;
     /* MENU_WIDTH in utils/trackMenu.ts. */
     width: 220px;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    z-index: 20;
-    position: fixed;
-    color: var(--ink);
-    /* Menus are fixed-position and may render outside a view that sets the app's UI font. */
-    font-family: "Stack Sans Text", Inter, sans-serif;
-    text-align: left;
     display: flex;
     flex-direction: column;
     overflow: hidden;
-    background: none;
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
 }
 
 .menuItem {
@@ -56,7 +44,7 @@
        outside the screens, where the page centres text. */
     text-align: left;
     white-space: nowrap;
-    background-color: rgba(29, 29, 29, 0.7);
+    background: transparent;
     display: grid;
     grid-template-columns: 1fr;
     justify-items: start;
@@ -70,7 +58,7 @@
     min-height: 34px;
     padding: 0 12px;
     font-size: 0.8rem;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .menuItem:has(> .menuIcon) {
@@ -84,27 +72,24 @@
     text-overflow: ellipsis;
 }
 
-.menuItem:hover,
+.menuItem:hover:not(:disabled),
 .menuItem:focus-visible {
-    background-color: rgba(42, 42, 42, 0.7);
+    background-color: var(--surface-hover);
     cursor: default;
 }
 
-.menuItem:focus-visible {
-    outline: none;
-}
-
-/* Explicit menu navigation avoids inheriting :focus-visible from a previous field
-   or first interaction. Pointer hover and keyboard focus never highlight two actions. */
+/* The playback menu tracks arrow-key navigation independently of pointer hover. */
 #trackPlaybackMenu:focus {
     outline: none;
 }
-#trackPlaybackMenu .menuItem {
-    background-color: rgba(29, 29, 29, 0.7);
-}
 #trackPlaybackMenu[data-navigation="pointer"] .menuItem:hover,
 #trackPlaybackMenu[data-navigation="keyboard"] .menuItem:focus {
-    background-color: rgba(42, 42, 42, 0.7);
+    background-color: var(--surface-hover);
+}
+
+#trackPlaybackMenu[data-navigation="keyboard"] .menuItem:focus {
+    outline: var(--focus-width) solid var(--focus-ring);
+    outline-offset: calc(-1 * (var(--focus-width) + 1px));
 }
 
 .menuIcon {
@@ -181,23 +166,10 @@
     opacity: var(--disabled-opacity);
     cursor: default;
 }
-/* Choosing a playlist: one glass panel like the menu it replaces, with quiet section
-   labels and the app's pill-shaped field and button for a new playlist. */
-#trackCollectionMenu:has(.playlistMenuList) {
-    background-color: rgba(29, 29, 29, 0.7);
-}
-#trackCollectionMenu:has(.playlistMenuList) .menuItem {
-    background-color: transparent;
-}
-#trackCollectionMenu:has(.playlistMenuList) .menuItem:hover,
-#trackCollectionMenu:has(.playlistMenuList) .menuItem:focus-visible {
-    background-color: rgba(255, 255, 255, 0.07);
-}
-
 .menuBack {
     grid-template-columns: 10px 1fr;
     font-weight: 600;
-    border-bottom: 1px solid #2f2f2f;
+    border-bottom: 1px solid var(--border-subtle);
 }
 .menuBack .dropdownChevron {
     transform: rotate(90deg);
@@ -218,14 +190,14 @@
 .playlistMenuList p {
     margin: 0;
     padding: 14px 15px;
-    color: #b3b3b3;
-    font-size: 0.85rem;
+    color: var(--ink-secondary);
+    font-size: var(--text-control);
 }
 
 .playlistMenuGroup > summary {
     padding: 12px 15px 4px;
-    color: #b3b3b3;
-    font-size: 12px;
+    color: var(--ink-secondary);
+    font-size: var(--text-caption);
     font-weight: 600;
     cursor: default;
 }
@@ -233,41 +205,18 @@
 .playlistMenuCreate {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 10px;
-    border-top: 1px solid #2f2f2f;
+    border-top: 1px solid var(--border-subtle);
 }
 .playlistMenuCreate input {
     flex: 1;
     min-width: 0;
     height: 32px;
-    box-sizing: border-box;
-    padding: 0 12px;
-    border: 1px solid #535353;
-    border-radius: 100px;
-    outline: none;
-    color: var(--ink);
-    background: rgba(0, 0, 0, 0.3);
-    font: inherit;
-    font-size: 0.85rem;
-    user-select: text;
-    -webkit-user-select: text;
-}
-.playlistMenuCreate input:focus {
-    border-color: #8a8a8a;
+    border-radius: var(--radius-field);
 }
 .playlistMenuCreate button {
     flex: none;
-    height: 32px;
-    padding: 0 14px;
-    border: 0;
-    border-radius: 100px;
-    color: black;
-    background: var(--ink);
-    font: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    cursor: default;
 }
 .playlistMenuCreate [role="alert"] {
     flex-basis: 100%;

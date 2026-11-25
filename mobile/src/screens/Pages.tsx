@@ -17,7 +17,7 @@ import { ScreenHeader, reason, showToast, useNavigation, useRun, type Route } fr
 import { playEntries } from "../queueModel";
 import { services, type Service } from "../servicePreferences";
 import { PromptSheet, openDownloadSheet } from "../Sheets";
-import { colors, fonts } from "../theme";
+import { colors, fonts, textSize } from "../theme";
 import { Touchable } from "../Touchable";
 import { CardGrid, CardRow, type Card } from "./Cards";
 import { CollectionArt, TrackListScreen } from "./TrackListScreen";
@@ -315,19 +315,19 @@ export { albumCard, artistCard };
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
   overview: { flexDirection: "row", gap: 10, paddingHorizontal: 20, marginBottom: 12 },
-  overviewCard: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: "#2f2f2f", backgroundColor: "#111", padding: 14, gap: 6 },
-  overviewTitle: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 13 },
-  overviewCount: { color: "white", fontFamily: fonts.serif, fontSize: 28 },
+  overviewCard: { flex: 1, borderRadius: 14, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, backgroundColor: "#111", padding: 14, gap: 6 },
+  overviewTitle: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.detail },
+  overviewCount: { color: colors.text, fontFamily: fonts.serif, fontSize: 28 },
   row: { flexDirection: "row", alignItems: "center", gap: 14, minHeight: 56, paddingHorizontal: 22 },
   rowText: { flex: 1, gap: 3 },
-  rowTitle: { color: "white", fontFamily: fonts.sans, fontSize: 15 },
-  rowDetail: { color: colors.muted, fontFamily: fonts.sans, fontSize: 12 },
+  rowTitle: { color: colors.text, fontFamily: fonts.sans, fontSize: 15 },
+  rowDetail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption },
   groupHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingRight: 12 },
-  group: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 12, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingHorizontal: 22, paddingTop: 24, paddingBottom: 8 },
+  group: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingHorizontal: 22, paddingTop: 24, paddingBottom: 8 },
   newButton: { width: 44, height: 44, marginTop: 14, alignItems: "center", justifyContent: "center" },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 13, paddingHorizontal: 22, paddingBottom: 8 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.detail, paddingHorizontal: 22, paddingBottom: 8 },
   loading: { padding: 16 },
-  biography: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 14, lineHeight: 21, paddingHorizontal: 12, paddingTop: 16 },
-  status: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 13, lineHeight: 19, paddingHorizontal: 12, paddingBottom: 8 },
-  listHeading: { color: "white", fontFamily: fonts.sans, fontSize: 20, fontWeight: "600", paddingHorizontal: 12, paddingTop: 20, paddingBottom: 8 },
+  biography: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 21, paddingHorizontal: 12, paddingTop: 16 },
+  status: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 19, paddingHorizontal: 12, paddingBottom: 8 },
+  listHeading: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.heading, fontWeight: "600", paddingHorizontal: 12, paddingTop: 20, paddingBottom: 8 },
 });

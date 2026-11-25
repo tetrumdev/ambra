@@ -1,11 +1,14 @@
 import { reducedMotion } from "./reducedMotion";
+import { motion } from "./motion";
 
-const FADE_MS = 150;
+const pendingClose = new WeakMap<HTMLDialogElement, ReturnType<typeof setTimeout>>();
 
 // Dialogs fade like system sheets. The close waits for the fade (the dialog
 // leaves the top layer the moment it closes), and reopening cancels a pending close.
 export function openDialog(dialog: HTMLDialogElement | null) {
   if (!dialog) return;
+  clearTimeout(pendingClose.get(dialog));
+  pendingClose.delete(dialog);
   delete dialog.dataset.closing;
   if (!dialog.open) dialog.showModal();
 }
@@ -17,9 +20,9 @@ export function closeDialog(dialog: HTMLDialogElement | null) {
     return;
   }
   dialog.dataset.closing = "";
-  setTimeout(() => {
-    if (!("closing" in dialog.dataset)) return;
+  pendingClose.set(dialog, setTimeout(() => {
+    pendingClose.delete(dialog);
     delete dialog.dataset.closing;
     dialog.close();
-  }, FADE_MS);
+  }, motion.feedback.duration));
 }

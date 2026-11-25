@@ -1,3 +1,4 @@
+import { colors } from "./theme";
 import * as Haptics from "expo-haptics";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
@@ -155,14 +156,14 @@ const styles = StyleSheet.create({
   hit: { paddingVertical: 14, marginVertical: -14 },
   barSlot: { height: HELD_HEIGHT, justifyContent: "center" },
   bar: { overflow: "hidden" },
-  fill: { height: "100%", backgroundColor: "white" },
+  fill: { height: "100%", backgroundColor: colors.text },
   times: {
     flexDirection: "row",
     justifyContent: "space-between",
     marginTop: 6,
   },
   time: {
-    color: "white",
+    color: colors.text,
     fontFamily: "Stack Sans Text",
     fontSize: 11,
     fontWeight: "500",

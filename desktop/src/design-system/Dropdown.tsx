@@ -1,6 +1,6 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { DropdownChevron } from "./DropdownChevron";
-import "./ExtraCtrls.css";
+import "./controls.css";
 
 export type DropdownOption<Value extends string> = { value: Value; label: string; icon?: string };
 
@@ -114,7 +114,7 @@ export function Dropdown<Value extends string>({ label, value, options, onChange
           : (current + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
         items[next]?.focus();
       }}>
-      <button ref={trigger} type="button" className="dropdownTrigger" disabled={disabled}
+      <button ref={trigger} type="button" className="uiField dropdownTrigger" disabled={disabled}
         aria-label={`${label}: ${selectedLabel}`} aria-haspopup="menu" aria-expanded={expanded}
         aria-controls={expanded ? id : undefined} data-tooltip={iconOnly ? selectedLabel : undefined}
         onMouseDown={event => {
@@ -128,17 +128,17 @@ export function Dropdown<Value extends string>({ label, value, options, onChange
           : <><span className="dropdownValue">{selectedLabel}</span><DropdownChevron /></>}
       </button>
       {expanded && (
-        <div ref={menu} id={id} popover="manual" className="devAudioControls dropdownMenu" role="menu" aria-label={label}
+        <div ref={menu} id={id} popover="manual" className="dropdownMenu uiMenu uiMenuPopup" role="menu" aria-label={label}
           data-icon-only={iconOnly || undefined}>
           {options.map(option => (
-            <button key={option.value} type="button" className="audioDeviceOption" role="menuitemradio"
+            <button key={option.value} type="button" className="uiMenuOption" role="menuitemradio"
               aria-label={iconOnly ? option.label : undefined} data-tooltip={iconOnly ? option.label : undefined}
               aria-checked={value === option.value} tabIndex={-1} onClick={() => {
                 close();
                 if (value !== option.value) onChange(option.value);
               }}>
               {iconOnly ? <img className="dropdownIcon" src={option.icon} alt="" /> : <>
-                <span className="audioDeviceCheck" aria-hidden="true" />
+                <span className="uiMenuCheck" aria-hidden="true" />
                 <span className="dropdownOptionLabel">{option.label}</span>
               </>}
             </button>

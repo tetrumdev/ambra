@@ -45,7 +45,7 @@ import { TabStacks, ToastHost, tabs, type Route, type Tab } from "./navigation";
 import { AlbumScreen, ArtistScreen, DownloadsScreen, HomeScreen, LibraryScreen, PlaylistScreen, SectionScreen } from "./screens/Pages";
 import { DownloadSheetHost } from "./Sheets";
 import { OutputPicker } from "./OutputPicker";
-import { colors, fonts, haptic } from "./theme";
+import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 import { Touchable } from "./Touchable";
 import { MINI_HEIGHT, NAVIGATION_HEIGHT, playerFrame, playerLayout } from "./playerGeometry";
 import { SearchScreen } from "./SearchScreen";
@@ -374,23 +374,23 @@ const styles = StyleSheet.create({
   dockTint: { backgroundColor: "rgba(18, 18, 18, 0.35)" },
   navigation: { position: "absolute", left: 0, right: 0, bottom: 0, flexDirection: "row", alignItems: "center" },
   navigationButton: { flex: 1, minHeight: 48, alignItems: "center", justifyContent: "center" },
-  navigationLabel: { textAlign: "center", color: colors.muted, fontFamily: fonts.sans, fontSize: 14, fontWeight: "500" },
+  navigationLabel: { textAlign: "center", color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, fontWeight: "500" },
   settingsButton: { position: "absolute", right: 14, width: 44, height: 44, alignItems: "center", justifyContent: "center", zIndex: 3 },
-  navigationSelected: { color: "white", fontWeight: "600" },
+  navigationSelected: { color: colors.text, fontWeight: "600" },
   shade: { backgroundColor: colors.black },
   surface: { position: "absolute", overflow: "hidden", borderCurve: "continuous" },
   surfaceBackground: { borderWidth: StyleSheet.hairlineWidth },
   collapseGesture: { position: "absolute", alignSelf: "center", height: 44, width: 72, zIndex: 2 },
   collapse: { height: 44, width: 72, alignItems: "center", justifyContent: "center" },
   lyrics: { position: "absolute", left: 0 },
-  lyricsSelected: { backgroundColor: "rgba(255,255,255,0.12)", borderRadius: 12 },
+  lyricsSelected: { backgroundColor: "rgba(255,255,255,0.12)", borderRadius: radius.md },
   grabHandle: { width: 36, height: 5, borderRadius: 3, backgroundColor: "rgba(255,255,255,0.4)" },
-  footer: { position: "absolute", left: 20, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 12 },
+  footer: { position: "absolute", left: 20, right: 16, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.md },
   footerText: { flex: 1, alignItems: "flex-start" },
-  outputButton: { flexDirection: "row", alignItems: "center", gap: 8, minHeight: 36, maxWidth: "100%", paddingHorizontal: 12, borderRadius: 100, backgroundColor: "rgba(255, 255, 255, 0.08)" },
+  outputButton: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 36, maxWidth: "100%", paddingHorizontal: 12, borderRadius: radius.pill, backgroundColor: "rgba(255, 255, 255, 0.08)" },
   footerButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  output: { flexShrink: 1, color: "white", fontFamily: fonts.sans, fontSize: 12, fontWeight: "600" },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 12, lineHeight: 18, marginTop: 4, paddingHorizontal: 4 },
+  output: { flexShrink: 1, color: colors.text, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600" },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.caption, lineHeight: 18, marginTop: 4, paddingHorizontal: 4 },
   mini: { position: "absolute", left: 0, right: 0, top: 0, height: MINI_HEIGHT, flexDirection: "row", alignItems: "center", paddingRight: 4 },
   miniTrack: { flex: 1, height: MINI_HEIGHT },
   miniButton: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
@@ -399,7 +399,7 @@ const styles = StyleSheet.create({
   cover: { position: "absolute", transformOrigin: "top left", zIndex: 1 },
   coverEmpty: { shadowColor: "white", shadowOpacity: 0.18, shadowRadius: 30, shadowOffset: { width: 0, height: 0 } },
   info: { position: "absolute" },
-  title: { color: "white", fontFamily: fonts.sans, fontWeight: "700", letterSpacing: -0.3 },
+  title: { color: colors.text, fontFamily: fonts.sans, fontWeight: "700", letterSpacing: -0.3 },
   artist: { color: "rgba(255, 255, 255, 0.75)", fontFamily: fonts.sans },
   details: { position: "absolute", left: 0, top: 0 },
   progress: { position: "absolute", left: 30 },

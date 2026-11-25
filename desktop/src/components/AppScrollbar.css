@@ -7,7 +7,7 @@
     background: var(--surface-black);
     z-index: 9;
     touch-action: none;
-    border-left: 1px solid #535353;
+    border-left: 1px solid var(--border-control);
 }
 
 /* With nothing to scroll there is no rail at all: its column collapses, so the screen and the
@@ -35,7 +35,7 @@
     position: absolute;
     inset: 3px auto 3px 5px;
     width: 4px; /* Visible thumb remains narrow */
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: rgb(255 255 255 / 25%);
     transition: background-color 140ms ease;
 }

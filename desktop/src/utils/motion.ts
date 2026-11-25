@@ -18,6 +18,7 @@ export const motion = {
   enter: { duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
   /** Things lighting up under the pointer. Leaving takes twice as long, so they fade rather than blink off. */
   hover: { duration: 120, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+  feedback: { duration: 150, easing: "ease" },
   /** Small controls changing shape or place: chevrons turning, the search field widening. */
   snappy: spring(0.35, 0.9, "cubic-bezier(0.25, 1, 0.5, 1)"),
   /** A pressed control going down: immediate. */

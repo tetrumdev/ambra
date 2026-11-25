@@ -17,7 +17,7 @@ import { advanceNativeDot, advanceNativeLetter, lyricClockStep, lyricFontSize, n
 import { LyricCell, LyricList, LyricMeasurements, useLyricScroll } from "./useLyricScroll";
 import { Icon } from "./Icons";
 import { Touchable } from "./Touchable";
-import { colors, fonts } from "./theme";
+import { colors, fonts, radius, space, textSize } from "./theme";
 
 // MaskedView 0.3.2's constructor intersection loses component props with TypeScript 6.
 const FadeMask = MaskedView as unknown as ComponentType<ViewProps & { maskElement: ReactElement }>;
@@ -267,7 +267,7 @@ export function LyricsView({ track, view, active, height, disabled, onSeek }: { 
   if (!active && !result.lyrics && !result.error) return null;
   const instrumental = result.lyrics?.status === "instrumental";
   return <View style={styles.message}>
-    {result.loading ? <ActivityIndicator color="white" accessibilityLabel="Finding lyrics" /> : <Icon name="lyrics" size={30} color={colors.secondary} />}
+    {result.loading ? <ActivityIndicator color={colors.text} accessibilityLabel="Finding lyrics" /> : <Icon name="lyrics" size={30} color={colors.secondary} />}
     <Text style={styles.messageTitle}>{!track ? "Choose a song" : result.loading ? "Finding lyrics…" : instrumental ? "Instrumental" : result.error ? "Lyrics couldn’t load" : "No lyrics for this song yet"}</Text>
     <Text style={styles.messageDetail}>{instrumental ? "No vocals in this track." : result.error || (!track ? "Your lyrics will appear here." : " ")}</Text>
     {!!track && !result.loading && !instrumental && <Touchable accessibilityRole="button" accessibilityLabel="Retry lyrics" onPress={result.retry} scale={0.96} style={styles.retry}><Text style={styles.retryText}>Try again</Text></Touchable>}
@@ -278,23 +278,23 @@ const styles = StyleSheet.create({
   fill: { flex: 1 },
   group: { marginBottom: 32 },
   glyph: { transformOrigin: "50% 80%" },
-  letter: { color: "white" },
+  letter: { color: colors.text },
   words: { flexDirection: "row", flexWrap: "wrap", alignItems: "baseline" },
   alternate: { justifyContent: "flex-end" },
   word: { flexDirection: "row", flexWrap: "wrap", maxWidth: "100%" },
   lineBreak: { width: "100%", height: 0 },
   singer: { color: "rgba(255,255,255,0.6)", fontFamily: fonts.sans, fontSize: 11, lineHeight: 16.5, marginTop: 10, marginBottom: 5 },
   dots: { flexDirection: "row", alignItems: "center", gap: 11, height: 26, paddingHorizontal: 2 },
-  dot: { width: 11, height: 11, borderRadius: 6, backgroundColor: "white" },
-  credits: { marginTop: 30, gap: 4 },
-  credit: { color: "rgba(255,255,255,0.6)", fontFamily: fonts.sans, fontSize: 13, lineHeight: 18 },
-  source: { color: "rgba(255,255,255,0.4)", fontFamily: fonts.sans, fontSize: 12, lineHeight: 17 },
-  plainNote: { gap: 12, marginBottom: 26 },
-  resume: { position: "absolute", bottom: 8, alignSelf: "center", minHeight: 42, paddingHorizontal: 17, borderRadius: 100, borderWidth: StyleSheet.hairlineWidth, borderColor: "#454545", backgroundColor: "rgba(22,22,22,0.94)", flexDirection: "row", alignItems: "center", gap: 8 },
-  resumeText: { color: "white", fontFamily: fonts.sans, fontSize: 13, fontWeight: "500" },
+  dot: { width: 11, height: 11, borderRadius: 6, backgroundColor: colors.text },
+  credits: { marginTop: 30, gap: space.xs },
+  credit: { color: "rgba(255,255,255,0.6)", fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 18 },
+  source: { color: "rgba(255,255,255,0.4)", fontFamily: fonts.sans, fontSize: textSize.caption, lineHeight: 17 },
+  plainNote: { gap: space.md, marginBottom: 26 },
+  resume: { position: "absolute", bottom: 8, alignSelf: "center", minHeight: 42, paddingHorizontal: 17, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: "#454545", backgroundColor: "rgba(22,22,22,0.94)", flexDirection: "row", alignItems: "center", gap: space.sm },
+  resumeText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.detail, fontWeight: "500" },
   message: { flex: 1, alignItems: "flex-start", justifyContent: "center", paddingHorizontal: 30, gap: 18 },
   messageTitle: { color: "rgba(255,255,255,0.85)", fontFamily: fonts.sans, fontWeight: "600", fontSize: 28, lineHeight: 35.5, letterSpacing: -0.98 },
-  messageDetail: { color: colors.muted, fontFamily: fonts.sans, fontSize: 14, lineHeight: 21 },
-  retry: { minHeight: 42, borderRadius: 100, paddingHorizontal: 20, justifyContent: "center", backgroundColor: "rgba(255,255,255,0.12)" },
-  retryText: { color: "white", fontFamily: fonts.sans, fontSize: 13, fontWeight: "500" },
+  messageDetail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 21 },
+  retry: { minHeight: 42, borderRadius: radius.pill, paddingHorizontal: 20, justifyContent: "center", backgroundColor: "rgba(255,255,255,0.12)" },
+  retryText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.detail, fontWeight: "500" },
 });

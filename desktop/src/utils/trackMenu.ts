@@ -33,7 +33,8 @@ export function isEntityLink(target: EventTarget) {
 }
 
 function hasDirectSongAction(target: EventTarget) {
-  return target instanceof Element && target.closest(".entityLink, [data-track-cover-play]") !== null;
+  return target instanceof Element &&
+    target.closest(".entityLink, [data-track-cover-play], [data-collection-menu-trigger]") !== null;
 }
 
 /** Suppress pointer clicks that precede a playback double-click. */

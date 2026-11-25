@@ -108,6 +108,7 @@ export function PlayerControls({
     <div id="controls">
       <button
         id="backBtn"
+        className="uiIconButton"
         type="button"
         onClick={onPrevious}
         disabled={disabled || !canGoBack}
@@ -121,7 +122,7 @@ export function PlayerControls({
         id="playBtn"
         type="button"
         onClick={onTogglePlayback}
-        className={isPlaying ? "pause" : "play"}
+        className={isPlaying ? "uiIconButton pause" : "uiIconButton play"}
         disabled={disabled}
         data-tooltip={isPlaying ? "Pause" : "Play"}
         aria-label={isPlaying ? "Pause" : "Play"}
@@ -129,7 +130,7 @@ export function PlayerControls({
         <PlayPauseIcon playing={isPlaying} />
       </button>
 
-      <button id="skipBtn" type="button" onClick={onNext} disabled={disabled || !canSkip} data-tooltip="Next" aria-label="Next">
+      <button className="uiIconButton" id="skipBtn" type="button" onClick={onNext} disabled={disabled || !canSkip} data-tooltip="Next" aria-label="Next">
         <SkipIcon activation={nextActivation} />
       </button>
     </div>

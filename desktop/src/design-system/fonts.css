@@ -1,0 +1,8 @@
+/* Bundled fonts load from disk without flashing a fallback in the desktop player. */
+@font-face {
+    font-family: "Stack Sans Text";
+    src: url(../assets/fonts/StackSansText-VariableFont_wght.ttf);
+    font-style: normal;
+    font-weight: 200 700;
+    font-display: block;
+}

@@ -1,17 +1,6 @@
 /* Settings, in the library's language: the same sidebar, serif page titles, pill buttons and
    the player's glass. The toggle switch itself lives in App.css. */
 
-/* The library's own colours: its grey text, the search bar's and pills' borders, the menus'
-   hairlines and their highlight for what's chosen. */
-:root {
-    --settings-muted: #a3a2a3;
-    --settings-line: #2f2f2f;
-    --settings-control-border: #535353;
-    --settings-field: #151515;
-    --settings-card: #121212;
-    --settings-selected: #303030;
-}
-
 /* ---------- Sidebar: the library sidebar's place, width and type. ---------- */
 .settingsSidebar {
     grid-column: 1;
@@ -19,9 +8,9 @@
     box-sizing: border-box;
     height: 100%;
     padding: 30px 20px calc(var(--player-height) + 20px) 30px;
-    border-right: 1px solid #535353;
+    border-right: 1px solid var(--border-control);
     overflow-y: auto;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     /* Above the page, which slides beneath it while a swipe drags it. */
     z-index: 1;
     background: var(--surface-black);
@@ -52,8 +41,8 @@
 
 /* ---------- Page ---------- */
 .settingsView {
-    --settings-section-gap: 32px;
-    --settings-item-gap: 12px;
+    --settings-section-gap: var(--space-8);
+    --settings-item-gap: var(--space-3);
 }
 
 .settingsView > section {
@@ -75,13 +64,13 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 16px;
+    gap: var(--space-4);
 }
 
 .settingsTitle {
     flex: 1;
     margin: 0;
-    font-family: "Source Serif 4", serif;
+    font-family: var(--font-serif);
     font-size: 3rem;
     font-weight: 500;
     line-height: 1.1;
@@ -89,14 +78,14 @@
 
 .settingsMuted {
     margin: 0;
-    color: var(--settings-muted);
-    font-size: 0.85rem;
+    color: var(--ink-muted);
+    font-size: var(--text-control);
     line-height: 1.5;
 }
 
 .settingsError {
     color: var(--error-text) !important;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     overflow-wrap: anywhere;
 }
 
@@ -113,7 +102,7 @@
     margin-block-start: var(--settings-item-gap);
 }
 
-.settingsGroup > :is(.settingsPill, .settingsLink) {
+.settingsGroup > :is(.uiButton, .settingsLink) {
     align-self: flex-start;
 }
 
@@ -121,9 +110,9 @@
 .settingsGroup > h2 {
     margin: 0;
     padding-bottom: var(--settings-item-gap);
-    border-bottom: 1px solid var(--settings-line);
-    color: var(--settings-muted);
-    font-size: 0.75rem;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
@@ -136,7 +125,7 @@
     gap: var(--settings-item-gap) 24px;
     min-height: 56px;
     padding: 8px 0;
-    border-bottom: 1px solid var(--settings-line);
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .settingRow:last-child {
@@ -161,7 +150,7 @@
 
 .settingRowHint {
     margin-top: 2px;
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font-size: 0.8rem;
 }
 
@@ -201,11 +190,11 @@
     height: 16px;
     margin-left: 8px;
     padding: 0;
-    border: 1px solid var(--settings-control-border);
+    border: 1px solid var(--border-control);
     border-radius: 50%;
     background: transparent;
-    color: var(--settings-muted);
-    font: 600 10px/1 "Stack Sans Text", sans-serif;
+    color: var(--ink-muted);
+    font: 600 10px/1 var(--font-sans);
     letter-spacing: 0;
     text-transform: none;
     vertical-align: middle;
@@ -217,7 +206,7 @@
     width: 20px;
     height: 20px;
     margin-left: 12px;
-    font-size: 12px;
+    font-size: var(--text-caption);
 }
 
 :is(.settingRow, .settingsGroup > h2, .serverSetup > h2, .settingsPageHeader, .dspSectionHeader):hover .settingsHelp,
@@ -231,7 +220,6 @@
 .settingsHelp[aria-expanded="true"] {
     border-color: var(--ink);
     color: var(--ink);
-    outline: none;
 }
 
 .settingsHelpBackdrop {
@@ -244,19 +232,11 @@
     position: fixed;
     display: grid;
     gap: 6px;
-    box-sizing: border-box;
     width: min(340px, calc(100vw - 16px));
     padding: 14px 16px;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
     outline: none;
-    background: rgba(29, 29, 29, 0.85);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
-    color: var(--ink);
-    font: 400 0.85rem/1.5 "Stack Sans Text", sans-serif;
-    text-align: left;
+    font: 400 0.85rem/1.5 var(--font-sans);
     animation: settingsSaveBarIn var(--motion-enter);
 }
 
@@ -284,50 +264,18 @@
     animation: none;
 }
 /* ---------- Controls ---------- */
-.settingsPill {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    height: 34px;
-    padding: 0 16px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 100px;
-    background: transparent;
-    color: var(--ink);
-    font: inherit;
-    font-size: 0.85rem;
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.settingsPill:hover:not(:disabled),
-.settingsPill:focus-visible {
-    border-color: var(--ink);
-}
-
-.settingsPillPrimary {
-    border-color: transparent;
-    background: var(--ink);
-    color: black;
-}
-
-.settingsPillPrimary:hover:not(:disabled),
-.settingsPillPrimary:focus-visible {
-    background: #dcdcdc;
-}
-
 .settingsPillDone {
-    border-color: var(--settings-line);
-    color: var(--settings-muted);
+    border-color: var(--border-subtle);
+    color: var(--ink-muted);
 }
 
 .settingsLink {
     padding: 4px 2px;
     border: 0;
     background: none;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 
 .settingsLink:hover:not(:disabled),
@@ -349,18 +297,18 @@
     box-sizing: border-box;
     width: fit-content;
     padding: 3px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 100px;
-    background: var(--settings-field);
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
+    background: var(--surface-field);
 }
 
 .settingsSegmented button {
     height: 28px;
     padding: 0 14px;
     border: 0;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: transparent;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font: inherit;
     font-size: 0.8rem;
     font-weight: 600;
@@ -377,34 +325,12 @@
     color: black;
 }
 
-.settingsView input[type="number"],
-.settingsView input[type="text"],
-.settingsView input:not([type]) {
-    box-sizing: border-box;
-    height: 34px;
-    min-width: 0;
-    padding: 0 12px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 10px;
-    outline: none;
-    background: var(--settings-field);
-    color: var(--ink);
-    color-scheme: dark;
-    font: inherit;
-    font-size: 0.85rem;
-    user-select: text;
-}
-
-.settingsView input:focus-visible {
-    border-color: #8a8a8a;
-}
-
 .settingsChip {
     flex: none;
     padding: 3px 10px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 100px;
-    color: #b3b3b3;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
+    color: var(--ink-secondary);
     font-size: 0.72rem;
     font-weight: 600;
     white-space: nowrap;
@@ -426,14 +352,14 @@
 
 .settingsOutput {
     padding: 0 18px;
-    border: 1px solid var(--settings-line);
-    border-radius: 12px;
-    background: var(--settings-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
     transition: border-color var(--motion-hover);
 }
 
 .settingsOutput[data-selected] {
-    border-color: var(--settings-control-border);
+    border-color: var(--border-control);
 }
 
 .settingsOutputHeader {
@@ -443,7 +369,7 @@
     gap: 10px;
     min-height: 60px;
     padding: 8px 0;
-    border-bottom: 1px solid var(--settings-line);
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .settingsOutput .settingRow {
@@ -466,8 +392,8 @@
 
 .settingsView input.settingsOutputName:hover,
 .settingsView input.settingsOutputName:focus-visible {
-    border-color: var(--settings-control-border);
-    background: var(--settings-field);
+    border-color: var(--border-control);
+    background: var(--surface-field);
 }
 
 .settingsOutputSpacer {
@@ -479,7 +405,7 @@
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font-size: 0.8rem;
 }
 
@@ -500,22 +426,22 @@
 
 /* A number and its unit. */
 .settingsUnitInput {
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .settingsUnitInput small {
-    color: var(--settings-muted);
-    font-size: 0.75rem;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 /* ---------- Services ---------- */
 .settingsServiceRow {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: var(--space-4);
     max-width: 680px;
     padding: 16px 0;
-    border-bottom: 1px solid var(--settings-line);
+    border-bottom: 1px solid var(--border-subtle);
 }
 
 .settingsServiceIcon {
@@ -537,7 +463,7 @@
 
 .settingsServiceRow p {
     margin: 2px 0 0;
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font-size: 0.8rem;
 }
 
@@ -549,7 +475,7 @@
 
 .settingsCallbackForm {
     display: grid;
-    gap: 8px;
+    gap: var(--space-2);
     max-width: 680px;
     font-size: 0.9rem;
 }
@@ -565,7 +491,7 @@
 
 .settingsView .settingsServiceMessage {
     color: #b9d7b9;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 
 /* ---------- DSP ---------- */
@@ -580,7 +506,7 @@
     position: sticky;
     top: 0;
     display: grid;
-    gap: 4px;
+    gap: var(--space-1);
 }
 
 .dspPresetItem {
@@ -588,9 +514,9 @@
     gap: 3px;
     padding: 10px 12px;
     border: 1px solid transparent;
-    border-radius: 12px;
+    border-radius: var(--radius-md);
     background: transparent;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font: inherit;
     text-align: left;
     overflow-wrap: anywhere;
@@ -602,8 +528,8 @@
 }
 
 .dspPresetItem span {
-    color: var(--settings-muted);
-    font-size: 0.75rem;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .dspPresetItem em {
@@ -619,7 +545,7 @@
 }
 
 .dspPresetItem[aria-pressed="true"] {
-    background: var(--settings-selected);
+    background: var(--surface-selected);
     color: var(--ink);
 }
 
@@ -643,14 +569,14 @@
     padding: 0 10px;
     border-color: transparent;
     background: transparent;
-    font-family: "Source Serif 4", serif;
+    font-family: var(--font-serif);
     font-size: 1.8rem;
     font-weight: 500;
 }
 
 .settingsView input.dspPresetName:hover,
 .settingsView input.dspPresetName:focus-visible {
-    border-color: var(--settings-control-border);
+    border-color: var(--border-control);
 }
 
 .dspUsedBy {
@@ -674,19 +600,19 @@
     gap: 2px;
     min-width: 0;
     padding: 10px 10px 10px 20px;
-    border-top: 1px solid var(--settings-line);
-    border-bottom: 1px solid var(--settings-line);
-    background: var(--settings-card);
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+    background: var(--surface-raised);
 }
 
 .dspSignalPath li:first-child {
     padding-left: 14px;
-    border-left: 1px solid var(--settings-line);
+    border-left: 1px solid var(--border-subtle);
     border-radius: 12px 0 0 12px;
 }
 
 .dspSignalPath li:last-child {
-    border-right: 1px solid var(--settings-line);
+    border-right: 1px solid var(--border-subtle);
     border-radius: 0 12px 12px 0;
 }
 
@@ -698,14 +624,14 @@
     left: -6px;
     width: 10px;
     height: 10px;
-    border-top: 1px solid #535353;
-    border-right: 1px solid #535353;
-    background: var(--settings-card);
+    border-top: 1px solid var(--border-control);
+    border-right: 1px solid var(--border-control);
+    background: var(--surface-raised);
     transform: translateY(-50%) rotate(45deg);
 }
 
 .dspSignalPath span {
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.04em;
@@ -721,7 +647,7 @@
 
 .dspSignalPath strong {
     color: var(--ink);
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     font-weight: 600;
 }
 
@@ -749,20 +675,20 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
     margin-bottom: 18px;
     padding: 10px 10px 10px 16px;
     border: 1px solid #4a3a1c;
     border-radius: 14px;
     background: #17120a;
     color: #f1d6a2;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 
 .dspGains {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 24px;
+    gap: var(--space-6);
     margin-bottom: 28px;
 }
 
@@ -775,7 +701,7 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
-    gap: 12px;
+    gap: var(--space-3);
     margin-bottom: 14px;
 }
 
@@ -789,14 +715,14 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 /* ---------- EQ graph ---------- */
 .eqGraph {
     overflow: hidden;
-    border: 1px solid var(--settings-line);
-    border-radius: 16px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
     background: radial-gradient(120% 140% at 50% 0%, #161616 0%, #070707 70%);
     touch-action: none;
 }
@@ -817,7 +743,7 @@
 
 .eqGrid text {
     fill: #666;
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     font-size: 10px;
 }
 
@@ -857,7 +783,7 @@
 
 .eqNode text {
     fill: var(--ink);
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
     font-size: 10px;
     font-weight: 700;
     pointer-events: none;
@@ -899,11 +825,11 @@
     height: 28px;
     padding: 0 10px 0 4px;
     border: 1px solid #333;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: transparent;
     color: #d0d0d0;
     font: inherit;
-    font-size: 0.75rem;
+    font-size: var(--text-caption);
     font-variant-numeric: tabular-nums;
 }
 
@@ -918,7 +844,7 @@
 }
 
 .dspBandChip span {
-    color: var(--settings-muted);
+    color: var(--ink-muted);
 }
 
 .dspBandChip[aria-selected="true"] {
@@ -939,9 +865,9 @@
     display: grid;
     gap: 14px;
     padding: 14px 16px;
-    border: 1px solid var(--settings-line);
-    border-radius: 16px;
-    background: var(--settings-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-lg);
+    background: var(--surface-raised);
 }
 
 .dspBandNumber {
@@ -953,7 +879,7 @@
     border-radius: 50%;
     background: var(--ink);
     color: black;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     font-weight: 700;
 }
 
@@ -965,7 +891,7 @@
 }
 
 .dspBandInspectorRow + .dspBandInspectorRow {
-    gap: 20px;
+    gap: var(--space-5);
 }
 
 /* The band's switch and removal close the top row, on its right. */
@@ -975,11 +901,11 @@
 
 .dspNumber {
     display: grid;
-    gap: 4px;
+    gap: var(--space-1);
 }
 
 .dspNumber > span:first-child {
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font-size: 0.7rem;
     font-weight: 600;
 }
@@ -996,13 +922,13 @@
 }
 
 .dspNumberInput small {
-    color: var(--settings-muted);
-    font-size: 0.75rem;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .dspImpulses {
     display: grid;
-    gap: 8px;
+    gap: var(--space-2);
     margin: 0;
     padding: 0;
     list-style: none;
@@ -1013,15 +939,15 @@
     align-items: center;
     gap: 14px;
     padding: 10px 14px;
-    border: 1px solid var(--settings-line);
+    border: 1px solid var(--border-subtle);
     border-radius: 14px;
-    background: var(--settings-card);
+    background: var(--surface-raised);
 }
 
 .dspImpulseRate {
     flex: none;
     padding: 3px 10px;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: var(--ink);
     color: black;
     font-size: 0.72rem;
@@ -1038,8 +964,8 @@
 .dspImpulseName small {
     display: block;
     margin-top: 2px;
-    color: var(--settings-muted);
-    font-size: 0.75rem;
+    color: var(--ink-muted);
+    font-size: var(--text-caption);
 }
 
 .dspEmpty {
@@ -1053,7 +979,7 @@
 
 .dspEmpty h2 {
     margin: 0;
-    font-family: "Source Serif 4", serif;
+    font-family: var(--font-serif);
     font-size: 1.8rem;
     font-weight: 500;
 }
@@ -1068,13 +994,13 @@
     align-items: center;
     gap: 14px;
     padding: 6px 6px 6px 18px;
-    border: 1px solid #535353;
-    border-radius: 100px;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
     background: rgba(22, 22, 22, 0.6);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.5);
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     animation: settingsSaveBarIn var(--motion-enter);
 }
 
@@ -1132,7 +1058,7 @@
     border-radius: 6px;
     background: #1d1d1d;
     color: #e6e6e6;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
     user-select: text;
 }
 
@@ -1141,9 +1067,9 @@
     margin: 0 0 20px;
     padding: 10px 14px;
     border: 1px solid #cf9d62;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: #382818;
-    font-size: 0.85rem;
+    font-size: var(--text-control);
 }
 
 .settingsView input.serverNameInput,
@@ -1165,11 +1091,11 @@
     width: min(420px, calc(100vw - 48px));
     box-sizing: border-box;
     padding: 16px 18px;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
     background: rgba(29, 29, 29, 0.92);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
     font-size: 0.9rem;
 }
 
@@ -1218,13 +1144,13 @@
     align-items: center;
     gap: 14px 24px;
     padding: 20px 22px;
-    border: 1px solid var(--settings-line);
-    border-radius: 12px;
-    background: var(--settings-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+    background: var(--surface-raised);
 }
 
 /* Everything but the heading and its button takes the card's full width. */
-.serverSetupCard > :not(.serverSetupCardText, .settingsPill) {
+.serverSetupCard > :not(.serverSetupCardText, .uiButton) {
     grid-column: 1 / -1;
 }
 
@@ -1241,7 +1167,7 @@
     align-items: center;
     gap: 6px;
     padding-top: 14px;
-    border-top: 1px solid var(--settings-line);
+    border-top: 1px solid var(--border-subtle);
 }
 
 .serverSetupTerminal .settingsLink {
@@ -1273,22 +1199,22 @@
     flex-wrap: wrap;
     justify-content: flex-end;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
 }
 
 .shortcutBinding {
     display: inline-flex;
     align-items: center;
     height: 34px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 100px;
-    background: var(--settings-field);
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
+    background: var(--surface-field);
     transition: border-color var(--motion-hover), background-color var(--motion-hover);
 }
 
 .shortcutBinding:hover,
 .shortcutBinding:focus-within {
-    border-color: #8a8a8a;
+    border-color: var(--ink-subtle);
 }
 
 .shortcutBindingKeys {
@@ -1296,7 +1222,7 @@
     min-width: 34px;
     padding: 0 4px 0 14px;
     border: 0;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     background: transparent;
     color: var(--ink);
     font: inherit;
@@ -1312,7 +1238,7 @@
     border: 0;
     border-radius: 0 100px 100px 0;
     background: transparent;
-    color: var(--settings-muted);
+    color: var(--ink-muted);
     font: inherit;
     font-size: 0.95rem;
     line-height: 1;
@@ -1326,10 +1252,10 @@
 .shortcutAdd {
     height: 34px;
     padding: 0 14px;
-    border: 1px solid var(--settings-control-border);
-    border-radius: 100px;
+    border: 1px solid var(--border-control);
+    border-radius: var(--radius-pill);
     background: transparent;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font: inherit;
     font-size: 0.8rem;
     font-weight: 600;
@@ -1339,7 +1265,7 @@
 
 .shortcutAdd:hover,
 .shortcutAdd:focus-visible {
-    border-color: #8a8a8a;
+    border-color: var(--ink-subtle);
     color: var(--ink);
 }
 

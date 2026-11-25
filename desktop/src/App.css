@@ -1,26 +1,11 @@
-*,
-*::before,
-*::after {
-    outline: none !important;
-}
-
 ::selection {
     background: rgba(255, 255, 255, 0.25);
 }
 
 :root {
-    /* The app's darkest surface: just off black, because a panel switches pixels to and from
-       pure black slowly, which dims thin lines while they scroll. Keep it in step with
-       SURFACE_BLACK (utils/surfaceBlack.ts) and the window's backgroundColor (tauri.conf.json). */
-    --surface-black: #0a0a0a;
-    --surface-black-rgb: 10 10 10;
-    /* Text and controls: just off white, which is easier on the eyes over the dark surfaces than
-       pure white. Keep it in step with the icons' fill (public/*.svg). */
-    --ink: #ebebeb;
-    /* Sans everywhere; the serif is kept for page titles, which set it themselves (.libraryTitle). */
-    font-family: "Stack Sans Text", Inter, Avenir, Helvetica, Arial, sans-serif;
-    font-size: 16px;
-    line-height: 24px;
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    line-height: 1.5;
     font-weight: 400;
     width: 100vw;
     height: 100vh;
@@ -46,9 +31,6 @@
     --workspace-control-inset: calc(34px - var(--scrollbar-column-width));
     --library-titlebar-height: 0px;
     --content-top-spacer: 20px;
-    /* Shared states, so every screen shows errors and unavailable controls alike. */
-    --error-text: #ffb4b4;
-    --disabled-opacity: 0.5;
 }
 
 body,
@@ -108,15 +90,14 @@ body,
     flex-shrink: 0;
     z-index: 10000;
     display: flex;
-    gap: 12px;
+    gap: var(--space-3);
     align-items: center;
     justify-content: center;
     padding: 1px 12px;
     border-top: 1px solid #cf9d62;
     background: #382818;
     font:
-        13px/18px "Stack Sans Text",
-        sans-serif;
+        13px/18px var(--font-sans);
 }
 .stateSaveError span {
     min-width: 0;
@@ -131,11 +112,6 @@ body,
     border-radius: 3px;
     background: transparent;
 }
-.stateSaveError button:focus-visible {
-    outline: 1px solid currentColor !important;
-    outline-offset: 0;
-}
-
 :root:has([data-window-drag-region]) {
     --library-titlebar-height: 32px;
 }
@@ -218,21 +194,6 @@ button img {
     pointer-events: none;
 }
 
-@font-face {
-    font-family: "Source Serif 4";
-    src: url(./assets/fonts/SourceSerif4Variable-Roman.ttf);
-    font-style: normal;
-    /* Bundled fonts load from disk at once; swapping would flash a fallback face. */
-    font-display: block;
-}
-
-@font-face {
-    font-family: "Stack Sans Text";
-    src: url(./assets/fonts/StackSansText-VariableFont_wght.ttf);
-    font-style: normal;
-    font-display: block;
-}
-
 /* Library, search, settings and queue share one screen element (its id names the screen),
    so layout rules target the class and apply to every screen alike. */
 .appScreen {
@@ -247,7 +208,7 @@ button img {
     width: 100%;
     height: 100%;
     display: grid;
-    /*border-top: 1px solid #2f2f2f;*/
+    /*border-top: 1px solid var(--border-subtle);*/
     /*margin-top: 30px;*/
     overflow: hidden;
 }
@@ -278,7 +239,7 @@ button img {
     min-height: 0;
     overflow-y: auto;
     padding: 63px 30px calc(var(--player-height) + 30px);
-    font-family: "Stack Sans Text", sans-serif;
+    font-family: var(--font-sans);
 }
 
 .settingsToggle {
@@ -290,7 +251,7 @@ button img {
     padding: 3px;
     border: 0;
     border-radius: 24px;
-    background: #535353;
+    background: var(--border-control);
 }
 
 .settingsToggle::before {

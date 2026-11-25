@@ -13,7 +13,7 @@
         clamp(320px, 55vw, 700px)
         minmax(0, 1fr);
     grid-template-rows: 75px 80px;
-    column-gap: 24px;
+    column-gap: var(--space-6);
 }
 
 /* The bar is deliberately not a stacking context of its own, so its content sits above the player. */
@@ -113,11 +113,11 @@
     box-sizing: border-box;
     padding: 2px;
     border: 1px solid #754c4c;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: #281c1c;
     color: #ffe0e0;
     box-shadow: 0 4px 18px #0006;
-    font: 0.8rem/1.4 "Stack Sans Text", sans-serif;
+    font: 0.8rem/1.4 var(--font-sans);
 }
 
 .playbackError button {
@@ -127,7 +127,7 @@
     height: 32px;
     padding: 0;
     border: 0;
-    border-radius: 999px;
+    border-radius: var(--radius-pill);
     background: transparent;
     color: inherit;
     font: inherit;
@@ -139,7 +139,7 @@
 
 .playbackError .playbackErrorCopy {
     min-width: 0;
-    gap: 8px;
+    gap: var(--space-2);
     padding: 0 12px;
 }
 
@@ -197,7 +197,7 @@
     margin: 0;
     overflow: hidden;
     border: 0;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: transparent;
     cursor: default;
 }

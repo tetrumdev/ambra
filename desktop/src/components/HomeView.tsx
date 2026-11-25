@@ -10,7 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { ArtworkImage } from "./ArtworkImage";
 import { ArtistLinks } from "./ArtistLinks";
-import { Dropdown } from "./Dropdown";
+import { Dropdown } from "../design-system/Dropdown";
 import { MenuDotsIcon } from "./MenuDotsIcon";
 import {
   loadProviderRecommendations, loadRecommendationArtwork, type RecommendationMix, type StreamingProvider,

@@ -6,7 +6,7 @@ import type { CatalogAlbum, CatalogArtist } from "../../desktop/src/api/server";
 import type { SessionView } from "./client";
 import { Icon } from "./Icons";
 import type { Service } from "./servicePreferences";
-import { colors, fonts, haptic } from "./theme";
+import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 import { Touchable } from "./Touchable";
 
 /** Desktop's views, one stack per tab: pages open on top and Back returns, as in the sidebar's history. */
@@ -146,10 +146,10 @@ const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: colors.black },
   header: { paddingHorizontal: 20 },
   back: { width: 44, height: 44, marginLeft: -12, alignItems: "center", justifyContent: "center" },
-  headerRow: { flexDirection: "row", alignItems: "flex-end", gap: 12, paddingBottom: 16 },
+  headerRow: { flexDirection: "row", alignItems: "flex-end", gap: space.md, paddingBottom: 16 },
   headerText: { flex: 1, gap: 6 },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 38, fontWeight: "500" },
-  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: 13 },
-  toast: { position: "absolute", alignSelf: "center", backgroundColor: colors.raised, borderColor: "#2f2f2f", borderWidth: StyleSheet.hairlineWidth, borderRadius: 100, paddingHorizontal: 18, paddingVertical: 10, maxWidth: "90%" },
-  toastText: { color: "white", fontFamily: fonts.sans, fontSize: 13, fontWeight: "600", textAlign: "center" },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: textSize.page, fontWeight: "500" },
+  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail },
+  toast: { position: "absolute", alignSelf: "center", backgroundColor: colors.raised, borderColor: colors.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.pill, paddingHorizontal: 18, paddingVertical: 10, maxWidth: "90%" },
+  toastText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.detail, fontWeight: "600", textAlign: "center" },
 });

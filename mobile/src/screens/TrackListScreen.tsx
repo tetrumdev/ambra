@@ -9,7 +9,7 @@ import { Menu, type MenuAction } from "../Menu";
 import { ScreenHeader, useNavigation, useRun } from "../navigation";
 import { playEntries, playlistEntries, shuffledEntries } from "../queueModel";
 import { serviceAllowed, servicePreferences, subscribeServicePreferences } from "../servicePreferences";
-import { colors, fonts, haptic } from "../theme";
+import { colors, fonts, haptic, radius, space, textSize } from "../theme";
 import { Touchable } from "../Touchable";
 import { TrackRow, boundRows } from "../TrackBrowser";
 import { useTrackMenus, type RemoveAction } from "../TrackMenus";
@@ -114,7 +114,7 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
       </View>
       <View style={styles.actions}>
         <Touchable accessibilityRole="button" accessibilityLabel={`Play ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn onPress={() => run(() => changeQueue(queue => playEntries(queue, entries, shown), true))} style={styles.play}>
-          <Icon name="play" size={14} color="black" /><Text style={styles.playLabel}>PLAY</Text>
+          <Icon name="play" size={14} color={colors.black} /><Text style={styles.playLabel}>PLAY</Text>
         </Touchable>
         <Touchable accessibilityRole="button" accessibilityLabel={`Shuffle ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn onPress={() => {
           // Shuffled once, so a conflict retry keeps the same order.
@@ -165,20 +165,20 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
   content: { paddingHorizontal: 12 },
-  hero: { alignItems: "center", gap: 8, paddingHorizontal: 12, paddingBottom: 20 },
+  hero: { alignItems: "center", gap: space.sm, paddingHorizontal: 12, paddingBottom: 20 },
   art: { backgroundColor: "#141414", overflow: "hidden", borderCurve: "continuous", marginBottom: 10 },
   mosaic: { flexDirection: "row", flexWrap: "wrap" },
   tile: { width: "50%", height: "50%" },
-  title: { color: "white", fontFamily: fonts.serif, fontSize: 34, lineHeight: 40, fontWeight: "500", textAlign: "center" },
-  subtitle: { color: colors.secondary, fontFamily: fonts.sans, fontSize: 14, textAlign: "center" },
-  summary: { color: colors.muted, fontFamily: fonts.sans, fontSize: 12 },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 34, lineHeight: 40, fontWeight: "500", textAlign: "center" },
+  subtitle: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.small, textAlign: "center" },
+  summary: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption },
   actions: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, marginBottom: 14 },
-  play: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: "white", borderRadius: 100, height: 46 },
-  shuffle: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderColor: "white", borderWidth: 1, borderRadius: 100, height: 46 },
+  play: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: colors.text, borderRadius: radius.pill, height: 46 },
+  shuffle: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderColor: colors.text, borderWidth: 1, borderRadius: radius.pill, height: 46 },
   more: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: "#3a3a3a", alignItems: "center", justifyContent: "center" },
-  playLabel: { color: "black", fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
-  shuffleLabel: { color: "white", fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
-  error: { color: colors.error, fontFamily: fonts.sans, fontSize: 13, lineHeight: 20, paddingHorizontal: 8, paddingVertical: 6 },
+  playLabel: { color: colors.black, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
+  shuffleLabel: { color: colors.text, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, paddingHorizontal: 8, paddingVertical: 6 },
   loading: { paddingVertical: 32 },
-  empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: 14, lineHeight: 20, paddingVertical: 24, paddingHorizontal: 8, textAlign: "center" },
+  empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 20, paddingVertical: 24, paddingHorizontal: 8, textAlign: "center" },
 });

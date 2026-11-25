@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Playlist, Track } from "../types/music";
 import { isUnmodifiedKey } from "../utils/keyboard";
 import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
-import { DropdownChevron } from "./DropdownChevron";
+import { DropdownChevron } from "../design-system/DropdownChevron";
 import { TrackMenuBackdrop } from "./TrackMenuBackdrop";
 import { MENU_WIDTH, menuBounds } from "../utils/trackMenu";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
@@ -130,7 +130,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose} onKeyDown={event => {
       if (isUnmodifiedKey(event, "Escape")) { event.preventDefault(); event.stopPropagation(); onClose(); }
     }}>
-      <div ref={panel} id="trackCollectionMenu" tabIndex={-1} style={{
+      <div ref={panel} id="trackCollectionMenu" className="uiMenu uiMenuPopup" tabIndex={-1} style={{
         left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top",
         width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)", animation: instant ? "none" : undefined,
       }} onClick={event => event.stopPropagation()}>
@@ -159,8 +159,8 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
             event.preventDefault();
             void save(() => collection ? playlistOptions.onCreateWithTracks(name, tracks ?? []) : playlistOptions.onCreate(name, trackId));
           }}>
-            <input spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New playlist" value={name} onChange={event => setName(event.target.value)} />
-            <button type="submit" disabled={!name.trim() || saving || (collection && !tracks?.length)}>{saving ? "Saving…" : "Create"}</button>
+            <input className="uiField" spellCheck={false} autoCorrect="off" autoCapitalize="off" autoComplete="off" aria-label="New AMBRA playlist name" placeholder="New playlist" value={name} onChange={event => setName(event.target.value)} />
+            <button className="uiButton uiButtonPrimary" type="submit" disabled={!name.trim() || saving || (collection && !tracks?.length)}>{saving ? "Saving…" : "Create"}</button>
             {error && <span role="alert">{error}</span>}
           </form>
         </> : <>

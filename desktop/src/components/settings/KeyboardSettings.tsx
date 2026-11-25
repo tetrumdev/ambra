@@ -61,7 +61,7 @@ export function KeyboardSettings({ overrides, onChange }: { overrides: ShortcutO
   return <>
     <header className="settingsPageHeader">
       <h1 className="settingsTitle">Keyboard<Help topic="Keyboard">Click a shortcut, then press the keys for it. Esc cancels. A shortcut can have several keys.</Help></h1>
-      <button type="button" className="settingsPill" disabled={!customized} onClick={() => { onChange({}); setNotice(null); }}>Reset all</button>
+      <button type="button" className="uiButton" disabled={!customized} onClick={() => { onChange({}); setNotice(null); }}>Reset all</button>
     </header>
     {notice && <p className="settingsMuted" role="status">{notice}</p>}
     {shortcutCategories.map(category => <div className="settingsGroup" key={category}>

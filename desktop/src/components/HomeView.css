@@ -28,7 +28,7 @@
 }
 
 .homeRetry {
-    border: 1px solid #535353;
+    border: 1px solid var(--border-control);
     border-radius: 6px;
     background: #191919;
     color: white;
@@ -47,7 +47,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    gap: var(--space-4);
     padding: 0 30px 14px;
 }
 
@@ -60,7 +60,7 @@
 
 .homeRowControls {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
     flex-shrink: 0;
 }
 
@@ -70,10 +70,10 @@
     width: 30px;
     height: 30px;
     padding: 0;
-    border: 1px solid #535353;
+    border: 1px solid var(--border-control);
     border-radius: 50%;
     background: transparent;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
 }
 
 .homeRowControls button:enabled:hover,
@@ -90,7 +90,7 @@
     display: grid;
     grid-auto-flow: column;
     grid-auto-columns: clamp(140px, 16vw, 180px);
-    gap: 20px;
+    gap: var(--space-5);
     margin: 0;
     padding: 2px 30px 12px;
     list-style: none;
@@ -121,7 +121,7 @@
     position: relative;
     aspect-ratio: 1;
     overflow: hidden;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: #191919;
 }
 
@@ -232,7 +232,7 @@
 }
 
 .homeCardDetail {
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 0.8rem;
 }
 
@@ -249,7 +249,7 @@
     display: grid;
     place-items: center;
     height: 100%;
-    color: #b3b3b3;
+    color: var(--ink-secondary);
     font-size: 3rem;
 }
 
@@ -257,10 +257,10 @@
 .homeError {
     margin: 0 30px;
     padding: 18px 0 24px;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     line-height: 1.6;
 }
 
 .homeError {
-    color: #ffb4b4;
+    color: var(--error-text);
 }

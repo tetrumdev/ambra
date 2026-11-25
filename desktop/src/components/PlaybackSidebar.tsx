@@ -16,7 +16,7 @@ import {
 } from "../utils/trackMenu";
 import { ArtistLinks } from "./ArtistLinks";
 import { TrackTitleLink } from "./TrackTitleLink";
-import { DropdownChevron } from "./DropdownChevron";
+import { DropdownChevron } from "../design-system/DropdownChevron";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionAction } from "./TrackCollectionMenu";
 import { TrackPlaybackMenu } from "./TrackPlaybackMenu";
@@ -396,7 +396,7 @@ function SidebarTracks({
         tracks={[...new Map(selected.map(({ track }) => [track.globalId, track])).values()]}
         startWithPlaylistPicker playlistOptions={playlistOptions} xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu} />}
 
-      {selection.isSelecting && <div className="selectionActionMenu playbackSidebarSelection" role="group" aria-label="Selected songs">
+      {selection.isSelecting && <div className="selectionActionMenu playbackSidebarSelection uiMenu" role="group" aria-label="Selected songs">
         <button type="button" className="selectionRemoveAction" disabled={!selected.some(entry => entry.queueId !== undefined || entry.historyId !== undefined)}
           onClick={() => removeEntries(selected)}>Remove</button>
         <button type="button" disabled={!selected.length} onClick={event => {

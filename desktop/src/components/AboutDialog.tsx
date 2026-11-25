@@ -1,3 +1,4 @@
+import { Dialog } from "../design-system/Dialog";
 import { useEffect, useRef, type MouseEvent, type ReactNode } from "react";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import "./Credits.css";
@@ -23,16 +24,16 @@ export function AboutDialog({ title, subtitle, open, onClose, children }: {
     else closeDialog(dialog.current);
   }, [open]);
 
-  return <dialog ref={dialog} className="playlistEditDialog creditsDialog aboutDialog" aria-label={`About ${title}`}
-    onCancel={event => { event.preventDefault(); onClose(); }} onKeyDown={event => event.stopPropagation()}
+  return <Dialog ref={dialog} className="creditsDialog aboutDialog" aria-label={`About ${title}`}
+    onDismiss={onClose} onKeyDown={event => event.stopPropagation()}
     onPointerDown={event => { pressedBackdrop.current = outside(event); }}
     onClick={event => { if (pressedBackdrop.current && outside(event)) onClose(); }}>
     <button type="button" className="xContainer aboutDialogClose" aria-label="Close" onClick={onClose}>
       <img className="closeBtn" src="/x.svg" alt="" />
     </button>
-    <div className="playlistEditContent">
+    <div className="uiDialogContent">
       <div><h2>About</h2><p>{title}{subtitle ? ` · ${subtitle}` : ""}</p></div>
       <div className="creditsScroll aboutContent">{children}</div>
     </div>
-  </dialog>;
+  </Dialog>;
 }

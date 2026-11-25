@@ -1,3 +1,4 @@
+import { Dialog } from "../design-system/Dialog";
 import "./Sidebar.css";
 import { ProviderIcon } from "./ProviderIcon";
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -8,7 +9,7 @@ import { librarySections } from "../utils/librarySections";
 import { closeDialog, openDialog } from "../utils/dialogs";
 import type { PlaylistServiceGroup } from "../hooks/useServicePlaylists";
 import { musicProviderName } from "../utils/musicProviderName";
-import { DropdownChevron } from "./DropdownChevron";
+import { DropdownChevron } from "../design-system/DropdownChevron";
 import { slideDetails } from "../utils/detailsMotion";
 import type { PlaylistGroup } from "../utils/preferences";
 import type { StreamingProvider } from "../api/server";
@@ -265,19 +266,16 @@ export function Sidebar({
           </button>
         </div>
       </div>
-      <dialog
+      <Dialog
         ref={createDialog}
         className="playlistEditDialog"
         aria-label="Name playlist"
-        onCancel={(event) => {
-          event.preventDefault();
-          cancelCreatingPlaylist();
-        }}
+        onDismiss={cancelCreatingPlaylist}
         onKeyDown={(event) => event.stopPropagation()}
       >
         <button
           type="button"
-          className="playlistEditCancel"
+          className="uiDialogClose"
           onClick={cancelCreatingPlaylist}
         >
           Cancel
@@ -295,9 +293,9 @@ export function Sidebar({
             onSelectPlaylist(playlistId);
           }}
         >
-          <div className="playlistEditContent">
+          <div className="uiDialogContent">
             <h2>Name playlist</h2>
-            <input
+            <input className="uiField"
               spellCheck={false}
               autoCorrect="off"
               autoCapitalize="off"
@@ -313,12 +311,12 @@ export function Sidebar({
             )}
           </div>
           <div className="playlistEditButtons">
-            <button type="submit" disabled={!newPlaylistName.trim()}>
+            <button className="uiButton uiButtonPrimary" type="submit" disabled={!newPlaylistName.trim()}>
               Save
             </button>
           </div>
         </form>
-      </dialog>
+      </Dialog>
     </>
   );
 }

@@ -101,7 +101,7 @@ export function AudioControlsMenu({
       <div className="clickMenuDismiss" style={{ clipPath: layout?.backdropClip }} onClick={onClose} />
       <div
         ref={panel}
-        className={className ? `devAudioControls ${className}` : "devAudioControls"}
+        className={className ? `devAudioControls uiMenu uiMenuPopup ${className}` : "devAudioControls uiMenu uiMenuPopup"}
         role="dialog"
         aria-label={label}
         tabIndex={-1}

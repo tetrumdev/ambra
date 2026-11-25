@@ -19,7 +19,7 @@ export function QualityLight({ track, audioQuality }: QualityLightProps) {
       <button
         ref={button}
         type="button"
-        className="qualityLightButton"
+        className="qualityLightButton uiIconButton"
         data-tier={quality.tier}
         aria-label={`Audio quality: ${quality.label}`}
         aria-expanded={open}

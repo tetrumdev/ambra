@@ -47,7 +47,7 @@
     height: 100%;
     font-size: 0.9rem;
     font-weight: 300;
-    font-family: "Stack Sans Text", Inter, sans-serif;
+    font-family: var(--font-sans);
     filter: none;
 }
 
@@ -165,7 +165,7 @@
     left: 30px;
     min-width: 0;
     overflow: hidden;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: var(--surface-black);
 }
 
@@ -251,7 +251,7 @@
         ) + 16px
     );
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
     align-items: center;
     opacity: var(--playlist-actions-progress);
     transform: translateY(-50%) scale(calc(0.85 + 0.15 * var(--playlist-actions-progress)));
@@ -340,14 +340,14 @@
 .playlistPending {
     margin: 0;
     padding: 60px 30px;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     line-height: 1.6;
 }
 
 .libraryOverview {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 20px;
+    gap: var(--space-5);
     padding: 16px 30px 30px;
 }
 
@@ -359,7 +359,7 @@
     gap: 18px;
     min-width: 0;
     padding: 30px;
-    border: 1px solid #535353;
+    border: 1px solid var(--border-control);
     border-radius: 18px;
     background: #090909;
     color: var(--ink);
@@ -371,7 +371,7 @@
     grid-column: 1 / -1;
 }
 .libraryOverviewCard:hover {
-    background: #151515;
+    background: var(--surface-field);
 }
 .libraryOverviewTitle {
     font-size: 1.5rem;
@@ -382,7 +382,7 @@
     line-height: 1.2;
 }
 .libraryOverviewDetail {
-    color: #a3a2a3;
+    color: var(--ink-muted);
     padding-right: 24px;
 }
 .libraryOverviewArrow {
@@ -399,7 +399,7 @@
 }
 
 .libraryTitle {
-    font-family: "Source Serif 4", serif;
+    font-family: var(--font-serif);
     font-weight: 500;
     font-size: 4rem;
     margin-bottom: 30px;
@@ -407,7 +407,7 @@
 
 .librarySections {
     display: flex;
-    gap: 24px;
+    gap: var(--space-6);
     margin: 0 0 0 4px;
 }
 
@@ -415,7 +415,7 @@
     padding: 0;
     border: 0;
     background: transparent;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font: inherit;
     font-size: 1rem;
     cursor: default;
@@ -482,7 +482,7 @@
 
 .libraryEntityCard p {
     margin: 0;
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-size: 0.8rem;
 }
 
@@ -521,7 +521,7 @@
 }
 
 .libraryAlbumCover {
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
 }
 
 .libraryPlayActions {
@@ -549,7 +549,7 @@
     gap: 10px;
     background-color: var(--ink);
     border: 1px solid transparent;
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     color: black;
 }
 
@@ -569,7 +569,7 @@
     gap: 10px;
     background-color: transparent;
     border: 1px solid var(--ink);
-    border-radius: 100px;
+    border-radius: var(--radius-pill);
     color: var(--ink);
 }
 
@@ -603,7 +603,7 @@
 .playlistImproveStatus {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
     min-width: 0;
     margin: 0 0 0 4px;
     font-size: 0.8rem;
@@ -750,7 +750,7 @@
 }
 
 .columnInfo + .libraryItem {
-    border-top: 1px solid #535353;
+    border-top: 1px solid var(--border-control);
 }
 
 .libraryItem {
@@ -759,7 +759,7 @@
     cursor: default;
     padding-left: 15px;
     height: 76px;
-    border-bottom: 1px solid #535353;
+    border-bottom: 1px solid var(--border-control);
     display: grid;
     align-items: center;
     box-sizing: border-box;
@@ -781,7 +781,7 @@
 }
 
 .libraryItem:hover {
-    background-color: #151515;
+    background-color: var(--surface-field);
 }
 
 .libraryItem[data-reorderable="true"] {
@@ -826,12 +826,12 @@
 }
 
 .libraryItem[data-menu-open="true"] {
-    background-color: #151515;
+    background-color: var(--surface-field);
 }
 
 .libraryItem[data-selected="true"],
 .libraryItem[data-selected="true"]:hover {
-    background-color: #352000;
+    background-color: var(--surface-selection);
 }
 
 /* Songs bound into a package read as one block: no dividers inside it, and a faint warmth
@@ -849,18 +849,11 @@
 
 .selectionActionMenu {
     position: fixed;
-    font-family: "Stack Sans Text", Inter, sans-serif;
     top: calc(5% + 48px);
     right: 3%;
     z-index: 10;
-    box-sizing: border-box;
     width: 120px;
     overflow: hidden;
-    border: 1px solid #2f2f2f;
-    border-radius: 12px;
-    background: rgba(29, 29, 29, 0.7);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
 }
 
 .selectionActionMenu button {
@@ -881,7 +874,7 @@
 
 .selectionActionMenu button:hover,
 .selectionActionMenu button:focus-visible {
-    background: rgba(42, 42, 42, 0.8);
+    background: var(--surface-hover);
 }
 
 .selectionActionMenu .selectionRemoveAction {
@@ -923,7 +916,7 @@
     grid-column: 1;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     min-width: 0;
 }
 
@@ -1073,7 +1066,7 @@
 }
 
 .extraCell {
-    color: #a3a2a3;
+    color: var(--ink-muted);
     font-variant-numeric: tabular-nums;
 }
 
@@ -1105,29 +1098,29 @@
 
 .libraryItem:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover {
     background-color: var(--surface-black);
-    border-left: 1px solid #535353;
+    border-left: 1px solid var(--border-control);
 }
 
 .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
     background-color: var(--surface-black);
-    border-left: 1px solid #535353;
+    border-left: 1px solid var(--border-control);
 }
 
 /* A package hides the dividers between its rows, which elsewhere close the menu's black box
    off; the box draws those edges itself, only where its row lacks one. */
 .libraryItem[data-package="first"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
 .libraryItem[data-package="first"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
-    box-shadow: inset 0 -1px #535353;
+    box-shadow: inset 0 -1px var(--border-control);
 }
 
 .libraryItem[data-package="middle"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
 .libraryItem[data-package="middle"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
-    box-shadow: inset 0 1px #535353, inset 0 -1px #535353;
+    box-shadow: inset 0 1px var(--border-control), inset 0 -1px var(--border-control);
 }
 
 .libraryItem[data-package="last"]:not([data-selecting="true"]) .trackCollectionMenuTrigger:hover,
 .libraryItem[data-package="last"] .trackCollectionMenuTrigger[data-collection-menu-open="true"] {
-    box-shadow: inset 0 1px #535353;
+    box-shadow: inset 0 1px var(--border-control);
 }
 
 .trackCollectionMenuTrigger img {
@@ -1171,5 +1164,5 @@
 /* Selection outranks both shades. */
 .libraryItem[data-selected="true"][data-now-playing],
 .libraryItem[data-selected="true"][data-revealed="true"] {
-    background-color: #352000;
+    background-color: var(--surface-selection);
 }

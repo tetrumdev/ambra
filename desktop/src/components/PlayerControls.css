@@ -19,19 +19,12 @@
 }
 
 #controls button {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    background: transparent;
+    width: var(--control-touch);
+    height: var(--control-touch);
     appearance: none;
     -webkit-appearance: none;
     cursor: default;
-    /*filter: drop-shadow(0 0 8px rgba(0, 0, 0, 0.4));*/
-    outline: none;
-    transition-duration: 0.15s;
+    transition: filter var(--motion-feedback);
 }
 
 #controls button:active {

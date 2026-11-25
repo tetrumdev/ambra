@@ -113,7 +113,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
         <p>Headphone EQ, room correction and headroom, saved as presets you give to outputs.</p>
         <p>Playback is bit-perfect in exclusive mode with DSP off and volume at 100%. Otherwise it's processed in 64-bit and dithered to the device.</p>
       </Help></h1>
-      <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
+      <button type="button" className="uiButton uiButtonPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
     </header>
     <div className="dspLayout">
       <nav className="dspPresets" aria-label="DSP presets">
@@ -127,7 +127,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
 
       {draft ? <div className="dspEditor">
         <div className="dspEditorHeader">
-          <input className="dspPresetName" aria-label="Preset name" maxLength={120} value={draft.name} onChange={e => edit({ name: e.currentTarget.value })} />
+          <input className="uiField dspPresetName" aria-label="Preset name" maxLength={120} value={draft.name} onChange={e => edit({ name: e.currentTarget.value })} />
           <Toggle label="DSP enabled" checked={draft.enabled} onChange={enabled => edit({ enabled })} />
           <button type="button" className="settingsLink" disabled={audio.saving} onClick={() => void create(true)}>Duplicate</button>
           <button type="button" className="settingsLink" disabled={audio.saving} onClick={() => void remove()}>Delete</button>
@@ -147,7 +147,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
 
         {risk > 0.05 && draft.enabled && <div className="dspWarning" role="status">
           <span>Boosts up to {signedDb(boost)} can clip with {signedDb(-draft.headroomDb)} of headroom.</span>
-          <button type="button" className="settingsPill" onClick={() => edit({ headroomDb: Math.min(30, Math.ceil((draft.headroomDb + risk) * 2) / 2) })}>
+          <button type="button" className="uiButton" onClick={() => edit({ headroomDb: Math.min(30, Math.ceil((draft.headroomDb + risk) * 2) / 2) })}>
             Set headroom to {signedDb(-Math.min(30, Math.ceil((draft.headroomDb + risk) * 2) / 2))}
           </button>
         </div>}
@@ -160,8 +160,8 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
           <div className="dspSectionHeader">
             <h2>Parametric EQ<Help topic="Parametric EQ">Drag a band to move it, scroll over it to change its width, double-click to add one and right-click to remove it.</Help></h2>
             <div className="dspSectionActions">
-              <button type="button" className="settingsPill" disabled={draft.bands.length >= 32} onClick={() => addBand({ enabled: true, kind: "peak", frequency: 1000, gainDb: 0, q: 1 })}>Add band</button>
-              <button type="button" className="settingsPill" onClick={() => eqFile.current?.click()}>Import AutoEq</button>
+              <button type="button" className="uiButton" disabled={draft.bands.length >= 32} onClick={() => addBand({ enabled: true, kind: "peak", frequency: 1000, gainDb: 0, q: 1 })}>Add band</button>
+              <button type="button" className="uiButton" onClick={() => eqFile.current?.click()}>Import AutoEq</button>
               {draft.bands.length > 0 && <button type="button" className="settingsLink" onClick={() => { edit({ bands: [] }); setBand(null); }}>Clear</button>}
             </div>
           </div>
@@ -193,7 +193,7 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
         <section className="dspSection" aria-label="Convolution">
           <div className="dspSectionHeader">
             <h2>Convolution<Help topic="Convolution">Impulse responses from WAV files, for room correction or a headphone target. Add one per sample rate, mono or stereo.</Help></h2>
-            <button type="button" className="settingsPill" disabled={!audio.native || importing} onClick={() => impulseFile.current?.click()}>{importing ? "Importing…" : "Import WAV"}</button>
+            <button type="button" className="uiButton" disabled={!audio.native || importing} onClick={() => impulseFile.current?.click()}>{importing ? "Importing…" : "Import WAV"}</button>
           </div>
           <input ref={impulseFile} type="file" accept=".wav,audio/wav" hidden aria-label="Import convolution WAV"
             onChange={e => { const file = e.currentTarget.files?.[0]; if (file) void importImpulse(file); e.currentTarget.value = ""; }} />
@@ -205,14 +205,14 @@ export function DspPanel({ active, presetId, onPresetChange }: Props) {
         </section>
       </div> : <div className="dspEmpty">
         <h2>Shape your sound</h2>
-        <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
+        <button type="button" className="uiButton uiButtonPrimary" disabled={audio.loading || audio.saving} onClick={() => void create()}>New preset</button>
       </div>}
     </div>
     {error && <p className="settingsError" role="alert">{error}</p>}
     {dirty && <div className="settingsSaveBar" role="region" aria-label="Unsaved changes">
       <span>Unsaved changes</span>
       <button type="button" className="settingsLink" onClick={() => { setDirty(false); setError(null); }}>Discard changes</button>
-      <button type="button" className="settingsPill settingsPillPrimary" disabled={audio.saving || importing} onClick={() => void save()}>{audio.saving ? "Saving…" : "Save preset"}</button>
+      <button type="button" className="uiButton uiButtonPrimary" disabled={audio.saving || importing} onClick={() => void save()}>{audio.saving ? "Saving…" : "Save preset"}</button>
     </div>}
   </>;
 }
@@ -223,7 +223,7 @@ function NumberField({ label, unit, ariaLabel, value, min, max, step, onChange }
   return <label className="dspNumber">
     <span>{label}</span>
     <span className="dspNumberInput">
-      <input type="number" aria-label={ariaLabel} min={min} max={max} step={step} value={Number.isFinite(value) ? value : ""}
+      <input className="uiField" type="number" aria-label={ariaLabel} min={min} max={max} step={step} value={Number.isFinite(value) ? value : ""}
         onChange={e => onChange(e.currentTarget.valueAsNumber)} />
       {unit && <small>{unit}</small>}
     </span>
