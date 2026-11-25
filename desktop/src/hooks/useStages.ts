@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  coreCommand,
   coreOutputs,
   coreSession,
   coreSessions,
+  coreView,
   setCoreStages,
   subscribeCore,
   type CoreOutput,
   type CoreSession,
   type CoreStage,
 } from "../api/core";
-import { serverConnection } from "../api/serverConnection";
+import { serverBaseUrl, serverConnection, serverConnectionSignal } from "../api/serverConnection";
 import { invokeOn } from "../utils/playbackTarget";
 import type { useAudioSettings } from "./AudioSettingsContext";
 
@@ -80,6 +82,65 @@ export function useStages(active: boolean, reload?: unknown) {
       state.stages.find((stage) => stage.id === GENERAL_STAGE)!)
     : null;
   return { stages: state?.stages ?? null, activeStage, save };
+}
+
+/** The outputs last picked on this device for each session's General stage, by session id. */
+const PICKED_KEY = "ambra.general-outputs.v1";
+
+function pickedHere(): Record<string, CoreOutput[]> {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(PICKED_KEY) ?? "{}");
+    return value && typeof value === "object" ? (value as Record<string, CoreOutput[]>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Remembers the outputs picked by hand on this device, for `restoreGeneralOutputs`. */
+export function rememberGeneralOutputs(sessionId: string, outputs: CoreOutput[]) {
+  try {
+    localStorage.setItem(PICKED_KEY, JSON.stringify({ ...pickedHere(), [sessionId]: outputs }));
+  } catch {
+    /* Storage unavailable: connecting falls back to this computer's output. */
+  }
+}
+
+/**
+ * Run on connecting: when General plays only on outputs out of reach (their computer away, or
+ * the device unplugged), it moves to the ones last picked on this device that are in reach,
+ * else to `fallback`. `localDevices` are this computer's connected outputs, "" included: the
+ * server may not list this computer yet.
+ */
+export async function restoreGeneralOutputs(localDevices: Set<string>, fallback: CoreOutput) {
+  const sessionId = coreSession();
+  const playing = coreOutputs(coreView());
+  // Nothing picked yet: playing starts on this computer's output anyway.
+  if (playing.length === 0) return;
+  const signal = serverConnectionSignal();
+  const [sessions, endpoints] = await Promise.all([
+    coreSessions(),
+    fetch(`${serverBaseUrl}/api/endpoints`, { cache: "no-store", signal }).then(
+      (response) => (response.ok ? (response.json() as Promise<{ id: string; devices: { id: string }[] }[]>) : null),
+    ),
+  ]);
+  const session = sessions.find((other) => other.id === sessionId);
+  // Another stage was chosen on purpose; a server from before stages has no General.
+  if (signal.aborted || coreSession() !== sessionId || !endpoints || !session?.stages) return;
+  if ((session.activeStage ?? GENERAL_STAGE) !== GENERAL_STAGE) return;
+  const inReach = (output: CoreOutput) => {
+    if (output.endpointId === fallback.endpointId) return localDevices.has(output.deviceId);
+    const endpoint = endpoints.find((other) => other.id === output.endpointId);
+    return !!endpoint && (output.deviceId === "" || endpoint.devices.some((device) => device.id === output.deviceId));
+  };
+  if (playing.some(inReach)) return;
+  const picked = (pickedHere()[sessionId] ?? []).filter(inReach);
+  const outputs = picked.length > 0 ? picked : [fallback];
+  const general = { id: GENERAL_STAGE, name: "General", ...session.stages.find((stage) => stage.id === GENERAL_STAGE), outputs };
+  const stages = session.stages.some((stage) => stage.id === GENERAL_STAGE)
+    ? session.stages.map((stage) => (stage.id === GENERAL_STAGE ? general : stage))
+    : [general, ...session.stages];
+  await setCoreStages(sessionId, stages, GENERAL_STAGE);
+  await coreCommand("outputs", { outputs });
 }
 
 /** Sets a stage's target loudness on every computer it plays on. */

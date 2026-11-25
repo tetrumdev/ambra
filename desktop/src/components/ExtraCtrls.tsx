@@ -19,6 +19,7 @@ import { invokeOn, useEndpoints } from "../utils/playbackTarget";
 import {
   coreCommand,
   coreOutputs,
+  coreSession,
   coreView,
   subscribeCore,
   type CoreOutput,
@@ -28,6 +29,7 @@ import { serverConnection } from "../api/serverConnection";
 import {
   applyLoudnessTarget,
   GENERAL_STAGE,
+  rememberGeneralOutputs,
   useStages,
 } from "../hooks/useStages";
 import { MAX_TARGET_LUFS, MIN_TARGET_LUFS } from "../utils/audioSettings";
@@ -315,6 +317,7 @@ export function ExtraCtrls({
       return;
     }
     const stage = { ...general, outputs };
+    rememberGeneralOutputs(coreSession(), outputs);
     run(
       saveStages(
         (list) =>

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { coreCommand, coreOutputs, coreView, coreViewAge, followCore, subscribeCore, type CoreView } from "../api/core";
+import { coreCommand, coreOutputs, coreView, coreViewAge, followCore, subscribeCore, type CoreOutput, type CoreView } from "../api/core";
+import { restoreGeneralOutputs } from "./useStages";
 import { serverConnection } from "../api/serverConnection";
 import { createPlaybackClock, holdLyricsForSkip } from "../utils/playbackClock";
 import { useAudioSettings } from "./AudioSettingsContext";
@@ -11,6 +12,7 @@ import { acceptsPlaybackShortcut, isTypingTarget } from "../utils/keyboard";
 import { matchesShortcut } from "../utils/shortcuts";
 import { createOutputMediaControlHandler, ownsPlaybackOutput } from "../utils/outputMediaControls";
 import { serverAudioSource } from "../utils/nativeAudioSource";
+import type { Track } from "../types/music";
 
 const noDeck = () => {};
 
@@ -74,12 +76,18 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
   // engine itself: what's heard here, with no trip to the server and back in between.
   const engine = useRef<{ status: EngineStatus; at: number } | null>(null);
   // A skip shown at once: the server's view of the song it leaves is ignored until it loads the next.
-  const skipping = useRef<{ to: string; outputId: string | undefined; at: number } | null>(null);
+  // `to` is null for a new song whose track this hook doesn't have yet: found by `trackId` once
+  // the queue showing it renders.
+  const skipping = useRef<{ to: string | null; trackId?: string; outputId: string | undefined; at: number } | null>(null);
   const followsEngine = useCallback(() => {
     const current = coreView();
     const heard = engine.current;
     const fresh = !!heard && performance.now() - heard.at < ENGINE_FRESH_MS;
     const pending = skipping.current;
+    if (pending && pending.to === null) {
+      const shown = latestQueue.current.currentEntry?.track;
+      if (shown && shown.globalId === pending.trackId) pending.to = serverAudioSource(shown);
+    }
     if (pending && (current?.output?.endpointId !== pending.outputId || sameSource(current?.loadedSource, pending.to)
       || (performance.now() - pending.at > PENDING_MS && !(fresh && sameSource(heard.status.currentSource, pending.to))))) {
       skipping.current = null;
@@ -87,7 +95,7 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     const track = latestQueue.current.currentEntry?.track;
     // Direct streams belong to the selected track, even before the server confirms its load.
     // Live PCM has a session URL instead of the track URL, so use the server's source for it.
-    const source = skipping.current?.to ?? (current?.loadedSource?.includes("/api/playback/live/")
+    const source = skipping.current ? skipping.current.to : (current?.loadedSource?.includes("/api/playback/live/")
       ? current.loadedSource : (track && serverAudioSource(track)) ?? current?.loadedSource);
     return !!current && fresh && ownsPlaybackOutput(current.output, serverConnection?.clientId)
       && sameSource(heard.status.currentSource, source);
@@ -147,16 +155,31 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
 
   const latestAudio = useRef(audio);
   latestAudio.current = audio;
-  /** With no output chosen yet, playing starts on this computer's current one. */
-  const ensureOutput = useCallback(() => {
-    if (coreView()?.output || !serverConnection) return;
+  /** This computer's current output. */
+  const outputHere = useCallback((): CoreOutput | null => {
+    if (!serverConnection) return null;
     const settings = latestAudio.current?.settings;
     const deviceId = settings?.selectedOutputId ?? "";
     const deviceName = settings?.outputs.find(output => output.id === deviceId)?.name ?? "System Output";
-    void coreCommand("output", {
-      output: { endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName },
-    }).catch(() => {});
+    return { endpointId: serverConnection.clientId, deviceId, endpointName: serverConnection.clientName, deviceName };
   }, []);
+  /** With no output chosen yet, playing starts on this computer's current one. */
+  const ensureOutput = useCallback(() => {
+    const output = outputHere();
+    if (coreView()?.output || !output) return;
+    void coreCommand("output", { output }).catch(() => {});
+  }, [outputHere]);
+  // Once per connection (or session followed), after this computer's outputs are known.
+  const restoreChecked = useRef(false);
+  const audioLoading = audio?.loading ?? false;
+  useEffect(() => {
+    if (!view) { restoreChecked.current = false; return; }
+    const fallback = outputHere();
+    if (restoreChecked.current || audioLoading || !fallback) return;
+    restoreChecked.current = true;
+    const localDevices = new Set(["", ...(latestAudio.current?.devices ?? []).map(device => device.id)]);
+    void restoreGeneralOutputs(localDevices, fallback).catch(() => {});
+  }, [view, audioLoading, outputHere]);
 
   const audioDecks = useMemo<AudioDeckController>(() => ({
     firstAudioRef, secondAudioRef,
@@ -354,9 +377,16 @@ export function useCorePlayer(queue: QueueController): AudioPlayer {
     seek: seekTo,
     audioDecks,
     // The queue change just before this carries it, so the server starts the song once.
-    playTrack: (trackId: string) => {
-      // A new song (or a shuffle) starts like a skip: the old one stops here at once.
+    playTrack: (trackId: string, preparedTrack?: Track) => {
+      // A new song (or a shuffle) starts like a skip: the old one stops here at once, and the
+      // progress starts at 0 instead of showing the old song's position until the server loads it.
       if (followsEngine()) holdForSkip();
+      skipping.current = {
+        to: preparedTrack ? serverAudioSource(preparedTrack) : null, trackId,
+        outputId: coreView()?.output?.endpointId, at: performance.now(),
+      };
+      clock.setRunning(false);
+      clock.set(0);
       void coreCommand("playTrack", { trackId }).catch(() => {});
       ensureOutput();
     },
