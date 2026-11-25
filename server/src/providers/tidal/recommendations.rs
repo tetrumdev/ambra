@@ -150,6 +150,7 @@ fn personalized_mix(item: &Value) -> Option<Mix> {
         id,
         title,
         image_url,
+        artwork_fallback: false,
         section,
     })
 }

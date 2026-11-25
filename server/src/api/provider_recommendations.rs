@@ -1,5 +1,5 @@
 use super::*;
-use crate::providers::recommendations::Recommendations;
+use crate::providers::recommendations::{MixArtwork, Recommendations};
 
 pub(super) async fn list(
     State(state): State<AppState>,
@@ -32,6 +32,28 @@ pub(super) async fn tracks(
             let qobuz = qobuz_provider(&state)?;
             require_mix(qobuz.recommendations().await, provider, &id)?;
             qobuz.recommendation_tracks(&id, &state.user_state).await
+        }
+    };
+    result.map(Json).map_err(|error| upstream(provider, error))
+}
+
+pub(super) async fn artwork(
+    State(state): State<AppState>,
+    Path((provider, id)): Path<(MusicProvider, String)>,
+) -> Result<Json<MixArtwork>, ApiError> {
+    let result = match provider {
+        MusicProvider::Spotify if id == SpotifyProvider::DAYLIST => {
+            spotify_provider(&state).await?.daylist_artwork().await
+        }
+        MusicProvider::Qobuz if QobuzProvider::is_daily_mix(&id) => {
+            qobuz_provider(&state)?
+                .daily_mix_artwork(&id, &state.user_state)
+                .await
+        }
+        _ => {
+            return Err(ApiError::not_found(
+                "This mix has no fallback artwork.".into(),
+            ));
         }
     };
     result.map(Json).map_err(|error| upstream(provider, error))

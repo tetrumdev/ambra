@@ -61,17 +61,7 @@ impl SpotifyProvider {
         let mut entries = Vec::new();
         let mut offset = 0;
         loop {
-            let bytes = self
-                .session
-                .spclient()
-                .request(
-                    &reqwest::Method::GET,
-                    &format!("/playlist/v2/playlist/{id}?from={offset}&length=100"),
-                    None,
-                    None,
-                )
-                .await?;
-            let page = SelectedListContent::parse_from_bytes(&bytes)?;
+            let page = self.playlist_page(id, offset, 100).await?;
             if revision
                 .as_ref()
                 .is_some_and(|revision: &Vec<u8>| revision.as_slice() != page.revision())
@@ -113,6 +103,25 @@ impl SpotifyProvider {
             entries,
             revision: general_purpose::STANDARD.encode(revision.unwrap_or_default()),
         })
+    }
+
+    pub(super) async fn playlist_page(
+        &self,
+        id: &str,
+        offset: usize,
+        limit: usize,
+    ) -> ProviderResult<SelectedListContent> {
+        let bytes = self
+            .session
+            .spclient()
+            .request(
+                &reqwest::Method::GET,
+                &format!("/playlist/v2/playlist/{id}?from={offset}&length={limit}"),
+                None,
+                None,
+            )
+            .await?;
+        Ok(SelectedListContent::parse_from_bytes(&bytes)?)
     }
 
     async fn change_playlist(

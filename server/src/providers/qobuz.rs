@@ -43,6 +43,7 @@ pub struct QobuzProvider {
     /// Tracks without loudness values are remembered too, so each is asked about once.
     loudness: Arc<Mutex<HashMap<String, Loudness>>>,
     recommendation_cache: Arc<super::recommendations::Cache>,
+    daily_mix: Arc<super::recommendations::Cached<Arc<recommendations::DailyMix>, bool>>,
     track_metadata_cache: Arc<Mutex<HashMap<String, TrackMetadata>>>,
     track_metadata_cache_path: Arc<PathBuf>,
 }
@@ -146,6 +147,7 @@ impl QobuzProvider {
             loudness: Arc::new(Mutex::new(HashMap::new())),
             track_metadata_cache: Arc::new(Mutex::new(track_metadata_cache)),
             recommendation_cache: Arc::default(),
+            daily_mix: Arc::default(),
             track_metadata_cache_path: Arc::new(track_metadata_cache_path),
         })
     }

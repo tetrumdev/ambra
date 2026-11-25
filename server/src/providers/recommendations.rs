@@ -14,7 +14,17 @@ pub struct Mix {
     pub id: String,
     pub title: String,
     pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub artwork_fallback: bool,
     pub section: &'static str,
+}
+
+#[derive(Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MixArtwork {
+    pub image_url: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub album_image_urls: Vec<String>,
 }
 
 #[derive(Clone, Default, Serialize)]
@@ -33,7 +43,36 @@ pub struct Cache {
     contents: Mutex<Vec<Contents>>,
 }
 
-const TTL: Duration = Duration::from_secs(10 * 60);
+pub const TTL: Duration = Duration::from_secs(10 * 60);
+
+/// A single provider-session value. Concurrent callers share the same load.
+pub struct Cached<T, K = ()>(Mutex<Option<(K, Instant, T)>>);
+
+impl<T, K> Default for Cached<T, K> {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+impl<T: Clone, K: PartialEq> Cached<T, K> {
+    pub async fn get_or_load<E>(
+        &self,
+        key: K,
+        load: impl Future<Output = Result<T, E>>,
+        ttl: impl FnOnce(&T) -> Duration,
+    ) -> Result<T, E> {
+        let mut cached = self.0.lock().await;
+        if let Some((_, _, value)) = cached
+            .as_ref()
+            .filter(|(cached_key, expires, _)| *cached_key == key && *expires > Instant::now())
+        {
+            return Ok(value.clone());
+        }
+        let value = load.await?;
+        *cached = Some((key, Instant::now() + ttl(&value), value.clone()));
+        Ok(value)
+    }
+}
 
 impl Cache {
     pub async fn recommendations<E>(

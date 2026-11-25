@@ -282,3 +282,68 @@ test("Provider shelves open mixes as playlists and releases as albums, then retu
     await act(async () => { updateServiceAvailability({ tidal: false, qobuz: false, spotify: false }); });
   }
 });
+
+test("daily mix artwork loads independently and uses only the selected provider", async () => {
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  const daylist = "37i9dQZF1EP6YuccBxUcC1";
+  let finishQobuz!: (response: Response) => void;
+  let qobuzSignal: AbortSignal | null | undefined;
+  const opened: unknown[] = [];
+  const view = (source: RecommendationSource) => <HomeView entries={[]} tracks={[]} playlists={[]} error={null}
+    onAction={() => {}} onSelectPlaylist={() => {}} onOpenEntity={entity => opened.push(entity)}
+    selectedSource={source} onSelectSource={() => {}} registerScrollElement={() => {}} />;
+  const card = () => container.querySelector<HTMLButtonElement>(".homeCardButton")!;
+  globalThis.fetch = ((url, options) => {
+    const path = String(url).split("/api/")[1];
+    calls.push(path);
+    switch (path) {
+      case "providers/qobuz/recommendations":
+        return Promise.resolve(Response.json({
+          mixes: [{ id: "daily-suggestions", title: "Daily suggestions", imageUrl: null, artworkFallback: true }],
+          albums: [],
+        }));
+      case "providers/qobuz/recommendations/daily-suggestions/artwork":
+        qobuzSignal = options?.signal;
+        return new Promise<Response>(resolve => { finishQobuz = resolve; });
+      case "providers/spotify/recommendations":
+        return Promise.resolve(Response.json({
+          mixes: [{ id: daylist, title: "daylist", imageUrl: null, artworkFallback: true }],
+          albums: [],
+        }));
+      case `providers/spotify/recommendations/${daylist}/artwork`:
+        return Promise.resolve(Response.json({ imageUrl: "https://daylist.spotifycdn.com/daylist.jpg" }));
+      default:
+        throw new Error(`Unexpected URL: ${String(url)}`);
+    }
+  }) as typeof fetch;
+  updateServiceAvailability({ tidal: true, qobuz: true, spotify: true });
+  try {
+    await render(view("qobuz"));
+    expect(card().textContent).toContain("Daily suggestions");
+    expect(card().querySelector(".homePlaylistPlaceholder")).not.toBeNull();
+    await act(async () => { card().click(); });
+    expect(opened[0]).toMatchObject({ kind: "mix", mix: { provider: "qobuz", id: "daily-suggestions" } });
+
+    await act(async () => { finishQobuz(Response.json({
+      imageUrl: null, albumImageUrls: ["https://static.qobuz.com/a.jpg", "https://static.qobuz.com/b.jpg"],
+    })); });
+    expect(card().querySelectorAll(".homeMixArtwork img")).toHaveLength(2);
+
+    await act(async () => { root.render(view("spotify")); });
+    expect(qobuzSignal?.aborted).toBe(true);
+    expect(card().querySelector(".homeMixArtwork")).toBeNull();
+    expect(card().querySelector("img")).not.toBeNull();
+    await act(async () => { card().click(); });
+    expect(opened[1]).toMatchObject({ kind: "mix", mix: {
+      provider: "spotify", id: daylist, imageUrl: "https://daylist.spotifycdn.com/daylist.jpg",
+    } });
+    expect(calls).toEqual([
+      "providers/qobuz/recommendations", "providers/qobuz/recommendations/daily-suggestions/artwork",
+      "providers/spotify/recommendations", `providers/spotify/recommendations/${daylist}/artwork`,
+    ]);
+  } finally {
+    globalThis.fetch = original;
+    await act(async () => { updateServiceAvailability({ tidal: false, qobuz: false, spotify: false }); });
+  }
+});

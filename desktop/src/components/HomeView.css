@@ -144,6 +144,19 @@
     object-fit: cover;
 }
 
+.homeMixArtwork > img:only-child {
+    grid-area: 1 / 1 / -1 / -1;
+}
+
+.homeMixArtwork > img:first-child:nth-last-child(2),
+.homeMixArtwork > img:nth-child(2):last-child {
+    grid-row: span 2;
+}
+
+.homeMixArtwork > img:nth-child(3):last-child {
+    grid-column: span 2;
+}
+
 .homeCard {
     position: relative;
 }

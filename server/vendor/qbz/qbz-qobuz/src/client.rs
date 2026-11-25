@@ -19,6 +19,7 @@ use super::lyrics::{
     merge_translation_into, QobuzLyricsContent, QobuzLyricsDocument, QobuzLyricsUrls,
 };
 use qbz_models::*;
+use qbz_models::types::DynamicMixContents;
 use zeroize::Zeroizing;
 
 /// Only the token-restoration POST; shared streaming/download requests remain unbounded.
@@ -46,6 +47,23 @@ fn redacted_body_diagnostic(body: &str) -> &'static str {
         " : <empty body>"
     } else {
         " : <response body omitted>"
+    }
+}
+
+fn dynamic_mix_contents(response: &Value, label: &str) -> DynamicMixContents {
+    let mut images = std::collections::HashMap::new();
+    for field in ["image", "images"] {
+        match response.get(field) {
+            Some(Value::String(url)) => { images.insert("small".into(), url.clone()); }
+            Some(Value::Object(variants)) => images.extend(
+                variants.iter().filter_map(|(size, url)| Some((size.clone(), url.as_str()?.to_owned()))),
+            ),
+            _ => {}
+        }
+    }
+    DynamicMixContents {
+        tracks: qbz_models::lenient::parse_items_array(response, "tracks", label),
+        images,
     }
 }
 
@@ -1316,7 +1334,7 @@ impl QobuzClient {
     }
 
     /// Read a published mix in service order. The list supplies its type.
-    pub async fn get_dynamic_mix_tracks(&self, kind: &str, limit: u32) -> Result<Vec<Track>> {
+    pub async fn get_dynamic_mix(&self, kind: &str, limit: u32) -> Result<DynamicMixContents> {
         let response: Value = self
             .http()?
             .get(endpoints::build_url("/dynamic-tracks/get"))
@@ -1331,18 +1349,18 @@ impl QobuzClient {
         if response.pointer("/tracks/items").and_then(Value::as_array).is_none() {
             return Err(ApiError::ApiResponse("Missing Qobuz mix tracks".into()));
         }
-        Ok(qbz_models::lenient::parse_items_array(&response, "tracks", "dynamic mix track"))
+        Ok(dynamic_mix_contents(&response, "dynamic mix track"))
     }
 
     /// Dynamic suggestions for mixes (`POST /dynamic/suggest`). Seeds
-    /// from recently-listened track ids. Returns the suggested tracks
-    /// (items parsed leniently). Ported from the legacy api client;
+    /// from recently-listened track ids. Item metadata is parsed leniently.
+    /// Ported from the legacy api client;
     /// the `track_to_analysed` payload is optional and omitted here.
     pub async fn get_dynamic_suggest(
         &self,
         listened_track_ids: &[u64],
         limit: u32,
-    ) -> Result<Vec<Track>> {
+    ) -> Result<DynamicMixContents> {
         self.get_dynamic_suggest_full(listened_track_ids, &[], limit)
             .await
     }
@@ -1356,7 +1374,7 @@ impl QobuzClient {
         listened_track_ids: &[u64],
         tracks_to_analyse: &[TrackToAnalyse],
         limit: u32,
-    ) -> Result<Vec<Track>> {
+    ) -> Result<DynamicMixContents> {
         let url = endpoints::build_url(paths::DYNAMIC_SUGGEST);
         let body = serde_json::json!({
             "limit": limit,
@@ -1377,11 +1395,7 @@ impl QobuzClient {
             )));
         }
         let response: Value = http_response.json().await?;
-        Ok(qbz_models::lenient::parse_items_array(
-            &response,
-            "tracks",
-            "dynamic-suggest track",
-        ))
+        Ok(dynamic_mix_contents(&response, "dynamic-suggest track"))
     }
 
     /// Qobuz radio for an artist (`/radio/artist`) — a generated track

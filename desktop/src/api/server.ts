@@ -817,11 +817,18 @@ export async function loadDiscover(signal: AbortSignal): Promise<DiscoverRespons
   return { ...value, tracks: value.tracks.map(track => "globalId" in track ? JSON.parse(fromStorage(JSON.stringify(track))) as Track : playableTrack(track)) };
 }
 
-export type RecommendationMix = { id: string; title: string; imageUrl: string | null; section?: string };
+export type RecommendationMix = {
+  id: string;
+  title: string;
+  imageUrl: string | null;
+  section?: string;
+  artworkFallback?: boolean;
+};
+export type RecommendationArtwork = { imageUrl: string | null; albumImageUrls?: string[] };
 export type ProviderRecommendations = { mixes: RecommendationMix[]; albums: CatalogAlbum[] };
 
-async function recommendationResponse(provider: StreamingProvider, signal: AbortSignal, id?: string) {
-  const path = `/api/providers/${provider}/recommendations${id === undefined ? "" : `/${encodeURIComponent(id)}`}`;
+async function recommendationResponse(provider: StreamingProvider, signal: AbortSignal, suffix = "") {
+  const path = `/api/providers/${provider}/recommendations${suffix}`;
   const response = await fetch(`${serverBaseUrl}${path}`, {
     signal: AbortSignal.any([signal, AbortSignal.timeout(55_000)]), cache: "no-store",
   });
@@ -833,8 +840,12 @@ export function loadProviderRecommendations(provider: StreamingProvider, signal:
   return recommendationResponse(provider, signal);
 }
 
+export function loadRecommendationArtwork(provider: StreamingProvider, id: string, signal: AbortSignal): Promise<RecommendationArtwork> {
+  return recommendationResponse(provider, signal, `/${encodeURIComponent(id)}/artwork`);
+}
+
 export async function loadRecommendationMix(provider: StreamingProvider, id: string, signal: AbortSignal): Promise<Track[]> {
-  const tracks: RemoteTrack[] = await recommendationResponse(provider, signal, id);
+  const tracks: RemoteTrack[] = await recommendationResponse(provider, signal, `/${encodeURIComponent(id)}`);
   return tracks.filter(track => track.provider === provider).map(playableTrack);
 }
 

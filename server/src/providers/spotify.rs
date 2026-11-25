@@ -62,6 +62,7 @@ pub struct SpotifyProvider {
     quality: SpotifyQuality,
     tracks: Arc<Mutex<HashMap<String, Track>>>,
     recommendation_cache: Arc<super::recommendations::Cache>,
+    daylist_artwork: Arc<super::recommendations::Cached<Option<String>>>,
     track_metadata: Arc<crate::metadata_store::MetadataStore>,
 }
 
@@ -264,6 +265,7 @@ impl SpotifyProvider {
             quality: configured_quality(),
             tracks: Arc::new(Mutex::new(HashMap::new())),
             recommendation_cache: Arc::default(),
+            daylist_artwork: Arc::default(),
             track_metadata: Arc::new(track_metadata),
         }))
     }
@@ -1197,6 +1199,7 @@ mod tests {
                 quality: SpotifyQuality::Kbps320,
                 tracks: Arc::new(Mutex::new(HashMap::new())),
                 recommendation_cache: Arc::default(),
+                daylist_artwork: Arc::default(),
                 track_metadata: Arc::new(crate::metadata_store::MetadataStore::in_memory()),
             })
         }

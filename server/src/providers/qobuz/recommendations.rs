@@ -1,11 +1,23 @@
 use super::*;
-use crate::providers::recommendations::{Mix, Recommendations};
-use qbz_models::{lenient::parse_items_array, types::TrackToAnalyse};
+use crate::providers::recommendations::{Mix, MixArtwork, Recommendations, TTL};
+use qbz_models::{
+    lenient::parse_items_array,
+    types::{DynamicMixContents, TrackToAnalyse},
+};
 use std::collections::HashSet;
 
 const GENERATED_DAILY: &str = "daily-suggestions";
 
+pub(super) struct DailyMix {
+    tracks: Vec<TrackMetadata>,
+    artwork: MixArtwork,
+}
+
 impl QobuzProvider {
+    pub fn is_daily_mix(id: &str) -> bool {
+        matches!(id, "daily" | GENERATED_DAILY)
+    }
+
     pub async fn recommendations(&self) -> ProviderResult<Recommendations> {
         self.recommendation_cache
             .recommendations(async {
@@ -16,15 +28,15 @@ impl QobuzProvider {
                 let mut mixes: Vec<_> = published?
                     .into_iter()
                     .filter(|mix| matches!(mix.kind.as_str(), "daily" | "weekly"))
-                    .map(|mix| Mix {
-                        id: mix.kind,
-                        title: mix.title,
-                        section: "Your mixes",
-                        image_url: mix
-                            .images
-                            .get("small")
-                            .filter(|url| url.starts_with("https://"))
-                            .cloned(),
+                    .map(|mix| {
+                        let image_url = official_cover(&mix.images);
+                        Mix {
+                            artwork_fallback: mix.kind == "daily" && image_url.is_none(),
+                            id: mix.kind,
+                            title: mix.title,
+                            section: "Your mixes",
+                            image_url,
+                        }
                     })
                     .collect();
                 if !mixes.iter().any(|mix| mix.id == "daily") {
@@ -36,6 +48,7 @@ impl QobuzProvider {
                             id: GENERATED_DAILY.into(),
                             title: "Daily suggestions".into(),
                             image_url: None,
+                            artwork_fallback: true,
                             section: "Your mixes",
                         },
                     );
@@ -64,27 +77,70 @@ impl QobuzProvider {
         id: &str,
         user_state: &Arc<crate::user_state::UserState>,
     ) -> ProviderResult<Vec<TrackMetadata>> {
+        if Self::is_daily_mix(id) {
+            return Ok(self.daily_mix(id, user_state).await?.tracks.clone());
+        }
         self.recommendation_cache
             .tracks(id, async {
-                let tracks = if id == GENERATED_DAILY {
-                    self.daily_suggestions(user_state).await?
-                } else {
-                    self.client.get_dynamic_mix_tracks(id, 100).await?
-                };
-                let mut seen = HashSet::new();
-                Ok(tracks
-                    .into_iter()
-                    .filter(|track| track.is_streamable() && seen.insert(track.id))
-                    .map(map_search_track)
-                    .collect())
+                let mix = self.client.get_dynamic_mix(id, 100).await?;
+                Ok(playable_mix_tracks(mix.tracks))
             })
+            .await
+    }
+
+    pub async fn daily_mix_artwork(
+        &self,
+        id: &str,
+        user_state: &Arc<crate::user_state::UserState>,
+    ) -> ProviderResult<MixArtwork> {
+        Ok(self.daily_mix(id, user_state).await?.artwork.clone())
+    }
+
+    async fn daily_mix(
+        &self,
+        id: &str,
+        user_state: &Arc<crate::user_state::UserState>,
+    ) -> ProviderResult<Arc<DailyMix>> {
+        let generated = id == GENERATED_DAILY;
+        self.daily_mix
+            .get_or_load(
+                generated,
+                async {
+                    let mix = if generated {
+                        self.daily_suggestions(user_state).await?
+                    } else {
+                        self.client.get_dynamic_mix("daily", 100).await?
+                    };
+                    let tracks = playable_mix_tracks(mix.tracks);
+                    let image_url = official_cover(&mix.images);
+                    let album_image_urls = if image_url.is_none() {
+                        album_covers(&tracks)
+                    } else {
+                        Vec::new()
+                    };
+                    Ok(Arc::new(DailyMix {
+                        tracks,
+                        artwork: MixArtwork {
+                            image_url,
+                            album_image_urls,
+                        },
+                    }))
+                },
+                |mix| {
+                    if mix.tracks.is_empty() {
+                        Duration::ZERO
+                    } else {
+                        TTL
+                    }
+                },
+            )
             .await
     }
 
     async fn daily_suggestions(
         &self,
         user_state: &Arc<crate::user_state::UserState>,
-    ) -> ProviderResult<Vec<Track>> {
+    ) -> ProviderResult<DynamicMixContents> {
         // Only Qobuz plays enter this request. Favorites are already scoped
         // to the connected Qobuz account and support users new to Ambra.
         let history = user_state
@@ -106,7 +162,7 @@ impl QobuzProvider {
                 .filter(|id| seen.insert(*id)),
         );
         if seeds.is_empty() {
-            return Ok(Vec::new());
+            return Ok(DynamicMixContents::default());
         }
         let sample: Vec<_> = (0..seeds.len().min(9))
             .map(|index| seeds[index * seeds.len() / seeds.len().min(9)])
@@ -145,15 +201,65 @@ impl QobuzProvider {
                 })
             })
             .collect();
-        let tracks = self
+        let mut mix = self
             .client
             .get_dynamic_suggest_full(&seeds, &analyzed, 50 - analyzed.len() as u32)
             .await?;
-        if tracks.is_empty() && !analyzed.is_empty() {
-            return Ok(self.client.get_dynamic_suggest(&seeds, 50).await?);
+        if mix.tracks.is_empty() && !analyzed.is_empty() {
+            let fallback = self.client.get_dynamic_suggest(&seeds, 50).await?;
+            mix.tracks = fallback.tracks;
+            mix.images.extend(fallback.images);
         }
-        Ok(tracks)
+        Ok(mix)
     }
+}
+
+fn album_covers(tracks: &[TrackMetadata]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    tracks
+        .iter()
+        .filter(|track| track.provider == MusicProvider::Qobuz)
+        .filter_map(|track| track.album.as_ref()?.cover_url.as_deref())
+        .filter(|url| {
+            crate::artwork_quality::trusted_artwork_url("qobuz", url) && seen.insert(*url)
+        })
+        .take(4)
+        .map(str::to_owned)
+        .collect()
+}
+
+fn official_cover(images: &HashMap<String, String>) -> Option<String> {
+    let is_https = |value: &str| {
+        reqwest::Url::parse(value).is_ok_and(|url| url.scheme() == "https" && url.has_host())
+    };
+    [
+        "small",
+        "thumbnail",
+        "medium",
+        "large",
+        "extralarge",
+        "mega",
+    ]
+    .into_iter()
+    .filter_map(|size| images.get(size))
+    .find(|url| is_https(url))
+    .or_else(|| {
+        images
+            .iter()
+            .filter(|(_, url)| is_https(url))
+            .min_by_key(|(size, _)| *size)
+            .map(|(_, url)| url)
+    })
+    .cloned()
+}
+
+fn playable_mix_tracks(tracks: Vec<Track>) -> Vec<TrackMetadata> {
+    let mut seen = HashSet::new();
+    tracks
+        .into_iter()
+        .filter(|track| track.is_streamable() && seen.insert(track.id))
+        .map(map_search_track)
+        .collect()
 }
 
 fn recent_track_ids(history: Option<&str>) -> Vec<u64> {
@@ -201,6 +307,22 @@ fn recent_track_ids(history: Option<&str>) -> Vec<u64> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn daily_mix_uses_other_official_sizes_when_small_artwork_is_missing() {
+        let images = HashMap::from([
+            ("small".into(), "https://".into()),
+            ("medium".into(), "https://static.qobuz.com/mix.jpg".into()),
+            (
+                "large".into(),
+                "https://static.qobuz.com/mix-large.jpg".into(),
+            ),
+        ]);
+        assert_eq!(
+            official_cover(&images).as_deref(),
+            Some("https://static.qobuz.com/mix.jpg")
+        );
+    }
 
     #[test]
     fn daily_suggestions_only_seed_distinct_qobuz_plays_in_recent_order() {

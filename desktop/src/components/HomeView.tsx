@@ -10,7 +10,9 @@ import {
 import { createPortal } from "react-dom";
 import { ArtworkImage } from "./ArtworkImage";
 import { DropdownChevron } from "./DropdownChevron";
-import { loadProviderRecommendations, type RecommendationMix, type StreamingProvider } from "../api/server";
+import {
+  loadProviderRecommendations, loadRecommendationArtwork, type RecommendationMix, type StreamingProvider,
+} from "../api/server";
 import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
@@ -26,6 +28,7 @@ import { reducedMotion } from "../utils/reducedMotion";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
 const rowLimit = 12;
+const recommendationRefreshMs = 10 * 60 * 1000;
 const recommendationProviders = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" } satisfies Record<StreamingProvider, string>;
 export type RecommendationSource = "ambra" | StreamingProvider;
 const providers = Object.keys(recommendationProviders) as StreamingProvider[];
@@ -202,9 +205,10 @@ function SongCards({
   );
 }
 
-function RecommendationCard({ title, imageUrl, onClick, detail }: {
+function RecommendationCard({ title, imageUrl, albumImageUrls, onClick, detail }: {
   title: string;
   imageUrl: string | null;
+  albumImageUrls?: string[];
   onClick: () => void;
   detail?: string;
 }) {
@@ -214,7 +218,11 @@ function RecommendationCard({ title, imageUrl, onClick, detail }: {
         <div className="homeArtwork">
           {imageUrl
             ? <ArtworkImage src={imageUrl} alt="" />
-            : <span className="homePlaylistPlaceholder" aria-hidden="true">♫</span>}
+            : albumImageUrls?.length
+              ? <div className="playlistArtworkGrid homeMixArtwork" aria-hidden="true">
+                  {albumImageUrls.map(url => <ArtworkImage key={url} src={url} alt="" />)}
+                </div>
+              : <span className="homePlaylistPlaceholder" aria-hidden="true">♫</span>}
         </div>
         <span className="homeCardTitle" data-tooltip={title} data-tooltip-overflow="">{title}</span>
         {detail && <span className="homeCardDetail">{detail}</span>}
@@ -223,11 +231,25 @@ function RecommendationCard({ title, imageUrl, onClick, detail }: {
   );
 }
 
+function ProviderMixCard({ provider, mix, onOpenEntity }: {
+  provider: StreamingProvider;
+  mix: RecommendationMix;
+  onOpenEntity: (entity: BrowseEntity) => void;
+}) {
+  const id = mix.id;
+  const load = useCallback((signal: AbortSignal) => loadRecommendationArtwork(provider, id, signal), [provider, id]);
+  const { value } = useRecommendationRequest(mix.artworkFallback ? load : null, recommendationRefreshMs);
+  const imageUrl = mix.imageUrl ?? value?.imageUrl ?? null;
+  return <RecommendationCard title={mix.title} imageUrl={imageUrl} albumImageUrls={value?.albumImageUrls}
+    onClick={() => onOpenEntity({ kind: "mix", mix: { ...mix, imageUrl, provider } })} />;
+}
+
 function ProviderHome({ provider, onOpenEntity }: {
   provider: StreamingProvider; onOpenEntity: (entity: BrowseEntity) => void;
 }) {
   const load = useCallback((signal: AbortSignal) => loadProviderRecommendations(provider, signal), [provider]);
-  const { value, error, retry } = useRecommendationRequest(load);
+  const { value, error, retry } = useRecommendationRequest(load,
+    provider === "spotify" || provider === "qobuz" ? recommendationRefreshMs : undefined);
   const defaultSection = provider === "qobuz" ? "Your mixes" : "Made for you";
   const sections = new Map<string, RecommendationMix[]>();
   for (const mix of value?.mixes ?? []) {
@@ -250,8 +272,7 @@ function ProviderHome({ provider, onOpenEntity }: {
       {[...sections].map(([title, mixes]) => (
         <HomeRow key={title} title={title} empty="" hasItems>
           {mixes.map(mix => (
-            <RecommendationCard key={mix.id} title={mix.title} imageUrl={mix.imageUrl}
-              onClick={() => onOpenEntity({ kind: "mix", mix: { ...mix, provider } })} />
+            <ProviderMixCard key={mix.id} provider={provider} mix={mix} onOpenEntity={onOpenEntity} />
           ))}
         </HomeRow>
       ))}

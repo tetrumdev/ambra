@@ -1,9 +1,11 @@
 use super::*;
-use crate::providers::recommendations::{Mix, Recommendations};
+use crate::providers::recommendations::{Mix, MixArtwork, Recommendations, TTL};
+use librespot_core::FileId;
 use librespot_protocol::{
     extended_metadata::{BatchedEntityRequest, EntityRequest, ExtensionQuery},
     extension_kind::ExtensionKind,
     metadata::Track as TrackProto,
+    playlist4_external::ListAttributes,
 };
 use protobuf::{EnumOrUnknown, Message};
 use serde_json::{Value, json};
@@ -13,11 +15,12 @@ const MADE_FOR_YOU: &str = "spotify:section:0JQ5DAUnp4wcj0bCb3wh3S";
 const TOP_MIXES: &str = "spotify:section:0JQ5DAnM3wGh0gz1MXnu89";
 const MADE_FOR_YOU_TITLE: &str = "Made for you";
 const HOME_SECTION_HASH: &str = "eb3fba2d388cf4fc4d696b1757a58584e9538a3b515ea742e9cc9465807340be";
-const DAYLIST: &str = "37i9dQZF1EP6YuccBxUcC1";
 const SPOTIFY_DJ: &str = "37i9dQZF1EYkqdzj48dyYq";
 const PAGE_SIZE: usize = 20;
 
 impl SpotifyProvider {
+    pub const DAYLIST: &str = "37i9dQZF1EP6YuccBxUcC1";
+
     pub async fn recommendations(&self) -> ProviderResult<Recommendations> {
         self.recommendation_cache
             .recommendations(async {
@@ -26,7 +29,7 @@ impl SpotifyProvider {
                 let context = self.access_token(None).await?;
                 let token = self.session.login5().auth_token().await?;
                 let client_token = self.session.spclient().client_token().await?;
-                let (mut mixes, top_mixes) = tokio::try_join!(
+                let (mut mixes, mut top_mixes) = tokio::try_join!(
                     self.recommendation_section(
                         MADE_FOR_YOU,
                         MADE_FOR_YOU_TITLE,
@@ -43,18 +46,28 @@ impl SpotifyProvider {
                     ),
                 )?;
                 // Keep shared cards in the more specific Top mixes shelf.
+                if let Some(daylist) = top_mixes.iter_mut().find(|mix| mix.id == Self::DAYLIST) {
+                    if daylist.image_url.is_none() {
+                        daylist.image_url = mixes
+                            .iter()
+                            .find(|mix| mix.id == Self::DAYLIST)
+                            .and_then(|mix| mix.image_url.clone());
+                        daylist.artwork_fallback = daylist.image_url.is_none();
+                    }
+                }
                 let top_ids: HashSet<_> = top_mixes.iter().map(|mix| mix.id.as_str()).collect();
                 mixes.retain(|mix| !top_ids.contains(mix.id.as_str()));
                 mixes.extend(top_mixes);
                 // Spotify exposes daylist at a stable entry point, even on
                 // accounts where it is absent from the Home shelves.
-                if !mixes.iter().any(|mix| mix.id == DAYLIST) {
+                if !mixes.iter().any(|mix| mix.id == Self::DAYLIST) {
                     mixes.insert(
                         0,
                         Mix {
-                            id: DAYLIST.into(),
+                            id: Self::DAYLIST.into(),
                             title: "daylist".into(),
                             image_url: None,
+                            artwork_fallback: true,
                             section: MADE_FOR_YOU_TITLE,
                         },
                     );
@@ -65,6 +78,58 @@ impl SpotifyProvider {
                 })
             })
             .await
+    }
+
+    pub async fn daylist_artwork(&self) -> ProviderResult<MixArtwork> {
+        let image_url = self
+            .daylist_artwork
+            .get_or_load(
+                (),
+                async {
+                    // Read the signed-in account's current playlist metadata first.
+                    if let Ok(Ok(page)) = tokio::time::timeout(
+                        Duration::from_secs(3),
+                        self.playlist_page(Self::DAYLIST, 0, 1),
+                    )
+                    .await
+                    {
+                        if let Some(url) = playlist_cover(page.attributes.get_or_default()) {
+                            return Ok::<_, reqwest::Error>(Some(url));
+                        }
+                    }
+
+                    // Spotify also publishes a time-of-day cover through its embed.
+                    let value: Value = self
+                        .http_client
+                        .get("https://open.spotify.com/oembed")
+                        .query(&[(
+                            "url",
+                            format!("https://open.spotify.com/playlist/{}", Self::DAYLIST),
+                        )])
+                        .timeout(Duration::from_secs(4))
+                        .send()
+                        .await?
+                        .error_for_status()?
+                        .json()
+                        .await?;
+                    Ok(value
+                        .get("thumbnail_url")
+                        .and_then(Value::as_str)
+                        .and_then(spotify_cover_url))
+                },
+                |url| {
+                    if url.is_some() {
+                        TTL
+                    } else {
+                        Duration::from_secs(60)
+                    }
+                },
+            )
+            .await?;
+        Ok(MixArtwork {
+            image_url,
+            ..MixArtwork::default()
+        })
     }
 
     pub async fn recommendation_tracks(&self, id: &str) -> ProviderResult<Vec<TrackMetadata>> {
@@ -251,27 +316,64 @@ fn playlist(item: &Value, section: &'static str) -> Option<Mix> {
     }
     let title = data.get("name")?.as_str()?.to_owned();
     let image_url = data
-        .pointer("/images/items/0/sources")
+        .pointer("/images/items")
         .and_then(Value::as_array)
-        .and_then(|images| {
-            images
+        .and_then(|items| {
+            items
                 .iter()
+                .filter_map(|item| item.get("sources")?.as_array())
+                .flatten()
                 .filter_map(|image| {
-                    Some((
-                        image.get("url")?.as_str()?,
-                        image.get("width").and_then(Value::as_u64),
-                    ))
+                    let url = image.get("url")?.as_str()?;
+                    let url = if id == SpotifyProvider::DAYLIST {
+                        spotify_cover_url(url)?
+                    } else {
+                        url.starts_with("https://").then(|| url.to_owned())?
+                    };
+                    Some((url, image.get("width").and_then(Value::as_u64)))
                 })
-                .filter(|(url, _)| url.starts_with("https://"))
                 .min_by_key(|(_, width)| width.map_or(u64::MAX, |width| width.abs_diff(320)))
-                .map(|(url, _)| url.to_owned())
+                .map(|(url, _)| url)
         });
     Some(Mix {
+        artwork_fallback: id == SpotifyProvider::DAYLIST && image_url.is_none(),
         id: id.to_owned(),
         title,
         image_url,
         section,
     })
+}
+
+fn playlist_cover(attributes: &ListAttributes) -> Option<String> {
+    attributes
+        .picture_size
+        .iter()
+        .find_map(|picture| spotify_cover_url(picture.url()))
+        .or_else(|| {
+            std::str::from_utf8(attributes.picture())
+                .ok()
+                .and_then(spotify_cover_url)
+        })
+        .or_else(|| {
+            let bytes = attributes.picture();
+            if !attributes.has_picture() || bytes.len() != 20 || bytes.iter().all(|byte| *byte == 0)
+            {
+                return None;
+            }
+            spotify_cover_url(&format!("spotify:image:{}", FileId::from_raw(bytes)))
+        })
+}
+
+fn spotify_cover_url(value: &str) -> Option<String> {
+    if let Some(id) = value.strip_prefix("spotify:image:") {
+        return (id.len() == 40 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            .then(|| format!("https://i.scdn.co/image/{id}"));
+    }
+    let url = reqwest::Url::parse(value).ok()?;
+    let host = url.host_str()?;
+    (url.scheme() == "https"
+        && (matches!(host, "i.scdn.co" | "mosaic.scdn.co") || host.ends_with(".spotifycdn.com")))
+    .then(|| value.to_owned())
 }
 
 fn summarized_artists(artists: &librespot_metadata::artist::Artists) -> Vec<ArtistMetadata> {
@@ -289,13 +391,58 @@ fn summarized_artists(artists: &librespot_metadata::artist::Artists) -> Vec<Arti
 #[cfg(test)]
 mod tests {
     use super::*;
+    use librespot_protocol::playlist4_external::PictureSize;
+
+    #[test]
+    fn daylist_reads_current_spotify_artwork_from_any_image_group() {
+        let mut card = json!({"content": {"data": {
+            "__typename": "Playlist", "uri": format!("spotify:playlist:{}", SpotifyProvider::DAYLIST),
+            "name": "daylist", "images": {"items": [
+                {"sources": [{"url": "https://other.example/cover", "width": 320}]},
+                {"sources": [{"url": "https://daylist.spotifycdn.com/playlist-covers-mix/en/evening_default.jpg", "width": 300}]}
+            ]}
+        }}});
+        let mix = playlist(&card, MADE_FOR_YOU_TITLE).unwrap();
+        assert!(!mix.artwork_fallback);
+        assert_eq!(
+            mix.image_url.as_deref(),
+            Some("https://daylist.spotifycdn.com/playlist-covers-mix/en/evening_default.jpg")
+        );
+
+        card["content"]["data"]["images"]["items"][1]["sources"][0]["url"] = Value::Null;
+        let mix = playlist(&card, MADE_FOR_YOU_TITLE).unwrap();
+        assert!(mix.artwork_fallback);
+        assert!(mix.image_url.is_none());
+    }
+
+    #[test]
+    fn spotify_playlist_metadata_supports_cdn_urls_and_image_ids() {
+        let mut attributes = ListAttributes::new();
+        assert!(playlist_cover(&attributes).is_none());
+
+        attributes.set_picture(vec![0xab; 20]);
+        assert_eq!(
+            playlist_cover(&attributes),
+            Some(format!("https://i.scdn.co/image/{}", "ab".repeat(20)))
+        );
+
+        let mut picture = PictureSize::new();
+        picture.set_url(
+            "https://daylist.spotifycdn.com/playlist-covers-mix/en/evening_default.jpg".into(),
+        );
+        attributes.picture_size.push(picture);
+        assert_eq!(
+            playlist_cover(&attributes).as_deref(),
+            Some(attributes.picture_size[0].url())
+        );
+    }
 
     #[test]
     fn skips_unplayable_cards_without_shortening_the_next_page_offset() {
         let body = json!({"data": {"homeSections": {"sections": [{"sectionItems": {
             "totalCount": 12,
             "items": [
-                {"content": {"data": {"__typename": "Playlist", "uri": format!("spotify:playlist:{DAYLIST}"), "name": "daylist"}}},
+                {"content": {"data": {"__typename": "Playlist", "uri": format!("spotify:playlist:{}", SpotifyProvider::DAYLIST), "name": "daylist"}}},
                 {"content": {"data": {"__typename": "Playlist", "uri": format!("spotify:playlist:{SPOTIFY_DJ}"), "name": "DJ"}}},
                 {"content": {"data": {"__typename": "Album", "name": "Ignored"}}}
             ]
@@ -303,7 +450,7 @@ mod tests {
         let (mixes, count, more) = section_page(&body, 4, MADE_FOR_YOU_TITLE).unwrap();
         assert_eq!(
             mixes.iter().map(|mix| mix.id.as_str()).collect::<Vec<_>>(),
-            [DAYLIST]
+            [SpotifyProvider::DAYLIST]
         );
         assert_eq!(mixes[0].section, MADE_FOR_YOU_TITLE);
         assert_eq!(count, 3);

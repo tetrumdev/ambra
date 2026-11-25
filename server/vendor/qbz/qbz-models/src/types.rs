@@ -1466,6 +1466,13 @@ pub struct DynamicMix {
     pub images: std::collections::HashMap<String, String>,
 }
 
+/// Tracks and optional artwork returned when opening or generating a mix.
+#[derive(Default)]
+pub struct DynamicMixContents {
+    pub tracks: Vec<Track>,
+    pub images: std::collections::HashMap<String, String>,
+}
+
 /// Response from `/album/suggest` — albums similar to a seed album.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumSuggestResponse {
