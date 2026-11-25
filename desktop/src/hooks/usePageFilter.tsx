@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useState, type ReactNode } from "react";
-import type { Track } from "../types/music";
+import type { GlobalTrackId, Track } from "../types/music";
+import type { TrackReveal } from "../utils/browse";
 import { filterTerms, trackMatches } from "../utils/trackFilter";
 
 type PageFilterStore = {
@@ -38,28 +39,22 @@ export function useReportPageMatches(count: number | null) {
   useEffect(() => () => reportMatches(list, null), [list, reportMatches]);
 }
 
-export type PageReveal = {
-  /** The page's only match, shown in place rather than on its own; null otherwise. */
-  target: string | null;
-  /** Changes each time the match is found anew, so the list scrolls to it once per find. */
-  key: string | null;
-  /** True until the listener scrolls, clicks or presses a key outside the filter after it was found. */
+type RevealKey = string | TrackReveal;
+
+type PageReveal = {
+  /** The song to show in place among its neighbors. */
+  target: GlobalTrackId | null;
+  /** Identifies a reveal so the list scrolls to the song once. */
+  key: RevealKey | null;
+  /** True until the listener scrolls, clicks or presses a key outside the filter. */
   highlighted: boolean;
 };
 
 /** Keys that move nothing on the page, so pressing them leaves the found song highlighted. */
 const QUIET_KEYS = new Set(["Shift", "Control", "Alt", "Meta", "CapsLock", "Escape", "Enter", "Tab"]);
 
-/**
- * When the whole page has one match, a list that holds it keeps all its songs and points at
- * that one instead of narrowing to it. `matchedIds` are this list's matches.
- */
-export function usePageReveal(matchedIds: readonly string[], filtering: boolean): PageReveal {
-  const { matches, query } = usePageFilter();
-  const target = filtering && matches === 1 && matchedIds.length === 1 ? matchedIds[0] : null;
-  const key = target === null ? null : `${query}
-${target}`;
-  const [dismissed, setDismissed] = useState<string | null>(null);
+function usePageReveal(target: GlobalTrackId | null, key: RevealKey | null): PageReveal {
+  const [dismissed, setDismissed] = useState<RevealKey | null>(null);
   const highlighted = key !== null && dismissed !== key;
   useEffect(() => {
     if (!highlighted) return;
@@ -78,13 +73,20 @@ ${target}`;
   return { target, key, highlighted };
 }
 
-/** The songs of `tracks` the page filter lets through, or all of them around the page's only match. */
-export function usePageFilteredTracks<T extends Track>(tracks: T[]) {
-  const { terms } = usePageFilter();
+/** Keep a song among its neighbors when navigation or a single filter match reveals it. */
+export function usePageFilteredTracks<T extends Track>(tracks: T[], revealTrack?: TrackReveal) {
+  const { terms, matches, query } = usePageFilter();
   const filtering = terms.length > 0;
   const matched = useMemo(() => filtering ? tracks.filter(track => trackMatches(track, terms)) : tracks, [tracks, terms, filtering]);
-  const matchedIds = useMemo(() => filtering ? matched.map(track => track.globalId) : [], [matched, filtering]);
   useReportPageMatches(filtering ? matched.length : null);
-  const reveal = usePageReveal(matchedIds, filtering);
-  return { shown: reveal.target ? tracks : matched, filtering: filtering && !reveal.target, reveal };
+  const filterTarget = filtering && matches === 1 && matched.length === 1 ? matched[0].globalId : null;
+  const trackToReveal = !filtering && revealTrack && tracks.some(track => track.globalId === revealTrack.trackId)
+    ? revealTrack : null;
+  const filterReveal = usePageReveal(filterTarget, filterTarget ? `${query}\n${filterTarget}` : null);
+  const navigationReveal = usePageReveal(trackToReveal?.trackId ?? null, trackToReveal);
+  return {
+    shown: filterTarget ? tracks : matched,
+    filtering: filtering && !filterTarget,
+    reveal: filtering ? filterReveal : navigationReveal,
+  };
 }

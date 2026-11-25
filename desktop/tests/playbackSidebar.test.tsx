@@ -130,6 +130,11 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     expect(upcoming()).toEqual(["Play First", "Play Second", "Play Third", "Play Fourth"]);
     expect(pane()?.querySelector('[aria-current="true"] .trackPlayButton')).not.toBeNull();
 
+    await click('[aria-label="Upcoming songs"] .trackTitleText.entityLink');
+    expect(viewport.querySelector(".albumView h1")?.textContent).toBe("Album");
+    expect(menu()).toBeNull();
+    await click(".browseBack");
+
     await click('[aria-label="Actions for Second"].trackCollectionMenuTrigger');
     expect(menu()?.textContent).toContain("Credits");
     expect(menu()?.textContent).not.toContain("Move to Front");
@@ -137,7 +142,7 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await menuAction("Sidebar song");
     expect(savedPlaylist("sidebar-song")).toEqual([next[1].globalId]);
 
-    await click('[aria-label="Upcoming songs"] [title="Second"]');
+    await click('[aria-label="Upcoming songs"] .libraryItem:has([aria-label="Play Second"]) .coverImgContainer');
     expect(menu()?.textContent).toContain("Play from Here");
     await menuAction("Move to Front");
     expect(upcoming()).toEqual(["Play Second", "Play First", "Play Third", "Play Fourth"]);
@@ -184,13 +189,14 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await click('.playbackSidebarTabs button:nth-child(1)');
     await click(".playbackSidebarHistoryToggle");
     expect(trackPlays("Played songs")).toEqual(expect.arrayContaining(["Play Older", "Play Latest"]));
-    await click('[aria-label="Played songs"] [title="Latest"]');
+    const latestArtwork = '[aria-label="Played songs"] .libraryItem:has([aria-label="Play Latest"]) .coverImgContainer';
+    await click(latestArtwork);
     expect(menu()?.textContent).toContain("Standalone Play");
     expect(menu()?.textContent).toContain("Add to Queue");
     await menuAction("Play Next");
     expect(upcoming()).toEqual(["Play Latest", "Play Fourth"]);
     await act(async () => {
-      pane()!.querySelector('[aria-label="Played songs"] [title="Latest"]')!
+      pane()!.querySelector(latestArtwork)!
         .dispatchEvent(new dom.MouseEvent("contextmenu", { bubbles: true, cancelable: true }) as unknown as MouseEvent);
     });
     await click('[aria-label="Played songs"] [aria-label="Select Older"]');
@@ -213,6 +219,11 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
     await click(".playbackSidebarHistoryToggle");
     await click('[aria-label="Played songs"] [aria-label="Play Latest"]');
     expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
+
+    await click("#songName");
+    expect(viewport.querySelector(".albumView h1")?.textContent).toBe("Album");
+    expect(savedQueue().current.globalTrackId).toBe(recent[1].globalId);
+    await click(".browseBack");
   } finally {
     await act(async () => root.unmount());
     viewport.remove();

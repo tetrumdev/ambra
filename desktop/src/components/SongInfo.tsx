@@ -2,6 +2,7 @@ import { useContext, useEffect, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { albumForTrack, type BrowseEntity } from "../utils/browse";
 import { ArtistLinks } from "./ArtistLinks";
+import { TrackTitleLink } from "./TrackTitleLink";
 import { MenuDotsIcon } from "./MenuDotsIcon";
 import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionAction } from "./TrackCollectionMenu";
 import type { Track } from "../types/music";
@@ -56,7 +57,8 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
         onContextMenu={openCombinedMenu}
         onDoubleClick={combinedMenu && track && available && nowPlaying.trackId === track.globalId && !nowPlaying.isPlaying
           ? event => playSongOnDoubleClick(event, nowPlaying.togglePlayback) : undefined}>
-        <span id="songName" data-tooltip={track?.name} data-tooltip-overflow="">{track?.name ?? "Nothing Playing"}</span>
+        {track ? <TrackTitleLink id="songName" track={track} onOpenEntity={onOpenEntity} />
+          : <span id="songName">Nothing Playing</span>}
         {available && track && menu && (
           <button
             type="button"

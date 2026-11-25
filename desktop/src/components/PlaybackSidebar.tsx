@@ -11,10 +11,11 @@ import { formatTotalDuration } from "../utils/totalDuration";
 import type { DropPosition } from "../utils/trackCollectionOrder";
 import { showTrackCredits } from "../utils/trackCredits";
 import {
-  isKeyboardMenuClick, MENU_WIDTH, SongContextMenu, playSongOnDoubleClick, songMenuPosition, suppressSongClick,
+  isEntityLink, isKeyboardMenuClick, MENU_WIDTH, SongContextMenu, playSongOnDoubleClick, songMenuPosition, suppressSongClick,
   pauseTrackAction, trackPlaybackActions,
 } from "../utils/trackMenu";
 import { ArtistLinks } from "./ArtistLinks";
+import { TrackTitleLink } from "./TrackTitleLink";
 import { DropdownChevron } from "./DropdownChevron";
 import { TrackArtwork } from "./TrackArtwork";
 import { TrackCollectionMenu, type PlaylistMenuOptions, type TrackCollectionAction } from "./TrackCollectionMenu";
@@ -515,7 +516,7 @@ const SidebarRow = memo(function SidebarRow({
       data-dragging={dragging ? "true" : undefined} data-drop-position={dropPosition}
       onPointerDown={onPointerDown && available ? event => onPointerDown(event, index) : undefined}
       onClickCapture={combinedMenu ? suppressSongClick : entry.current ? undefined : event => {
-        if (selecting || ((event.shiftKey || event.metaKey || event.ctrlKey) && available)) onAction("select", event, entry);
+        if (selecting || ((event.shiftKey || event.metaKey || event.ctrlKey) && available && !isEntityLink(event.target))) onAction("select", event, entry);
       }}
       onClick={combinedMenu ? undefined : event => onAction("playback", event, entry)}
       onContextMenu={combinedMenu ? event => onAction("combined", event, entry)
@@ -533,7 +534,8 @@ const SidebarRow = memo(function SidebarRow({
         </div>
       </div>
       <span className="trackName playbackSidebarTrackText" data-playback-menu-trigger inert={!available}>
-        <span className="trackTitleText" title={track.name}>{track.name}</span>
+        {selecting ? <span className="trackTitleText" title={track.name}>{track.name}</span>
+          : <TrackTitleLink track={track} onOpenEntity={onOpenEntity} className="trackTitleText" />}
         <small className="playbackSidebarArtists"><ArtistLinks track={track} onOpenEntity={onOpenEntity} /></small>
       </span>
       <button type="button" className="trackCollectionMenuTrigger"

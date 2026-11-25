@@ -110,7 +110,8 @@ export function useAppNavigation({
     ...current, ui: { ...current.ui, screen: returnScreen(current.ui.screen) },
   })));
   const openEntity = useStableCallback((entity: BrowseEntity) => {
-    if (browseEntity && entityKey(entity) === entityKey(browseEntity) && !isPlayerView) return;
+    const revealsTrack = entity.kind === "album" && entity.revealTrack;
+    if (!revealsTrack && browseEntity && entityKey(entity) === entityKey(browseEntity) && !isPlayerView) return;
     setBrowseEntity(entity);
     setSelectedPlaylistId(null);
     changeScreen("library");

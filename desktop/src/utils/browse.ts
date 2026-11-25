@@ -1,8 +1,11 @@
 import type { CatalogAlbum, CatalogArtist, RecommendationMix, StreamingProvider } from "../api/server";
-import type { MusicProvider, Track, TrackArtist } from "../types/music";
+import type { GlobalTrackId, MusicProvider, Track, TrackArtist } from "../types/music";
+import { trackArtistCredits } from "./trackArtists";
+
+export type TrackReveal = { trackId: GlobalTrackId };
 
 export type BrowseEntity =
-  | { kind: "album"; album: CatalogAlbum; fromRecommendations?: true }
+  | { kind: "album"; album: CatalogAlbum; fromRecommendations?: true; revealTrack?: TrackReveal }
   | { kind: "artist"; artist: CatalogArtist }
   | { kind: "mix"; mix: RecommendationMix & { provider: StreamingProvider } };
 export function entityKey(entity: BrowseEntity) {
@@ -24,13 +27,15 @@ function albumKey(track: Track) {
 export function albumForTrack(track: Track): CatalogAlbum {
   return { id: albumKey(track), provider: track.provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, artists: track.albumArtists, imageUrl: track.fullCover ?? track.cover, releaseDate: track.releaseDate, version: track.albumVersion, upc: track.upc, maximumBitDepth: track.maximumBitDepth, maximumSamplingRateKHz: track.maximumSamplingRateKHz };
 }
-export function artistForTrack(track: Track, artist: TrackArtist = track.artists[0] ?? { providerId: track.artist, name: track.artist, imageUrl: null }): CatalogArtist {
+export function artistForTrack(track: Track, artist: TrackArtist = trackArtistCredits(track)[0]): CatalogArtist {
   return { id: `${track.provider}:${artist.providerId || artist.name}`, provider: track.provider, name: artist.name, imageUrl: artist.imageUrl };
 }
 export function sortAlbumTracks(tracks: Track[]): Track[] {
   return [...tracks].sort((a, b) => (a.discNumber ?? 1) - (b.discNumber ?? 1) || (a.trackNumber ?? Number.MAX_SAFE_INTEGER) - (b.trackNumber ?? Number.MAX_SAFE_INTEGER));
 }
 export function tracksForEntity(entity: Exclude<BrowseEntity, { kind: "mix" }>, tracks: Track[]): Track[] {
-  return tracks.filter(track => entity.kind === "album" ? albumKey(track) === entity.album.id : track.provider === entity.artist.provider && [...track.artists, ...track.albumArtists].some(artist => `${track.provider}:${artist.providerId || artist.name}` === entity.artist.id))
-    .sort((a, b) => entity.kind === "album" ? (a.discNumber ?? 1) - (b.discNumber ?? 1) || (a.trackNumber ?? Number.MAX_SAFE_INTEGER) - (b.trackNumber ?? Number.MAX_SAFE_INTEGER) : a.album.localeCompare(b.album) || (a.discNumber ?? 1) - (b.discNumber ?? 1) || (a.trackNumber ?? 0) - (b.trackNumber ?? 0));
+  if (entity.kind === "album") return sortAlbumTracks(tracks.filter(track => albumKey(track) === entity.album.id));
+  return tracks.filter(track => track.provider === entity.artist.provider
+      && [...trackArtistCredits(track), ...track.albumArtists].some(artist => artistForTrack(track, artist).id === entity.artist.id))
+    .sort((a, b) => a.album.localeCompare(b.album) || (a.discNumber ?? 1) - (b.discNumber ?? 1) || (a.trackNumber ?? 0) - (b.trackNumber ?? 0));
 }

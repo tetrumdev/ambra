@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import { artistForTrack, type BrowseEntity } from "../utils/browse";
 import type { Track } from "../types/music";
+import { trackArtistCredits } from "../utils/trackArtists";
 
 /** One link per credited artist, so duets and features each open their own page. */
 export function ArtistLinks({
@@ -12,11 +13,10 @@ export function ArtistLinks({
   onOpenEntity: (entity: BrowseEntity) => void;
   className?: string;
 }) {
-  const artists = track.artists.length ? track.artists : [undefined];
   return (
     <>
-      {artists.map((artist, index) => (
-        <Fragment key={artist ? `${artist.providerId}:${artist.name}` : index}>
+      {trackArtistCredits(track).map((artist, index) => (
+        <Fragment key={`${artist.providerId}:${artist.name}`}>
           {index > 0 && <span className="artistSeparator">, </span>}
           <button
             type="button"
@@ -26,7 +26,7 @@ export function ArtistLinks({
               onOpenEntity({ kind: "artist", artist: artistForTrack(track, artist) });
             }}
           >
-            {artist?.name ?? track.artist}
+            {artist.name}
           </button>
         </Fragment>
       ))}

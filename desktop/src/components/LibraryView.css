@@ -1047,6 +1047,23 @@
     white-space: nowrap;
 }
 
+.trackTitleWithDetails {
+    display: inline-flex;
+    align-items: baseline;
+    max-width: 100%;
+    vertical-align: bottom;
+}
+
+.trackTitleWithDetails > .entityLink {
+    min-width: 0;
+    white-space: nowrap;
+    text-underline-offset: 2px;
+}
+
+.trackTitleWithDetails > small {
+    flex-shrink: 0;
+}
+
 .trackName:hover {
     text-decoration: none;
 }
@@ -1145,9 +1162,7 @@
     opacity: 1;
 }
 
-/* The filter's only match, shown in place among its neighbours: a brighter shade than the
-   playing song, held still until the listener scrolls, clicks or presses a key outside the
-   filter (hooks/usePageFilter.tsx). */
+/* A revealed song remains highlighted until the listener interacts outside the filter. */
 .libraryItem[data-revealed="true"],
 .libraryItem[data-revealed="true"]:hover {
     background-color: #2c2c2c;

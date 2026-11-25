@@ -3,10 +3,12 @@ import { Window } from "happy-dom";
 import { act, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import App from "../src/App";
+import { playableTrack, type RemoteTrack } from "../src/api/server";
 import { HomeView, type RecommendationSource } from "../src/components/HomeView";
 import { updateServiceAvailability } from "../src/hooks/useServiceAvailability";
 import type { Playlist, Track } from "../src/types/music";
 import { defaultPreferences, savePreferences } from "../src/utils/preferences";
+import { PLAYLIST_STORAGE_KEY } from "../src/utils/playlistStorage";
 import { SongContextMenu } from "../src/utils/trackMenu";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -22,7 +24,7 @@ beforeAll(() => {
   Object.defineProperty(dom.document, "fonts", { value: { ready: Promise.resolve() } });
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement, Element: dom.Element,
-    Node: dom.Node, ResizeObserver: dom.ResizeObserver, IntersectionObserver: dom.IntersectionObserver,
+    Node: dom.Node, KeyboardEvent: dom.KeyboardEvent, ResizeObserver: dom.ResizeObserver, IntersectionObserver: dom.IntersectionObserver,
     localStorage: dom.localStorage, MutationObserver: dom.MutationObserver,
     requestAnimationFrame: dom.requestAnimationFrame.bind(dom), cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     getComputedStyle: dom.getComputedStyle.bind(dom), IS_REACT_ACT_ENVIRONMENT: true,
@@ -97,10 +99,10 @@ test("keyboard menu supports playback, queue, next, standalone and Escape", asyn
   expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
-test("combined song menu opens instantly on right-click and double-click plays the song card", async () => {
+test("combined song menu opens instantly on right-click and double-clicking the artwork plays the song", async () => {
   next = { ...next, tracks: [track], status: "ready" };
   await mount(true);
-  const card = container.querySelector('section[aria-label="Discover"] .homeCardTitle')!;
+  const card = container.querySelector('section[aria-label="Discover"] .homeArtwork')!;
   const menu = () => document.querySelector<HTMLElement>("#trackPlaybackMenu");
   const mouse = (type: string, detail: number, button = 0, clientX = 0, clientY = 0) => act(async () => {
     card.dispatchEvent(new dom.MouseEvent(type, { detail, button, clientX, clientY, bubbles: true, cancelable: true }) as unknown as MouseEvent);
@@ -122,6 +124,92 @@ test("combined song menu opens instantly on right-click and double-click plays t
   expect(menu()).toBeNull();
   expect(actions.map(([action, tracks, id]) => [action, tracks.map(song => song.globalId), id]))
     .toEqual([["play", [track.globalId], track.globalId]]);
+});
+
+test("Home song cards open the album and reveal the exact track, and each artist opens their own page", async () => {
+  const serverFetch = globalThis.fetch;
+  const lead = { providerId: "lead", name: "Discovery Artist", imageUrl: null };
+  const guest = { providerId: "guest", name: "Guest Artist", imageUrl: null };
+  const song: RemoteTrack = {
+    id: "tidal:discover-song", provider: "tidal", providerTrackId: "discover-song", title: "Discovery Song",
+    version: null, primaryArtist: lead, artists: [lead, guest],
+    album: {
+      providerId: "discover-album", title: "Discovery Album", version: null, artists: [lead],
+      coverUrl: null, releaseDate: null, label: null, genres: [], upc: null,
+    },
+    durationSeconds: 180, trackNumber: 2, discNumber: 1, explicit: false, isrc: null,
+    copyright: null, quality: null, maximumSamplingRateKHz: null, maximumBitDepth: null,
+    playback: { kind: "dash", url: "/api/providers/tidal/tracks/discover-song/manifest.mpd" },
+  };
+  const other = { ...song, id: "tidal:other-song", providerTrackId: "other-song", trackNumber: 1 };
+  const recent = { ...song, id: "tidal:recent-song", providerTrackId: "recent-song", trackNumber: 3, title: "Recently played song" };
+  const older = { ...song, id: "tidal:older-song", providerTrackId: "older-song", trackNumber: 4, title: "Older song" };
+  let finishAlbum!: (value: Response) => void;
+  globalThis.fetch = ((url, init) => {
+    const path = String(url).split("/api/")[1];
+    if (path === "recommendations/discover?limit=12") return Promise.resolve(Response.json({ ...next, status: "ready", tracks: [song] }));
+    if (path === "providers/tidal/albums/discover-album/tracks") return new Promise<Response>(resolve => { finishAlbum = resolve; });
+    if (path === "providers/tidal/artists/guest") return Promise.resolve(Response.json({
+      artist: { id: "tidal:guest", provider: "tidal", name: guest.name, imageUrl: null },
+      biography: null, biographySource: null, popularTracks: [song], popularTracksError: null,
+    }));
+    if (path?.startsWith("providers/tidal/artists/guest/albums?"))
+      return Promise.resolve(Response.json({ albums: [], nextOffset: null }));
+    return serverFetch(url, init);
+  }) as typeof fetch;
+  updateServiceAvailability({ tidal: true, qobuz: false, spotify: false });
+  const homeButton = (section: string, name: string) => [...container.querySelectorAll<HTMLButtonElement>(`section[aria-label="${section}"] button`)]
+    .find(button => button.textContent === name)!;
+  const click = (button: HTMLButtonElement) => act(async () => {
+    button.dispatchEvent(new dom.MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }) as unknown as MouseEvent);
+  });
+  const back = () => click(container.querySelector<HTMLButtonElement>(".browseBack")!);
+  const historyKey = "ambra.listening-history.v1";
+  localStorage.setItem(historyKey, JSON.stringify({ version: 1, entries: [
+    { track: playableTrack(recent), lastPlayedAt: Date.now() },
+    { track: playableTrack(older), lastPlayedAt: Date.now() - 31 * 24 * 60 * 60 * 1000 },
+  ] }));
+  localStorage.setItem(PLAYLIST_STORAGE_KEY, JSON.stringify({ version: 1, tracks: [playableTrack(song)], playlists: [
+    { id: "discovery-playlist", name: "Discovery playlist", trackIds: [song.id] },
+  ] }));
+  try {
+    savePreferences({ ...defaultPreferences, ui: { ...defaultPreferences.ui, reduceMotion: true, songContextMenu: true } });
+    await render(<App localOnly />);
+    await click(homeButton("Discover", song.title));
+    expect(container.querySelector(".albumView h1")?.textContent).toBe(song.album!.title);
+    expect(container.querySelector("[data-revealed]")).toBeNull();
+
+    await act(async () => { finishAlbum(Response.json({ tracks: [song, other, recent, older] })); });
+    const rows = [...container.querySelectorAll<HTMLElement>(".albumView [data-track-id]")];
+    expect(rows.map(row => row.dataset.trackId)).toEqual([other.id, song.id, recent.id, older.id]);
+    expect(rows.filter(row => row.dataset.revealed === "true")).toEqual([rows[1]]);
+    await act(async () => { rows[1].dispatchEvent(new dom.Event("wheel", { bubbles: true }) as unknown as Event); });
+    expect(container.querySelector("[data-revealed]")).toBeNull();
+
+    await back();
+    for (const [section, track] of [["Recently played", recent], ["Haven’t played in a while", older], ["Discover", song]] as const) {
+      await click(homeButton(section, track.title));
+      expect(container.querySelector(".albumView [data-revealed='true']")?.getAttribute("data-track-id")).toBe(track.id);
+      await back();
+      await click(homeButton(section, guest.name));
+      expect(container.querySelector(".artistView h1")?.textContent).toBe(guest.name);
+      expect(container.querySelector(`.artistView [data-track-id="${song.id}"]`)).not.toBeNull();
+      await back();
+    }
+
+    await click(container.querySelector<HTMLButtonElement>('.sidebarPlaylistName[data-tooltip="Discovery playlist"]')!);
+    await click(container.querySelector<HTMLButtonElement>(".playlistView .trackTitleText button")!);
+    expect(container.querySelector(".albumView [data-revealed='true']")?.getAttribute("data-track-id")).toBe(song.id);
+    await click(container.querySelector<HTMLButtonElement>(`.albumView [data-track-id="${other.id}"] .trackTitleText button`)!);
+    expect(container.querySelector(".albumView [data-revealed='true']")?.getAttribute("data-track-id")).toBe(other.id);
+    await back();
+    expect(container.querySelector(".playlistView h1")?.textContent).toBe("Discovery playlist");
+  } finally {
+    localStorage.removeItem(historyKey);
+    localStorage.removeItem(PLAYLIST_STORAGE_KEY);
+    globalThis.fetch = serverFetch;
+    await act(async () => { updateServiceAvailability({ tidal: false, qobuz: false, spotify: false }); });
+  }
 });
 
 test("rerenders avoid duplicate requests; reconnect refreshes the row", async () => {

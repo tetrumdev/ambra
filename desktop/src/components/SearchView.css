@@ -112,12 +112,6 @@
     opacity: 1;
 }
 
-/* Hovering an artist or album link underlines that link instead of the song. */
-.searchResult:hover:not(:has(.entityLink:hover)) .searchResultName {
-    text-decoration: underline;
-    text-underline-offset: 3px;
-}
-
 /* The shared 4px offset falls outside these clipped, single-line rows. */
 .searchView .entityLink:hover,
 .searchView .entityLink:focus-visible {
@@ -165,15 +159,16 @@
     white-space: nowrap;
 }
 
-.searchResultName,
+.searchResultInfo .searchResultName,
 .searchEntityInfo strong {
     font-size: 1rem;
     font-weight: 600;
     line-height: 1.35;
 }
 
-.searchResultName {
+.searchResultInfo .searchResultName {
     padding-right: 30px;
+    justify-self: start;
 }
 
 .searchResultArtist,

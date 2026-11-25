@@ -28,15 +28,19 @@ export function isKeyboardMenuClick(event: { type: string; detail: number }) {
   return event.type === "click" && event.detail === 0;
 }
 
-/** Suppress the clicks that precede a double-click, including clicks on nested buttons. */
+export function isEntityLink(target: EventTarget) {
+  return target instanceof Element && target.closest(".entityLink") !== null;
+}
+
+/** Suppress pointer clicks that precede a playback double-click. */
 export function suppressSongClick(event: MouseEvent) {
-  if (isKeyboardMenuClick(event)) return;
+  if (isKeyboardMenuClick(event) || isEntityLink(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
 }
 
 export function playSongOnDoubleClick(event: MouseEvent, play: () => void) {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || isEntityLink(event.target)) return;
   event.preventDefault();
   event.stopPropagation();
   play();

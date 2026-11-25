@@ -19,7 +19,7 @@ export function remoteTrack(track: RemoteTrack, mediaUrl: (path: string) => stri
     albumId: track.album?.providerId ?? null,
     albumArtists: track.album?.artists ?? [],
     artist: track.primaryArtist.name,
-    artists: track.artists,
+    artists: track.artists.length || !track.primaryArtist.providerId ? track.artists : [track.primaryArtist],
     trackNumber: track.trackNumber,
     discNumber: track.discNumber,
     durationSeconds: track.durationSeconds,

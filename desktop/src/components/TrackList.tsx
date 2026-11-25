@@ -1,7 +1,7 @@
 import { useTrackColumns } from "../hooks/useTrackColumns";
-import { albumForTrack, artistForTrack, type BrowseEntity } from "../utils/browse";
+import { albumForTrack, artistForTrack, type BrowseEntity, type TrackReveal } from "../utils/browse";
 import { isTrackAvailable, useServiceAvailability } from "../hooks/useServiceAvailability";
-import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { coreView, subscribeCore, warmCoreTrack } from "../api/core";
 import { ProviderIcon } from "./ProviderIcon";
 import type { GlobalTrackId, Track } from "../types/music";
@@ -18,12 +18,14 @@ import { showTrackCredits } from "../utils/trackCredits";
 import { TrackArtwork } from "./TrackArtwork";
 import { VirtualSpacer } from "./VirtualSpacer";
 import { ArtistLinks } from "./ArtistLinks";
+import { TrackTitleLink } from "./TrackTitleLink";
 import { trackArtistNames } from "../utils/trackArtists";
 import { PerfProfiler } from "./PerfProfiler";
 import { TrackColumnHeader } from "./TrackColumnHeader";
 import { TrackExtraCells } from "./TrackExtraCells";
 import { useVirtualWindow } from "../hooks/useVirtualWindow";
 import { usePageFilteredTracks } from "../hooks/usePageFilter";
+import { useStableCallback } from "../hooks/useStableCallback";
 import { nowPlayingState, useNowPlaying, type NowPlayingState } from "../hooks/useNowPlaying";
 import { revealListItem } from "../utils/revealListItem";
 import { useNavActions } from "../utils/keyboardNav";
@@ -53,6 +55,7 @@ type OpenMenu =
 
 export type TrackListProps = {
   tracks: Track[];
+  revealTrack?: TrackReveal;
   onOpenEntity?: (entity: BrowseEntity) => void;
   savedTrackIds?: ReadonlySet<string>;
   showTrackNumbers?: boolean;
@@ -93,6 +96,7 @@ function formatTime(time: number) {
 
 export function TrackList({
   tracks: allTracks,
+  revealTrack,
   onOpenEntity, savedTrackIds, showTrackNumbers = false, showRank = false, showArtwork = true,
   playTrack,
   playStandalone,
@@ -113,7 +117,7 @@ export function TrackList({
   const combinedMenu = useContext(SongContextMenu);
   const connected = useServiceAvailability();
   const { hidden: hiddenColumns } = useTrackColumns();
-  const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks);
+  const { shown: tracks, filtering, reveal } = usePageFilteredTracks(allTracks, revealTrack);
   const nowPlaying = useNowPlaying();
   // A filtered list hides songs, so reordering it can't say where they belong.
   const reorderTracks = filtering ? undefined : reorderAllTracks;
@@ -185,12 +189,18 @@ export function TrackList({
     overscanRows: 10,
     pinnedIndex: draggedIndex,
   });
-  // The page's only match stays among its neighbours; the list jumps to it once per find.
-  const revealIndex = reveal.target ? tracks.findIndex(track => track.globalId === reveal.target) : -1;
-  useLayoutEffect(() => {
+  const scrollToRevealedTrack = useStableCallback(() => {
+    if (!reveal.highlighted) return;
+    const index = tracks.findIndex(track => track.globalId === reveal.target);
     const list = columnHeaderRef.current?.parentElement;
-    if (reveal.key && revealIndex >= 0 && list) revealListItem(list, revealIndex, virtual.start);
-  }, [reveal.key]);
+    if (index >= 0 && list) revealListItem(list, index, virtual.start);
+  });
+  useEffect(() => {
+    if (!reveal.key) return;
+    // The page restores its previous scroll position before revealing a newly opened song.
+    const frame = requestAnimationFrame(scrollToRevealedTrack);
+    return () => cancelAnimationFrame(frame);
+  }, [reveal.key, scrollToRevealedTrack]);
 
   // The keyboard's selected song (utils/keyboardNav.ts), when it's one of these.
   useNavActions((action, item) => {
@@ -479,7 +489,7 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
   packageIndex?: number;
   packageSize?: number;
   dropPosition: DropPosition | null;
-  /** The filter's only match, highlighted until the listener does anything. */
+  /** Highlighted until the listener interacts with the page. */
   revealed: boolean;
   nowPlaying: NowPlayingState;
   onAction: (action: RowAction, event: React.MouseEvent, index: number) => void;
@@ -530,7 +540,13 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
         className={`trackName trackDescriptor${showProviderIcon ? " trackNameWithProvider" : ""}`}
         data-playback-menu-trigger
       >
-        <span className="trackTitleText">{(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? position + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? position + 1}</>}</small>}{track.name}{saved && <small className="savedTrackBadge">Saved</small>}</span>
+        <span className="trackTitleText trackTitleWithDetails">
+          {(showRank || showTrackNumbers) && <small className="trackNumber">{showRank ? position + 1 : <>{showDiscNumbers ? `${track.discNumber ?? 1}.` : ""}{track.trackNumber ?? position + 1}</>}</small>}
+          {onOpenEntity && !selecting
+            ? <TrackTitleLink track={track} onOpenEntity={onOpenEntity} />
+            : <span className="trackTitleText">{track.name}</span>}
+          {saved && <small className="savedTrackBadge">Saved</small>}
+        </span>
         {showProviderIcon && (
           <ProviderIcon provider={track.provider} />
         )}

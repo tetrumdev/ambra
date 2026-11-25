@@ -11,7 +11,8 @@
     text-align: left;
 }
 
-#songInfo span {
+#songInfo span,
+#songInfo #songName {
     filter: drop-shadow(0 0 8px rgba(0 0 0 0.4));
 }
 
@@ -106,7 +107,7 @@
     max-width: max(0px, calc(50vw - 130px));
 }
 
-#songName {
+#songInfo #songName {
     font-weight: 600;
     font-size: 1.3rem;
 }

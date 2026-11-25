@@ -9,6 +9,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { ArtworkImage } from "./ArtworkImage";
+import { ArtistLinks } from "./ArtistLinks";
 import { DropdownChevron } from "./DropdownChevron";
 import {
   loadProviderRecommendations, loadRecommendationArtwork, type RecommendationMix, type StreamingProvider,
@@ -25,6 +26,7 @@ import { useDiscover } from "../hooks/useDiscover";
 import { useRecommendationRequest } from "../hooks/useRecommendationRequest";
 import type { BrowseEntity } from "../utils/browse";
 import { reducedMotion } from "../utils/reducedMotion";
+import { TrackTitleLink } from "./TrackTitleLink";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
 const rowLimit = 12;
@@ -117,13 +119,15 @@ function HomeRow({
 
 type OnAction = (action: EntityAction, tracks: Track[], id?: string) => void;
 
-/** Song cards offer the same playback actions as track rows. */
+/** The song and artist links sit alongside the artwork's playback menu. */
 function SongCards({
   tracks,
   onAction,
+  onOpenEntity,
 }: {
   tracks: Track[];
   onAction: OnAction;
+  onOpenEntity: (entity: BrowseEntity) => void;
 }) {
   const connected = useServiceAvailability();
   const combinedMenu = useContext(SongContextMenu);
@@ -135,17 +139,17 @@ function SongCards({
     <>
       {tracks.map((track) => (
         <li className="homeCard" key={track.globalId} data-unavailable={!isTrackAvailable(track, connected) ? "true" : undefined}
-          onClickCapture={combinedMenu ? suppressSongClick : undefined}
           onContextMenu={combinedMenu && isTrackAvailable(track, connected) ? event =>
-            setMenu({ id: track.globalId, ...songMenuPosition(event), openedWithKeyboard: false }) : undefined}
-          onDoubleClick={combinedMenu && isTrackAvailable(track, connected) ? event =>
-            playSongOnDoubleClick(event, () => onAction("play", tracks, track.globalId)) : undefined}>
+            setMenu({ id: track.globalId, ...songMenuPosition(event), openedWithKeyboard: false }) : undefined}>
           <button
             className="homeCardButton"
             disabled={!isTrackAvailable(track, connected)}
             type="button"
             aria-haspopup="menu"
             aria-label={`Options for ${track.name} by ${track.artist}`}
+            onClickCapture={combinedMenu ? suppressSongClick : undefined}
+            onDoubleClick={combinedMenu ? event =>
+              playSongOnDoubleClick(event, () => onAction("play", tracks, track.globalId)) : undefined}
             onClick={(event) => {
               const bounds = event.currentTarget.getBoundingClientRect();
               // Keyboard presses have no pointer position.
@@ -161,22 +165,11 @@ function SongCards({
               <TrackArtwork track={track} alt="" />
               <span className="homeShade" aria-hidden="true" />
             </div>
-            <span
-              className="homeCardTitle"
-              data-tooltip={track.name}
-              data-tooltip-overflow=""
-            >
-              {track.name}
-            </span>
-            <span
-              className="homeCardDetail"
-              data-tooltip={track.artist}
-              data-tooltip-overflow=""
-            >
-              {track.artist}
-            </span>
           </button>
-          <div className="homePlayArea"></div>
+          <TrackTitleLink track={track} onOpenEntity={onOpenEntity} className="homeCardTitle" />
+          <div className="homeCardDetail homeCardArtists">
+            <ArtistLinks track={track} onOpenEntity={onOpenEntity} />
+          </div>
         </li>
       ))}
       {/* Portaled: a list can only hold items, and the row scrolls and clips. */}
@@ -325,14 +318,16 @@ export function HomeView({ registerScrollElement, onOpenEntity, selectedSource, 
           <DropdownChevron />
         </div>
       </header>
-      {source === "ambra" ? <AmbraHome {...props} /> : (
+      {source === "ambra" ? <AmbraHome {...props} onOpenEntity={onOpenEntity} /> : (
         <ProviderHome key={source} provider={source} onOpenEntity={onOpenEntity} />
       )}
     </div>
   );
 }
 
-function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlaylist }: AmbraHomeProps) {
+function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlaylist, onOpenEntity }: AmbraHomeProps & {
+  onOpenEntity: (entity: BrowseEntity) => void;
+}) {
   const discover = useDiscover(entries);
   const tracksById = useMemo(
     () => new Map(tracks.map((track) => [track.globalId, track])),
@@ -367,7 +362,7 @@ function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlayli
         empty="Play some music to start your listening history."
         hasItems={recent.length > 0}
       >
-        <SongCards tracks={recent} onAction={onAction} />
+        <SongCards tracks={recent} onAction={onAction} onOpenEntity={onOpenEntity} />
       </HomeRow>
       {playlistSources.map(source => {
         const group = playlists.filter(playlist => (playlist.provider ?? "ambra") === source);
@@ -408,7 +403,7 @@ function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlayli
         empty="Songs you last played over 30 days ago will appear here."
         hasItems={older.length > 0}
       >
-        <SongCards tracks={older} onAction={onAction} />
+        <SongCards tracks={older} onAction={onAction} onOpenEntity={onOpenEntity} />
       </HomeRow>
       <HomeRow
         title="Discover"
@@ -416,7 +411,7 @@ function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlayli
         hasItems={discover.tracks.length > 0}
         loading={discover.loading}
       >
-        <SongCards tracks={discover.tracks} onAction={onAction} />
+        <SongCards tracks={discover.tracks} onAction={onAction} onOpenEntity={onOpenEntity} />
       </HomeRow>
     </>
   );

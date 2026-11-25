@@ -1,6 +1,7 @@
 import type { Track } from "../types/music";
 import { thumbnailArtwork } from "../api/server";
 import type { LibrarySection } from "../components/LibraryView";
+import { trackArtistCredits } from "./trackArtists";
 
 export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; label: string }> = [
   { id: "artists", label: "Artists" },
@@ -40,11 +41,7 @@ export function libraryArtists(tracks: Track[]): LibraryArtist[] {
   >();
 
   for (const track of tracks) {
-    const trackArtists = track.artists.length > 0
-      ? track.artists
-      : [{ providerId: track.artist, name: track.artist, imageUrl: null }];
-
-    for (const artist of trackArtists) {
+    for (const artist of trackArtistCredits(track)) {
       const id = `${track.provider}:${artist.providerId || artist.name}`;
       const current = artists.get(id) ?? {
         id,

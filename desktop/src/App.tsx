@@ -4,7 +4,7 @@ import { DownloadActivity } from "./components/DownloadActivity";
 import "./App.css";
 import "./components/EntityView.css";
 import { EntityView, type EntityPage } from "./components/EntityView";
-import { entityKey } from "./utils/browse";
+import { entityKey, type BrowseEntity } from "./utils/browse";
 
 //Components
 import { LibraryView } from "./components/LibraryView";
@@ -272,7 +272,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     browseEntity, librarySection, setLibrarySection, settingsTab, setSettingsTab,
     sidebarView, setPlaybackSidebarView, closePlaybackSidebar, sidebarWidth, setSidebarWidth,
     sessionPreferences, goBack, canNavigate, navigate, closeCurrentScreen, changeScreen,
-    openEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
+    openEntity: openBrowseEntity, openHome, openLibrarySection, selectPlaylist, openSettings, toggleQueue,
     openPlayer, playerOpenedByKeyRef, hasSearchPage, searchSummon, searchFocus, changeSearchQuery,
     confirmSearch, dismissSearch,
   } = useAppNavigation({
@@ -375,6 +375,10 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     : selectedPlaylist || playlistPending ? `playlist:${selectedPlaylistId}`
     : `library:${librarySection}`;
   const { mainRef, activeScrollElement, registerScrollElement, pageFilter } = usePageLayout(viewKey, isPlayerView);
+  const openEntity = useStableCallback((entity: BrowseEntity) => {
+    if (entity.kind === "album" && entity.revealTrack) pageFilter?.onClose();
+    openBrowseEntity(entity);
+  });
   const backFromRecommendation = useCallback(() => { if (!goBack()) openHome(); }, [goBack, openHome]);
 
   const collectionSortKey = selectedPlaylist
@@ -652,8 +656,9 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
             }))}
           />
-        ) : browseEntity && browseEntity.kind !== "mix" ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
-          onBack={browseEntity.kind === "album" && browseEntity.fromRecommendations ? backFromRecommendation : goBack}
+        ) : browseEntity && browseEntity.kind !== "mix" ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current}
+          libraryTracks={library.tracks} catalogTracks={browseEntity.kind === "album" && browseEntity.revealTrack && browseEntity.album.provider === "local" ? library.catalogTracks : undefined}
+          onBack={browseEntity.kind === "album" && (browseEntity.fromRecommendations || browseEntity.revealTrack) ? backFromRecommendation : goBack}
           onOpenEntity={openEntity} onAction={onEntityAction}
           onAddTrack={addEntityTrack} onAddTracks={addEntityTracks}
           rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (

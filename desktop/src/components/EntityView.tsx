@@ -45,6 +45,7 @@ export type EntityViewProps<Kind extends CatalogEntity["kind"] = CatalogEntity["
   entity: Extract<CatalogEntity, { kind: Kind }>;
   cache: Map<string, EntityPage>;
   libraryTracks: Track[];
+  catalogTracks?: Track[];
   onBack: () => void;
   onOpenEntity: (entity: BrowseEntity) => void;
   onAction: (action: EntityAction, tracks: Track[], id?: string) => void;
@@ -70,6 +71,7 @@ function AlbumView({
   const columns = useTrackColumns();
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
+  const { revealTrack } = props.entity;
   const saved = useMemo(
     () => tracksForEntity(props.entity, props.libraryTracks),
     [props.entity, props.libraryTracks],
@@ -78,8 +80,12 @@ function AlbumView({
     () => new Set(saved.map((track) => track.globalId)),
     [saved],
   );
-  const [showEntire, setEntire] = useState(props.entity.fromRecommendations === true || (cached?.entire ?? !saved.length));
-  const entire = showEntire || !saved.length;
+  const [scope, setScope] = useState({
+    revealTrack,
+    entire: Boolean(props.entity.fromRecommendations || revealTrack) || (cached?.entire ?? !saved.length),
+  });
+  const entire = scope.revealTrack !== revealTrack || scope.entire || !saved.length;
+  const setEntire = (entire: boolean) => setScope({ revealTrack, entire });
   const [catalogTracks, setCatalogTracks] = useState<Track[] | undefined>(
     cached?.tracks,
   );
@@ -111,8 +117,12 @@ function AlbumView({
     props.cache.set(key, { tracks: catalogTracks, entire });
     if (catalogTracks) props.rememberTracks(catalogTracks);
   }, [key, catalogTracks, entire, props.cache, props.rememberTracks]);
-  const tracks =
-    entire && album.provider !== "local" ? (catalogTracks ?? []) : saved;
+  const localTracks = useMemo(
+    () => revealTrack && album.provider === "local" && props.catalogTracks
+      ? tracksForEntity(props.entity, props.catalogTracks) : saved,
+    [revealTrack, album.provider, props.entity, props.catalogTracks, saved],
+  );
+  const tracks = album.provider === "local" ? localTracks : entire ? (catalogTracks ?? []) : saved;
   const quality = useMemo(() => albumAudioQuality(catalogTracks ?? saved), [catalogTracks, saved]);
   // Only an album by several artists has an artist column; on others it would repeat one name.
   const multiArtist = useMemo(() => new Set(tracks.map(trackArtistNames)).size > 1, [tracks]);
@@ -137,6 +147,7 @@ function AlbumView({
       className={`entityView albumView${multiArtist ? " multiArtistAlbum" : ""}`}
       title={album.title}
       tracks={tracks}
+      revealTrack={revealTrack}
       playlistOptions={props.playlistOptions}
       headerNavigation={
         <button type="button" className="browseBack" onClick={props.onBack}>

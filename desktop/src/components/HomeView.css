@@ -168,18 +168,6 @@
     opacity: 0;
 }
 
-/* Over the artwork, but only the button itself takes clicks; the rest of the card opens the menu. */
-.homePlayArea {
-    position: absolute;
-    top: 0;
-    left: 0;
-    display: grid;
-    place-items: center;
-    width: 100%;
-    aspect-ratio: 1;
-    pointer-events: none;
-}
-
 .homeCardButton:hover .homeCardTitle,
 .homeCardButton:focus-visible .homeCardTitle {
     text-decoration: underline;
@@ -198,7 +186,7 @@
     white-space: nowrap;
 }
 
-.homeCardTitle {
+.homeCard .homeCardTitle {
     margin: 12px 0 4px;
     font-size: 0.95rem;
     font-weight: 500;
@@ -207,6 +195,15 @@
 .homeCardDetail {
     color: #a3a2a3;
     font-size: 0.8rem;
+}
+
+.homeCardArtists {
+    white-space: normal;
+}
+
+.homeCardArtists .entityLink {
+    white-space: nowrap;
+    vertical-align: top;
 }
 
 .homePlaylistPlaceholder {

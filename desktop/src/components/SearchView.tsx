@@ -1,6 +1,7 @@
 import { albumForTrack, sortAlbumTracks, type BrowseEntity } from "../utils/browse";
 import { nowPlayingState, useNowPlaying } from "../hooks/useNowPlaying";
 import { ArtistLinks } from "./ArtistLinks";
+import { TrackTitleLink } from "./TrackTitleLink";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
@@ -229,7 +230,7 @@ function SearchResult({
       </div>
 
       <div className="searchResultInfo" inert={!available}>
-        <div className="searchResultName">{track.name}</div>
+        <TrackTitleLink track={track} onOpenEntity={onOpenEntity} className="searchResultName" />
         <div className="searchResultArtist">By <ArtistLinks track={track} onOpenEntity={onOpenEntity} /></div>
         <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button></div>
         <div className="searchResultMeta">

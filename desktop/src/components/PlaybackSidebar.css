@@ -333,6 +333,7 @@
 }
 
 .playbackSidebarTrackText .trackTitleText {
+    justify-self: start;
     line-height: 1.3;
 }
 
