@@ -1,6 +1,6 @@
 #searchBar {
     position: absolute;
-    /* The screen's right edge moves when the scrollbar column collapses. */
+    /* Keep the same window-edge inset alongside the scrollbar column. */
     inset-inline-end: var(--workspace-control-inset);
     z-index: 10;
     display: flex;
@@ -17,10 +17,10 @@
 /* Over the player, the hidden screen around it stays hidden. */
 #searchBar[data-summoned] {
     visibility: visible;
-    transition: box-shadow 0.25s ease, border-color 0.25s ease, opacity 0.2s ease;
+    transition: box-shadow var(--motion-feedback), border-color var(--motion-feedback), opacity var(--motion-feedback);
 }
 #searchBar[data-away="dismissed"] {
-    transition: opacity 0.2s ease, visibility 0s linear 0.2s;
+    transition: opacity var(--motion-feedback), visibility 0s linear var(--motion-feedback-duration);
 }
 
 .searchInputControl {

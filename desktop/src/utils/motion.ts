@@ -1,4 +1,9 @@
+import { interactionTiming } from "./interactionTiming";
 import { spring, type SpringTiming } from "./spring";
+
+const { press, settle } = interactionTiming;
+const pressDown = { duration: press.duration, easing: `cubic-bezier(${press.curve.join(", ")})` };
+const feedback = { duration: settle.duration, easing: `cubic-bezier(${settle.curve.join(", ")})` };
 
 // Ambra's motion language. Views and large surfaces leave gently and settle quietly over a
 // long tail; things you touch respond at once and spring back. Every animation uses one of these, from TS directly or
@@ -18,13 +23,12 @@ export const motion = {
   enter: { duration: 260, easing: "cubic-bezier(0.16, 1, 0.3, 1)" },
   /** Things lighting up under the pointer. Leaving takes twice as long, so they fade rather than blink off. */
   hover: { duration: 120, easing: "cubic-bezier(0.2, 0, 0, 1)" },
-  feedback: { duration: 150, easing: "ease" },
-  /** Small controls changing shape or place: chevrons turning, the search field widening. */
+  /** Menus, chevrons, dialogs, and other short control transitions. */
+  feedback,
+  /** Small controls changing shape or place, such as the search field widening. */
   snappy: spring(0.35, 0.9, "cubic-bezier(0.25, 1, 0.5, 1)"),
   /** A pressed control going down: immediate. */
-  pressDown: { duration: 90, easing: "cubic-bezier(0.2, 0, 0, 1)" },
-  /** A pressed control coming back up, with a small spring past its resting size. */
-  pressUp: spring(0.32, 0.6, "cubic-bezier(0.34, 1.56, 0.64, 1)"),
+  pressDown,
 } satisfies Record<string, SpringTiming>;
 
 const root = globalThis.document?.documentElement.style;

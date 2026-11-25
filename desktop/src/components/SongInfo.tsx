@@ -31,7 +31,7 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
   const nowPlaying = useNowPlaying();
   const available = !track || isTrackAvailable(track, connected);
   const [position, setPosition] = useState<{
-    x: number; y: number; flipY?: number; placement?: "above"; returnFocusTo?: HTMLElement; instant?: boolean;
+    x: number; y: number; flipY?: number; placement?: "above"; returnFocusTo?: HTMLElement;
   } | null>(null);
   // The menu belongs to the song it was opened for.
   useEffect(() => setPosition(null), [track?.globalId, combinedMenu]);
@@ -85,7 +85,6 @@ export function SongInfo({ track, onOpenEntity, menu }: SongInfoProps) {
           flipY={position.flipY}
           placement={position.placement}
           returnFocusTo={position.returnFocusTo}
-          instant={position.instant}
           onClose={() => setPosition(null)}
         />,
         document.body,

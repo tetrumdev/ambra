@@ -19,6 +19,7 @@ export function TrackMenuBackdrop({ children, song, onClose, onKeyDown }: {
       if (!backdrop.current || event.composedPath().includes(backdrop.current)) return;
       if (event.type === "contextmenu") {
         // Unmount the old menu before the clicked song opens a fresh one.
+        backdrop.current.dataset.menuReplacing = "";
         flushSync(onClose);
         return;
       }

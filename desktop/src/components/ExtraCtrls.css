@@ -408,7 +408,7 @@
     content: "";
     opacity: 0;
     scale: 0;
-    transition: opacity 0.2s ease, scale 0.2s ease;
+    transition: opacity var(--motion-feedback), scale var(--motion-feedback);
 }
 
 #queueBtn[aria-expanded="true"]::after {

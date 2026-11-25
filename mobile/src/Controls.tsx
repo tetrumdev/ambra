@@ -6,11 +6,11 @@ import Animated, {
   useAnimatedProps,
   useAnimatedStyle,
   useSharedValue,
-  withSpring,
   withTiming,
 } from "react-native-reanimated";
 import Svg, { G, Path } from "react-native-svg";
 import { playerTiming } from "./playerMotion";
+import { motion } from "./theme";
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -133,7 +133,8 @@ function SkipIcon({
   );
 }
 
-const press = { damping: 15, stiffness: 400, mass: 0.6 };
+const press = { duration: motion.press.duration, easing: Easing.bezier(...motion.press.curve) };
+const settle = { duration: motion.settle.duration, easing: Easing.bezier(...motion.settle.curve) };
 
 function ControlButton({
   label,
@@ -159,10 +160,10 @@ function ControlButton({
       disabled={disabled}
       hitSlop={8}
       onPressIn={() => {
-        down.set(withTiming(1, { duration: 90 }));
+        down.set(withTiming(1, press));
         void Haptics.impactAsync(haptic);
       }}
-      onPressOut={() => down.set(withSpring(0, press))}
+      onPressOut={() => down.set(withTiming(0, settle))}
       onPress={onPress}
       style={[styles.button, disabled && styles.disabled]}
     >

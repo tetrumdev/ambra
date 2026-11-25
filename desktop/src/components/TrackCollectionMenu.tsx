@@ -50,14 +50,13 @@ type TrackCollectionMenuProps = {
   /** The trigger already says Add to Playlist, so open its picker directly. */
   startWithPlaylistPicker?: boolean;
   returnFocusTo?: HTMLElement;
-  instant?: boolean;
   /** As wide as its labels, for a short menu opened at the cursor. */
   fitContent?: boolean;
   /** False for a playback-only menu whose song's other menu already offers downloads. */
   downloads?: boolean;
 };
 
-export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false, returnFocusTo, instant = false, downloads = true, fitContent = false }: TrackCollectionMenuProps) {
+export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, playlistOptions, placement = "below", flipY, tracks, startWithPlaylistPicker = false, returnFocusTo, downloads = true, fitContent = false }: TrackCollectionMenuProps) {
   const collection = tracks !== undefined;
   const connected = useServiceAvailability();
   const available = collection || isTrackAvailable(trackId, connected);
@@ -91,7 +90,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       setSaving(false);
     }
   }
-  useFadeOutOnUnmount(panel, !instant);
+  useFadeOutOnUnmount(panel);
   const [position, setPosition] = useState({ left: xPos, top: yPos, above: placement === "above" });
   useLayoutEffect(() => {
     const element = panel.current;
@@ -101,9 +100,10 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       const bounds = menuBounds(element);
       // A menu opened at the cursor turns to its left at the view's edge; one already lined up
       // with its trigger fits, and a wider playlist chooser only shifts in.
-      const turnWidth = Math.min(MENU_WIDTH, element.offsetWidth || width);
+      const naturalWidth = element.offsetWidth || width;
+      const turnWidth = Math.min(MENU_WIDTH, naturalWidth);
       const turn = xPos + turnWidth > bounds.right && xPos - turnWidth >= bounds.left;
-      const left = Math.max(bounds.left, Math.min(turn ? xPos - turnWidth : xPos, bounds.right - width));
+      const left = Math.max(bounds.left, Math.min(turn ? xPos - turnWidth : xPos, bounds.right - naturalWidth));
       // Only the menu's natural size decides the flip, so its open/close scale never flips it back.
       const naturalHeight = element.offsetHeight || height;
       const bottom = bounds.bottom;
@@ -120,7 +120,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
       observer.disconnect();
       window.removeEventListener("resize", reposition);
     };
-  }, [xPos, yPos, placement, flipY, instant]);
+  }, [xPos, yPos, placement, flipY]);
   useEffect(() => { panel.current?.focus(); }, [choosingPlaylist]);
   useEffect(() => () => {
     if (returnFocusTo?.isConnected) returnFocusTo.focus({ preventScroll: true });
@@ -132,7 +132,7 @@ export function TrackCollectionMenu({ onClose, xPos, yPos, actions, trackId, pla
     }}>
       <div ref={panel} id="trackCollectionMenu" className="uiMenu uiMenuPopup" tabIndex={-1} style={{
         left: position.left, top: position.top, transformOrigin: position.above ? "left bottom" : "left top",
-        width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)", animation: instant ? "none" : undefined,
+        width, maxWidth: "calc(100vw - 8px)", maxHeight: "calc(100vh - 8px)",
       }} onClick={event => event.stopPropagation()}>
         {choosingPlaylist && playlistOptions ? <>
           <button type="button" className="menuItem menuBack" onClick={startWithPlaylistPicker ? onClose : () => setChoosingPlaylist(false)}><DropdownChevron />Add to Playlist</button>

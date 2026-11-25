@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, expect, jest, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -7,6 +7,7 @@ import { DownloadDialog } from "../src/components/DownloadDialog";
 import { DownloadActivity } from "../src/components/DownloadActivity";
 import { closeDownloadDialog, openDownloadDialog, refreshServerDownloads, type DownloadJob } from "../src/utils/offlineDownloads";
 import { setReducedMotion } from "../src/utils/reducedMotion";
+import { motion } from "../src/utils/motion";
 
 const dom = new Window({ url: "http://localhost/" });
 const originalFetch = globalThis.fetch;
@@ -24,7 +25,8 @@ const job = (overrides: Partial<DownloadJob> = {}): DownloadJob => ({
 beforeAll(() => {
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator,
-    HTMLElement: dom.HTMLElement, Node: dom.Node, IS_REACT_ACT_ENVIRONMENT: true,
+    HTMLElement: dom.HTMLElement, Node: dom.Node, getComputedStyle: dom.getComputedStyle.bind(dom),
+    IS_REACT_ACT_ENVIRONMENT: true,
   });
   setReducedMotion(true);
   globalThis.fetch = (async (input, init) => {
@@ -106,6 +108,30 @@ test("Escape dismisses only the quality popup and restores trigger focus", async
   await key("ArrowDown");
   expect(option(0).getAttribute("aria-checked")).toBe("true");
   expect(requests).toEqual([]);
+});
+
+test("a closing dropdown releases focus while its visual copy fades", async () => {
+  await mount();
+  setReducedMotion(false);
+  jest.useFakeTimers();
+  try {
+    await act(async () => trigger().click());
+    const popup = host.querySelector<HTMLElement>(".dropdownMenu")!;
+    popup.getBoundingClientRect = () => new dom.DOMRect(20, 40, 240, 160);
+    const id = popup.id;
+    await key("Escape");
+
+    expect(document.activeElement).toBe(trigger());
+    expect(document.getElementById(id)).toBeNull();
+    const fading = document.querySelector<HTMLElement>('.dropdownMenu[aria-hidden="true"]')!;
+    expect(fading.inert).toBe(true);
+    expect(fading.style.transition).toContain(`${motion.feedback.duration}ms`);
+    jest.advanceTimersByTime(motion.feedback.duration + 50);
+    expect(fading.isConnected).toBe(false);
+  } finally {
+    jest.useRealTimers();
+    setReducedMotion(true);
+  }
 });
 
 test("quality stays selected through client navigation and client downloads", async () => {

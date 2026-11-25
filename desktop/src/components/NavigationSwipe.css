@@ -40,7 +40,7 @@
 .navigationSwipe svg {
     width: 20px;
     height: 20px;
-    transition: scale var(--motion-press-up);
+    transition: scale var(--motion-feedback);
 }
 
 /* The shaft draws out behind the head as the arrow is pulled toward the threshold. */

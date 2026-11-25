@@ -11,7 +11,7 @@
     width: min(240px, calc(100vw - 60px));
     height: 42px;
     padding: 0 6px 0 16px;
-    animation: pageFilterIn 0.16s ease-out;
+    animation: pageFilterIn var(--motion-feedback);
 }
 
 .pageFilterInput {

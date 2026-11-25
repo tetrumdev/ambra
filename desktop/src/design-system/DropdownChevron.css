@@ -15,7 +15,7 @@
     height: 10px;
     color: var(--ink);
     transform: rotate(-90deg);
-    transition: transform var(--motion-snappy);
+    transition: transform var(--motion-feedback);
 }
 
 .dropdown {
@@ -37,7 +37,6 @@
 
 .dropdownTrigger .dropdownChevron {
     transform: rotate(0);
-    transition-duration: 100ms;
 }
 
 .dropdownTrigger[aria-expanded="true"] .dropdownChevron {
@@ -50,7 +49,7 @@
     white-space: nowrap;
 }
 
-.dropdown .dropdownMenu {
+.dropdownMenu {
     inset: auto;
     margin: 0;
     width: max-content;

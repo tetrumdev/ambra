@@ -1,14 +1,12 @@
 import { createElement, useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+import { motion } from "../utils/motion";
 import { reducedMotion } from "../utils/reducedMotion";
-
-const FADE_MS = 150;
 
 // Native menus fade out instead of vanishing. React removes a closed menu at
 // once, so as it unmounts a lifeless copy is left in its place and faded out.
 // The menu's own logic never waits on the animation.
-export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>, enabled = true) {
+export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>) {
   useLayoutEffect(() => {
-    if (!enabled) return;
     const host = ref.current;
     // A `display: contents` wrapper has no box of its own; fade what it wraps.
     const element = host && getComputedStyle(host).display === "contents"
@@ -16,19 +14,20 @@ export function useFadeOutOnUnmount(ref: RefObject<HTMLElement | null>, enabled 
       : host;
     return () => {
       // Layout cleanups run before React detaches the element, so it can still be copied.
-      if (!element?.isConnected || reducedMotion()) return;
+      if (!element?.isConnected || element.closest("[data-menu-replacing]") || reducedMotion()) return;
       const ghost = fadingCopy(element);
       if (!ghost) return;
       // StrictMode's rehearsal unmount leaves the element in place; only a real close fades.
       queueMicrotask(() => {
         if (element.isConnected) return;
         document.body.append(ghost);
+        if (ghost.hasAttribute("popover")) ghost.showPopover?.();
         ghost.getBoundingClientRect();
         ghost.style.opacity = "0";
-        setTimeout(() => ghost.remove(), FADE_MS + 50);
+        setTimeout(() => ghost.remove(), motion.feedback.duration + 50);
       });
     };
-  }, [ref, enabled]);
+  }, [ref]);
 }
 
 function fadingCopy(element: HTMLElement): HTMLElement | null {
@@ -38,6 +37,11 @@ function fadingCopy(element: HTMLElement): HTMLElement | null {
   // Keeps its id: the menus are styled by id, and the original is already gone
   // by the time the copy is added.
   const ghost = element.cloneNode(true) as HTMLElement;
+  if (element.hasAttribute("popover")) {
+    // A dropdown can close inside a native dialog, so leave its visual copy in the top layer.
+    ghost.removeAttribute("id");
+    if (!ghost.showPopover) ghost.removeAttribute("popover");
+  }
   ghost.setAttribute("aria-hidden", "true");
   ghost.inert = true;
   // Pinned where it was on screen, with the inherited text styles it had there.
@@ -59,10 +63,10 @@ function fadingCopy(element: HTMLElement): HTMLElement | null {
     fontFamily: computed.fontFamily,
     fontSize: computed.fontSize,
     lineHeight: computed.lineHeight,
-    opacity: "1",
+    opacity: computed.opacity || "1",
     // The copy only fades; it must not replay the menu's opening.
     animation: "none",
-    transition: `opacity ${FADE_MS}ms ease`,
+    transition: `opacity ${motion.feedback.duration}ms ${motion.feedback.easing}`,
   });
   return ghost;
 }

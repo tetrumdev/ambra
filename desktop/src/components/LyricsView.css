@@ -392,8 +392,8 @@ button.lyricLine:hover {
         500 13px/1.4 var(--font-sans);
     cursor: default;
     transition:
-        opacity 0.25s ease,
-        scale var(--motion-press-up);
+        opacity var(--motion-feedback),
+        scale var(--motion-feedback);
 }
 /* Like the view picker, the menu stays dim until the pointer reaches it; resume is the current action. */
 .lyricsSyncTrigger {
@@ -404,8 +404,7 @@ button.lyricLine:hover {
 .lyricsSyncTrigger[aria-expanded="true"] {
     opacity: 1;
 }
-.lyricsResume:active,
-.lyricsSyncTrigger:active {
+:root:not([data-reduce-motion]) :is(.lyricsResume, .lyricsSyncTrigger):active {
     scale: 0.97;
     transition: scale var(--motion-press-down);
 }

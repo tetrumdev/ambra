@@ -168,7 +168,7 @@ const VIRTUALIZE_AFTER_ROWS = 120;
 
 type SidebarEntry = { id: string; track: Track; queueId?: QueueId; historyId?: string; current?: boolean };
 type SidebarMenu =
-  | { kind: "playback" | "collection" | "combined"; id: string; anchor: HTMLElement; x: number; y: number; flipY: number; keyboard: boolean; extendSelection?: boolean; instant?: boolean }
+  | { kind: "playback" | "collection" | "combined"; id: string; anchor: HTMLElement; x: number; y: number; flipY: number; keyboard: boolean; extendSelection?: boolean }
   | { kind: "selection"; anchor: HTMLButtonElement; x: number; y: number; flipY: number };
 type RowAction = "play" | "start" | "playback" | "collection" | "combined" | "select";
 type EntryAction = (action: RowAction, event: MouseEvent<HTMLElement>, entry: SidebarEntry) => void;
@@ -375,7 +375,7 @@ function SidebarTracks({
             openedWithKeyboard={menu.keyboard} playStandalone={() => recentAction("standalone")}
             playNext={() => recentAction("next")} addToQueue={() => recentAction("queue")} />)}
       {(menu?.kind === "collection" || menu?.kind === "combined") && menuEntry && menuCanOpen && <TrackCollectionMenu trackId={menuEntry.track.globalId}
-        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} instant={menu.instant} onClose={closeMenu}
+        xPos={menu.x} yPos={menu.y} flipY={menu.flipY} onClose={closeMenu}
         playlistOptions={menuAvailable ? playlistOptions : undefined}
         actions={menuAvailable ? [
           ...(menu.kind === "combined" ? combinedPlaybackActions(menuEntry) : queueActions(menuEntry).filter(action => action.id === "remove")),

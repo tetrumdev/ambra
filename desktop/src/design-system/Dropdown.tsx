@@ -1,4 +1,5 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useFadeOutOnUnmount } from "../hooks/useFadeOutOnUnmount";
 import { DropdownChevron } from "./DropdownChevron";
 import "./controls.css";
 
@@ -29,6 +30,38 @@ function positionMenu(trigger: HTMLButtonElement, menu: HTMLDivElement) {
   menu.style.transformOrigin = opensBelow ? "top right" : "bottom right";
 }
 
+function DropdownMenu({ menu, trigger, id, label, iconOnly, children }: {
+  menu: RefObject<HTMLDivElement | null>;
+  trigger: RefObject<HTMLButtonElement | null>;
+  id: string;
+  label: string;
+  iconOnly?: boolean;
+  children: ReactNode;
+}) {
+  useFadeOutOnUnmount(menu);
+  useLayoutEffect(() => {
+    const button = trigger.current;
+    const popup = menu.current;
+    if (!button || !popup) return;
+    // Keep the dropdown above scrolling views and modal dialogs.
+    popup.showPopover?.();
+    const place = () => positionMenu(button, popup);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      if (popup.isConnected) popup.hidePopover?.();
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [menu, trigger]);
+  return (
+    <div ref={menu} id={id} popover="manual" className="dropdownMenu uiMenu uiMenuPopup" role="menu" aria-label={label}
+      data-icon-only={iconOnly || undefined}>
+      {children}
+    </div>
+  );
+}
+
 export function Dropdown<Value extends string>({ label, value, options, onChange, disabled = false, className, iconOnly }: DropdownProps<Value>) {
   const id = useId();
   const control = useRef<HTMLDivElement>(null);
@@ -42,22 +75,6 @@ export function Dropdown<Value extends string>({ label, value, options, onChange
     setOpen(false);
     trigger.current?.focus({ preventScroll: true });
   };
-
-  useLayoutEffect(() => {
-    const button = trigger.current;
-    const popup = menu.current;
-    if (!expanded || !button || !popup) return;
-    // The custom menu stays above scrolling views and modal dialogs.
-    if (popup.isConnected) popup.showPopover?.();
-    const place = () => positionMenu(button, popup);
-    window.addEventListener("resize", place);
-    window.addEventListener("scroll", place, true);
-    return () => {
-      if (popup.isConnected) popup.hidePopover?.();
-      window.removeEventListener("resize", place);
-      window.removeEventListener("scroll", place, true);
-    };
-  }, [expanded]);
 
   useLayoutEffect(() => {
     if (expanded && trigger.current && menu.current) positionMenu(trigger.current, menu.current);
@@ -128,8 +145,7 @@ export function Dropdown<Value extends string>({ label, value, options, onChange
           : <><span className="dropdownValue">{selectedLabel}</span><DropdownChevron /></>}
       </button>
       {expanded && (
-        <div ref={menu} id={id} popover="manual" className="dropdownMenu uiMenu uiMenuPopup" role="menu" aria-label={label}
-          data-icon-only={iconOnly || undefined}>
+        <DropdownMenu menu={menu} trigger={trigger} id={id} label={label} iconOnly={iconOnly}>
           {options.map(option => (
             <button key={option.value} type="button" className="uiMenuOption" role="menuitemradio"
               aria-label={iconOnly ? option.label : undefined} data-tooltip={iconOnly ? option.label : undefined}
@@ -143,7 +159,7 @@ export function Dropdown<Value extends string>({ label, value, options, onChange
               </>}
             </button>
           ))}
-        </div>
+        </DropdownMenu>
       )}
     </div>
   );

@@ -59,7 +59,7 @@ export function songMenuPosition(event: MouseEvent<HTMLElement>) {
     const rect = anchor.getBoundingClientRect();
     return { x: rect.left, y: rect.bottom, flipY: rect.top, returnFocusTo: anchor };
   }
-  return { x: event.clientX, y: event.clientY, flipY: event.clientY, instant: event.type === "contextmenu" };
+  return { x: event.clientX, y: event.clientY, flipY: event.clientY };
 }
 
 export type TrackPlaybackActions = {

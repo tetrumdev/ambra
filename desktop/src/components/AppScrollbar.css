@@ -1,5 +1,6 @@
 .appScrollbar {
     position: fixed;
+    box-sizing: border-box;
     top: var(--library-titlebar-height);
     right: var(--playback-sidebar-width, 0px);
     bottom: var(--player-height);
@@ -10,12 +11,8 @@
     border-left: 1px solid var(--border-control);
 }
 
-/* With nothing to scroll there is no rail at all: its column collapses, so the screen and the
-   controls aligned to it reach the window edge instead of stopping at an empty strip. */
-:root:has(.appScrollbarThumb[hidden]) {
-    --scrollbar-column-width: 0px;
-}
-
+/* Keep the column reserved when the rail is hidden. Giving the space back can widen
+   responsive cards enough to make them taller and bring the scrollbar back. */
 .appScrollbar:has(> .appScrollbarThumb[hidden]) {
     visibility: hidden;
 }

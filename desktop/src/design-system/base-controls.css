@@ -24,7 +24,16 @@
     font-weight: var(--weight-semibold);
     line-height: 1.25;
     text-align: center;
-    transition: background-color var(--motion-feedback), border-color var(--motion-feedback), color var(--motion-feedback);
+}
+
+:where(.uiButton, .dropdownTrigger) {
+    transition: background-color var(--motion-feedback), border-color var(--motion-feedback),
+        color var(--motion-feedback), filter var(--button-press-time, var(--motion-feedback));
+}
+
+:where(.uiButton, .dropdownTrigger):enabled:active {
+    --button-press-time: var(--motion-press-down);
+    filter: brightness(86%);
 }
 
 .uiButton:hover:not(:disabled) {
@@ -73,8 +82,24 @@
     pointer-events: none;
 }
 
-:root[data-reduce-motion] :is(.uiButton, .uiIconButton) {
-    --motion-press-up: 0s;
-    --motion-press-down: 0s;
+/* Only the artwork scales. The button's hit area stays full size. */
+:where(
+    .uiIconButton, #volumeBtn, #queueBtn, .xContainer, .sidebarPlaylistActions,
+    .searchResultMenuButton, .trackCollectionMenuTrigger, .trackPlayButton,
+    .songMenuButton, .columnPickerButton, .pageHistoryControls button, .searchExpandButton, .bigscreenViewButton
+) > :is(img, svg) {
+    pointer-events: none;
+    scale: var(--icon-press-scale, none);
+    filter: var(--icon-press-filter, none);
+    transition: scale var(--icon-press-time, var(--motion-feedback)), filter var(--icon-press-time, var(--motion-feedback));
+}
+
+:root:not([data-reduce-motion]) :where(button):enabled:active {
+    --icon-press-scale: 0.82;
+    --icon-press-filter: brightness(86%);
+    --icon-press-time: var(--motion-press-down);
+}
+
+:root[data-reduce-motion] :is(.uiButton, .uiIconButton, .dropdownTrigger) {
     transition: none;
 }

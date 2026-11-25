@@ -165,7 +165,7 @@ button img {
     transition:
         opacity 0.25s ease,
         visibility 0.25s,
-        filter 0.15s;
+        filter var(--motion-feedback);
 }
 
 /* Opened from the keyboard, the player starts with these already hidden (App.tsx). */

@@ -12,7 +12,6 @@ type TrackPlaybackMenuProps = TrackPlaybackActions & {
   yPos: number;
   trackId: GlobalTrackId | null;
   openedWithKeyboard?: boolean;
-  instant?: boolean;
 };
 
 export function TrackPlaybackMenu({
@@ -21,13 +20,12 @@ export function TrackPlaybackMenu({
   yPos,
   trackId,
   openedWithKeyboard = false,
-  instant = false,
   ...playback
 }: TrackPlaybackMenuProps) {
   const connected = useServiceAvailability();
   const menu = useRef<HTMLDivElement>(null);
   const [keyboardNavigation, setKeyboardNavigation] = useState(openedWithKeyboard);
-  useFadeOutOnUnmount(menu, !instant);
+  useFadeOutOnUnmount(menu);
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // Pointer opens need focus for keyboard handling, but must not select an action.
@@ -44,7 +42,6 @@ export function TrackPlaybackMenu({
     setFlip({ left: xPos + element.offsetWidth > bounds.right, up: yPos + element.offsetHeight > bounds.bottom });
   }, [xPos, yPos]);
   if (trackId && !isTrackAvailable(trackId, connected)) return null;
-  const offset = instant ? "0" : "1%";
   return (
     <TrackMenuBackdrop song={Boolean(trackId)} onClose={onClose}>
       <div
@@ -73,12 +70,11 @@ export function TrackPlaybackMenu({
           items[next]?.focus();
         }}
         style={{
-          animation: instant ? "none" : undefined,
           left: xPos,
           top: yPos,
           transform: `translate(
-            ${flip.left ? "-100%" : offset},
-            ${flip.up ? "-100%" : offset}
+            ${flip.left ? "-100%" : "1%"},
+            ${flip.up ? "-100%" : "1%"}
           )`,
           // The scale applies after the flip, so the box's own corner is always the clicked point.
           transformOrigin: "0 0",

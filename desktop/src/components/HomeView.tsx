@@ -133,7 +133,7 @@ function SongCards({
 }) {
   const connected = useServiceAvailability();
   const combinedMenu = useContext(SongContextMenu);
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number; openedWithKeyboard: boolean; instant?: boolean } | null>(
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; openedWithKeyboard: boolean } | null>(
     null,
   );
   useEffect(() => setMenu(null), [combinedMenu]);
@@ -190,7 +190,6 @@ function SongCards({
             yPos={menu.y}
             trackId={menu.id}
             openedWithKeyboard={menu.openedWithKeyboard}
-            instant={menu.instant}
             playTrack={(id) => onAction("play", tracks, id)}
             playStandalone={(id) => onAction("standalone", tracks, id)}
             addToQueue={(id) =>

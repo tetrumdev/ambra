@@ -60,11 +60,6 @@
     z-index: 51;
 }
 
-.pageHistoryControls[data-player] {
-    border-radius: var(--radius-pill);
-    background: rgba(22, 22, 22, 0.55);
-}
-
 .pageHistoryControls button {
     display: grid;
     place-items: center;
@@ -174,8 +169,9 @@
 .bigscreenCtrls .bigscreenBtn {
     opacity: 0.45;
     transition:
-        opacity 0.25s ease,
-        scale var(--motion-press-up);
+        opacity var(--motion-feedback),
+        scale var(--icon-press-time, var(--motion-feedback)),
+        filter var(--icon-press-time, var(--motion-feedback));
 }
 
 .bigscreenViewButton[aria-pressed="true"] .bigscreenBtn,

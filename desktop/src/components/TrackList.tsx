@@ -50,7 +50,6 @@ type OpenMenu =
       flipY: number;
       returnFocusTo?: HTMLElement;
       extendSelection?: boolean;
-      instant?: boolean;
     };
 
 export type TrackListProps = {
@@ -365,7 +364,6 @@ export function TrackList({
           yPos={openMenu.y}
           flipY={openMenu.flipY}
           returnFocusTo={openMenu.returnFocusTo}
-          instant={openMenu.instant}
           actions={[
             ...(openMenu.kind === "combined" && menuTrack && isTrackAvailable(menuTrack, connected) ? [
               ...(menuTrack.globalId === nowPlaying.trackId && nowPlaying.isPlaying ? [pauseTrackAction(nowPlaying.togglePlayback)] : []),

@@ -42,7 +42,7 @@
         color-mix(in srgb, var(--tint) 0%, transparent) 100%);
     box-shadow: 0 0 8px 1px color-mix(in srgb, var(--tint) 30%, transparent);
     opacity: 0.9;
-    transition: box-shadow 0.2s, opacity 0.2s, filter 0.2s;
+    transition: box-shadow var(--motion-feedback), opacity var(--motion-feedback), filter var(--motion-feedback);
 }
 
 [data-tier="bitPerfect"] .qualityLightDot { --tier: var(--tier-bitPerfect); }

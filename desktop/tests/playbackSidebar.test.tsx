@@ -209,8 +209,11 @@ test("the sidebar edits the live queue, displays lyrics and history, and restore
 
     await press("f", "KeyF");
     expect(viewport.querySelector('#bottomInfoBar[data-variant="expanded"]')).not.toBeNull();
-    expect(viewport.querySelector('.pageHistoryControls[data-player] [aria-label="Forward"]')).not.toBeNull();
-    await click('.pageHistoryControls[data-player] [aria-label="Back"]');
+    expect(viewport.querySelector(".pageHistoryControls")).toBeNull();
+    await click('[aria-label="Lyrics"]');
+    expect(viewport.querySelector(".pageHistoryControls")).toBeNull();
+    await click('[aria-label="Close player"]');
+    expect(viewport.querySelector(".pageHistoryControls")).not.toBeNull();
     expect(viewport.querySelector("main.appScreen")).toBe(main);
     expect(pane()?.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Queue");
     await click('[aria-label="Close playback sidebar"]');
@@ -366,6 +369,7 @@ test("Combined song menus open from the dots without starting playback", async (
 
     await mouse(find("img", nestedTrigger), "click", 1);
     const dotsActions = labels();
+    const dotsAnimation = find("#trackCollectionMenu").style.animation;
     expect(dotsActions).toContain("Play from Here");
     expect(nestedTrigger.getAttribute("aria-expanded")).toBe("true");
     expect(loadPreferences().playback.trackId).toBe(first.globalId);
@@ -379,7 +383,8 @@ test("Combined song menus open from the dots without starting playback", async (
     expect(viewport.querySelectorAll("#trackMenuBackdrop")).toHaveLength(1);
     expect(menu()?.hasAttribute("data-song-context-menu")).toBe(true);
     const panel = find("#trackCollectionMenu");
-    expect(panel.style.animation).toBe("none");
+    expect(panel.classList.contains("uiMenu")).toBe(true);
+    expect(panel.style.animation).toBe(dotsAnimation);
     expect([panel.style.left, panel.style.top]).toEqual(["35px", "40px"]);
     panel.getBoundingClientRect = () => new dom.DOMRect(0, 0, 220, 300);
     await selectAction("Add to Playlist");
@@ -389,7 +394,7 @@ test("Combined song menus open from the dots without starting playback", async (
     expect([moved.style.left, moved.style.top]).toEqual(["310px", "155px"]);
     expect(labels()).toContain("Play from Here");
     expect(labels().filter(label => label && removedActions.includes(label))).toEqual([]);
-    expect(moved.style.animation).toBe("none");
+    expect(moved.style.animation).toBe(dotsAnimation);
     expect(row(first).dataset.menuOpen).toBe("true");
     expect(document.querySelector('#trackCollectionMenu[aria-hidden="true"]')).toBeNull();
     await mouse(find(".sidebarSettingsButton"), "click", 1);

@@ -1,4 +1,5 @@
 import * as Haptics from "expo-haptics";
+import { interactionTiming } from "../../desktop/src/utils/interactionTiming";
 
 /**
  * Phones have OLED panels, so the app sits on true black (desktop keeps #0a0a0a for LCDs).
@@ -31,8 +32,7 @@ export const textSize = { caption: 12, detail: 13, small: 14, body: 16, heading:
 export const sizes = { touch: 44, field: 48, icon: 20, menuIcon: 18 };
 export const disabledOpacity = 0.5;
 export const motion = {
-  press: 110,
-  release: { damping: 14, stiffness: 380, mass: 0.6 },
+  ...interactionTiming,
   sheetIn: { damping: 32, stiffness: 340, mass: 1, overshootClamping: true },
   sheetSettle: { damping: 22, stiffness: 300, mass: 0.8 },
   sheetOut: 200,

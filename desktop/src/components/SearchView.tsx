@@ -69,7 +69,6 @@ type OpenMenu = {
   flipY?: number;
   openedWithKeyboard?: boolean;
   returnFocusTo?: HTMLElement;
-  instant?: boolean;
 };
 
 type SearchResultProps = {
@@ -426,7 +425,6 @@ export function SearchView({
           yPos={openMenu.y}
           flipY={openMenu.flipY}
           returnFocusTo={openMenu.returnFocusTo}
-          instant={openMenu.instant}
           actions={[
             ...(openMenu.kind === "combined" && menuTrack ? [
               ...(nowPlaying.trackId === menuTrack.globalId && nowPlaying.isPlaying ? [pauseTrackAction(nowPlaying.togglePlayback)] : []),

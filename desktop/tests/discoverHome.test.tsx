@@ -126,7 +126,7 @@ test("Home artwork plays the song on a single click without opening playback opt
   expect(document.querySelector("#trackPlaybackMenu")).toBeNull();
 });
 
-test("combined song menus keep single-click cover playback and open instantly on right-click", async () => {
+test("combined song menus use the shared popup on right-click and preserve cover playback", async () => {
   next = { ...next, tracks: [track], status: "ready" };
   await mount(true);
   const card = container.querySelector('section[aria-label="Discover"] .homeArtwork')!;
@@ -139,7 +139,8 @@ test("combined song menus keep single-click cover playback and open instantly on
   expect(actions).toHaveLength(1);
   await mouse("contextmenu", 0, 2, 65, 115);
   expect(menu()?.textContent).toContain("Add to Queue");
-  expect(menu()?.style.animation).toBe("none");
+  expect(menu()?.classList.contains("uiMenu")).toBe(true);
+  expect(menu()?.style.animation).toBe("");
   expect([menu()?.style.left, menu()?.style.top]).toEqual(["65px", "115px"]);
   await mouse("contextmenu", 0, 2, 220, 120);
   expect([menu()?.style.left, menu()?.style.top]).toEqual(["220px", "120px"]);

@@ -48,6 +48,7 @@
 }
 
 .uiMenu {
+    animation: menuEnter var(--motion-feedback) both;
     box-sizing: border-box;
     border: var(--border-width) solid var(--border-subtle);
     border-radius: var(--radius-md);
@@ -57,6 +58,22 @@
     text-align: left;
     -webkit-backdrop-filter: var(--glass-blur);
     backdrop-filter: var(--glass-blur);
+}
+
+.uiMenuPopup {
+    position: fixed;
+    z-index: 20;
+}
+
+@keyframes menuEnter {
+    from {
+        opacity: 0;
+        scale: 0.96;
+    }
+}
+
+:root[data-reduce-motion] .uiMenu {
+    animation: none;
 }
 
 .uiMenu :focus-visible {

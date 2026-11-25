@@ -40,7 +40,7 @@ export function slideDetails(event: MouseEvent<HTMLElement>) {
       { boxSizing: "border-box", height: `${start}px`, opacity: share(start), ...at(share(start)) },
       { boxSizing: "border-box", height: `${end}px`, opacity: closing ? 0 : 1, ...at(closing ? 0 : 1) },
     ],
-    motion.snappy,
+    motion.feedback,
   );
   running.set(details, slide);
   slide.onfinish = () => {

@@ -237,7 +237,6 @@
     outline: none;
     box-shadow: 0 12px 32px rgb(0 0 0 / 0.45);
     font: 400 0.85rem/1.5 var(--font-sans);
-    animation: settingsSaveBarIn var(--motion-enter);
 }
 
 .settingsHelpPanel > strong {
@@ -260,9 +259,6 @@
     color: var(--ink);
 }
 
-:root[data-reduce-motion] .settingsHelpPanel {
-    animation: none;
-}
 /* ---------- Controls ---------- */
 .settingsPillDone {
     border-color: var(--border-subtle);

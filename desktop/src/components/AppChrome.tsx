@@ -50,19 +50,20 @@ export function AppChrome({
         ? <div className="bigscreenTitlebar" data-window-drag-region />
         : <div className="libraryTitlebar" data-content-layout="library" data-window-drag-region />
       )}
-      <nav className="pageHistoryControls" aria-label="Page history"
-        data-in-titlebar={canDragWindow || undefined} data-player={isPlayerScreen || undefined}>
-        {directions.map(({ direction, label }) => (
-          <button key={direction} type="button" aria-label={label} data-tooltip={label} data-direction={direction}
-            disabled={direction === "back" ? !canGoBack : !canGoForward}
-            onClick={() => onNavigate(direction)}>
-            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8"
-              strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M9 4.5 3.5 10 9 15.5M4 10h12.5" />
-            </svg>
-          </button>
-        ))}
-      </nav>
+      {!isPlayerScreen && (
+        <nav className="pageHistoryControls" aria-label="Page history" data-in-titlebar={canDragWindow || undefined}>
+          {directions.map(({ direction, label }) => (
+            <button key={direction} type="button" aria-label={label} data-tooltip={label} data-direction={direction}
+              disabled={direction === "back" ? !canGoBack : !canGoForward}
+              onClick={() => onNavigate(direction)}>
+              <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8"
+                strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M9 4.5 3.5 10 9 15.5M4 10h12.5" />
+              </svg>
+            </button>
+          ))}
+        </nav>
+      )}
 
       {isPlayerScreen && (
         <>

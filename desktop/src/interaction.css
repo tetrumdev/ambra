@@ -1,41 +1,3 @@
-/* Shared press feedback for icon buttons. */
-
-#volumeBtn,
-#queueBtn,
-.xContainer,
-.sidebarPlaylistActions,
-.searchResultMenuButton {
-    transition-duration: 0.15s;
-}
-
-#volumeBtn:active,
-#queueBtn:active,
-.xContainer:active,
-.sidebarPlaylistActions:active,
-.searchResultMenuButton:active {
-    filter: brightness(70%);
-}
-
-/* Animate the icon while the button keeps its full clickable area. */
-#volumeBtn > #volumeImg,
-#queueBtn > img,
-.xContainer > img,
-.sidebarPlaylistActions > svg,
-.searchResultMenuButton > img {
-    pointer-events: none;
-    /* Presses go down at once and spring back up, just past their size (utils/motion.ts). */
-    transition: scale var(--motion-press-up);
-}
-
-#volumeBtn:active > #volumeImg,
-#queueBtn:active > img,
-.xContainer:active > img,
-.sidebarPlaylistActions:active > svg,
-.searchResultMenuButton:active > img {
-    scale: 0.7;
-    transition: scale var(--motion-press-down);
-}
-
 /* Things that light up under the pointer ease in quickly and fade back out at half the
    speed (utils/motion.ts). :where() keeps this from overriding a control's own transition. */
 :where(
@@ -45,7 +7,7 @@
     .uiMenuOption,
     .selectionActionMenu button,
     .selectionDeleteButton,
-        .lyricsSyncNudges button,
+    .lyricsSyncNudges button,
     .lyricsMessage button,
     .playbackError button,
     .sidebarBtn,
@@ -73,7 +35,7 @@
     .uiMenuOption,
     .selectionActionMenu button,
     .selectionDeleteButton,
-        .lyricsSyncNudges button,
+    .lyricsSyncNudges button,
     .lyricsMessage button,
     .playbackError button,
     .sidebarBtn,
@@ -89,21 +51,6 @@
 :where(.homeCard:hover .homePlay, .homeCard:hover .homeShade, .sidebarSettingsButton:hover img) {
     transition-duration: var(--motion-hover-duration);
     transition-timing-function: var(--motion-hover-ease);
-}
-
-/* Menus grow out of the point they were opened from (each sets its transform-origin)
-   and fade out as they close (hooks/useFadeOutOnUnmount.ts). */
-.uiMenuPopup {
-    position: fixed;
-    z-index: 20;
-    animation: menuEnter var(--motion-snappy) both;
-}
-
-@keyframes menuEnter {
-    from {
-        opacity: 0;
-        scale: 0.94;
-    }
 }
 
 /* Dialogs fade in and out like system sheets (see utils/dialogs.ts). */
@@ -123,10 +70,6 @@ dialog[data-closing]::backdrop {
     dialog[open]::backdrop {
         opacity: 0;
     }
-}
-
-:root[data-reduce-motion] .uiMenuPopup {
-    animation: none;
 }
 
 :root[data-reduce-motion] dialog[open],

@@ -24,17 +24,6 @@
     appearance: none;
     -webkit-appearance: none;
     cursor: default;
-    transition: filter var(--motion-feedback);
-}
-
-#controls button:active {
-    filter: brightness(70%);
-}
-
-#controls button:active img,
-#controls button:active svg {
-    scale: 0.7;
-    transition: scale var(--motion-press-down);
 }
 
 #controls button:disabled {
@@ -42,20 +31,10 @@
     cursor: default;
 }
 
-#controls button:disabled:active {
-    filter: none;
-}
-
-#controls button:disabled:active img,
-#controls button:disabled:active svg {
-    scale: 1;
-}
-
 #playBtn svg {
     width: 25px;
     height: 25px;
     pointer-events: none;
-    transition: scale var(--motion-press-up);
 }
 
 #controls .skipIcon {
@@ -63,7 +42,6 @@
     height: auto;
     overflow: visible;
     pointer-events: none;
-    transition: scale var(--motion-press-up);
 }
 
 #controls img {
@@ -72,5 +50,4 @@
     user-select: none;
     -webkit-user-drag: none;
     pointer-events: none;
-    transition: scale var(--motion-press-up);
 }

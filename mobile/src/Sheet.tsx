@@ -9,6 +9,7 @@ import { colors, haptic, motion, radius, space } from "./theme";
 
 const fall = { duration: motion.sheetOut, easing: Easing.in(Easing.quad) };
 const flick = { duration: motion.sheetFlick, easing: Easing.out(Easing.quad) };
+const menuTiming = { duration: motion.settle.duration, easing: Easing.bezier(...motion.settle.curve) };
 
 /**
  * A black sheet that rises over everything, follows a drag on its grip and drops away when
@@ -33,16 +34,17 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
   const drag = useSharedValue(0);
   const closing = useSharedValue(false);
   const passed = useSharedValue(false);
+  const compactMenu = variant === "menu";
 
   useEffect(() => {
-    shown.set(withSpring(1, motion.sheetIn));
+    shown.set(compactMenu ? withTiming(1, menuTiming) : withSpring(1, motion.sheetIn));
     return () => { cancelAnimation(shown); cancelAnimation(drag); };
-  }, [shown, drag]);
+  }, [compactMenu, shown, drag]);
   const close = useCallback(() => {
     if (closing.get()) return;
     closing.set(true);
-    shown.set(withTiming(0, fall, finished => { if (finished) scheduleOnRN(onClose); }));
-  }, [closing, shown, onClose]);
+    shown.set(withTiming(0, compactMenu ? menuTiming : fall, finished => { if (finished) scheduleOnRN(onClose); }));
+  }, [closing, compactMenu, shown, onClose]);
   useEffect(() => {
     const back = BackHandler.addEventListener("hardwareBackPress", () => { close(); return true; });
     return () => back.remove();
@@ -66,7 +68,7 @@ export function Sheet({ label, onClose, grip, children, tall = false, dragAnywhe
       passed.set(false);
       if (!event.canceled && !closing.get() && (event.translationY > Math.min(120, height.get() * 0.3) || (event.translationY > 20 && event.velocityY > 700))) {
         closing.set(true);
-        shown.set(withTiming(0, flick, finished => { if (finished) scheduleOnRN(onClose); }));
+        shown.set(withTiming(0, compactMenu ? menuTiming : flick, finished => { if (finished) scheduleOnRN(onClose); }));
       } else drag.set(withSpring(0, motion.sheetSettle));
     },
     onFinalize: event => {
