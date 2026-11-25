@@ -8,14 +8,14 @@ import { exportPlaylist } from "../utils/playlistExport";
 
 type PlaylistViewProps = Omit<
   TrackCollectionViewProps,
-  "title" | "removalLabel" | "collapsibleHeader" | "headerArtwork" | "playbackActions" | "compactActions"
+  "title" | "removalLabel" | "collapsibleHeader" | "playbackActions" | "compactActions"
 > & {
   playlist: Playlist;
   artworkTracks: Track[];
   /** Only editable playlists can be renamed or deleted, and only AMBRA playlists improved. */
   onRename?: (id: string, name: string) => boolean | Promise<boolean>;
   onDelete?: (id: string) => boolean | Promise<boolean>;
-  onDuplicate: () => void;
+  onDuplicate?: () => void;
   onImprove?: () => void;
   /** The scan the user asked for, on any playlist. */
   improvementProgress: PlaylistImprovementProgress | null;
@@ -43,6 +43,7 @@ export function PlaylistView({
   improvementReport,
   onExit,
   tracks,
+  headerArtwork,
   ...props
 }: PlaylistViewProps) {
   // What a scan reported belongs to this visit; leaving the playlist clears it.
@@ -65,7 +66,7 @@ export function PlaylistView({
   );
   const canShow = !progress && upgradedIds.size > 0;
   const menuActions = [
-    { label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: onDuplicate },
+    ...(onDuplicate ? [{ label: "Duplicate Playlist", icon: "/duplicate.svg", onSelect: onDuplicate }] : []),
     ...(onImprove ? [{
       label: improvementProgress ? "Improving…" : "Improve Playlist",
       icon: "/sparkle.svg",
@@ -127,7 +128,7 @@ export function PlaylistView({
           )}
         </>
       }
-      headerArtwork={
+      headerArtwork={headerArtwork ?? (
         <div className="playlistArtworkGrid" aria-hidden="true">
           {Array.from({ length: 4 }, (_, index) => {
             const track = artworkTracks[index];
@@ -142,7 +143,7 @@ export function PlaylistView({
             );
           })}
         </div>
-      }
+      )}
     />
   );
 }

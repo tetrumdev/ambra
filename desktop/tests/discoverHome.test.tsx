@@ -1,10 +1,12 @@
 import { afterAll, afterEach, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { HomeView } from "../src/components/HomeView";
+import App from "../src/App";
+import { HomeView, type RecommendationSource } from "../src/components/HomeView";
 import { updateServiceAvailability } from "../src/hooks/useServiceAvailability";
-import type { Track } from "../src/types/music";
+import type { Playlist, Track } from "../src/types/music";
+import { defaultPreferences, savePreferences } from "../src/utils/preferences";
 import { SongContextMenu } from "../src/utils/trackMenu";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -17,9 +19,12 @@ const track: Track = { globalId: "local:a", provider: "local", providerTrackId: 
 let next = { tracks: [track], reasons: {}, status: "ready", generatedAt: 1, refreshAfterMs: null };
 
 beforeAll(() => {
+  Object.defineProperty(dom.document, "fonts", { value: { ready: Promise.resolve() } });
   Object.assign(globalThis, {
     window: dom, document: dom.document, navigator: dom.navigator, HTMLElement: dom.HTMLElement, Element: dom.Element,
     Node: dom.Node, ResizeObserver: dom.ResizeObserver, IntersectionObserver: dom.IntersectionObserver,
+    localStorage: dom.localStorage, MutationObserver: dom.MutationObserver,
+    requestAnimationFrame: dom.requestAnimationFrame.bind(dom), cancelAnimationFrame: dom.cancelAnimationFrame.bind(dom),
     getComputedStyle: dom.getComputedStyle.bind(dom), IS_REACT_ACT_ENVIRONMENT: true,
   });
   globalThis.fetch = (async (url) => {
@@ -35,13 +40,19 @@ afterEach(async () => {
 });
 afterAll(() => { globalThis.fetch = originalFetch; dom.happyDOM.abort(); });
 
-async function mount(combinedMenu = false) {
+async function render(component: ReactNode) {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-  await act(async () => {
-    root.render(<SongContextMenu.Provider value={combinedMenu}><HomeView entries={[]} tracks={[]} playlists={[]} error={null}
-      onAction={(action, tracks, id) => actions.push([action, tracks, id])} onSelectPlaylist={() => {}} onSelectAlbum={() => {}}
-      registerScrollElement={() => {}} /></SongContextMenu.Provider>);
-  });
+  await act(async () => { root.render(component); });
+}
+
+async function mount(combinedMenu = false, playlists: Playlist[] = []) {
+  function Harness() {
+    const [source, setSource] = useState<RecommendationSource>("ambra");
+    return <SongContextMenu.Provider value={combinedMenu}><HomeView entries={[]} tracks={[]} playlists={playlists} error={null}
+      onAction={(action, tracks, id) => actions.push([action, tracks, id])} onSelectPlaylist={() => {}} onOpenEntity={() => {}}
+      selectedSource={source} onSelectSource={setSource} registerScrollElement={() => {}} /></SongContextMenu.Provider>;
+  }
+  await render(<Harness />);
 }
 
 test("Discover stays last, renders real track cards, and preserves Home empty states", async () => {
@@ -147,11 +158,26 @@ test("late responses and unmounted requests cannot replace newer discoveries", a
   } finally { globalThis.fetch = serverFetch; }
 });
 
-test("Home loads only the selected recommendation source and drops disconnected providers", async () => {
+test("Home groups saved playlists by service and preserves their order within each group", async () => {
+  await mount(false, [
+    { id: "spotify:b", name: "Second in alphabet", trackIds: [], provider: "spotify" },
+    { id: "local", name: "Local playlist", trackIds: [] },
+    { id: "qobuz:a", name: "Qobuz playlist", trackIds: [], provider: "qobuz" },
+    { id: "spotify:a", name: "First in alphabet", trackIds: [], provider: "spotify" },
+  ]);
+  const names = (section: string) => [...container.querySelectorAll(`section[aria-label="${section}"] .homeCardTitle`)]
+    .map(element => element.textContent);
+  expect(names("Your playlists")).toEqual(["Local playlist"]);
+  expect(names("Spotify playlists")).toEqual(["Second in alphabet", "First in alphabet"]);
+  expect(names("Qobuz playlists")).toEqual(["Qobuz playlist"]);
+});
+
+test("Provider shelves open mixes as playlists and releases as albums, then return to the same source", async () => {
   const serverFetch = globalThis.fetch;
   const calls: string[] = [];
-  const album = { id: "qobuz:album", provider: "qobuz", title: "Qobuz release", artist: "Artist", imageUrl: null };
-  const mix = (id: string, title: string) => ({ id, title, imageUrl: null });
+  const album = { id: "qobuz:album", provider: "qobuz", title: "Qobuz release", artist: "Artist", imageUrl: null, releaseDate: "2026-11-21" };
+  const olderAlbum = { ...album, id: "qobuz:older", title: "Older release", releaseDate: "2026-11-20" };
+  const mix = (id: string, title: string, section?: string) => ({ id, title, imageUrl: null, section });
   const tidalTrack = {
     id: "tidal:123", provider: "tidal", providerTrackId: "123", title: "TIDAL recommendation",
     primaryArtist: { name: "Artist" }, artists: [], durationSeconds: 180,
@@ -159,6 +185,7 @@ test("Home loads only the selected recommendation source and drops disconnected 
   };
   let spotifyReply!: (value: Response) => void;
   let spotifySignal: AbortSignal | null | undefined;
+  let mixAttempts = 0;
   globalThis.fetch = ((url, init) => {
     const path = String(url).split("/api/")[1];
     if (path === "providers/spotify/recommendations") {
@@ -168,31 +195,44 @@ test("Home loads only the selected recommendation source and drops disconnected 
     }
     if (path === "providers/tidal/recommendations") {
       calls.push(path);
-      return Promise.resolve(Response.json({ mixes: [mix("discovery", "Daily Discovery")], albums: [] }));
+      return Promise.resolve(Response.json({ mixes: [
+        mix("discovery", "Daily Discovery", "Discovery"), mix("daily", "My Mix 1", "Daily mixes"),
+      ], albums: [] }));
     }
     if (path === "providers/tidal/recommendations/discovery") {
       calls.push(path);
+      if (++mixAttempts === 1) return Promise.resolve(new Response(null, { status: 502 }));
       return Promise.resolve(Response.json([tidalTrack]));
     }
     if (path === "providers/qobuz/recommendations") {
       calls.push(path);
-      return Promise.resolve(Response.json({ mixes: [mix("weekly", "WeeklyQ")], albums: [album] }));
+      return Promise.resolve(Response.json({ mixes: [mix("weekly", "WeeklyQ")], albums: [olderAlbum, album] }));
+    }
+    if (path === "providers/qobuz/albums/album/tracks") {
+      calls.push(path);
+      return Promise.resolve(Response.json({ tracks: [{
+        ...tidalTrack, id: "qobuz:456", provider: "qobuz", providerTrackId: "456", title: "Release song",
+        playback: { kind: "direct", url: "/api/providers/qobuz/tracks/456/stream" },
+      }] }));
     }
     return serverFetch(url, init);
   }) as typeof fetch;
   updateServiceAvailability({ tidal: true, qobuz: true, spotify: true });
   next = { ...next, tracks: [track], status: "ready" };
   try {
-    await mount();
-    const select = container.querySelector("select")!;
+    savePreferences({ ...defaultPreferences, ui: { ...defaultPreferences.ui, reduceMotion: true } });
+    await render(<App localOnly />);
+    const select = () => container.querySelector<HTMLSelectElement>('select[aria-label="Recommendation source"]')!;
     const choose = (value: string) => act(async () => {
-      select.value = value;
-      select.dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
+      select().value = value;
+      select().dispatchEvent(new dom.Event("change", { bubbles: true }) as unknown as Event);
     });
+    const card = (section: string) => container.querySelector<HTMLButtonElement>(`section[aria-label="${section}"] .homeCardButton`)!;
+    const back = () => act(async () => { container.querySelector<HTMLButtonElement>(".browseBack")!.click(); });
     const ambraCalls = discoverCalls;
     expect(container.querySelector("h1")?.textContent).toBe("Home");
-    expect(select.value).toBe("ambra");
-    expect([...select.options].map(option => option.text)).toEqual(["Ambra", "Spotify", "TIDAL", "Qobuz"]);
+    expect(select().value).toBe("ambra");
+    expect([...select().options].map(option => option.text)).toEqual(["Ambra", "Spotify", "TIDAL", "Qobuz"]);
     expect(calls).toEqual([]);
 
     await choose("spotify");
@@ -204,20 +244,37 @@ test("Home loads only the selected recommendation source and drops disconnected 
     expect(container.textContent).toContain("Daily Discovery");
     expect(calls).toEqual(["providers/spotify/recommendations", "providers/tidal/recommendations"]);
 
-    const tidalMix = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Daily Discovery"))!;
-    await act(async () => { tidalMix.click(); });
+    expect(card("Daily mixes").querySelector(".homeCardTitle")?.textContent).toBe("My Mix 1");
+    await act(async () => { card("Discovery").click(); });
     expect(calls.at(-1)).toEqual("providers/tidal/recommendations/discovery");
-    expect(container.textContent).toContain("TIDAL recommendation");
+    const mixPage = container.querySelector(".playlistView")!;
+    expect(mixPage.querySelector("h1")?.textContent).toBe("Daily Discovery");
+    const retry = mixPage.querySelector<HTMLButtonElement>('[role="alert"] button')!;
+    await act(async () => { retry.click(); });
+    expect(mixPage.textContent).toContain("TIDAL recommendation");
+    expect(mixPage.querySelector<HTMLButtonElement>(".libraryPlayBtn")?.disabled).toBe(false);
+    expect(mixPage.querySelector<HTMLButtonElement>(".libraryShuffleBtn")?.disabled).toBe(false);
+    await back();
+    expect(select().value).toBe("tidal");
+    expect(card("Discovery").querySelector(".homeCardTitle")?.textContent).toBe("Daily Discovery");
 
     await choose("qobuz");
     expect(container.textContent).toContain("WeeklyQ");
     expect(container.textContent).toContain("Qobuz release");
     expect(container.textContent).not.toContain("TIDAL recommendation");
     expect(discoverCalls).toBe(ambraCalls);
+    expect([...container.querySelectorAll('section[aria-label="Release Watch"] .homeCardTitle')]
+      .map(element => element.textContent)).toEqual(["Qobuz release", "Older release"]);
+    await act(async () => { card("Release Watch").click(); });
+    expect(calls.at(-1)).toBe("providers/qobuz/albums/album/tracks");
+    expect(container.querySelector(".albumView h1")?.textContent).toBe("Qobuz release");
+    expect(container.querySelector(".albumView")?.textContent).toContain("Release song");
+    await back();
+    expect(select().value).toBe("qobuz");
 
     await act(async () => { updateServiceAvailability({ tidal: true, qobuz: false, spotify: false }); });
-    expect([...select.options].map(option => option.text)).toEqual(["Ambra", "TIDAL"]);
-    expect(select.value).toBe("ambra");
+    expect([...select().options].map(option => option.text)).toEqual(["Ambra", "TIDAL"]);
+    expect(select().value).toBe("ambra");
     expect(container.textContent).toContain("Discovery Song");
     expect(container.textContent).not.toContain("WeeklyQ");
   } finally {

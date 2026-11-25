@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 const MADE_FOR_YOU: &str = "spotify:section:0JQ5DAUnp4wcj0bCb3wh3S";
 const TOP_MIXES: &str = "spotify:section:0JQ5DAnM3wGh0gz1MXnu89";
+const MADE_FOR_YOU_TITLE: &str = "Made for you";
 const HOME_SECTION_HASH: &str = "eb3fba2d388cf4fc4d696b1757a58584e9538a3b515ea742e9cc9465807340be";
 const DAYLIST: &str = "37i9dQZF1EP6YuccBxUcC1";
 const SPOTIFY_DJ: &str = "37i9dQZF1EYkqdzj48dyYq";
@@ -28,32 +29,33 @@ impl SpotifyProvider {
                 let (mut mixes, top_mixes) = tokio::try_join!(
                     self.recommendation_section(
                         MADE_FOR_YOU,
+                        MADE_FOR_YOU_TITLE,
                         &token.access_token,
                         &client_token,
                         &context
                     ),
                     self.recommendation_section(
                         TOP_MIXES,
+                        "Top mixes",
                         &token.access_token,
                         &client_token,
                         &context
                     ),
                 )?;
-                let mut seen: HashSet<String> = mixes.iter().map(|mix| mix.id.clone()).collect();
-                mixes.extend(
-                    top_mixes
-                        .into_iter()
-                        .filter(|mix| seen.insert(mix.id.clone())),
-                );
+                // Keep shared cards in the more specific Top mixes shelf.
+                let top_ids: HashSet<_> = top_mixes.iter().map(|mix| mix.id.as_str()).collect();
+                mixes.retain(|mix| !top_ids.contains(mix.id.as_str()));
+                mixes.extend(top_mixes);
                 // Spotify exposes daylist at a stable entry point, even on
                 // accounts where it is absent from the Home shelves.
-                if !seen.contains(DAYLIST) {
+                if !mixes.iter().any(|mix| mix.id == DAYLIST) {
                     mixes.insert(
                         0,
                         Mix {
                             id: DAYLIST.into(),
                             title: "daylist".into(),
                             image_url: None,
+                            section: MADE_FOR_YOU_TITLE,
                         },
                     );
                 }
@@ -151,6 +153,7 @@ impl SpotifyProvider {
     async fn recommendation_section(
         &self,
         section: &str,
+        title: &'static str,
         token: &str,
         client_token: &str,
         context: &str,
@@ -184,7 +187,7 @@ impl SpotifyProvider {
                 .error_for_status()?
                 .json()
                 .await?;
-            let (page, count, more) = section_page(&value, offset)?;
+            let (page, count, more) = section_page(&value, offset, title)?;
             mixes.extend(page.into_iter().filter(|mix| seen.insert(mix.id.clone())));
             if !more {
                 return Ok(mixes);
@@ -195,7 +198,11 @@ impl SpotifyProvider {
     }
 }
 
-fn section_page(value: &Value, offset: usize) -> ProviderResult<(Vec<Mix>, usize, bool)> {
+fn section_page(
+    value: &Value,
+    offset: usize,
+    title: &'static str,
+) -> ProviderResult<(Vec<Mix>, usize, bool)> {
     let invalid = || io::Error::other("Spotify did not return a personalized Home shelf");
     if value.get("errors").is_some_and(|errors| {
         !errors.is_null() && errors.as_array().is_none_or(|errors| !errors.is_empty())
@@ -221,7 +228,7 @@ fn section_page(value: &Value, offset: usize) -> ProviderResult<(Vec<Mix>, usize
                 .and_then(Value::as_u64)
                 .map(|n| sum + n)
         });
-        mixes.extend(items.iter().filter_map(playlist));
+        mixes.extend(items.iter().filter_map(|item| playlist(item, title)));
     }
     let more = count > 0
         && total.map_or(count == PAGE_SIZE, |total| {
@@ -230,7 +237,7 @@ fn section_page(value: &Value, offset: usize) -> ProviderResult<(Vec<Mix>, usize
     Ok((mixes, count, more))
 }
 
-fn playlist(item: &Value) -> Option<Mix> {
+fn playlist(item: &Value, section: &'static str) -> Option<Mix> {
     let data = item.pointer("/content/data")?;
     if data.get("__typename")?.as_str()? != "Playlist" {
         return None;
@@ -263,6 +270,7 @@ fn playlist(item: &Value) -> Option<Mix> {
         id: id.to_owned(),
         title,
         image_url,
+        section,
     })
 }
 
@@ -292,13 +300,21 @@ mod tests {
                 {"content": {"data": {"__typename": "Album", "name": "Ignored"}}}
             ]
         }}]}}});
-        let (mixes, count, more) = section_page(&body, 4).unwrap();
+        let (mixes, count, more) = section_page(&body, 4, MADE_FOR_YOU_TITLE).unwrap();
         assert_eq!(
             mixes.iter().map(|mix| mix.id.as_str()).collect::<Vec<_>>(),
             [DAYLIST]
         );
+        assert_eq!(mixes[0].section, MADE_FOR_YOU_TITLE);
         assert_eq!(count, 3);
         assert!(more);
-        assert!(section_page(&json!({"errors": [{"message": "Unavailable"}]}), 0).is_err());
+        assert!(
+            section_page(
+                &json!({"errors": [{"message": "Unavailable"}]}),
+                0,
+                "Top mixes"
+            )
+            .is_err()
+        );
     }
 }

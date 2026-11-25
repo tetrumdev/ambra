@@ -50,10 +50,6 @@
     margin: -20px 30px 28px;
 }
 
-.homeCardButton[aria-pressed="true"] .homeArtwork {
-    box-shadow: 0 0 0 2px currentColor;
-}
-
 .homeSection {
     margin: 0 0 28px;
     min-width: 0;

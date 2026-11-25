@@ -69,7 +69,7 @@ const release = (source: CatalogArtist, title = "Shared album"): Albums => ({
 });
 async function mount(source: CatalogArtist) {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-  const props: EntityViewProps = {
+  const props: EntityViewProps<"artist"> = {
     entity: { kind: "artist", artist: source }, cache: new Map(), libraryTracks: [],
     onBack: () => {}, onOpenEntity: () => {}, onAction: () => {}, onAddTrack: () => {}, onAddTracks: () => {},
     rememberTracks: () => {}, registerScrollElement: () => {}, playlistOptions: {} as EntityViewProps["playlistOptions"],

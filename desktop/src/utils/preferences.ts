@@ -147,12 +147,13 @@ function readNavigation(value: unknown): NavigationPreferences | undefined {
   let entity: BrowseEntity | null = null;
   if (isRecord(value.entity)) {
     const candidate = value.entity.kind === "album" ? value.entity.album
-      : value.entity.kind === "artist" ? value.entity.artist : null;
+      : value.entity.kind === "artist" ? value.entity.artist
+      : value.entity.kind === "mix" ? value.entity.mix : null;
     if (isRecord(candidate) && typeof candidate.id === "string"
       && ["local", "tidal", "qobuz", "spotify"].includes(String(candidate.provider))
       && (candidate.imageUrl === null || typeof candidate.imageUrl === "string")
-      && (value.entity.kind === "album"
-        ? typeof candidate.title === "string" && typeof candidate.artist === "string"
+      && (value.entity.kind === "album" ? typeof candidate.title === "string" && typeof candidate.artist === "string"
+        : value.entity.kind === "mix" ? typeof candidate.title === "string" && candidate.provider !== "local"
         : typeof candidate.name === "string")) {
       entity = value.entity as BrowseEntity;
     }

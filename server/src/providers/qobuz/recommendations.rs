@@ -19,6 +19,7 @@ impl QobuzProvider {
                     .map(|mix| Mix {
                         id: mix.kind,
                         title: mix.title,
+                        section: "Your mixes",
                         image_url: mix
                             .images
                             .get("small")
@@ -35,9 +36,11 @@ impl QobuzProvider {
                             id: GENERATED_DAILY.into(),
                             title: "Daily suggestions".into(),
                             image_url: None,
+                            section: "Your mixes",
                         },
                     );
                 }
+                mixes.sort_by_key(|mix| mix.id == "weekly");
                 // Release Watch is personalized to the artists followed on this account.
                 let albums = match releases {
                     Ok(releases) => releases

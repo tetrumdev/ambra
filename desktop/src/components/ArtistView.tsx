@@ -13,7 +13,7 @@ import { AboutDialog } from "./AboutDialog";
 import type { EntityViewProps } from "./EntityView";
 import "./ArtistView.css";
 
-export function ArtistView({ artist, ...props }: EntityViewProps & { artist: CatalogArtist }) {
+export function ArtistView({ artist, ...props }: EntityViewProps<"artist"> & { artist: CatalogArtist }) {
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
   const initialProfile = cached?.profile ?? cachedArtistProfile(artist);

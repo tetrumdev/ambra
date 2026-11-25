@@ -40,8 +40,9 @@ export type EntityPage = {
 /** "nextAll" plays every given song next, in order; "next" only the chosen one. */
 export type EntityAction = "play" | "standalone" | "queue" | "next" | "nextAll" | "shuffle";
 const albumExcludedColumns: readonly ColumnKey[] = ["album", "quality", "year", "genre"];
-export type EntityViewProps = {
-  entity: BrowseEntity;
+type CatalogEntity = Exclude<BrowseEntity, { kind: "mix" }>;
+export type EntityViewProps<Kind extends CatalogEntity["kind"] = CatalogEntity["kind"]> = {
+  entity: Extract<CatalogEntity, { kind: Kind }>;
   cache: Map<string, EntityPage>;
   libraryTracks: Track[];
   onBack: () => void;
@@ -57,15 +58,15 @@ export type EntityViewProps = {
 // Skip rebuilding the catalog page on unrelated app updates.
 export const EntityView = memo(function EntityView(props: EntityViewProps) {
   return props.entity.kind === "artist" ? (
-    <ArtistView {...props} artist={props.entity.artist} />
+    <ArtistView {...props} entity={props.entity} artist={props.entity.artist} />
   ) : (
-    <AlbumView {...props} album={props.entity.album} />
+    <AlbumView {...props} entity={props.entity} album={props.entity.album} />
   );
 });
 function AlbumView({
   album,
   ...props
-}: EntityViewProps & { album: CatalogAlbum }) {
+}: EntityViewProps<"album"> & { album: CatalogAlbum }) {
   const columns = useTrackColumns();
   const key = entityKey(props.entity);
   const cached = props.cache.get(key);
@@ -77,7 +78,7 @@ function AlbumView({
     () => new Set(saved.map((track) => track.globalId)),
     [saved],
   );
-  const [showEntire, setEntire] = useState(cached?.entire ?? !saved.length);
+  const [showEntire, setEntire] = useState(props.entity.fromRecommendations === true || (cached?.entire ?? !saved.length));
   const entire = showEntire || !saved.length;
   const [catalogTracks, setCatalogTracks] = useState<Track[] | undefined>(
     cached?.tracks,

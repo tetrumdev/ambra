@@ -817,7 +817,7 @@ export async function loadDiscover(signal: AbortSignal): Promise<DiscoverRespons
   return { ...value, tracks: value.tracks.map(track => "globalId" in track ? JSON.parse(fromStorage(JSON.stringify(track))) as Track : playableTrack(track)) };
 }
 
-export type RecommendationMix = { id: string; title: string; imageUrl: string | null };
+export type RecommendationMix = { id: string; title: string; imageUrl: string | null; section?: string };
 export type ProviderRecommendations = { mixes: RecommendationMix[]; albums: CatalogAlbum[] };
 
 async function recommendationResponse(provider: StreamingProvider, signal: AbortSignal, id?: string) {

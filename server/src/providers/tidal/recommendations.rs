@@ -125,12 +125,12 @@ fn personalized_mix(item: &Value) -> Option<Mix> {
         return None;
     }
     let data = item.get("data")?;
-    if !matches!(
-        data.get("type")?.as_str()?,
-        "DISCOVERY_MIX" | "DAILY_MIX" | "NEW_RELEASE_MIX"
-    ) {
-        return None;
-    }
+    let section = match data.get("type")?.as_str()? {
+        "DISCOVERY_MIX" => "Discovery",
+        "DAILY_MIX" => "Daily mixes",
+        "NEW_RELEASE_MIX" => "New releases",
+        _ => return None,
+    };
     let id = data.get("id")?.as_str()?.to_owned();
     let title = data.pointer("/titleTextInfo/text")?.as_str()?.to_owned();
     let image_url = data
@@ -150,6 +150,7 @@ fn personalized_mix(item: &Value) -> Option<Mix> {
         id,
         title,
         image_url,
+        section,
     })
 }
 
@@ -160,10 +161,10 @@ mod tests {
 
     #[test]
     fn reads_the_three_personal_mix_types_from_the_current_web_shape() {
-        for (kind, title) in [
-            ("DISCOVERY_MIX", "My Daily Discovery"),
-            ("DAILY_MIX", "My Mix 1"),
-            ("NEW_RELEASE_MIX", "My New Arrivals"),
+        for (kind, title, section) in [
+            ("DISCOVERY_MIX", "My Daily Discovery", "Discovery"),
+            ("DAILY_MIX", "My Mix 1", "Daily mixes"),
+            ("NEW_RELEASE_MIX", "My New Arrivals", "New releases"),
         ] {
             let card = json!({"type": "MIX", "data": {
                 "type": kind, "id": "mix", "titleTextInfo": {"text": title},
@@ -172,6 +173,7 @@ mod tests {
             }});
             let mix = personalized_mix(&card).unwrap();
             assert_eq!(mix.title, title);
+            assert_eq!(mix.section, section);
             assert_eq!(
                 mix.image_url.as_deref(),
                 Some("https://image.example/medium")

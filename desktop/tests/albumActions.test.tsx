@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { AlbumActions } from "../src/components/AlbumActions";
 import type { EntityAction } from "../src/components/EntityView";
+import type { PlaylistMenuOptions } from "../src/components/TrackCollectionMenu";
 import type { Track } from "../src/types/music";
 
 const dom = new Window({ url: "http://localhost/" });
@@ -49,8 +50,10 @@ test("the album menu adds the whole album to a playlist", async () => {
   const added: [string, string[]][] = [];
   const host = document.createElement("div"); document.body.append(host);
   const root = createRoot(host);
-  const playlistOptions = {
+  const playlistOptions: PlaylistMenuOptions = {
     playlists: [{ id: "mix", name: "Mix", trackIds: [] }],
+    groups: { ambra: true, spotify: true, qobuz: true, tidal: true },
+    onToggleGroup: () => {},
     onAdd: () => false, onCreate: () => false, onCreateWithTracks: () => false,
     onAddTracks: (id: string, list: Track[]) => { added.push([id, list.map(track => track.globalId)]); return true; },
   };

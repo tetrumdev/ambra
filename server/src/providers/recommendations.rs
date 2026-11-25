@@ -14,6 +14,7 @@ pub struct Mix {
     pub id: String,
     pub title: String,
     pub image_url: Option<String>,
+    pub section: &'static str,
 }
 
 #[derive(Clone, Default, Serialize)]

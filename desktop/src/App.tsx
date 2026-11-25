@@ -8,7 +8,7 @@ import { entityKey } from "./utils/browse";
 
 //Components
 import { LibraryView } from "./components/LibraryView";
-import { HomeView } from "./components/HomeView";
+import { HomeView, type RecommendationSource } from "./components/HomeView";
 import { Sidebar } from "./components/Sidebar";
 import { PlaybackSidebar } from "./components/PlaybackSidebar";
 import { AppScrollbar } from "./components/AppScrollbar";
@@ -21,6 +21,7 @@ import { SearchBar } from "./components/SearchBar";
 import { PlayerStage } from "./components/PlayerStage";
 import { SearchView } from "./components/SearchView";
 import { PlaylistView } from "./components/PlaylistView";
+import { AlbumArtwork } from "./components/AlbumArtwork";
 import { SettingsView } from "./components/SettingsView";
 import { SettingsSidebar } from "./components/SettingsSidebar";
 
@@ -53,7 +54,8 @@ import {
 } from "./utils/preferences";
 import { orderPlaylists } from "./utils/playlistOrder";
 import type { GlobalTrackId, Playlist, Track } from "./types/music";
-import { configuredSearchProviders, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
+import { configuredSearchProviders, loadRecommendationMix, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
+import { useRecommendationRequest } from "./hooks/useRecommendationRequest";
 import {
   collectionQueueContext,
   libraryQueueContext,
@@ -102,6 +104,11 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
   // Rerenders when a service connects or drops, so what the pages offer stays current.
   const services = useServiceAvailability();
   const [preferences, setPreferences] = useState(loadPreferences);
+  const [recommendationSource, setRecommendationSource] = useState<RecommendationSource>(() => {
+    const entity = preferences.ui.navigation?.entity;
+    if (entity?.kind === "album" && entity.fromRecommendations && entity.album.provider !== "local") return entity.album.provider;
+    return entity?.kind === "mix" ? entity.mix.provider : "ambra";
+  });
   useSettingsProfile(setPreferences);
   // Applied while rendering, before any child's effects read it.
   setReducedMotion(preferences.ui.reduceMotion);
@@ -328,7 +335,24 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     [homePlaylists, addTrackToPlaylist, createPlaylistWithTrack, addTracksToPlaylist, createPlaylistWithTracks, preferences.ui.playlistPickerGroups, togglePickerGroup],
   );
 
-  const selectedPlaylist = playlists.find((playlist) => {
+  const mix = browseEntity?.kind === "mix" ? browseEntity.mix : null;
+  const mixConnected = mix ? services?.[mix.provider] : undefined;
+  const loadMix = useMemo(() => {
+    if (!mix || mixConnected !== true) return null;
+    return (signal: AbortSignal) => loadRecommendationMix(mix.provider, mix.id, signal);
+  }, [mix, mixConnected]);
+  const { value: mixTracks, error: mixError, retry: retryMix } = useRecommendationRequest(loadMix);
+  useEffect(() => {
+    if (mixTracks?.length) rememberTracks(mixTracks);
+  }, [mixTracks, rememberTracks]);
+  const mixPlaylist = useMemo<Playlist | null>(() => mix && ({
+    id: `recommendation:${mix.provider}:${mix.id}`,
+    name: mix.title,
+    provider: mix.provider,
+    editable: false,
+    trackIds: mixTracks?.map(track => track.globalId) ?? [],
+  }), [mix, mixTracks]);
+  const selectedPlaylist = mixPlaylist ?? playlists.find((playlist) => {
     return playlist.id === selectedPlaylistId;
   });
   // The app often opens before the server answers, so a saved playlist can't be found yet. Its
@@ -351,6 +375,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     : selectedPlaylist || playlistPending ? `playlist:${selectedPlaylistId}`
     : `library:${librarySection}`;
   const { mainRef, activeScrollElement, registerScrollElement, pageFilter } = usePageLayout(viewKey, isPlayerView);
+  const backFromRecommendation = useCallback(() => { if (!goBack()) openHome(); }, [goBack, openHome]);
 
   const collectionSortKey = selectedPlaylist
     ? `playlist:${selectedPlaylist.id}`
@@ -358,8 +383,8 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
   const collectionSort = collectionSorts[collectionSortKey] ?? null;
   // Kept between renders: every list under it compares this array to skip its own work.
   const baseCollectionTracks = useMemo(
-    () => selectedPlaylist ? playlistTracks(selectedPlaylist, availableTracks) : library.tracks,
-    [selectedPlaylist, availableTracks, library.tracks],
+    () => mixPlaylist ? mixTracks ?? [] : selectedPlaylist ? playlistTracks(selectedPlaylist, availableTracks) : library.tracks,
+    [mixPlaylist, mixTracks, selectedPlaylist, availableTracks, library.tracks],
   );
   const collectionPackages = selectedPlaylist?.packages;
   const collectionStats = collectionSort?.key === "plays" || collectionSort?.key === "lastPlayed"
@@ -381,9 +406,10 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
       }, collectionPackages)
     : libraryQueueContext(collection.tracks);
 
-  const duplicatePlaylist = (playlist: Playlist) => {
-    const id = playlistStore.duplicate(playlist.name, playlistTracks(playlist, availableTracks));
-    if (id) setSelectedPlaylistId(id);
+  const duplicatePlaylist = () => {
+    if (!selectedPlaylist) return;
+    const id = playlistStore.duplicate(selectedPlaylist.name, baseCollectionTracks);
+    if (id) selectPlaylist(id);
   };
   const isServicePlaylist = (id: string) => servicePlaylistStore.playlists.some(playlist => playlist.id === id);
   const renamePlaylist = (id: string, name: string) =>
@@ -626,8 +652,9 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
               ...current, ui: { ...current.ui, servicePlaylistVisibility: { ...current.ui.servicePlaylistVisibility, [provider]: visible } },
             }))}
           />
-        ) : browseEntity ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
-          onBack={goBack} onOpenEntity={openEntity} onAction={onEntityAction}
+        ) : browseEntity && browseEntity.kind !== "mix" ? <EntityView key={browseContextKey} entity={browseEntity} cache={browseCache.current} libraryTracks={library.tracks}
+          onBack={browseEntity.kind === "album" && browseEntity.fromRecommendations ? backFromRecommendation : goBack}
+          onOpenEntity={openEntity} onAction={onEntityAction}
           onAddTrack={addEntityTrack} onAddTracks={addEntityTracks}
           rememberTracks={rememberTracks} playlistOptions={playlistOptions} registerScrollElement={registerScrollElement} /> : isSearchView ? (
           <SearchView
@@ -666,15 +693,27 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
         ) : isHomeView ? (
           <HomeView entries={listeningHistory.entries} tracks={availableTracks} playlists={homePlaylists}
             error={listeningHistory.error} onAction={onEntityAction}
-            onSelectPlaylist={selectPlaylist} onSelectAlbum={album => openEntity({ kind: "album", album })}
+            onSelectPlaylist={selectPlaylist} onOpenEntity={openEntity}
+            selectedSource={recommendationSource} onSelectSource={setRecommendationSource}
             registerScrollElement={registerScrollElement} />
         ) : selectedPlaylist ? (
           <PlaylistView
             key={selectedPlaylist.id}
             playlist={selectedPlaylist}
             artworkTracks={baseCollectionTracks}
+            headerArtwork={mix?.imageUrl ? <AlbumArtwork src={mix.imageUrl} title={mix.title} /> : undefined}
+            headerNavigation={mix && <button type="button" className="browseBack" onClick={backFromRecommendation}>Back</button>}
+            headerContent={mix && (mixError ? (
+              <p className="entityStatus" role="alert">
+                Could not load this mix. <button type="button" className="entityLink" onClick={retryMix}>Retry</button>
+              </p>
+            ) : !mixTracks?.length && (
+              <p className="entityStatus" role="status">{mixConnected === false ? "Reconnect this music service to load the mix."
+                : mixTracks ? "No playable songs are available yet." : "Loading songs…"}</p>
+            ))}
+            summary={mix && !mixTracks ? null : undefined}
             onRename={selectedPlaylist.editable === false ? undefined : renamePlaylist}
-            onDuplicate={() => duplicatePlaylist(selectedPlaylist)}
+            onDuplicate={!mix || baseCollectionTracks.length ? duplicatePlaylist : undefined}
             onDelete={selectedPlaylist.editable === false ? undefined : deletePlaylist}
             savedTrackIds={libraryTrackIds}
             addToLibrary={id => { const track = baseCollectionTracks.find(track => track.globalId === id); if (track) addEntityTrack(track); }}

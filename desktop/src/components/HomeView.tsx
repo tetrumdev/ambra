@@ -8,13 +8,9 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
-import { ProviderIcon } from "./ProviderIcon";
 import { ArtworkImage } from "./ArtworkImage";
 import { DropdownChevron } from "./DropdownChevron";
-import {
-  loadProviderRecommendations, loadRecommendationMix,
-  type CatalogAlbum, type RecommendationMix, type StreamingProvider,
-} from "../api/server";
+import { loadProviderRecommendations, type RecommendationMix, type StreamingProvider } from "../api/server";
 import type { Playlist, Track } from "../types/music";
 import type { ListeningEntry } from "../hooks/useListeningHistory";
 import { TrackArtwork } from "./TrackArtwork";
@@ -24,12 +20,16 @@ import { isTrackAvailable, useServiceAvailability, useServiceStatus } from "../h
 import type { EntityAction } from "./EntityView";
 import "./HomeView.css";
 import { useDiscover } from "../hooks/useDiscover";
+import { useRecommendationRequest } from "../hooks/useRecommendationRequest";
+import type { BrowseEntity } from "../utils/browse";
 import { reducedMotion } from "../utils/reducedMotion";
 
 const monthMs = 30 * 24 * 60 * 60 * 1000;
 const rowLimit = 12;
 const recommendationProviders = { spotify: "Spotify", tidal: "TIDAL", qobuz: "Qobuz" } satisfies Record<StreamingProvider, string>;
-type RecommendationSource = "ambra" | StreamingProvider;
+export type RecommendationSource = "ambra" | StreamingProvider;
+const providers = Object.keys(recommendationProviders) as StreamingProvider[];
+const playlistSources = ["ambra", ...providers] as const;
 
 function HomeRow({
   title,
@@ -40,7 +40,7 @@ function HomeRow({
 }: {
   title: string;
   empty: string;
-  children: ReactNode;
+  children?: ReactNode;
   hasItems: boolean;
   loading?: boolean;
 }) {
@@ -202,31 +202,15 @@ function SongCards({
   );
 }
 
-function useRecommendationRequest<T>(load: (signal: AbortSignal) => Promise<T>) {
-  const [result, setResult] = useState<{ value?: T; error?: boolean }>({});
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    void load(controller.signal).then(value => {
-      if (!controller.signal.aborted) setResult({ value });
-    }).catch(() => {
-      if (!controller.signal.aborted) setResult({ error: true });
-    });
-    return () => controller.abort();
-  }, [load, attempt]);
-  return { ...result, retry: () => { setResult({}); setAttempt(attempt + 1); } };
-}
-
-function RecommendationCard({ title, imageUrl, selected, onClick, detail }: {
+function RecommendationCard({ title, imageUrl, onClick, detail }: {
   title: string;
   imageUrl: string | null;
-  selected?: boolean;
   onClick: () => void;
   detail?: string;
 }) {
   return (
     <li className="homeCard">
-      <button type="button" className="homeCardButton" onClick={onClick} aria-pressed={selected}>
+      <button type="button" className="homeCardButton" onClick={onClick}>
         <div className="homeArtwork">
           {imageUrl
             ? <ArtworkImage src={imageUrl} alt="" />
@@ -239,50 +223,44 @@ function RecommendationCard({ title, imageUrl, selected, onClick, detail }: {
   );
 }
 
-function RecommendationMixRow({ mix, provider, onAction }: {
-  mix: RecommendationMix; provider: StreamingProvider; onAction: OnAction;
-}) {
-  const load = useCallback((signal: AbortSignal) => loadRecommendationMix(provider, mix.id, signal), [provider, mix.id]);
-  const { value, error, retry } = useRecommendationRequest(load);
-  return (
-    <>
-      <HomeRow title={mix.title}
-        empty={error ? "Could not load this mix." : value ? "No playable songs are available yet." : "Loading songs…"}
-        hasItems={Boolean(value?.length)} loading={!value && !error}>
-        <SongCards tracks={value ?? []} onAction={onAction} />
-      </HomeRow>
-      {error && <button className="homeRetry" type="button" onClick={retry}>Retry mix</button>}
-    </>
-  );
-}
-
-function ProviderHome({ provider, onAction, onSelectAlbum }: {
-  provider: StreamingProvider; onAction: OnAction; onSelectAlbum: (album: CatalogAlbum) => void;
+function ProviderHome({ provider, onOpenEntity }: {
+  provider: StreamingProvider; onOpenEntity: (entity: BrowseEntity) => void;
 }) {
   const load = useCallback((signal: AbortSignal) => loadProviderRecommendations(provider, signal), [provider]);
   const { value, error, retry } = useRecommendationRequest(load);
-  const [mix, setMix] = useState<RecommendationMix | null>(null);
+  const defaultSection = provider === "qobuz" ? "Your mixes" : "Made for you";
+  const sections = new Map<string, RecommendationMix[]>();
+  for (const mix of value?.mixes ?? []) {
+    const title = mix.section || defaultSection;
+    const section = sections.get(title);
+    if (section) section.push(mix);
+    else sections.set(title, [mix]);
+  }
+  const albums = (value?.albums ?? []).filter(album => album.provider === provider)
+    .sort((a, b) => (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "") || a.title.localeCompare(b.title));
   return (
     <>
-      <HomeRow
-        title={provider === "qobuz" ? "Your mixes" : "Made for you"}
+      {!sections.size && <HomeRow
+        title={defaultSection}
         empty={error ? `Could not load ${recommendationProviders[provider]} recommendations.`
           : value ? "Your personalized mixes will appear here when available." : "Loading recommendations…"}
-        hasItems={Boolean(value?.mixes.length)}
+        hasItems={false}
         loading={!value && !error}
-      >
-        {value?.mixes.map(item => (
-          <RecommendationCard key={item.id} title={item.title} imageUrl={item.imageUrl}
-            selected={mix?.id === item.id} onClick={() => setMix(mix?.id === item.id ? null : item)} />
-        ))}
-      </HomeRow>
+      />}
+      {[...sections].map(([title, mixes]) => (
+        <HomeRow key={title} title={title} empty="" hasItems>
+          {mixes.map(mix => (
+            <RecommendationCard key={mix.id} title={mix.title} imageUrl={mix.imageUrl}
+              onClick={() => onOpenEntity({ kind: "mix", mix: { ...mix, provider } })} />
+          ))}
+        </HomeRow>
+      ))}
       {error && <button className="homeRetry" type="button" onClick={retry}>Retry recommendations</button>}
-      {mix && <RecommendationMixRow key={mix.id} mix={mix} provider={provider} onAction={onAction} />}
-      {Boolean(value?.albums.length) && (
-        <HomeRow title="Release Watch" empty="" hasItems>
-          {value?.albums.filter(album => album.provider === provider).map(album => (
+      {albums.length > 0 && (
+        <HomeRow title={provider === "qobuz" ? "Release Watch" : "Recommended albums"} empty="" hasItems>
+          {albums.map(album => (
             <RecommendationCard key={album.id} title={album.title} imageUrl={album.imageUrl}
-              detail={album.artist} onClick={() => onSelectAlbum(album)} />
+              detail={album.artist} onClick={() => onOpenEntity({ kind: "album", album, fromRecommendations: true })} />
           ))}
         </HomeRow>
       )}
@@ -299,16 +277,17 @@ type AmbraHomeProps = {
   onSelectPlaylist: (id: string) => void;
 };
 
-export function HomeView({ registerScrollElement, onSelectAlbum, ...props }: AmbraHomeProps & {
+export function HomeView({ registerScrollElement, onOpenEntity, selectedSource, onSelectSource, ...props }: AmbraHomeProps & {
   registerScrollElement: (element: HTMLDivElement | null) => void;
-  onSelectAlbum: (album: CatalogAlbum) => void;
+  onOpenEntity: (entity: BrowseEntity) => void;
+  selectedSource: RecommendationSource;
+  onSelectSource: (source: RecommendationSource) => void;
 }) {
   const connected = useServiceStatus();
-  const [selected, setSelected] = useState<RecommendationSource>("ambra");
-  const source = selected !== "ambra" && connected?.[selected] ? selected : "ambra";
+  const source = selectedSource !== "ambra" && connected?.[selectedSource] ? selectedSource : "ambra";
   useEffect(() => {
-    if (selected !== source) setSelected(source);
-  }, [selected, source]);
+    if (connected && selectedSource !== source) onSelectSource(source);
+  }, [connected, selectedSource, source, onSelectSource]);
 
   return (
     <div className="libraryView homeView smoothScroll" ref={registerScrollElement}>
@@ -316,9 +295,9 @@ export function HomeView({ registerScrollElement, onSelectAlbum, ...props }: Amb
         <h1 className="libraryTitle">Home</h1>
         <div className="homeSource">
           <select aria-label="Recommendation source" value={source}
-            onChange={event => setSelected(event.currentTarget.value as RecommendationSource)}>
+            onChange={event => onSelectSource(event.currentTarget.value as RecommendationSource)}>
             <option value="ambra">Ambra</option>
-            {(Object.keys(recommendationProviders) as StreamingProvider[]).filter(provider => connected?.[provider]).map(provider => (
+            {providers.filter(provider => connected?.[provider]).map(provider => (
               <option key={provider} value={provider}>{recommendationProviders[provider]}</option>
             ))}
           </select>
@@ -326,7 +305,7 @@ export function HomeView({ registerScrollElement, onSelectAlbum, ...props }: Amb
         </div>
       </header>
       {source === "ambra" ? <AmbraHome {...props} /> : (
-        <ProviderHome key={source} provider={source} onAction={props.onAction} onSelectAlbum={onSelectAlbum} />
+        <ProviderHome key={source} provider={source} onOpenEntity={onOpenEntity} />
       )}
     </div>
   );
@@ -369,65 +348,40 @@ function AmbraHome({ entries, tracks, playlists, error, onAction, onSelectPlayli
       >
         <SongCards tracks={recent} onAction={onAction} />
       </HomeRow>
-      <HomeRow
-        title="Your playlists"
-        empty="Create a playlist or connect a music service to see your playlists here."
-        hasItems={playlists.length > 0}
-      >
-        {playlists.map((playlist) => {
-          const artwork = playlist.trackIds
-            .map((id) => tracksById.get(id))
-            .filter((track): track is Track => Boolean(track))
-            .slice(0, 4);
-          const count = playlist.trackCount ?? playlist.trackIds.length;
-          return (
-            <li className="homeCard" key={playlist.id}>
-              <button
-                className="homeCardButton"
-                type="button"
-                onClick={() => onSelectPlaylist(playlist.id)}
-              >
-                <div
-                  className="homeArtwork homePlaylistArtwork"
-                  aria-hidden="true"
-                >
-                  {artwork.length > 0 ? (
-                    <div className="playlistArtworkGrid">
-                      {Array.from({ length: 4 }, (_, index) =>
-                        artwork[index] ? (
-                          <TrackArtwork
-                            key={index}
-                            track={artwork[index]}
-                            alt=""
-                          />
-                        ) : (
-                          <span key={index} />
-                        ),
-                      )}
+      {playlistSources.map(source => {
+        const group = playlists.filter(playlist => (playlist.provider ?? "ambra") === source);
+        if (!group.length && (source !== "ambra" || playlists.length)) return null;
+        return (
+          <HomeRow key={source} title={source === "ambra" ? "Your playlists" : `${recommendationProviders[source]} playlists`}
+            empty="Create a playlist or connect a music service to see your playlists here."
+            hasItems={group.length > 0}>
+            {group.map(playlist => {
+              const artwork = playlist.trackIds
+                .map(id => tracksById.get(id))
+                .filter((track): track is Track => Boolean(track))
+                .slice(0, 4);
+              const count = playlist.trackCount ?? playlist.trackIds.length;
+              return (
+                <li className="homeCard" key={playlist.id}>
+                  <button className="homeCardButton" type="button" onClick={() => onSelectPlaylist(playlist.id)}>
+                    <div className="homeArtwork homePlaylistArtwork" aria-hidden="true">
+                      {artwork.length > 0 ? (
+                        <div className="playlistArtworkGrid">
+                          {Array.from({ length: 4 }, (_, index) => artwork[index]
+                            ? <TrackArtwork key={index} track={artwork[index]} alt="" />
+                            : <span key={index} />)}
+                        </div>
+                      ) : <span className="homePlaylistPlaceholder">♫</span>}
                     </div>
-                  ) : (
-                    <span className="homePlaylistPlaceholder">♫</span>
-                  )}
-                </div>
-                <span
-                  className="homeCardTitle"
-                  data-tooltip={playlist.name}
-                  data-tooltip-overflow=""
-                >
-                  {playlist.name}
-                </span>
-                <span className="homeCardDetail">
-                  <ProviderIcon
-                    provider={playlist.provider ?? "local"}
-                    label={playlist.provider ? undefined : "AMBRA"}
-                  />{" "}
-                  · {count} {count === 1 ? "song" : "songs"}
-                </span>
-              </button>
-            </li>
-          );
-        })}
-      </HomeRow>
+                    <span className="homeCardTitle" data-tooltip={playlist.name} data-tooltip-overflow="">{playlist.name}</span>
+                    <span className="homeCardDetail">{count} {count === 1 ? "song" : "songs"}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </HomeRow>
+        );
+      })}
       <HomeRow
         title="Haven’t played in a while"
         empty="Songs you last played over 30 days ago will appear here."
