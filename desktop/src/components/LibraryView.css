@@ -628,6 +628,7 @@
 
 .libraryInfo {
     display: flex;
+    align-items: center;
     gap: 15px;
     margin-top: 20px;
     top: 0;
@@ -661,6 +662,8 @@
 
 .separator {
     font-size: 1.8rem;
+    /* Zero line box keeps the oversized glyph centred without growing the row. */
+    line-height: 0;
 }
 
 .columnInfo {

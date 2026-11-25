@@ -31,7 +31,7 @@
         color var(--motion-feedback), filter var(--button-press-time, var(--motion-feedback));
 }
 
-:where(.uiButton, .dropdownTrigger):enabled:active {
+:root:not([data-window-waking]) :where(.uiButton, .dropdownTrigger):enabled:active {
     --button-press-time: var(--motion-press-down);
     filter: brightness(86%);
 }
@@ -94,7 +94,7 @@
     transition: scale var(--icon-press-time, var(--motion-feedback)), filter var(--icon-press-time, var(--motion-feedback));
 }
 
-:root:not([data-reduce-motion]) :where(button):enabled:active {
+:root:not([data-reduce-motion], [data-window-waking]) :where(button):enabled:active {
     --icon-press-scale: 0.82;
     --icon-press-filter: brightness(86%);
     --icon-press-time: var(--motion-press-down);

@@ -28,6 +28,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+      # actool from Xcode 26+ compiles macIcon.icon into the light/dark Assets.car;
+      # older Xcode silently falls back to the dark-only icns.
+      - uses: maxim-lobanov/setup-xcode@v1
+        if: runner.os == 'macOS'
+        with:
+          xcode-version: latest-stable
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.4'

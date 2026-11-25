@@ -1,26 +1,32 @@
 {
-  "fill-specializations" : [
-    {
-      "value" : "system-dark"
-    },
-    {
-      "appearance" : "dark",
-      "value" : "system-dark"
-    }
-  ],
+  "fill" : "system-light",
   "groups" : [
     {
       "layers" : [
         {
-          "fill" : "none",
+          "blend-mode-specializations" : [
+            {
+              "appearance" : "dark",
+              "value" : "normal"
+            }
+          ],
+          "fill-specializations" : [
+            {
+              "value" : "system-dark"
+            },
+            {
+              "appearance" : "dark",
+              "value" : "system-light"
+            }
+          ],
           "glass" : true,
-          "image-name" : "ambraForIcns 2.svg",
-          "name" : "ambraForIcns 2",
+          "image-name" : "ambraWaveform.png",
+          "name" : "ambraWaveform",
           "position" : {
-            "scale" : 1.9,
+            "scale" : 1.15,
             "translation-in-points" : [
-              0.007707041249432223,
-              0.31582375225031
+              0,
+              0
             ]
           }
         }

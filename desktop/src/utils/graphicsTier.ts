@@ -18,11 +18,26 @@ export function setLowGraphics() {
 /**
  * Marks the root `data-window-inactive` while another app has focus, so the glass turns
  * to the low tier's plain surfaces (lowGraphics.css) until the window is active again.
+ *
+ * `data-window-waking` also goes on with it but outlasts the focus change: the click that
+ * activates a macOS window is not delivered as a click, so its press must not animate
+ * either. It clears on the first input that reaches the focused window.
  */
 export function followWindowFocus() {
-  const update = () => document.documentElement.toggleAttribute("data-window-inactive", !document.hasFocus());
+  const root = document.documentElement;
+  const update = () => {
+    const active = document.hasFocus();
+    root.toggleAttribute("data-window-inactive", !active);
+    if (!active) root.setAttribute("data-window-waking", "");
+  };
+  const wake = (event: Event) => {
+    if (!document.hasFocus() || (event instanceof PointerEvent && event.type === "pointermove" && event.buttons)) return;
+    root.removeAttribute("data-window-waking");
+  };
   window.addEventListener("focus", update);
   window.addEventListener("blur", update);
+  // Capture runs before the press is styled, so a real press after waking still animates.
+  for (const type of ["pointerdown", "pointermove", "keydown"]) window.addEventListener(type, wake, true);
   update();
 }
 

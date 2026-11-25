@@ -323,7 +323,7 @@ button.lyricLine:hover {
 .lyricsMessage button:hover {
     background: rgba(255, 255, 255, 0.22);
 }
-.lyricsMessage button:active {
+:root:not([data-window-waking]) .lyricsMessage button:active {
     transform: scale(0.97);
 }
 /* Resume shows while browsing; the sync menu joins it while the lyrics are hovered. */
@@ -404,7 +404,7 @@ button.lyricLine:hover {
 .lyricsSyncTrigger[aria-expanded="true"] {
     opacity: 1;
 }
-:root:not([data-reduce-motion]) :is(.lyricsResume, .lyricsSyncTrigger):active {
+:root:not([data-reduce-motion], [data-window-waking]) :is(.lyricsResume, .lyricsSyncTrigger):active {
     scale: 0.97;
     transition: scale var(--motion-press-down);
 }
