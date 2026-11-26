@@ -206,7 +206,10 @@ export function followPhoneOutput() {
         quiet = false;
         publish({ ...descriptor, ready: true, error: null });
       }
-      void report();
+      // Each second only while this phone plays for the session; otherwise every 3 s keeps it
+      // listed (the server waits 8 s) without holding the radio awake.
+      const playingHere = ownsOutput() && !!sessionView()?.playing;
+      if (playingHere || silence >= 3000) void report();
     }, 1000);
 
     // Keeps the server's clock estimate fresh: every 2 s in a synced group, where milliseconds

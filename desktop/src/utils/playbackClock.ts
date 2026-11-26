@@ -17,8 +17,9 @@ export type PlaybackClock = {
 // small disagreements in, instead of stalling and then jumping to each sample.
 /** Disagreements beyond this are seeks or stalls and are applied at once. */
 const SNAP_SECONDS = 0.35;
-/** Small disagreements are absorbed over this long. Must exceed SNAP_SECONDS to stay monotonic. */
-const CORRECTION_SECONDS = 0.4;
+/** Small disagreements are absorbed over this long. Must exceed SNAP_SECONDS to stay monotonic.
+    Long enough that a report's small correction doesn't visibly speed up or slow down the playhead. */
+const CORRECTION_SECONDS = 1;
 /** Without any sample for this long, the clock stops rather than run past a stall. */
 const MAX_EXTRAPOLATION_SECONDS = 1.5;
 

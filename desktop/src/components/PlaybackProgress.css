@@ -78,7 +78,9 @@
     /* The new song's bar over the last one's, which wipes off as a new song starts, its
        trailing edge fading rather than cut off. */
     background:
-        linear-gradient(to right, var(--ink) var(--progress), transparent var(--progress)),
+        /* A one-pixel soft edge: a hard stop lands on whole pixels, so a slowly playing bar
+           stepped a pixel at a time; this shades the edge pixel by how far into it the bar is. */
+        linear-gradient(to right, var(--ink) calc(var(--progress) - 0.5px), transparent calc(var(--progress) + 0.5px)),
         linear-gradient(
             to right,
             transparent var(--wipe-clear, 100%),

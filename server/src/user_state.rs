@@ -40,6 +40,8 @@ const KEYS: &[&str] = &[
     "ambra.listening-history.v1",
     "ambra.library-order.v1",
     "ambra.removed-library-tracks.v1",
+    // The sidebar's playlist order, the same on every device.
+    "ambra.playlist-order.v1",
     // Settings and per-song choices that follow the listener between devices.
     "ambra.ui-preferences.v1",
     "ambra.album-versions.v1",
@@ -51,6 +53,7 @@ const KEYS: &[&str] = &[
 ];
 /// Keys whose shape the app owns; the server only checks they hold a JSON object or list.
 const OPAQUE_KEYS: &[&str] = &[
+    "ambra.playlist-order.v1",
     "ambra.ui-preferences.v1",
     "ambra.album-versions.v1",
     "ambra.lyrics-sync.v1",

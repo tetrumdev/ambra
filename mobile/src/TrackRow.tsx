@@ -102,7 +102,7 @@ const styles = StyleSheet.create({
   byline: { flexDirection: "row", alignItems: "center", gap: 6 },
   artist: { flexShrink: 1, color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail },
   mark: { width: 13, height: 13, borderRadius: 6.5, backgroundColor: colors.text, alignItems: "center", justifyContent: "center" },
-  hiRes: { backgroundColor: "#f5b930" },
+  hiRes: { backgroundColor: "#dcc07f" },
   downloading: { width: 13, height: 13, transform: [{ scale: 0.6 }] },
   duration: { color: colors.faint, fontFamily: fonts.sans, fontSize: textSize.caption, fontVariant: ["tabular-nums"] },
   more: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },

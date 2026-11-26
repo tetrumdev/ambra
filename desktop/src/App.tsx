@@ -39,7 +39,7 @@ import { NowPlayingProvider } from "./hooks/useNowPlaying";
 import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { getServerConnection, subscribeServerConnection } from "./api/serverConnection";
-import { serverStateStatus, subscribeServerState } from "./utils/serverState";
+import { getServerItem, serverStateStatus, setServerItem, subscribeServerState } from "./utils/serverState";
 import { useStableCallback } from "./hooks/useStableCallback";
 import { useAppNavigation } from "./hooks/useAppNavigation";
 import { usePageLayout } from "./hooks/usePageLayout";
@@ -53,7 +53,7 @@ import {
   type AppPreferences,
   type PlaylistGroup,
 } from "./utils/preferences";
-import { orderPlaylists } from "./utils/playlistOrder";
+import { orderPlaylists, PLAYLIST_ORDER_KEY, sharedPlaylistOrder } from "./utils/playlistOrder";
 import type { GlobalTrackId, Playlist, Track } from "./types/music";
 import { configuredSearchProviders, loadRecommendationMix, resolveTrackPlayback, type SearchProvider, type StreamingProvider } from "./api/server";
 import { useRecommendationRequest } from "./hooks/useRecommendationRequest";
@@ -133,7 +133,18 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
   const servicePlaylistStore = useServicePlaylists(
     selectedPlaylistId, !localOnly, preferences.ui.screen === "home", preferences.ui.libraryStatsPlaylists,
   );
-  const { playlistOrder } = preferences.ui;
+  const savedPlaylistOrder = useSyncExternalStore(subscribeServerState, () => getServerItem(PLAYLIST_ORDER_KEY));
+  const playlistOrder = useMemo(
+    () => sharedPlaylistOrder(savedPlaylistOrder, preferences.ui.playlistOrder),
+    [savedPlaylistOrder, preferences.ui.playlistOrder],
+  );
+  const playlistOrderReady = useSyncExternalStore(subscribeServerState, () => serverStateStatus().ready);
+  // A server without an order yet takes the first device's, so the others match it from then on.
+  useEffect(() => {
+    if (!playlistOrderReady || savedPlaylistOrder !== null || !Object.values(preferences.ui.playlistOrder).some(ids => ids.length)) return;
+    try { setServerItem(PLAYLIST_ORDER_KEY, JSON.stringify(preferences.ui.playlistOrder)); }
+    catch (error) { console.warn("Could not share playlist order:", error); }
+  }, [playlistOrderReady, savedPlaylistOrder, preferences.ui.playlistOrder]);
   // Every list of playlists follows the order dragged in the sidebar.
   const ambraPlaylists = useMemo(() => orderPlaylists(playlistStore.playlists, playlistOrder.ambra), [playlistStore.playlists, playlistOrder.ambra]);
   const serviceGroups = useMemo(
@@ -641,9 +652,16 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
           onDeletePlaylist={deletePlaylist}
           playlists={ambraPlaylists}
           serviceGroups={serviceGroups}
-          onReorderPlaylists={(group, ids) => setPreferences(current => ({
-            ...current, ui: { ...current.ui, playlistOrder: { ...current.ui.playlistOrder, [group]: ids } },
-          }))}
+          onReorderPlaylists={(group, ids) => {
+            if (serverStateStatus().ready) {
+              try { setServerItem(PLAYLIST_ORDER_KEY, JSON.stringify({ ...playlistOrder, [group]: ids })); }
+              catch (error) { console.warn("Could not share playlist order:", error); }
+            }
+            // Kept on this device too, for when it's away from the server.
+            setPreferences(current => ({
+              ...current, ui: { ...current.ui, playlistOrder: { ...current.ui.playlistOrder, [group]: ids } },
+            }));
+          }}
           servicePlaylistVisibility={preferences.ui.servicePlaylistVisibility}
           playlistGroups={preferences.ui.playlistGroups}
           onTogglePlaylistGroup={(group, expanded) => setPreferences(current => current.ui.playlistGroups[group] === expanded ? current : {

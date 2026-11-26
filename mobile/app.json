@@ -26,7 +26,8 @@
           }
         },
         "NSCameraUsageDescription": "Ambra scans your server pairing QR code.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSSupportsLiveActivities": true
       },
       "icon": "../desktop/src-tauri/icons/macIcon.icon"
     },
@@ -81,7 +82,8 @@
         }
       ],
       "expo-web-browser",
-      "expo-sharing"
+      "expo-sharing",
+      "@bacons/apple-targets"
     ],
     "backgroundColor": "#000000",
     "extra": {

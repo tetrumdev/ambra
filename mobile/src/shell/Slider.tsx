@@ -66,7 +66,8 @@ export function VolumeSlider({ value, disabled = false, label, onChange }: {
     };
   });
   // Rounded, so a value springing toward 0 never prints as an exponent like "1e-9%".
-  const fillStyle = useAnimatedStyle(() => ({ width: `${Math.round(level.get() * 10000) / 100}%` }));
+  // A transform, not a width, so dragging never lays the sheet out again.
+  const fillStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: level.get() }] }));
   return (
     <GestureDetector gesture={pan}>
       <View collapsable={false} accessible accessibilityRole="adjustable" accessibilityLabel={label} accessibilityValue={{ min: 0, max: 100, now: Math.round(value) }}
@@ -87,6 +88,6 @@ const styles = StyleSheet.create({
   frame: { height: 44, justifyContent: "center" },
   disabled: { opacity: 0.4 },
   track: { height: HEIGHT, borderRadius: HEIGHT / 2, overflow: "hidden", backgroundColor: "#1a1a1a", borderCurve: "continuous" },
-  fill: { height: "100%", backgroundColor: "rgba(255, 255, 255, 0.92)" },
+  fill: { width: "100%", height: "100%", transformOrigin: "left", backgroundColor: "rgba(255, 255, 255, 0.92)" },
   icon: { position: "absolute", left: 10, top: 0, bottom: 0, justifyContent: "center" },
 });

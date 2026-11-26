@@ -16,6 +16,7 @@ export const serverStateKeys = new Set([
   "ambra.listening-history.v1",
   "ambra.library-order.v1",
   "ambra.removed-library-tracks.v1",
+  "ambra.playlist-order.v1",
   "ambra.ui-preferences.v1",
   "ambra.album-versions.v1",
   "ambra.lyrics-sync.v1",
@@ -34,12 +35,13 @@ const latestWins = new Set([
 ]);
 // Seen on the other screens as they're made: lyric timing, so every device's lyrics move
 // together, and settings, which other devices apply as they arrive.
-const promptKeys = new Set(["ambra.lyrics-sync.v1", "ambra.ui-preferences.v1"]);
+const promptKeys = new Set(["ambra.lyrics-sync.v1", "ambra.ui-preferences.v1", "ambra.playlist-order.v1"]);
 const PROMPT_SAVE_MS = 100;
 const keyNames: Record<string, string> = {
   "ambra.playlists.v1": "Playlists",
   "ambra.listening-history.v1": "Listening history",
   "ambra.library-order.v1": "Library order",
+  "ambra.playlist-order.v1": "Playlist order",
   "ambra.removed-library-tracks.v1": "The library",
 };
 

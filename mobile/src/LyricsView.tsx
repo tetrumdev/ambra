@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactElement } from "react";
 import { AccessibilityInfo, ActivityIndicator, AppState, StyleSheet, Text, View, useWindowDimensions, type TextStyle, type ViewProps } from "react-native";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -14,7 +14,7 @@ import { lyricPositionMs, nudgeLyricSync } from "./lyricSync";
 import { useLyricSync } from "./useLyricSync";
 import { LyricSyncControls } from "./LyricSyncControls";
 import { advanceNativeDot, advanceNativeLetter, lyricClockStep, lyricFontSize, nativeDot, nativeLetter, shouldAdvanceLyricRow, type LyricScrollMotion, type NativeLetter } from "./lyricsAnimation";
-import { LyricCell, LyricList, LyricMeasurements, useLyricScroll } from "./useLyricScroll";
+import { LyricCell, LyricList, LyricMeasurements, WordLayout, useLyricScroll } from "./useLyricScroll";
 import { Icon } from "./Icons";
 import { Touchable } from "./Touchable";
 import { colors, fonts, radius, space, textSize } from "./theme";
@@ -57,6 +57,9 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
     if (shown && (!activation.current.shown || activation.current.offset !== offset)) {
       time.set(report.time);
       initialized.set(false);
+    } else if (shown && !report.playing) {
+      // Paused, the clock is stopped: a seek or a pause lands at once.
+      time.set(report.time);
     }
     activation.current = { shown, offset };
   }, [view, duration, offset, position, sample, time, initialized, previewRevision, active, foreground]);
@@ -71,10 +74,14 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
     "worklet";
     const report = sample.get();
     const sampled = Math.min(report.end, report.time + (report.playing ? Date.now() - report.wall : 0));
-    time.set(Math.min(report.end, lyricClockStep(initialized.get() ? time.get() : NaN, sampled, (info.timeSincePreviousFrame ?? 0) / 1000, report.playing)));
+    const next = Math.min(report.end, lyricClockStep(initialized.get() ? time.get() : NaN, sampled, (info.timeSincePreviousFrame ?? 0) / 1000, report.playing));
+    // Every row reacts to the clock; a value that didn't move wakes none of them.
+    if (next !== time.get() || !initialized.get()) time.set(next);
     initialized.set(true);
   }, [sample, time, initialized]), false);
-  useEffect(() => { clock.setActive(active && foreground); return () => clock.setActive(false); }, [clock, active, foreground]);
+  // Runs only while playing: paused, nothing moves, so the display isn't kept redrawing.
+  const playing = !!view?.playing && !view.buffering;
+  useEffect(() => { clock.setActive(active && foreground && playing); return () => clock.setActive(false); }, [clock, active, foreground, playing]);
   const preview = useCallback((seconds: number) => {
     held.current = { seconds, at: Date.now(), revision: view?.revision ?? 0 };
     const at = position();
@@ -119,11 +126,14 @@ const Letter = memo(function Letter({ text, index, letters, font, emphasis, anim
   </Animated.View>;
 });
 
-const Row = memo(function Row({ row, time, fontSize, animate, past, plain, reduced, offset, disabled, onSeek }: {
+const Row = memo(function Row({ row, time, fontSize, animate, past, plain, reduced, offset, disabled, onSeek, wrapBlock }: {
   row: LyricRow; time: SharedValue<number>; fontSize: number; animate: boolean; past: boolean; plain: boolean; reduced: boolean; offset: number; disabled: boolean; onSeek: (seconds: number) => void;
+  /** The block whose scroll follows this lead line's wrapped rows. */
+  wrapBlock?: number;
 }) {
   const letters = useSharedValue(row.words.flatMap(word => word.letters.map(letter => nativeLetter(letter.motion))));
   const runs = useMemo(() => lyricWordRuns(row.words), [row.words]);
+  const recordWord = useContext(WordLayout);
   const last = useSharedValue({ time: NaN, moving: true });
   // A provider retry may replace text/timings under the same row ID. Reset its physics when content changes.
   useEffect(() => {
@@ -168,7 +178,7 @@ const Row = memo(function Row({ row, time, fontSize, animate, past, plain, reduc
     {!!row.singer && <Text style={styles.singer}>{row.singer}</Text>}
     {row.words.length && !plain ? <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants" style={[styles.words, row.alternate && styles.alternate]}>
       {runs.map((word, index) => word.break ? <View key={index} style={styles.lineBreak} />
-        : <View key={index} style={styles.word}>{word.letters.map((letter, index) => <Letter key={index} text={letter.text} index={letterIndex++} letters={letters} font={font} animate={animate} past={past} emphasis={letter.motion.emphasis && !reduced} />)}{!!word.trailing && <Text accessible={false} maxFontSizeMultiplier={1.4} style={font}>{word.trailing}</Text>}</View>)}
+        : <View key={index} style={styles.word} onLayout={wrapBlock === undefined ? undefined : event => recordWord(wrapBlock, index, event.nativeEvent.layout.y, word.letters[0]?.motion.segment.startMs ?? null, font.lineHeight ?? fontSize * 1.27)}>{word.letters.map((letter, index) => <Letter key={index} text={letter.text} index={letterIndex++} letters={letters} font={font} animate={animate} past={past} emphasis={letter.motion.emphasis && !reduced} />)}{!!word.trailing && <Text accessible={false} maxFontSizeMultiplier={1.4} style={font}>{word.trailing}</Text>}</View>)}
     </View> : <Animated.View style={colorStyle}><Text accessible={false} maxFontSizeMultiplier={1.4} style={[font, styles.letter]}>{row.line.text || "\u00a0"}</Text></Animated.View>}
   </>;
   const style = row.kind === "lead" ? undefined : { marginTop: row.kind === "background" ? 10 : 9 };
@@ -219,7 +229,7 @@ const Group = memo(function Group({ block, index, distance, side, following, tim
   });
   const style = useAnimatedStyle(() => ({ opacity: fade.get() }));
   if (block.kind === "pause") return <Animated.View accessible={side === 0} accessibilityLabel="Instrumental break" style={[{ height: side === 0 ? 56 : 0, overflow: "hidden" }, style, rippleStyle]}><View style={styles.dots}>{[0, 1, 2].map(dotIndex => <PauseDot key={dotIndex} index={dotIndex} {...{ block, time, reduced }} running={running && side === 0} />)}</View></Animated.View>;
-  return <Animated.View style={[styles.group, style, rippleStyle]}>{block.rows.map(row => <Row key={row.id} {...{ row, time, fontSize, plain, reduced, offset, disabled, onSeek }} animate={running && distance <= 2} past={side < 0} />)}</Animated.View>;
+  return <Animated.View style={[styles.group, style, rippleStyle]}>{block.rows.map((row, rowIndex) => <Row key={row.id} {...{ row, time, fontSize, plain, reduced, offset, disabled, onSeek }} animate={running && distance <= 2} past={side < 0} wrapBlock={rowIndex === 0 && row.kind === "lead" ? index : undefined} />)}</Animated.View>;
 });
 
 function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, retry, sync }: { lyrics: TrackLyrics; view: SessionView | null; duration: number; active: boolean; height: number; disabled: boolean; onSeek: (seconds: number) => void; retry: () => void; sync: ReturnType<typeof useLyricSync> }) {
@@ -234,7 +244,7 @@ function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, 
     if (next !== previous) scheduleOnRN(setFocus, next);
   });
   const [following, setFollowing] = useState(true);
-  const { list: listRef, motion: scrollMotion, followingUI, record, contentSize, failed, realign } = useLyricScroll({ blocks, focus, height, fontSize, running, following, reduced, plain });
+  const { list: listRef, motion: scrollMotion, followingUI, record, recordWord, contentSize, failed, realign } = useLyricScroll({ blocks, focus, time, height, fontSize, running, following, reduced, plain });
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seek = useRef(onSeek);
   useEffect(() => { seek.current = onSeek; }, [onSeek]);
@@ -249,7 +259,7 @@ function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, 
   const contentStyle = useMemo(() => ({ paddingHorizontal: 26, paddingTop: plain ? 24 : height * 0.43, paddingBottom: plain ? 90 : height * 0.57 }), [plain, height]);
   return <View style={styles.fill}>
     <FadeMask style={styles.fill} maskElement={<LinearGradient colors={["transparent", "black", "black", "transparent"]} locations={[0, 0.14, 0.82, 1]} style={StyleSheet.absoluteFill} />}>
-      <LyricMeasurements record={record}><LyricList ref={listRef} data={blocks} keyExtractor={block => block.id} renderItem={renderItem} CellRendererComponent={LyricCell} style={styles.fill} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={6} maxToRenderPerBatch={5} windowSize={5} removeClippedSubviews={false} scrollEventThrottle={16} onContentSizeChange={contentSize}
+      <LyricMeasurements record={record} recordWord={recordWord}><LyricList ref={listRef} data={blocks} keyExtractor={block => block.id} renderItem={renderItem} CellRendererComponent={LyricCell} style={styles.fill} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={6} maxToRenderPerBatch={5} windowSize={5} removeClippedSubviews={false} scrollEventThrottle={16} onContentSizeChange={contentSize}
         onScrollBeginDrag={() => { if (!plain) setFollowing(false); stopTimer(); }} onScrollEndDrag={armResume} onMomentumScrollBegin={stopTimer} onMomentumScrollEnd={armResume}
         onScrollToIndexFailed={failed}
         ListHeaderComponent={plain ? <View style={styles.plainNote}><Text style={styles.credit}>Lyrics aren’t time-synced.</Text>{needsLyricsRetry(lyrics) && <Touchable onPress={retry} scale={0.97}><Text style={styles.retryText}>Check for synced lyrics</Text></Touchable>}</View> : undefined}

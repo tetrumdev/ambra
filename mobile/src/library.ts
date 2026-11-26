@@ -18,6 +18,8 @@ import { services, type Service } from "./servicePreferences";
 
 const PLAYLISTS_KEY = "ambra.playlists.v1";
 const ORDER_KEY = "ambra.library-order.v1";
+/** Desktop's sidebar order: AMBRA playlist IDs, and `service:<provider>:<id>` for a service's. */
+const PLAYLIST_ORDER_KEY = "ambra.playlist-order.v1";
 const REMOVED_KEY = "ambra.removed-library-tracks.v1";
 const HISTORY_KEY = "ambra.listening-history.v1";
 /** MEGA keeps its fixed ID on every device. */
@@ -99,6 +101,13 @@ async function importedMusic(): Promise<Track[]> {
   return tracks;
 }
 
+/** In the shared order; ones not in it yet keep their own order after those, as on desktop. */
+function ordered<T>(items: T[], order: unknown, id: (item: T) => string): T[] {
+  if (!Array.isArray(order) || !order.length) return items;
+  const rank = new Map(order.map((key, index) => [key, index]));
+  return [...items].sort((a, b) => (rank.get(id(a)) ?? order.length) - (rank.get(id(b)) ?? order.length));
+}
+
 let refreshing: Promise<void> | null = null;
 /** Loads everything again; screens show the last snapshot meanwhile. */
 export function refreshLibrary(): Promise<void> {
@@ -119,13 +128,17 @@ export function refreshLibrary(): Promise<void> {
       const tracks = [...libraryTracks, ...local]
         .filter(track => !removed.has(track.globalId))
         .sort((a, b) => (positions.get(a.globalId) ?? Infinity) - (positions.get(b.globalId) ?? Infinity));
-      const { playlists, tracks: playlistTracks } = parsePlaylists(stateValue(state, PLAYLISTS_KEY));
+      const playlistOrder = parseJson<Record<string, unknown>>(stateValue(state, PLAYLIST_ORDER_KEY), {});
+      const parsed = parsePlaylists(stateValue(state, PLAYLISTS_KEY));
+      const playlists = ordered(parsed.playlists, playlistOrder.ambra, playlist => playlist.id);
+      const playlistTracks = parsed.tracks;
       const history = parseJson<{ entries?: HistoryEntry[] }>(stateValue(state, HISTORY_KEY), {}).entries ?? [];
       publish({ tracks, playlists, playlistTracks, connected, history, error: null, loadedAt: Date.now() });
       // Service playlists load after, so the library shows without waiting on every service.
       const lists = emptyServices();
       await Promise.all(services.filter(service => connected?.[service]).map(async service => {
-        lists[service] = await request<ServicePlaylist[]>(`/api/providers/${service}/playlists`, { timeoutMs: 60_000 }).catch(() => []);
+        const fetched = await request<ServicePlaylist[]>(`/api/providers/${service}/playlists`, { timeoutMs: 60_000 }).catch(() => []);
+        lists[service] = ordered(fetched, playlistOrder[service], playlist => `service:${service}:${playlist.id}`);
       }));
       publish({ servicePlaylists: lists });
     } catch (reason) {

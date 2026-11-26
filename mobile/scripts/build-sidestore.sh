@@ -21,7 +21,8 @@ xcodebuild \
 app="$output/Ambra.xcarchive/Products/Applications/Ambra.app"
 test -d "$app"
 test -f "$app/main.jsbundle"
-test ! -d "$app/PlugIns"
+# The downloads Live Activity (Dynamic Island) ships as a widget extension; SideStore signs it with the app.
+ls "$app/PlugIns"/*.appex >/dev/null
 /usr/libexec/PlistBuddy -c 'Print UIBackgroundModes' "$app/Info.plist" | grep -q audio
 # Native Rust networking uses a private loopback HTTP bridge. No VPN/IP-range exceptions.
 /usr/libexec/PlistBuddy -c 'Print :NSAppTransportSecurity:NSAllowsLocalNetworking' "$app/Info.plist" | grep -qx true

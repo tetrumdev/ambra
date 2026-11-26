@@ -7,7 +7,6 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Unpaired, follow, restore, networkStatus } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
-import { DownloadIsland } from "./src/DownloadIsland";
 import { colors } from "./src/theme";
 import { usePhoneOutput } from "./src/usePhoneOutput";
 import { followPhoneDownloads, refreshServerDownloads, startPhoneDownloads, useDownloads } from "./src/downloads";
@@ -95,7 +94,6 @@ export default function App() {
               void restore().then(value => { setSaved(value); setNetworkError(null); setChangingServer(false); }).catch(error => setNetworkError(String(error)));
             } : undefined}
             onPaired={() => { setNetworkError(null); setChangingServer(false); setSaved(current => ({ address: current?.address ?? null, paired: true })); }} />}
-        {paired && <DownloadIsland />}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

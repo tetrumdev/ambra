@@ -5,7 +5,6 @@ import { swirlPalette } from "../../desktop/src/utils/artworkPalette";
 import { colors as theme } from "./theme";
 import {
   COLOR_TRANSITION_MS,
-  MIN_FRAME_INTERVAL_MS,
   SWIRL_EASE_SECONDS,
   SWIRL_NOISE_SEED,
   createNoiseTexture,
@@ -23,6 +22,9 @@ import { coverPalette, type Palette, type Track } from "./client";
 // The field is soft and slow; drawing it this many pixels tall and letting the compositor scale
 // it up looks the same as full resolution for a fraction of the GPU time.
 const RENDER_HEIGHT = 720;
+// The field drifts slowly, so 30 frames a second looks the same as 120 on a ProMotion screen.
+// Its draw calls run on the JS thread, which also handles touches; half the frames, half the cost.
+const MIN_FRAME_INTERVAL_MS = 1000 / 30 - 2;
 const black = { colors: [theme.black, theme.black, theme.black, theme.black], weights: [1, 0, 0, 0] };
 const mobileFragmentShader = fragmentShaderSource.replace("void main()", "void swirlMain()") + backdropShader;
 
@@ -54,7 +56,7 @@ export function Swirl({ track, playing, darkened = false }: {
   const alphas = useMemo(() => darkened ? backdropAlphas(colors.colors, colors.weights) : [0, 0, 0, 0], [colors, darkened]);
   const target = useMemo(() => [...paletteComponents(colors.colors, colors.weights), ...alphas], [colors, alphas]);
   const transition = useRef({ from: target, to: target, startedAt: 0 });
-  const motion = useRef({ playing: playing && !!track, reduced: false, wake: () => {} });
+  const motion = useRef({ playing: playing && !!track, reduced: false, wake: () => {}, halt: () => {} });
   useEffect(() => {
     const now = performance.now();
     const previous = transition.current;
@@ -114,7 +116,28 @@ export function Swirl({ track, playing, darkened = false }: {
     travel.updatedAt = performance.now();
     let disposed = false;
     let lastDrawnAt = -Infinity;
+    // Reused every frame, and sent only while the colors are changing.
+    const colorsArray = new Float32Array(12);
+    const biasArray = new Float32Array(4);
+    const backdropArray = new Float32Array(4);
+    let colorsSettled = false;
+    gl.viewport(0, 0, bufferWidth, bufferHeight);
+    gl.uniform2f(u.resolution, bufferWidth, bufferHeight);
 
+    let wait: ReturnType<typeof setTimeout> | undefined;
+    // Sleeps until the next frame is due, rather than waking the JS thread at every display refresh.
+    const next = () => {
+      const delay = MIN_FRAME_INTERVAL_MS - (performance.now() - lastDrawnAt);
+      if (delay <= 4) { frame.current = requestAnimationFrame(draw); return; }
+      frame.current = -1;
+      wait = setTimeout(() => { wait = undefined; frame.current = requestAnimationFrame(draw); }, delay);
+    };
+    const halt = () => {
+      clearTimeout(wait);
+      wait = undefined;
+      cancelAnimationFrame(frame.current);
+      frame.current = 0;
+    };
     const draw = () => {
       frame.current = 0;
       // iOS forbids submitting GPU work while the app is inactive or locked.
@@ -123,19 +146,25 @@ export function Swirl({ track, playing, darkened = false }: {
       const swirlTarget = motion.current.playing ? 1 : 0;
       const moving = travel.speed > 0 || swirlTarget > 0;
       if (moving && now - lastDrawnAt < MIN_FRAME_INTERVAL_MS) {
-        frame.current = requestAnimationFrame(draw);
+        next();
         return;
       }
       lastDrawnAt = now;
 
       const { from, to, startedAt } = transition.current;
       const progress = easedProgress((now - startedAt) / COLOR_TRANSITION_MS);
-      const palette = mixPalette(from, to, progress);
-      gl.viewport(0, 0, bufferWidth, bufferHeight);
-      gl.uniform3fv(u.colors, new Float32Array(palette.slice(0, 12)));
-      gl.uniform4fv(u.bias, new Float32Array(palette.slice(12, 16)));
-      gl.uniform2f(u.resolution, bufferWidth, bufferHeight);
-      gl.uniform4fv(u.backdrop, new Float32Array(palette.slice(-4)));
+      if (progress < 1 || !colorsSettled) {
+        const palette = mixPalette(from, to, progress);
+        for (let index = 0; index < 12; index++) colorsArray[index] = palette[index];
+        for (let index = 0; index < 4; index++) {
+          biasArray[index] = palette[12 + index];
+          backdropArray[index] = palette[palette.length - 4 + index];
+        }
+        gl.uniform3fv(u.colors, colorsArray);
+        gl.uniform4fv(u.bias, biasArray);
+        gl.uniform4fv(u.backdrop, backdropArray);
+        colorsSettled = progress >= 1;
+      }
 
       // The swirl drifts to a stop on pause and gathers pace again on play, never freezing mid-motion.
       const elapsed = Math.min(0.1, Math.max(0, (now - travel.updatedAt) / 1000));
@@ -150,19 +179,17 @@ export function Swirl({ track, playing, darkened = false }: {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.endFrameEXP();
 
-      if (AppState.currentState === "active" && (travel.speed > 0 || swirlTarget > 0 || progress < 1)) {
-        frame.current = requestAnimationFrame(draw);
-      }
+      if (AppState.currentState === "active" && (travel.speed > 0 || swirlTarget > 0 || progress < 1)) next();
     };
     motion.current.wake = () => {
       if (disposed || frame.current) return;
       travel.updatedAt = performance.now();
       frame.current = requestAnimationFrame(draw);
     };
+    motion.current.halt = halt;
     stop.current = () => {
       disposed = true;
-      cancelAnimationFrame(frame.current);
-      frame.current = 0;
+      halt();
     };
     motion.current.wake();
   };
@@ -172,7 +199,7 @@ export function Swirl({ track, playing, darkened = false }: {
     const reduceMotion = AccessibilityInfo.addEventListener("reduceMotionChanged", reduced => { motion.current.reduced = reduced; });
     const appState = AppState.addEventListener("change", state => {
       if (state === "active") motion.current.wake();
-      else { cancelAnimationFrame(frame.current); frame.current = 0; }
+      else motion.current.halt();
     });
     return () => {
       reduceMotion.remove();

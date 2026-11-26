@@ -15,7 +15,6 @@ import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
 import { GestureDetector, useExclusiveGestures, useLongPressGesture, usePanGesture, useTapGesture } from "react-native-gesture-handler";
 import Animated, {
-  Easing,
   cancelAnimation,
   interpolate,
   useAnimatedReaction,
@@ -104,16 +103,21 @@ function LiveProgress({ view, duration, active, disabled, onSeek }: {
   return <Progress position={position} duration={duration} revision={view?.revision ?? 0} disabled={disabled} onSeek={onSeek} />;
 }
 
-/** The mini-player's line runs on the UI thread from each report to the song's end. */
-function MiniProgress({ view, duration }: { view: SessionView | null; duration: number }) {
+/**
+ * The mini-player's line. It moves about a point a second, so it's set twice a second rather
+ * than animated every frame for a whole song, which kept the display redrawing nonstop.
+ */
+function MiniProgress({ view, duration, shown }: { view: SessionView | null; duration: number; shown: boolean }) {
   const fill = useSharedValue(0);
   useEffect(() => {
     if (!view || duration <= 0) { fill.set(0); return; }
     const playing = view.playing && !view.buffering;
-    const now = Math.min(1, (view.positionSeconds + (playing ? sessionViewAge() : 0)) / duration);
-    fill.set(now);
-    if (playing && now < 1) fill.set(withTiming(1, { duration: (1 - now) * duration * 1000, easing: Easing.linear }));
-  }, [view, duration, fill]);
+    const at = () => Math.min(1, (view.positionSeconds + (playing ? sessionViewAge() : 0)) / duration);
+    fill.set(at());
+    if (!playing || !shown) return;
+    const timer = setInterval(() => fill.set(at()), 500);
+    return () => clearInterval(timer);
+  }, [view, duration, fill, shown]);
   const style = useAnimatedStyle(() => ({ transform: [{ scaleX: fill.get() }] }));
   return <View style={styles.miniProgress}><Animated.View style={[styles.miniFill, style]} /></View>;
 }
@@ -618,7 +622,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
                 </View>
               </GestureDetector>
               <Touchable accessibilityRole="button" accessibilityLabel={playing ? "Pause" : "Play"} disabled={disabled} haptic="firm" hapticOnPressIn scale={0.8} onPress={toggle} style={styles.miniButton}><Icon name={playing ? "pause" : "play"} size={20} /></Touchable>
-              <MiniProgress view={view} duration={duration} />
+              <MiniProgress view={view} duration={duration} shown={!expanded} />
             </Animated.View>
           </Animated.View>
         </GestureDetector>

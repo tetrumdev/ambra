@@ -116,8 +116,9 @@ export function Progress({
     marginHorizontal: -HELD_REACH * pressed.value,
     backgroundColor: `rgba(255, 255, 255, ${Math.round(350 + 150 * pressed.value) / 1000})`,
   }));
-  // Rounded, so a value easing toward 0 never prints as an exponent like "1e-9%".
-  const fillStyle = useAnimatedStyle(() => ({ width: `${Math.round(fill.value * 10000) / 100}%` }));
+  // A transform, not a width: it moves every frame while playing, and a width would lay the
+  // player out again each time.
+  const fillStyle = useAnimatedStyle(() => ({ transform: [{ scaleX: fill.value }] }));
   const timesStyle = useAnimatedStyle(() => ({
     opacity: 0.75 + 0.25 * pressed.value,
     transform: [{ translateY: 4 * pressed.value }],
@@ -165,7 +166,7 @@ const styles = StyleSheet.create({
   hit: { paddingVertical: 14, marginVertical: -14 },
   barSlot: { height: HELD_HEIGHT, justifyContent: "center" },
   bar: { overflow: "hidden" },
-  fill: { height: "100%", backgroundColor: colors.text },
+  fill: { width: "100%", height: "100%", transformOrigin: "left", backgroundColor: colors.text },
   times: {
     flexDirection: "row",
     justifyContent: "space-between",

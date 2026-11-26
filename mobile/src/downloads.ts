@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { useSyncExternalStore } from "react";
 import type { Track } from "../../desktop/src/types/music";
+import { finishDownloadActivity, showDownloadActivity } from "../modules/ambra-activity/src";
 import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { remoteTrack } from "../../desktop/src/utils/remoteTrack";
 import { Unpaired, clientId, request } from "./client";
@@ -168,12 +169,15 @@ export function followPhoneDownloads(): () => void {
   const work = async (id: string) => {
     if (working) return;
     working = true;
+    let shown = 0;
     try {
       while (queue.length && !abort.signal.aborted) {
         const job = queue.shift()!;
         let done = 0, failed = 0, error: string | null = null;
         const report = (current: string | null, finished: boolean) => {
           publish({ active: finished ? null : { done: done + failed, total: job.tracks.length, current } });
+          // The Dynamic Island follows it; it ends once nothing is left to download.
+          if (!finished) { shown = job.tracks.length; void showDownloadActivity(done + failed, job.tracks.length, null); }
           void request(`/api/downloads/clients/${id}/progress`, {
             method: "POST", body: JSON.stringify({ jobId: job.id, done, failed, current, error, finished }), timeoutMs: 10_000,
           }).catch(() => {});
@@ -187,7 +191,10 @@ export function followPhoneDownloads(): () => void {
         }
         report(null, true);
       }
-    } finally { working = false; }
+    } finally {
+      working = false;
+      if (shown) void finishDownloadActivity(shown);
+    }
   };
 
   void (async () => {

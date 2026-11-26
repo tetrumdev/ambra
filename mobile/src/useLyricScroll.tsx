@@ -1,12 +1,17 @@
-import { createContext, memo, useCallback, useContext, useEffect, useRef, type ComponentProps, type ReactNode } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { FlatList, View, type FlatListProps } from "react-native";
-import Animated, { scrollTo, useAnimatedRef, useFrameCallback, useScrollOffset, useSharedValue, type FrameInfo } from "react-native-reanimated";
+import Animated, { scrollTo, useAnimatedReaction, useAnimatedRef, useFrameCallback, useScrollOffset, useSharedValue, type FrameInfo, type SharedValue } from "react-native-reanimated";
+import { scheduleOnRN } from "react-native-worklets";
 import { advanceLyricScrollMotion, lyricRipple, lyricScrollSettled, lyricScrollTarget, type LyricScrollGoal, type LyricScrollMotion } from "./lyricsAnimation";
 import type { LyricBlock } from "./lyricsModel";
 
 // Use RN's cell renderer API so measured content coordinates include wrapping and singer labels.
 export const LyricList = Animated.createAnimatedComponent(FlatList<LyricBlock>);
 const CellLayout = createContext<(index: number, top: number | null, height: number) => void>(() => {});
+type WordRecorder = (block: number, word: number, top: number, startMs: number | null, lineHeight: number) => void;
+/** Where each word of a block's lead line landed, for following a wrapped line row by row. */
+export const WordLayout = createContext<WordRecorder>(() => {});
+type WrapStep = { startMs: number; offset: number };
 type CellProps = ComponentProps<NonNullable<FlatListProps<LyricBlock>["CellRendererComponent"]>>;
 export const LyricCell = memo(function LyricCell({ index, children, onLayout, onFocusCapture, style }: CellProps) {
   const record = useContext(CellLayout);
@@ -17,12 +22,26 @@ export const LyricCell = memo(function LyricCell({ index, children, onLayout, on
     record(index, y, height);
   }}>{children}</View>;
 });
-export function LyricMeasurements({ record, children }: { record: (index: number, top: number | null, height: number) => void; children: ReactNode }) {
-  return <CellLayout.Provider value={record}>{children}</CellLayout.Provider>;
+export function LyricMeasurements({ record, recordWord, children }: { record: (index: number, top: number | null, height: number) => void; recordWord: WordRecorder; children: ReactNode }) {
+  return <CellLayout.Provider value={record}><WordLayout.Provider value={recordWord}>{children}</WordLayout.Provider></CellLayout.Provider>;
 }
 
-export function useLyricScroll({ blocks, focus, height, fontSize, running, following, reduced, plain }: {
-  blocks: LyricBlock[]; focus: number; height: number; fontSize: number; running: boolean; following: boolean; reduced: boolean; plain: boolean;
+/** Desktop's rule: each later visual row of a wrapped line, where it starts being sung and how far below the first it sits. */
+function wrapSteps(words: Map<number, { top: number; startMs: number | null }>, lineHeight: number): WrapStep[] {
+  const ordered = [...words.entries()].sort(([left], [right]) => left - right).map(([, word]) => word);
+  const steps: WrapStep[] = [];
+  const firstTop = ordered[0]?.top ?? 0;
+  let lastTop = firstTop;
+  for (const word of ordered) {
+    if (word.top <= lastTop + lineHeight / 2 || word.startMs === null) continue;
+    lastTop = word.top;
+    steps.push({ startMs: word.startMs, offset: word.top - firstTop });
+  }
+  return steps;
+}
+
+export function useLyricScroll({ blocks, focus, time, height, fontSize, running, following, reduced, plain }: {
+  blocks: LyricBlock[]; focus: number; time: SharedValue<number>; height: number; fontSize: number; running: boolean; following: boolean; reduced: boolean; plain: boolean;
 }) {
   const list = useAnimatedRef<FlatList<LyricBlock>>();
   const nativeOffset = useScrollOffset(list);
@@ -34,8 +53,35 @@ export function useLyricScroll({ blocks, focus, height, fontSize, running, follo
   const content = useRef(0);
   const target = useRef({ index: -1, attempts: 0, epoch: 0, previousFocus: -1, previousOffset: 0, force: true });
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latest = useRef({ focus, height, fontSize, running, following, reduced, plain, blocks });
-  useEffect(() => { latest.current = { focus, height, fontSize, running, following, reduced, plain, blocks }; });
+  // A wrapped word-timed line is followed one visual row at a time as it is sung, as on desktop:
+  // the scroll moves down by a row when the singing reaches it.
+  const words = useRef(new Map<number, Map<number, { top: number; startMs: number | null }>>());
+  const wraps = useSharedValue<Record<number, WrapStep[]>>({});
+  const focusUI = useSharedValue(focus);
+  useEffect(() => { focusUI.set(focus); }, [focus, focusUI]);
+  // Kept with the line it belongs to, so a line change never borrows the last line's offset.
+  const [wrap, setWrap] = useState({ focus: -1, offset: 0 });
+  const showWrap = useCallback((key: string) => {
+    const [line, offset] = key.split(":").map(Number);
+    setWrap({ focus: line, offset });
+  }, []);
+  useAnimatedReaction(() => {
+    const line = focusUI.get();
+    const steps = wraps.get()[line];
+    const at = time.get();
+    let offset = 0;
+    if (steps) for (const step of steps) if (at >= step.startMs) offset = step.offset;
+    return `${line}:${offset}`;
+  }, (next, previous) => { if (next !== previous) scheduleOnRN(showWrap, next); });
+  const recordWord = useCallback<WordRecorder>((block, word, top, startMs, lineHeight) => {
+    const measured = words.current.get(block) ?? new Map<number, { top: number; startMs: number | null }>();
+    words.current.set(block, measured);
+    measured.set(word, { top, startMs });
+    const steps = wrapSteps(measured, lineHeight);
+    wraps.modify(all => { "worklet"; all[block] = steps; return all; });
+  }, [wraps]);
+  const latest = useRef({ focus, height, fontSize, running, following, reduced, plain, blocks, wrap });
+  useEffect(() => { latest.current = { focus, height, fontSize, running, following, reduced, plain, blocks, wrap }; });
   useEffect(() => { followingUI.set(following && !plain); }, [following, plain, followingUI]);
   const frame = useFrameCallback(useCallback((info: FrameInfo) => {
     "worklet";
@@ -79,7 +125,8 @@ export function useLyricScroll({ blocks, focus, height, fontSize, running, follo
     retry.current = null;
     const block = state.blocks[state.focus];
     const anchor = block.kind === "pause" ? 12 : state.fontSize * 1.27 / 2 + (block.rows[0]?.singer ? 31 : 0);
-    const next = lyricScrollTarget(cell.top, anchor, state.height, content.current);
+    const wrapped = block.kind === "pause" || state.wrap.focus !== state.focus ? 0 : state.wrap.offset;
+    const next = lyricScrollTarget(cell.top, anchor + wrapped, state.height, content.current);
     const last = target.current;
     if (!last.force && next === last.previousOffset && state.focus === last.previousFocus && last.epoch > 0) return;
     const direction = Math.sign(next - last.previousOffset);
@@ -103,7 +150,7 @@ export function useLyricScroll({ blocks, focus, height, fontSize, running, follo
   useEffect(() => {
     const paint = requestAnimationFrame(align);
     return () => cancelAnimationFrame(paint);
-  }, [focus, height, fontSize, running, following, reduced, align]);
+  }, [focus, height, fontSize, running, following, reduced, wrap, align]);
   useEffect(() => { if (!following) { target.current.previousFocus = -1; target.current.force = true; } }, [following]);
   useEffect(() => () => { if (retry.current) clearTimeout(retry.current); }, []);
   const failed = useCallback((info: { index: number; averageItemLength: number }) => {
@@ -120,5 +167,5 @@ export function useLyricScroll({ blocks, focus, height, fontSize, running, follo
     retry.current = null;
     requestAnimationFrame(align);
   }, [align]);
-  return { list, motion, followingUI, record, contentSize, failed, realign };
+  return { list, motion, followingUI, record, recordWord, contentSize, failed, realign };
 }
