@@ -128,12 +128,17 @@ struct Follower {
     started: u64,
     /// When a command to it last failed; it isn't asked again at once.
     failed_at: Option<Instant>,
+    /// The leading output's timeline as last passed on to it, as the moment song position 0 is
+    /// heard (server ms), for outputs that follow it rather than carry their own (`anchorFollowV1`).
+    forwarded: Option<f64>,
+    /// Since when it has reported not playing while the group plays.
+    stopped_since: Option<Instant>,
 }
 
 impl Follower {
     fn new(output: Output) -> Self {
         let address = output.endpoint_id.clone();
-        Self { output, address, loaded: None, queued_next: None, held: 0, started: 0, failed_at: None }
+        Self { output, address, loaded: None, queued_next: None, held: 0, started: 0, failed_at: None, forwarded: None, stopped_since: None }
     }
 }
 
@@ -161,6 +166,12 @@ const SYNC_READY_TIMEOUT: Duration = Duration::from_secs(8);
 const SYNC_START_MARGIN_MS: f64 = 300.0;
 /// An output joining a playing group prepares from where the group will be this much later.
 const SYNC_JOIN_LEAD_MS: f64 = 1500.0;
+/// A follower that follows the leading output's timeline (`anchorFollowV1`) is told again once
+/// it moves by more than this: report jitter stays below it, a song change's margin doesn't.
+const ANCHOR_FORWARD_MS: f64 = 5.0;
+/// A following output that stops on its own this long while the group plays (a stall it didn't
+/// recover from, an interruption, an app that paused itself) joins the group again.
+const FOLLOWER_STOPPED_REJOIN: Duration = Duration::from_secs(3);
 /// A follower whose command failed is asked again after this long.
 const FOLLOWER_RETRY: Duration = Duration::from_secs(5);
 /// A paused follower within this of the group's position resumes from its own; one further off
@@ -204,6 +215,7 @@ impl Transport {
                 follower.queued_next = None;
                 follower.held = 0;
                 follower.started = 0;
+                follower.forwarded = None;
             }
         }
     }
@@ -1895,6 +1907,7 @@ async fn follower_call(core: &Core, io: &mut OutputOperation<'_>, endpoint: &str
                 follower.loaded = None;
                 follower.held = 0;
                 follower.started = 0;
+                follower.forwarded = None;
                 follower.failed_at = Some(Instant::now());
             }
             Ok(false)
@@ -1956,6 +1969,7 @@ async fn drive_followers(core: &Core, io: &mut OutputOperation<'_>, source: &str
                 follower.queued_next = None;
                 follower.held = 0;
                 follower.started = 0;
+                follower.forwarded = None;
             }
             continue;
         };
@@ -1979,6 +1993,29 @@ async fn drive_followers(core: &Core, io: &mut OutputOperation<'_>, source: &str
             }
             (phase, generation, position, follower.clone())
         };
+        // Playing with the group is what it was told; one that reports otherwise for a while
+        // stopped on its own, and is brought back in step rather than left silent.
+        let mut follower = follower;
+        if let SyncPhase::Running { epoch, .. } = phase {
+            let stopped = follower.started == epoch
+                && status["currentSource"].as_str() == Some(source)
+                && status["isPlaying"] != true
+                && status["buffering"] != true
+                && status["ended"] != true
+                && status["error"].is_null();
+            if let Some(entry) = core.transport().follower(endpoint) {
+                if !stopped {
+                    entry.stopped_since = None;
+                } else if entry.stopped_since.is_none_or(|since| since.elapsed() < FOLLOWER_STOPPED_REJOIN) {
+                    entry.stopped_since.get_or_insert_with(Instant::now);
+                } else {
+                    eprintln!("A synced output stopped on its own; it joins the group again.");
+                    entry.stopped_since = None;
+                    entry.started = 0;
+                    follower.started = 0;
+                }
+            }
+        }
         let wanted = Loaded { endpoint_id: endpoint.to_owned(), endpoint_instance: instance.clone(), device_id: output.device_id.clone(), source: source.to_owned(), track_source: source.to_owned(), live: false, generation };
         let needs_device = follower.loaded.as_ref().is_none_or(|loaded| loaded.endpoint_instance != instance || loaded.device_id != output.device_id);
         let needs_load = follower.loaded.as_ref() != Some(&wanted);
@@ -2020,6 +2057,20 @@ async fn drive_followers(core: &Core, io: &mut OutputOperation<'_>, source: &str
             }
             _ => (follower.held, follower.started),
         };
+        // An output that can't place the group's timeline across a song change by itself (the
+        // phone can't tell when the others reopen their devices for a new format) follows the
+        // leading output's, which it is told whenever it moves.
+        if let SyncPhase::Running { epoch, resync_ms, .. } = phase
+            && status["anchorFollowV1"] == true
+            && started == epoch
+            && let Some((at_ms, position)) = leader_anchor(core, source).await
+        {
+            let origin = at_ms - position * 1000.0;
+            if follower.forwarded.is_none_or(|forwarded| (forwarded - origin).abs() > ANCHOR_FORWARD_MS) {
+                call!("sync_native_audio", start_args(epoch, at_ms, position, resync_ms));
+                if let Some(follower) = core.transport().follower(endpoint) { follower.forwarded = Some(origin); }
+            }
+        }
         let queued = {
             let mut transport = core.transport();
             let Some(follower) = transport.follower(endpoint) else { continue };

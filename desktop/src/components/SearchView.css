@@ -171,6 +171,49 @@
     justify-self: start;
 }
 
+/* The title isn't a link: it opens the song's playback options, as clicking anywhere on the
+   result does, so the whole result underlines it, except over the links and buttons inside. */
+.searchResultTitle {
+    padding: 0;
+    border: 0;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    background: transparent;
+    max-width: 100%;
+}
+
+.searchResult:hover:not(:has(.entityLink:hover, .trackPlayButton:hover, .searchResultMenuButton:hover)) .searchResultTitle,
+.searchResultTitle:focus-visible {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* The top result's play button sits on its cover, so the cover lines up with the details under it. */
+.searchResult[data-variant="featured"] .searchResultLeading {
+    position: relative;
+    width: var(--art-size);
+}
+
+.searchResult[data-variant="featured"] .trackPlayButton {
+    position: absolute;
+    right: 8px;
+    bottom: 8px;
+    z-index: 1;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--ink);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 0.4);
+    opacity: 1;
+}
+
+.searchResult[data-variant="featured"] .trackPlayButton img {
+    width: 14px;
+    height: 14px;
+    filter: invert(1);
+}
+
 .searchResultArtist,
 .searchResultAlbum,
 .searchEntityInfo span {
@@ -374,9 +417,6 @@
         grid-template-columns: var(--art-size) minmax(0, 1fr);
     }
 
-    .searchTrackSection[data-primary="true"] .searchResult[data-variant="featured"] {
-        grid-template-columns: calc(var(--art-size) + 40px) minmax(0, 1fr);
-    }
 }
 
 @container (width < 680px) {

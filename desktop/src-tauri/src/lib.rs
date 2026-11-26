@@ -43,6 +43,7 @@ mod playlist_export;
 mod remote_endpoint;
 mod server_install;
 mod server_link;
+mod server_pairing;
 mod service_login;
 mod window_drag;
 mod window_size;
@@ -1123,6 +1124,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            server_pairing::local_pairing,
             load_persistent_state,
             save_persistent_state,
             startup_elapsed_ms,

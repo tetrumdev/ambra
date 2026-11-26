@@ -1,10 +1,11 @@
 import { serverBaseUrl, serverConnectionSignal, subscribeServerConnection } from "./serverConnection";
+import { estimateClockOffset } from "../utils/clockEstimate";
 
 /**
  * This app's estimate of the server's clock (server/src/session.rs `server_time_ms`), so a
  * playback position can be carried forward from when the server took it, not from when it
- * arrived here. Like NTP: a quick round trip bounds the reading, and the quickest recent
- * one is trusted, since anything slower was held up by something besides the network.
+ * arrived here. Like NTP: a quick round trip bounds the reading; the quickest recent ones are
+ * fitted together (`estimateClockOffset`), since anything slower was held up on the way.
  */
 type Sample = { offset: number; roundTrip: number; at: number };
 
@@ -56,6 +57,7 @@ export function resetServerClock() {
 
 /** Now, on the server's clock, or null before any round trip has come back. */
 export function serverNow(): number | null {
-  const quickest = samples.reduce<Sample | null>((best, sample) => !best || sample.roundTrip < best.roundTrip ? sample : best, null);
-  return quickest ? performance.now() + quickest.offset : null;
+  const now = performance.now();
+  const offset = estimateClockOffset(samples, now);
+  return offset === null ? null : now + offset;
 }

@@ -10,7 +10,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.tetrum.ambra.remote",
-      "buildNumber": "10",
+      "buildNumber": "15",
       "infoPlist": {
         "UIBackgroundModes": [
           "audio",
@@ -27,11 +27,12 @@
         },
         "NSCameraUsageDescription": "Ambra scans your server pairing QR code.",
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "icon": "../desktop/src-tauri/icons/macIcon.icon"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#181818",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"

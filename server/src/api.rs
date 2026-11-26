@@ -452,14 +452,20 @@ async fn restore_providers(state: AppState, ready: watch::Sender<bool>) {
         authenticate_qobuz(),
         authenticate_spotify(),
     );
+    let tidal_restored = !matches!(tidal, Err(_));
     if let Ok(Some(mut provider)) = tidal {
         // Timing downloads and served segments share one bounded cache.
         provider.media_cache = state.media_cache.clone();
         let _ = state.tidal.set(provider);
     }
+    let qobuz_restored = !matches!(qobuz, Err(_));
     if let Ok(Some(provider)) = qobuz {
         let _ = state.qobuz.set(provider);
     }
+    // A saved login that failed for a moment (no network yet, a TLS hiccup) is tried again,
+    // rather than leaving the service off until the next restart.
+    if !tidal_restored { tokio::spawn(retry_saved_login(state.clone(), "tidal")); }
+    if !qobuz_restored { tokio::spawn(retry_saved_login(state.clone(), "qobuz")); }
     if let Ok(Some(provider)) = spotify {
         state.soloist.set_account(Some(provider.account_id()));
         *state
@@ -544,22 +550,70 @@ async fn wait_for_providers(
     next.run(request).await
 }
 
+/// Waits between attempts to restore a saved login that failed at startup.
+const LOGIN_RETRY_DELAYS: [Duration; 5] = [
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+];
+
+/// Tries a saved Tidal or Qobuz login again until it works. It stops when there's no saved
+/// login (or it was signed out), or when the service is connected some other way meanwhile.
+async fn retry_saved_login(state: AppState, service: &'static str) {
+    for attempt in 0.. {
+        tokio::time::sleep(LOGIN_RETRY_DELAYS[attempt.min(LOGIN_RETRY_DELAYS.len() - 1)]).await;
+        let connected = match service { "tidal" => state.tidal.get().is_some(), _ => state.qobuz.get().is_some() };
+        if connected { return; }
+        let index = if service == "tidal" { 0 } else { 1 };
+        let _login = state.service_login[index].lock().await;
+        match service {
+            "tidal" => match TidalProvider::authenticate_if_configured(false).await {
+                Ok(Some(mut provider)) => {
+                    provider.media_cache = state.media_cache.clone();
+                    state.change_streaming_service(|| { let _ = state.tidal.set(provider); }).await;
+                    eprintln!("Tidal saved login restored after {} retries", attempt + 1);
+                    return;
+                }
+                Ok(None) => return,
+                Err(error) => eprintln!("Tidal saved login still failing: {error}"),
+            },
+            _ => match QobuzProvider::authenticate_if_configured(false).await {
+                Ok(Some(provider)) => {
+                    state.change_streaming_service(|| { let _ = state.qobuz.set(provider); }).await;
+                    eprintln!("Qobuz saved login restored after {} retries", attempt + 1);
+                    return;
+                }
+                Ok(None) => return,
+                Err(error) => eprintln!("Qobuz saved login still failing: {error}"),
+            },
+        }
+    }
+}
+
 async fn authenticate_tidal() -> ServerResult<Option<TidalProvider>> {
     match TidalProvider::authenticate_if_configured(false).await {
-        Ok(Some(provider)) => return Ok(Some(provider)),
-        Ok(None) => {}
-        Err(error) => eprintln!("Tidal saved login failed: {error}"),
+        Ok(Some(provider)) => Ok(Some(provider)),
+        Ok(None) => Ok(None),
+        // Kept as a failure, so it is tried again (`retry_saved_login`).
+        Err(error) => {
+            eprintln!("Tidal saved login failed: {error}");
+            Err(error.to_string().into())
+        }
     }
-    Ok(None)
 }
 
 async fn authenticate_qobuz() -> ServerResult<Option<QobuzProvider>> {
     match QobuzProvider::authenticate_if_configured(false).await {
-        Ok(Some(provider)) => return Ok(Some(provider)),
-        Ok(None) => {}
-        Err(error) => eprintln!("Qobuz saved login failed: {error}"),
+        Ok(Some(provider)) => Ok(Some(provider)),
+        Ok(None) => Ok(None),
+        // Kept as a failure, so it is tried again (`retry_saved_login`).
+        Err(error) => {
+            eprintln!("Qobuz saved login failed: {error}");
+            Err(error.to_string().into())
+        }
     }
-    Ok(None)
 }
 
 async fn authenticate_spotify() -> ServerResult<Option<SpotifyProvider>> {

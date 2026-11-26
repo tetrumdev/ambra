@@ -7,6 +7,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Unpaired, follow, restore, networkStatus } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
+import { DownloadIsland } from "./src/DownloadIsland";
 import { colors } from "./src/theme";
 import { usePhoneOutput } from "./src/usePhoneOutput";
 import { followPhoneDownloads, refreshServerDownloads, startPhoneDownloads, useDownloads } from "./src/downloads";
@@ -58,17 +59,17 @@ export default function App() {
   useEffect(() => {
     if (!paired) return;
     let disposed = false;
+    let away = false;
     const refresh = () => void networkStatus().then(status => {
       if (disposed) return;
       const connected = status.state.startsWith("Connected");
       setNetworkError(connected ? null : status.error ?? `Server ${status.state.toLowerCase()}`);
-      setUnreachableSince(current => {
-        if (!connected) return current ?? Date.now();
-        // Back from being away: what changed meanwhile is loaded again.
-        if (current !== null) void refreshLibrary();
-        return null;
-      });
-    }).catch(error => { if (!disposed) { setNetworkError(String(error)); setUnreachableSince(current => current ?? Date.now()); } });
+      // Back from being away: what changed meanwhile is loaded again. (Not inside the state
+      // updater: the library publishing there updates other components mid-render.)
+      if (connected && away) void refreshLibrary();
+      away = !connected;
+      setUnreachableSince(current => connected ? null : current ?? Date.now());
+    }).catch(error => { if (!disposed) { away = true; setNetworkError(String(error)); setUnreachableSince(current => current ?? Date.now()); } });
     refresh();
     const timer = setInterval(refresh, 3000);
     return () => { disposed = true; clearInterval(timer); };
@@ -94,6 +95,7 @@ export default function App() {
               void restore().then(value => { setSaved(value); setNetworkError(null); setChangingServer(false); }).catch(error => setNetworkError(String(error)));
             } : undefined}
             onPaired={() => { setNetworkError(null); setChangingServer(false); setSaved(current => ({ address: current?.address ?? null, paired: true })); }} />}
+        {paired && <DownloadIsland />}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

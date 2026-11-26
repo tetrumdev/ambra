@@ -298,7 +298,7 @@ async fn request_pairing(
         );
     }
     let client_key = remote.map(|remote| remote.0.public_key);
-    if client_key.is_none() && !peer.ip().is_loopback() {
+    if client_key.is_none() && !peer.ip().is_loopback() && !crate::access::lan_http_allowed(peer.ip()) {
         return error(
             StatusCode::UPGRADE_REQUIRED,
             "Pair over the native encrypted transport using the server pairing link",

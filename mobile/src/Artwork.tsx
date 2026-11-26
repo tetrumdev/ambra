@@ -24,7 +24,7 @@ export function Artwork({
         height: size,
         borderRadius: Math.round(size / 8),
         borderCurve: "continuous",
-        backgroundColor: "#141414",
+        backgroundColor: "#0a0a0a",
       }}
     />
   );

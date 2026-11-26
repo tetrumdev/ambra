@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Constants from "expo-constants";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { ActivityIndicator, KeyboardAvoidingView, Platform, StyleSheet, Text, View } from "react-native";
-import { awaitPairing, requestPairing, type PairingStarted } from "./client";
+import { awaitPairing, directMode, requestPairing, type PairingStarted } from "./client";
 import { Swirl } from "./Swirl";
 import { colors, fonts, haptic, space, textSize } from "./theme";
 import { Button, Field } from "./DesignControls";
@@ -10,7 +10,7 @@ import { Touchable } from "./Touchable";
 
 /** Asks the server to pair, shows the code to approve there, and waits. */
 export function Pairing({ savedAddress, onPaired, onCancel, initialError = null }: { savedAddress: string | null; onPaired: () => void; onCancel?: () => void; initialError?: string | null }) {
-  const [address, setAddress] = useState(() => savedAddress?.startsWith("ambra://pair/") ? savedAddress : "");
+  const [address, setAddress] = useState(() => savedAddress?.startsWith("ambra://pair/") || directMode ? savedAddress ?? "" : "");
   const [pairing, setPairing] = useState<PairingStarted | null>(null);
   const [scanning, setScanning] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
@@ -60,7 +60,6 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
             <Text style={styles.secondaryText}>Cancel</Text>
           </Touchable>
         </> : <>
-          <Text style={styles.body}>Scan the QR code from ambra-server pair qr, or paste its link. Then approve the six-digit code on that server.</Text>
           {scanning && permission?.granted && <CameraView style={{ height: 240, width: "100%" }} barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
             onBarcodeScanned={({ data }) => { if (scanned.current) return; if (data.startsWith("ambra://pair/")) { scanned.current = true; setAddress(data); setScanning(false); void start(data); } else setError("This QR code is not an Ambra pairing link."); }} />}
           <Touchable accessibilityRole="button" onPress={() => void (async () => { const next = permission?.granted ? permission : await requestPermission(); if (next.granted) { scanned.current = false; setScanning(value => !value); } else setError("Allow camera access to scan, or paste the pairing link."); })()} style={styles.secondary}>
@@ -69,7 +68,7 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
           <Field
             value={address}
             onChangeText={setAddress}
-            placeholder="ambra://pair/…"
+            placeholder={directMode ? "ambra://pair/… or 192.168.1.20" : "ambra://pair/…"}
             accessibilityLabel="Server pairing link"
             autoCapitalize="none"
             autoCorrect={false}
@@ -80,7 +79,7 @@ export function Pairing({ savedAddress, onPaired, onCancel, initialError = null 
           {error && <Text style={styles.error}>{error}</Text>}
           <Button title={busy ? "Connecting" : "Connect"} variant="primary" haptic="firm" hapticOnPressIn
             onPress={() => void start()} disabled={busy || !address.trim()}>
-            {busy && <ActivityIndicator color={colors.black} />}
+            {busy ? <ActivityIndicator color={colors.black} /> : undefined}
           </Button>
         </>}
       </KeyboardAvoidingView>

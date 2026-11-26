@@ -2,26 +2,27 @@ import * as Haptics from "expo-haptics";
 import { interactionTiming } from "../../desktop/src/utils/interactionTiming";
 
 /**
- * Phones have OLED panels, so the app sits on true black (desktop keeps #0a0a0a for LCDs).
- * Raised surfaces are the only non-black areas, and they stay dark enough to read as glass on black.
+ * AMOLED: phones have OLED panels, where black pixels are off. Everything sits on true black,
+ * surfaces are only a breath above it, and edges come from hairlines rather than gray fills,
+ * so the screen stays dark around the artwork (desktop keeps #0a0a0a for LCDs).
  */
-export const PRESSED_ALPHA = 0.07;
+export const PRESSED_ALPHA = 0.08;
 export const colors = {
   black: "#000000",
-  raised: "#121212",
-  field: "#151515",
-  selected: "#303030",
-  line: "#2f2f2f",
-  control: "#666666",
+  raised: "#0a0a0a",
+  field: "#0c0c0c",
+  selected: "#1f1f1f",
+  line: "#242424",
+  control: "#4a4a4a",
   text: "white",
   secondary: "#b3b3b3",
-  muted: "#a3a2a3",
-  faint: "#8a8a8a",
+  muted: "#9a999a",
+  faint: "#7a7a7a",
   accent: "#e6d3b1",
   accentInk: "#241b0e",
-  menu: "rgba(29, 29, 29, 0.88)",
-  scrim: "rgba(0, 0, 0, 0.7)",
-  destructive: "#7a2323",
+  menu: "rgba(12, 12, 12, 0.9)",
+  scrim: "rgba(0, 0, 0, 0.75)",
+  destructive: "#5e1a1a",
   error: "#ffb4b4",
 };
 
@@ -39,9 +40,49 @@ export const motion = {
   sheetFlick: 180,
 };
 
+/**
+ * Springs for things under a finger. Velocity carries over from the gesture, so a flick keeps
+ * its momentum and a slow release settles gently. All are close to critically damped: things
+ * flow to rest like a fluid rather than wobbling like a spring.
+ */
+export const springs = {
+  /** Tabs, pages and rows coming to rest. */
+  settle: { damping: 36, stiffness: 320, mass: 1 },
+  /** Small things moving into place: lenses, toggles, icons. */
+  snappy: { damping: 32, stiffness: 420, mass: 0.7 },
+  /** Things that grow: an armed swipe action, a toggle filling. The faintest overshoot. */
+  bouncy: { damping: 26, stiffness: 340, mass: 0.7 },
+  /** Released drags and presses returning to rest. */
+  release: { damping: 30, stiffness: 360, mass: 0.7 },
+};
+
+/** Past an end, a drag gives less and less: the further you pull, the harder it resists. */
+export function rubberBand(distance: number, dimension: number, resistance = 0.55) {
+  "worklet";
+  const sign = distance < 0 ? -1 : 1;
+  const magnitude = Math.abs(distance);
+  return sign * (1 - 1 / (magnitude * resistance / Math.max(1, dimension) + 1)) * dimension;
+}
+
+/**
+ * Desktop's frosted glass, kept nearly black for OLED: blur gives depth, a hairline the edge.
+ * (Only the feel of Apple's Liquid Glass is borrowed, through motion, not its material.)
+ */
+export const glass = {
+  panel: "rgba(10, 10, 10, 0.78)",
+  dock: "rgba(0, 0, 0, 0.62)",
+  /** The pill behind the chosen tab, segment or option. */
+  lens: "rgba(255, 255, 255, 0.11)",
+  border: "rgba(255, 255, 255, 0.08)",
+};
+
 const ignore = () => {};
 /** One vocabulary of touch feedback for the whole app. */
 export const haptic = {
+  /** A detent: crossing a tab, a row slot, a threshold you can still go back from. */
+  tick: () => void Haptics.selectionAsync().catch(ignore),
+  /** Something lifting off under the finger (a held row, a squeezed card). */
+  soft: () => void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Soft).catch(ignore),
   /** Picking something from a list or menu. */
   select: () => void Haptics.selectionAsync().catch(ignore),
   /** An ordinary button. */

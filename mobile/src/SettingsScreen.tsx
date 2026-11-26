@@ -1,28 +1,40 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { ActivityIndicator, Animated, StyleSheet, Switch, Text, View, useAnimatedValue } from "react-native";
 import Constants from "expo-constants";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { ServiceAuthStatus } from "../../desktop/src/api/server";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
 import { serverInfo, serviceStatus } from "./catalog";
-import { networkStatus } from "./client";
+import { connectionMethod, directMode, networkStatus, setConnectionMethod, type ConnectionMethod } from "./client";
+import { Segmented } from "./shell/Segmented";
+
 import { loadServicePreferences, services, servicePreferences, setServiceEnabled, subscribeServicePreferences, type Service } from "./servicePreferences";
 import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
-import { useNavigation } from "./navigation";
+import { CompactBar, PageHeader, useNavigation } from "./navigation";
 import { useDownloads } from "./downloads";
 import { signIn, signOut } from "./playlistTools";
 import { refreshLibrary } from "./library";
 import { colors, fonts, radius, space, textSize } from "./theme";
 
-export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: number; onChangeServer: () => void }) {
-  const insets = useSafeAreaInsets();
-  const { push } = useNavigation();
+// As desktop's Server settings name them. pwnat needs raw sockets, which phones don't allow.
+const methodItems: { value: ConnectionMethod | "auto"; label: string }[] = [
+  { value: "auto", label: "Automatic" },
+  { value: "Lan", label: "Local network" },
+  { value: "Public", label: "Internet (direct)" },
+  { value: "HyperDHT", label: "HyperDHT" },
+  { value: "TcpPunch", label: "Direct TCP (Nostr)" },
+  { value: "Tailcat", label: "Tailcat" },
+];
+
+export function SettingsScreen({ onChangeServer }: { onChangeServer: () => void }) {
+  const { push, bottomInset } = useNavigation();
+  const scroll = useAnimatedValue(0);
   const { phone, active } = useDownloads();
   const downloadedBytes = [...phone.values()].reduce((sum, entry) => sum + entry.sizeBytes, 0);
   const enabled = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
   const [server, setServer] = useState("Selected server");
   const [connection, setConnection] = useState("Checking connection…");
+  const [method, setMethod] = useState<ConnectionMethod | "auto">(() => connectionMethod() ?? "auto");
   const [connected, setConnected] = useState<ServiceAuthStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Service | null>(null);
@@ -74,16 +86,23 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
     setError(null);
     void setServiceEnabled(service, value).catch(reason => setError(reason instanceof Error ? reason.message : "Couldn't save this setting.")).finally(() => setBusy(null));
   };
-  return <ScrollView style={styles.screen} contentContainerStyle={{ paddingTop: insets.top + 24, paddingHorizontal: 24, paddingBottom: bottomInset + 24 }}>
-    <Text accessibilityRole="header" style={styles.title}>Settings</Text>
-    <Text style={styles.intro}>Your server. Your music.</Text>
+  return <View style={styles.screen}><Animated.ScrollView style={styles.screen} scrollEventThrottle={16} onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
+    contentContainerStyle={{ paddingBottom: bottomInset + 24 }}>
+    <View style={styles.offset}><PageHeader title="Settings" subtitle="Your server. Your music." scroll={scroll} /></View>
+    <View style={styles.body}>
     <Text accessibilityRole="header" style={styles.sectionTitle}>Server</Text>
     <View style={styles.card}>
       <Text style={styles.name}>{server}</Text>
-      <Text style={styles.detail}>{connection}</Text>
+      <Text style={styles.detail}>{connection}{directMode ? " · Expo Go" : ""}</Text>
       <Button title="Change server" accessibilityLabel="Connect to a different server" onPress={onChangeServer} style={styles.button} />
     </View>
-    <Text style={styles.note}>Scan another server’s QR code or paste its pairing link. You can cancel and return to this server.</Text>
+    {!directMode && <View style={styles.methods}>
+      <Segmented<ConnectionMethod | "auto"> label="Connection type" value={method} items={methodItems} onChange={next => {
+        setMethod(next);
+        setConnection("Reconnecting…");
+        void setConnectionMethod(next === "auto" ? null : next).catch(failure => setError(String(failure))).finally(() => setAttempt(value => value + 1));
+      }} />
+    </View>}
     <Text accessibilityRole="header" style={styles.sectionTitle}>Music services</Text>
     <View style={styles.card}>
       {services.map((service, index) => <View key={service} style={[styles.service, index > 0 && styles.divider]}>
@@ -94,10 +113,9 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
         {connected && (connected[service]
           ? <Button title="Sign out" accessibilityLabel={`Sign out of ${musicProviderName(service)}`} disabled={busy !== null || signingIn !== null} onPress={() => disconnect(service)} />
           : <Button title={signingIn === service ? "Waiting…" : "Sign in"} variant="primary" accessibilityLabel={`Sign in to ${musicProviderName(service)}`} disabled={signingIn !== null} onPress={() => startSignIn(service)} />)}
-        <Switch accessibilityLabel={`Use ${musicProviderName(service)} on this phone`} value={enabled[service]} disabled={busy !== null} onValueChange={value => toggle(service, value)} trackColor={{ false: "#343434", true: "#876428" }} thumbColor={colors.text} />
+        <Switch accessibilityLabel={`Use ${musicProviderName(service)} on this phone`} value={enabled[service]} disabled={busy !== null} onValueChange={value => toggle(service, value)} trackColor={{ false: "#262626", true: "#876428" }} thumbColor={colors.text} />
       </View>)}
     </View>
-    <Text style={styles.note}>Switches hide a service’s songs and exclude it from search on this phone. They do not sign out the server, stop another device, or change the shared queue.</Text>
     {signingIn && <View style={styles.signIn}>
       <Text style={styles.note}>Finish signing in to {musicProviderName(signingIn)} in the browser.</Text>
       {paste && <>
@@ -108,26 +126,26 @@ export function SettingsScreen({ bottomInset, onChangeServer }: { bottomInset: n
       <Button title="Cancel" onPress={cancelSignIn} style={styles.button} />
     </View>}
     {serviceMessage && <Text accessibilityRole="alert" style={styles.note}>{serviceMessage}</Text>}
-    <Text style={styles.note}>Sign in here or on desktop. Credentials stay on your server.</Text>
     <Text accessibilityRole="header" style={styles.sectionTitle}>Downloads</Text>
     <View style={styles.card}>
       <Text style={styles.name}>{phone.size} {phone.size === 1 ? "song" : "songs"} on this phone</Text>
       <Text style={styles.detail}>{(downloadedBytes / 1024 ** 3).toFixed(2)} GB, encrypted{active ? ` · downloading ${active.done + 1} of ${active.total}` : ""}</Text>
       <Button title="Manage downloads" onPress={() => push({ kind: "downloads" })} style={styles.button} />
     </View>
-    <Text style={styles.note}>Downloaded songs play without a server. They are encrypted with this phone’s own key, so the files can’t be copied out and played elsewhere.</Text>
     {loading && <ActivityIndicator color={colors.muted} style={styles.loading} />}
     {error && <View style={styles.errorBox}><Text accessibilityRole="alert" style={styles.error}>{error}</Text><Touchable accessibilityRole="button" onPress={() => { setLoading(true); setError(null); setAttempt(value => value + 1); }} style={styles.retry}><Text style={styles.buttonText}>Retry</Text></Touchable></View>}
     <Text style={styles.version}>AMBRA {Constants.expoConfig?.version ?? ""}</Text>
-  </ScrollView>;
+    </View>
+  </Animated.ScrollView><CompactBar title="Settings" scroll={scroll} /></View>;
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
-  title: { color: colors.text, fontFamily: fonts.serif, fontSize: textSize.page },
-  intro: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, marginTop: 8, marginBottom: 12 },
+  offset: { marginHorizontal: 0 },
+  body: { paddingHorizontal: 20 },
   sectionTitle: { color: colors.text, fontFamily: fonts.sans, fontSize: 18, fontWeight: "600", marginTop: 28, marginBottom: 12 },
-  card: { backgroundColor: colors.field, borderColor: colors.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.md, paddingHorizontal: 16, paddingVertical: 8 },
+  methods: { marginHorizontal: -20, marginTop: 10 },
+  card: { backgroundColor: colors.raised, borderColor: colors.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.lg, borderCurve: "continuous", paddingHorizontal: 16, paddingVertical: 8 },
   name: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.body, marginTop: 8 },
   detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, marginTop: 5, marginBottom: 8 },
   note: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, marginTop: 12 },

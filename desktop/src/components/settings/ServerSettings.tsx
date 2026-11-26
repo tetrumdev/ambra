@@ -234,6 +234,71 @@ function PlaybackSessions() {
   </div>;
 }
 
+type PairingQr = { payload: string; svg: string | null };
+type Waiting = { code: string; clientName: string; address: string; ageSeconds: number };
+
+/**
+ * Pairs a phone or another computer with the server running on this computer: its QR code and
+ * pairing link, and the devices waiting for approval, approved here instead of with the CLI.
+ */
+function PairDevices() {
+  const [qr, setQr] = useState<PairingQr | null>(null);
+  const [waiting, setWaiting] = useState<Waiting[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!qr) return;
+    let disposed = false;
+    const refresh = () => void invoke<{ pending: Waiting[] }>("local_pairing", { action: "list" })
+      .then(list => { if (!disposed) setWaiting(list.pending); })
+      .catch(reason => { if (!disposed) setError(String(reason)); });
+    refresh();
+    const timer = setInterval(refresh, 1500);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [qr]);
+  if (!isTauri()) return null;
+  const show = async () => {
+    setBusy(true);
+    setError(null);
+    // Showing the code also opens the server's pairing window for a while.
+    try { setQr(await invoke<PairingQr>("local_pairing", { action: "qr" })); }
+    catch (reason) { setError(String(reason)); }
+    finally { setBusy(false); }
+  };
+  const answer = (action: "approve" | "deny", code: string) => {
+    setError(null);
+    void invoke("local_pairing", { action, code })
+      .then(() => setWaiting(current => current.filter(item => item.code !== code)))
+      .catch(reason => setError(String(reason)));
+  };
+  return <div className="settingsGroup">
+    <h2>Pair a device<Help topic="Pair a device">Scan the code with Ambra on a phone, or paste the link into another computer's Server settings. Then approve the six-digit code it shows. Only the computer running the server can pair devices.</Help></h2>
+    {!qr ? <button type="button" className="uiButton" disabled={busy} onClick={() => void show()}>{busy ? "Preparing…" : "Show pairing code"}</button> : <>
+      <div className="serverPair">
+        {qr.svg && <img className="serverPairQr" alt="Pairing QR code" src={`data:image/svg+xml;utf8,${encodeURIComponent(qr.svg)}`} />}
+        <div className="serverPairLink">
+          <SettingRow label="Pairing link" help="Contains only public details for finding this server; it grants no access until you approve a device.">
+            <span className="settingsActions">
+              <input className="uiField serverPairInput" aria-label="Pairing link" readOnly value={qr.payload} onFocus={event => event.currentTarget.select()} />
+              <button type="button" className="uiButton" onClick={() => void navigator.clipboard.writeText(qr.payload).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })}>{copied ? "Copied" : "Copy"}</button>
+            </span>
+          </SettingRow>
+          {waiting.length === 0 && <p className="settingsMuted" role="status">Waiting for a device to ask…</p>}
+          {waiting.map(item => <SettingRow key={item.code} label={item.clientName} hint={`${item.address} · code ${item.code.slice(0, 3)} ${item.code.slice(3)}`}>
+            <span className="settingsActions">
+              <button type="button" className="uiButton uiButtonPrimary" onClick={() => answer("approve", item.code)}>Approve</button>
+              <button type="button" className="uiButton" onClick={() => answer("deny", item.code)}>Deny</button>
+            </span>
+          </SettingRow>)}
+          <button type="button" className="settingsLink" onClick={() => { setQr(null); setWaiting([]); }}>Hide</button>
+        </div>
+      </div>
+    </>}
+    {error && <p className="settingsError" role="alert">{error}</p>}
+  </div>;
+}
+
 type ServerCommand = { path: string; installed: boolean; available: boolean };
 
 /** Downloads the server for this computer from the release matching this app; the app never ships it. */
@@ -334,6 +399,7 @@ export function ServerSettings({ active }: { active: boolean }) {
         </>}
       </div>
       {server && sharedPlayback && connected && <PlaybackSessions />}
+      <PairDevices />
       <SavedServers saved={saved} changing={changing} onChange={(command, args) => void change(command, args)} />
       <ServerCommandInstall />
     </>}

@@ -4,6 +4,13 @@
     outline: none;
 }
 
+/* The root centres text; WebView2 (Windows) lets fields inherit that where WebKit doesn't,
+   which centred the search field and its caret. Fields start at the start everywhere. */
+input,
+textarea {
+    text-align: start;
+}
+
 /* The gliding caret (utils/smoothCaret.ts) stands in for the native one. */
 input[data-smooth-caret] {
     caret-color: transparent;

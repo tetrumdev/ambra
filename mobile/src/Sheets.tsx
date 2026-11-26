@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Track } from "../../desktop/src/types/music";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
+import { nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { clientId } from "./client";
 import { downloadClients, downloadQualities, isDownloadable, requestDownloads, useDownloads, type DownloadClient, type DownloadQuality } from "./downloads";
 import { Icon } from "./Icons";
@@ -26,11 +27,23 @@ export function openDownloadSheet(tracks: Track[], title: string) {
 
 const songs = (count: number) => `${count} ${count === 1 ? "song" : "songs"}`;
 
-/** Download to Server or to Client, at the chosen quality (`desktop/src/components/DownloadDialog.tsx`). */
-export function DownloadSheetHost() {
-  const request = useSyncExternalStore(listener => { downloadListeners.add(listener); return () => { downloadListeners.delete(listener); }; }, () => downloadRequest);
-  if (!request) return null;
-  return <DownloadSheet key={request.title + request.tracks.length} request={request} onClose={() => setDownloadRequest(null)} />;
+type Picker = { kind: "playlist"; tracks: Track[] } | { kind: "credits"; track: Track };
+let picker: (Picker & { id: number }) | null = null;
+const setPicker = (next: Picker | null) => { picker = next && { ...next, id: Date.now() }; for (const listener of downloadListeners) listener(); };
+/** Desktop's Add to Playlist submenu, as a sheet over everything. */
+export const openPlaylistPicker = (tracks: Track[]) => setPicker({ kind: "playlist", tracks });
+export const openCredits = (track: Track) => setPicker({ kind: "credits", track });
+const subscribeSheets = (listener: () => void) => { downloadListeners.add(listener); return () => { downloadListeners.delete(listener); }; };
+
+/** Sheets any menu can open: Download (`desktop/src/components/DownloadDialog.tsx`), Add to Playlist, Credits. */
+export function SheetHosts() {
+  const request = useSyncExternalStore(subscribeSheets, () => downloadRequest);
+  const open = useSyncExternalStore(subscribeSheets, () => picker);
+  return <>
+    {request && <DownloadSheet key={request.title + request.tracks.length} request={request} onClose={() => setDownloadRequest(null)} />}
+    {open?.kind === "playlist" && <PlaylistPicker key={open.id} tracks={open.tracks} onClose={() => setPicker(null)} />}
+    {open?.kind === "credits" && <CreditsSheet key={open.id} track={open.track} onClose={() => setPicker(null)} />}
+  </>;
 }
 
 function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose: () => void }) {
@@ -56,13 +69,15 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
     return () => { abort.abort(); clearInterval(timer); };
   }, [step]);
 
-  const start = async (target: Parameters<typeof requestDownloads>[2]) => {
+  const start = async (target: Parameters<typeof requestDownloads>[2], close?: () => void) => {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       const created = await requestDownloads(request.tracks, quality, target);
       haptic.success();
+      // To this phone alone: the island at the top follows it, as in Qobuz.
+      if (close) { close(); return; }
       setStarted(created.map(job => job.id));
       setStep("started");
     } catch (failure) {
@@ -94,11 +109,14 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
             </Touchable>)}
             {step === "target" ? <>
               <Text style={styles.section}>Download to</Text>
+              {nativeNetworkAvailable && self && <Touchable accessibilityRole="button" highlight disabled={busy} onPress={() => void start({ kind: "clients", clientIds: [self] }, close)} style={styles.option}>
+                <Icon name="download" size={18} /><Text style={styles.label}>This Phone</Text>
+              </Touchable>}
               <Touchable accessibilityRole="button" highlight disabled={busy} onPress={() => void start({ kind: "server" })} style={styles.option}>
-                <Icon name="download" size={18} /><Text style={styles.label}>Download to Server</Text>
+                <Icon name="download" size={18} /><Text style={styles.label}>Server</Text>
               </Touchable>
               <Touchable accessibilityRole="button" highlight disabled={busy} onPress={() => { setError(null); setStep("clients"); }} style={styles.option}>
-                <Icon name="download" size={18} /><Text style={styles.label}>Download to Client</Text>
+                <Icon name="download" size={18} /><Text style={styles.label}>Other Devices</Text>
               </Touchable>
             </> : <>
               <Touchable accessibilityRole="button" haptic="tap" onPress={() => setStep("target")} style={styles.backRow}><Icon name="back" size={14} color={colors.secondary} /><Text style={styles.detail}>Back</Text></Touchable>
@@ -223,7 +241,7 @@ const styles = StyleSheet.create({
   body: { flexGrow: 0 },
   bodyContent: { paddingHorizontal: 8, paddingBottom: 12, gap: space.xs },
   section: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingTop: 16, paddingBottom: 6 },
-  option: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 48, paddingHorizontal: 8, borderRadius: radius.field },
+  option: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 50, paddingHorizontal: 10, borderRadius: radius.md, borderCurve: "continuous" },
   label: { flex: 1, color: colors.text, fontFamily: fonts.sans, fontSize: 15 },
   selected: { fontWeight: "600" },
   detail: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 19 },
@@ -231,7 +249,7 @@ const styles = StyleSheet.create({
   primary: { marginTop: 16 },
   job: { paddingVertical: 8, gap: 2 },
   backRow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36 },
-  box: { width: 20, height: 20, borderRadius: 5, borderWidth: 1, borderColor: "#5a5a5a", alignItems: "center", justifyContent: "center" },
+  box: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: "#4a4a4a", alignItems: "center", justifyContent: "center" },
   boxChecked: { backgroundColor: colors.text, borderColor: colors.text },
   loading: { padding: 16 },
   create: { flexDirection: "row", gap: space.sm, alignItems: "center", paddingTop: 4 },

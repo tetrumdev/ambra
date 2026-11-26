@@ -1,6 +1,6 @@
 import { convertFileSrc, invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { RemoteTrack } from "../api/server";
 import { getServerConnection, serverBaseUrl, serverConnectionSignal, subscribeServerConnection } from "../api/serverConnection";
 import type { GlobalTrackId, Track } from "../types/music";
@@ -58,10 +58,12 @@ export type DownloadClient = { id: string; name: string };
 type DownloadState = {
   local: ReadonlyMap<GlobalTrackId, DownloadEntry>;
   server: ReadonlySet<GlobalTrackId>;
+  /** The server's copies, for listing them; replaced only when `server` changes. */
+  serverEntries: readonly DownloadEntry[];
   jobs: DownloadJob[];
 };
 
-let state: DownloadState = { local: new Map(), server: new Set(), jobs: [] };
+let state: DownloadState = { local: new Map(), server: new Set(), serverEntries: [], jobs: [] };
 const listeners = new Set<() => void>();
 const DOWNLOADABLE = new Set(["tidal", "qobuz", "spotify"]);
 
@@ -73,7 +75,10 @@ function sameDownloads(previous: ReadonlySet<GlobalTrackId>, next: ReadonlySet<G
 
 function publish(next: Partial<DownloadState>) {
   // Job progress can change without changing which tracks are playable.
-  if (next.server && sameDownloads(state.server, next.server)) next.server = state.server;
+  if (next.server && sameDownloads(state.server, next.server)) {
+    next.server = state.server;
+    next.serverEntries = state.serverEntries;
+  }
   state = { ...state, ...next };
   for (const listener of listeners) listener();
 }
@@ -93,6 +98,17 @@ export function useServerDownloads() {
 
 export function useDownloadJobs() {
   return useSyncExternalStore(subscribe, () => state.jobs);
+}
+
+/** Every downloaded song, on this device or the server, newest first: the library's Downloaded section. */
+export function useDownloadedTracks(): Track[] {
+  const local = useLocalDownloads();
+  const server = useSyncExternalStore(subscribe, () => state.serverEntries);
+  return useMemo(() => {
+    const entries = new Map<GlobalTrackId, DownloadEntry>();
+    for (const entry of [...server, ...local.values()]) entries.set(entry.id, entry);
+    return [...entries.values()].sort((left, right) => right.downloadedAt - left.downloadedAt).map(offlineTrack);
+  }, [local, server]);
 }
 
 /** This device's player source for the song, when it's downloaded here. */
@@ -138,7 +154,7 @@ export async function refreshServerDownloads() {
   const connectionSignal = serverConnectionSignal();
   clearTimeout(jobPoll);
   if (!getServerConnection()?.server && isTauri()) {
-    publish({ server: new Set(), jobs: [] });
+    publish({ server: new Set(), serverEntries: [], jobs: [] });
     return;
   }
   try {
@@ -149,7 +165,7 @@ export async function refreshServerDownloads() {
     if (!response.ok) return;
     const body = await response.json() as { entries: DownloadEntry[]; jobs: DownloadJob[] };
     if (connectionSignal.aborted || refresh !== downloadRefresh) return;
-    publish({ server: new Set(body.entries.map(entry => entry.id)), jobs: body.jobs });
+    publish({ server: new Set(body.entries.map(entry => entry.id)), serverEntries: body.entries, jobs: body.jobs });
   } catch { /* Offline: keep what was last known. */ }
   finally {
     // Keep following jobs through brief outages, and discover downloads started

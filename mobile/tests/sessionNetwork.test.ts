@@ -2,7 +2,7 @@ import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 
 const foreground = new Set<(state: string) => void>();
 mock.module("expo-secure-store", () => ({
-  getItemAsync: async (key: string) => key === "ambra.token" ? "isolated-test-token" : "isolated-test-payload",
+  getItemAsync: async (key: string) => key === "ambra.session" ? null : key === "ambra.token" ? "isolated-test-token" : "isolated-test-payload",
   setItemAsync: async () => {}, deleteItemAsync: async () => {},
 }));
 mock.module("react-native", () => ({ AppState: {

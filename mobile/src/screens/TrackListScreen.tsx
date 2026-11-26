@@ -1,44 +1,38 @@
-import { Image } from "expo-image";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
-import { ActivityIndicator, FlatList, Platform, RefreshControl, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Animated, FlatList, Platform, RefreshControl, StyleSheet, Text, View, useAnimatedValue, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import type { Track } from "../../../desktop/src/types/music";
-import { changeQueue, command, currentTrack, thumbnailArtwork, type QueueItem } from "../client";
-import { useDownloads } from "../downloads";
+import { changeQueue, command, currentTrack, sessionView, thumbnailArtwork, type QueueItem } from "../client";
 import { Icon } from "../Icons";
-import { Menu, type MenuAction } from "../Menu";
-import { ScreenHeader, useNavigation, useRun } from "../navigation";
+import { CompactBar, PageHeader, useNavigation, useNowPlaying, useRun } from "../navigation";
 import { playEntries, playlistEntries, shuffledEntries } from "../queueModel";
 import { serviceAllowed, servicePreferences, subscribeServicePreferences } from "../servicePreferences";
+import { openMenu, type MenuAction } from "../shell/ContextMenu";
 import { colors, fonts, haptic, radius, space, textSize } from "../theme";
-import { Touchable } from "../Touchable";
-import { TrackRow, boundRows } from "../TrackBrowser";
+import { Touchable, anchorOf, type Frame } from "../Touchable";
+import { TrackRow } from "../TrackRow";
+import { boundRows } from "../TrackBrowser";
 import { useTrackMenus, type RemoveAction } from "../TrackMenus";
 import { ReorderRow, moved, useReorder } from "../reorder";
+import { CardArt } from "./Cards";
 
-const placeholder = require("../../assets/ambra.png");
+const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<Track>);
 
 function duration(tracks: Track[]) {
   const minutes = Math.round(tracks.reduce((sum, track) => sum + track.durationSeconds, 0) / 60);
   if (minutes <= 0) return "";
-  return `  •  ${minutes >= 60 ? `${Math.floor(minutes / 60)} hr ` : ""}${minutes % 60} min`;
+  return `  ·  ${minutes >= 60 ? `${Math.floor(minutes / 60)} hr ` : ""}${minutes % 60} min`;
 }
 
 /** A cover, or desktop's four-cover mosaic for playlists. */
-export function CollectionArt({ tracks, image, round = false, size = 132 }: { tracks?: Track[]; image?: string | null; round?: boolean; size?: number }) {
-  const style = [styles.art, { width: size, height: size, borderRadius: round ? size / 2 : 12 }];
-  if (image !== undefined || !tracks?.length) {
-    return <Image source={image || placeholder} contentFit={image ? "cover" : "contain"} cachePolicy="disk" transition={0} style={style} />;
-  }
-  const covers = [...new Set(tracks.map(track => thumbnailArtwork(track)).filter(Boolean))].slice(0, 4) as string[];
-  if (covers.length < 4) return <Image source={covers[0] || placeholder} contentFit="cover" cachePolicy="disk" transition={0} style={style} />;
-  return <View style={[style, styles.mosaic]}>
-    {covers.map(cover => <Image key={cover} source={cover} contentFit="cover" enforceEarlyResizing cachePolicy="disk" transition={0} style={styles.tile} />)}
-  </View>;
+export function CollectionArt({ tracks, image, round = false, size = 200 }: { tracks?: Track[]; image?: string | null; round?: boolean; size?: number }) {
+  const covers = useMemo(() => image !== undefined ? [] : [...new Set((tracks ?? []).map(track => thumbnailArtwork(track)).filter(Boolean))].slice(0, 4) as string[], [tracks, image]);
+  return <CardArt image={image ?? (covers.length < 4 ? covers[0] ?? null : null)} images={covers} size={size} round={round} />;
 }
 
 /**
  * Desktop's track collection page (TrackCollectionView) for a phone: the cover above the
- * title, Play, Shuffle and the collection's ⋯ menu, then its songs.
+ * title, Play, Shuffle and the collection's ⋯ menu, then its songs. Pull down and the cover
+ * swells; scroll and the title settles into the bar at the top.
  */
 export function TrackListScreen({ title, subtitle, art, tracks, source, packages, loading = false, error, onRefresh, remove, collectionActions, empty, header, onReorder }: {
   title: string;
@@ -59,12 +53,12 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
   /** Hold and drag songs to reorder them; gets the songs' new order. */
   onReorder?: (ids: string[]) => Promise<unknown>;
 }) {
-  const { view, bottomInset, onMenuVisibilityChange } = useNavigation();
+  const { bottomInset } = useNavigation();
+  const { trackId: nowId, playing } = useNowPlaying();
   const run = useRun();
   const enabled = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
-  const { phone } = useDownloads();
-  const [collectionMenu, setCollectionMenu] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const scroll = useAnimatedValue(0);
   // A drop shows at once; the saved order replaces it when it arrives.
   const [dropped, setDropped] = useState<{ base: Track[]; ids: string[] } | null>(null);
   const shown = useMemo(() => {
@@ -78,9 +72,7 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
     : shown.map((track, index) => ({ globalTrackId: track.globalId, source: { kind: source.kind, id: source.id, entryId: index + 1 } })),
   [shown, packages, source.kind, source.id, title]);
   const bound = useMemo(() => boundRows(packages ? { playlist: { id: source.id, name: title, trackIds: shown.map(track => track.globalId), packages }, tracks: shown } : null), [packages, shown, source.id, title]);
-  const { openPlayback, openEdit, menus } = useTrackMenus(remove);
-  const now = currentTrack(view);
-  const playing = !!view?.playing;
+  const { openSong, enqueue } = useTrackMenus(remove);
   const list = useRef<FlatList<Track>>(null);
   const reorder = useReorder({
     list: list as never,
@@ -90,40 +82,54 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
       setDropped({ base: tracks, ids });
       run(() => onReorder!(ids), undefined, false);
     },
-    renderLifted: index => shown[index] ? <TrackRow track={shown[index]} index={index} active={now?.globalId === shown[index].globalId} playing={playing} downloaded={phone.has(shown[index].globalId)} onPress={() => {}} /> : null,
+    renderLifted: index => shown[index] ? <TrackRow track={shown[index]} index={index} active={nowId === shown[index].globalId} playing={playing} onPress={() => {}} /> : null,
   });
 
   // Rows keep stable handlers, so a session update only redraws the rows whose state changed.
-  const latest = useRef({ view, entries, shown });
-  useLayoutEffect(() => { latest.current = { view, entries, shown }; });
+  const latest = useRef({ entries, shown });
+  useLayoutEffect(() => { latest.current = { entries, shown }; });
   const onPress = useCallback((index: number) => {
-    const { view, entries, shown } = latest.current;
+    const { entries, shown } = latest.current;
+    const view = sessionView();
     run(() => currentTrack(view)?.globalId === shown[index]?.globalId ? command(view?.playing ? "pause" : "play") : changeQueue(queue => playEntries(queue, entries.slice(index), shown), true));
   }, [run]);
-  const onHold = useCallback((index: number) => openPlayback(index, latest.current.entries, latest.current.shown), [openPlayback]);
-  const onMore = useCallback((index: number) => openEdit(latest.current.shown[index]), [openEdit]);
+  const onMenu = useCallback((index: number, frame: Frame) => {
+    const { entries, shown } = latest.current;
+    const view = sessionView();
+    const track = shown[index];
+    if (!track) return;
+    const row = <TrackRow track={track} index={index} active={currentTrack(view)?.globalId === track.globalId} playing={!!view?.playing} onPress={() => {}} />;
+    openSong(index, entries, shown, frame, row);
+  }, [openSong]);
+  const swipes = useCallback((index: number) => ({
+    start: { icon: "playNext" as const, label: "Play Next", run: () => enqueue(index, latest.current.entries, latest.current.shown, true) },
+    end: { icon: "addToQueue" as const, label: "Queue", run: () => enqueue(index, latest.current.entries, latest.current.shown, false) },
+  }), [enqueue]);
 
+  const play = (shuffle: boolean) => {
+    // Shuffled once, so a conflict retry keeps the same order.
+    const order = shuffle ? shuffledEntries(entries) : entries;
+    run(() => changeQueue(queue => playEntries(queue, order, shown), true));
+  };
   const listHeader = (
     <View onLayout={event => reorder.onRowsLayout(event.nativeEvent.layout.height)}>
-      <ScreenHeader />
+      <PageHeader scroll={scroll} large={false} />
       <View style={styles.hero}>
-        {art}
+        {/* Pulled past the top, the cover swells from its bottom edge. */}
+        <Animated.View style={{ transformOrigin: "center bottom", transform: [{ scale: scroll.interpolate({ inputRange: [-240, 0], outputRange: [1.35, 1], extrapolateRight: "clamp" }) }] }}>{art}</Animated.View>
         <Text accessibilityRole="header" style={styles.title} numberOfLines={3} adjustsFontSizeToFit minimumFontScale={0.6}>{title}</Text>
         {subtitle && <Text style={styles.subtitle} numberOfLines={2}>{subtitle}</Text>}
-        <Text style={styles.summary}>{shown.length} {shown.length === 1 ? "track" : "tracks"}{duration(shown)}</Text>
+        <Text style={styles.summary}>{shown.length} {shown.length === 1 ? "song" : "songs"}{duration(shown)}</Text>
       </View>
       <View style={styles.actions}>
-        <Touchable accessibilityRole="button" accessibilityLabel={`Play ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn onPress={() => run(() => changeQueue(queue => playEntries(queue, entries, shown), true))} style={styles.play}>
-          <Icon name="play" size={14} color={colors.black} /><Text style={styles.playLabel}>PLAY</Text>
+        <Touchable accessibilityRole="button" accessibilityLabel={`Play ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn scale={0.93} onPress={() => play(false)} style={styles.play}>
+          <Icon name="play" size={14} color={colors.black} /><Text style={styles.playLabel}>Play</Text>
         </Touchable>
-        <Touchable accessibilityRole="button" accessibilityLabel={`Shuffle ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn onPress={() => {
-          // Shuffled once, so a conflict retry keeps the same order.
-          const shuffled = shuffledEntries(entries);
-          run(() => changeQueue(queue => playEntries(queue, shuffled, shown), true));
-        }} style={styles.shuffle}>
-          <Icon name="shuffle" size={18} /><Text style={styles.shuffleLabel}>SHUFFLE</Text>
+        <Touchable accessibilityRole="button" accessibilityLabel={`Shuffle ${title}`} disabled={!shown.length} haptic="firm" hapticOnPressIn scale={0.93} onPress={() => play(true)} style={styles.shuffle}>
+          <Icon name="shuffle" size={18} /><Text style={styles.shuffleLabel}>Shuffle</Text>
         </Touchable>
-        {!!collectionActions?.length && <Touchable accessibilityRole="button" accessibilityLabel={`Options for ${title}`} haptic="select" onPress={() => setCollectionMenu(true)} style={styles.more}>
+        {!!collectionActions?.length && <Touchable accessibilityRole="button" accessibilityLabel={`Options for ${title}`} haptic="select" scale={0.85}
+          onPress={event => openMenu({ anchor: anchorOf(event), title, subtitle, actions: collectionActions })} style={styles.more}>
           <Icon name="more" rotation={90} size={18} />
         </Touchable>}
       </View>
@@ -135,29 +141,35 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
 
   return (
     <View style={styles.screen} {...reorder.containerProps}>
-      <FlatList
+      <AnimatedFlatList
         ref={list}
-        {...reorder.listProps}
+        scrollEnabled={reorder.listProps.scrollEnabled}
+        scrollEventThrottle={16}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], {
+          useNativeDriver: true,
+          listener: (event: NativeSyntheticEvent<NativeScrollEvent>) => reorder.listProps.onScroll(event),
+        })}
         data={shown}
         keyExtractor={(track, index) => `${track.globalId}:${index}`}
         contentContainerStyle={[styles.content, { paddingBottom: bottomInset + 16 }]}
         scrollIndicatorInsets={{ bottom: bottomInset }}
-        extraData={`${now?.globalId}:${playing}:${phone.size}`}
+        extraData={`${nowId}:${playing}`}
         initialNumToRender={12}
         maxToRenderPerBatch={8}
         windowSize={5}
         removeClippedSubviews={Platform.OS === "android"}
         refreshControl={onRefresh ? <RefreshControl refreshing={refreshing} onRefresh={() => { haptic.tap(); setRefreshing(true); Promise.resolve(onRefresh()).finally(() => setRefreshing(false)); }} tintColor="white" /> : undefined}
         ListHeaderComponent={listHeader}
-        ListEmptyComponent={!loading && !error ? <Text style={styles.empty}>{empty ?? "No songs here yet."}</Text> : undefined}
+        ListEmptyComponent={!loading && !error && empty ? <Text style={styles.empty}>{empty}</Text> : undefined}
         renderItem={({ item, index }) => {
-          const row = <TrackRow track={item} index={index} active={now?.globalId === item.globalId} playing={playing} bound={bound.get(item.globalId)} downloaded={phone.has(item.globalId)} holdDrags={!!onReorder} onPress={onPress} onHold={onHold} onMore={onMore} />;
-          return onReorder ? <ReorderRow index={index} reorder={reorder} enabled onHold={onHold}>{row}</ReorderRow> : row;
+          const swipe = swipes(index);
+          const row = <TrackRow track={item} index={index} active={nowId === item.globalId} playing={playing} bound={bound.get(item.globalId)}
+            onPress={onPress} onMenu={onMenu} swipeStart={swipe.start} swipeEnd={swipe.end} />;
+          return <ReorderRow index={index} reorder={onReorder ? reorder : undefined} onHold={onMenu}>{row}</ReorderRow>;
         }}
       />
       {reorder.overlay}
-      {menus}
-      {collectionMenu && collectionActions && <Menu title={title} subtitle={subtitle} actions={collectionActions} onClose={() => setCollectionMenu(false)} onVisibilityChange={onMenuVisibilityChange} />}
+      <CompactBar title={title} scroll={scroll} threshold={300} />
     </View>
   );
 }
@@ -166,16 +178,13 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.black },
   content: { paddingHorizontal: 12 },
   hero: { alignItems: "center", gap: space.sm, paddingHorizontal: 12, paddingBottom: 20 },
-  art: { backgroundColor: "#141414", overflow: "hidden", borderCurve: "continuous", marginBottom: 10 },
-  mosaic: { flexDirection: "row", flexWrap: "wrap" },
-  tile: { width: "50%", height: "50%" },
-  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 34, lineHeight: 40, fontWeight: "500", textAlign: "center" },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 34, lineHeight: 40, fontWeight: "500", textAlign: "center", marginTop: 14 },
   subtitle: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.small, textAlign: "center" },
   summary: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption },
-  actions: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, marginBottom: 14 },
-  play: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: colors.text, borderRadius: radius.pill, height: 46 },
-  shuffle: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderColor: colors.text, borderWidth: 1, borderRadius: radius.pill, height: 46 },
-  more: { width: 46, height: 46, borderRadius: 23, borderWidth: 1, borderColor: "#3a3a3a", alignItems: "center", justifyContent: "center" },
+  actions: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, marginBottom: 10 },
+  play: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: colors.text, borderRadius: radius.pill, height: 48 },
+  shuffle: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderColor: "rgba(255, 255, 255, 0.35)", borderWidth: 1, borderRadius: radius.pill, height: 48 },
+  more: { width: 48, height: 48, borderRadius: 24, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" },
   playLabel: { color: colors.black, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
   shuffleLabel: { color: colors.text, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
   error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, paddingHorizontal: 8, paddingVertical: 6 },

@@ -531,12 +531,9 @@ const TrackRow = memo(function TrackRow({ track, index, position, available, rem
           <img src={nowPlaying === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
         {showArtwork && (
-          <button type="button" className="coverImgContainer" data-track-cover-play data-drag-handle
-            disabled={!available} aria-label={`${nowPlaying === "playing" ? "Pause" : "Play"} ${track.name} (cover)`}
-            onClick={event => {
-              event.stopPropagation();
-              if (event.detail <= 1) onAction("play", event, index);
-            }}>
+          // Only the play button plays; the cover opens the song's playback options, like its title.
+          <button type="button" className="coverImgContainer" data-playback-menu-trigger data-drag-handle
+            disabled={!available} aria-label={`Playback options for ${track.name}`}>
             <TrackArtwork track={track} alt="" className="coverImg" draggable={false} />
           </button>
         )}

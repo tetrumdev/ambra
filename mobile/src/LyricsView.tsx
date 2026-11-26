@@ -203,22 +203,23 @@ function Credits({ lyrics, plain, motion, followingUI, reduced, index }: { lyric
   return <Animated.View style={[styles.credits, style]}><Text style={styles.credit}>{plain ? "Lyrics" : lyrics.hasWordSync ? "Word-synced lyrics" : "Line-synced lyrics"}</Text>{lyrics.source && <Text style={styles.source}>Lyrics from {sources[lyrics.source]}</Text>}</Animated.View>;
 }
 
-const Group = memo(function Group({ block, index, focus, following, time, fontSize, plain, reduced, running, offset, disabled, onSeek, scrollMotion, followingUI }: {
-  block: LyricBlock; index: number; focus: number; following: boolean; time: SharedValue<number>; fontSize: number; plain: boolean; reduced: boolean; running: boolean; offset: number; disabled: boolean; onSeek: (seconds: number) => void;
+// Only the distance to the sung line (clamped where the look stops changing) and which side
+// it's on reach each group, so a line change re-renders the few groups whose look changes.
+const Group = memo(function Group({ block, index, distance, side, following, time, fontSize, plain, reduced, running, offset, disabled, onSeek, scrollMotion, followingUI }: {
+  block: LyricBlock; index: number; distance: number; side: -1 | 0 | 1; following: boolean; time: SharedValue<number>; fontSize: number; plain: boolean; reduced: boolean; running: boolean; offset: number; disabled: boolean; onSeek: (seconds: number) => void;
   scrollMotion: SharedValue<LyricScrollMotion>; followingUI: SharedValue<boolean>;
 }) {
-  const distance = Math.abs(index - focus);
   const fade = useSharedValue(0.38);
   const rippleStyle = useRippleStyle(index, scrollMotion, followingUI, reduced);
   useAnimatedReaction(() => {
     const active = block.kind === "lines" && block.rows.some(row => lyricActive(row.line, time.get()));
-    return plain ? 1 : !following ? 0.75 : active || index === focus ? 1 : index < focus ? 0.28 : Math.max(0.24, 0.72 - distance * 0.13);
+    return plain ? 1 : !following ? 0.75 : active || side === 0 ? 1 : side < 0 ? 0.28 : Math.max(0.24, 0.72 - distance * 0.13);
   }, (target, previous) => {
     if (target !== previous) fade.set(withTiming(target, { duration: reduced ? 150 : 500, easing: lyricEase }));
   });
   const style = useAnimatedStyle(() => ({ opacity: fade.get() }));
-  if (block.kind === "pause") return <Animated.View accessible={index === focus} accessibilityLabel="Instrumental break" style={[{ height: index === focus ? 56 : 0, overflow: "hidden" }, style, rippleStyle]}><View style={styles.dots}>{[0, 1, 2].map(dotIndex => <PauseDot key={dotIndex} index={dotIndex} {...{ block, time, reduced }} running={running && index === focus} />)}</View></Animated.View>;
-  return <Animated.View style={[styles.group, style, rippleStyle]}>{block.rows.map(row => <Row key={row.id} {...{ row, time, fontSize, plain, reduced, offset, disabled, onSeek }} animate={running && distance <= 2} past={index < focus} />)}</Animated.View>;
+  if (block.kind === "pause") return <Animated.View accessible={side === 0} accessibilityLabel="Instrumental break" style={[{ height: side === 0 ? 56 : 0, overflow: "hidden" }, style, rippleStyle]}><View style={styles.dots}>{[0, 1, 2].map(dotIndex => <PauseDot key={dotIndex} index={dotIndex} {...{ block, time, reduced }} running={running && side === 0} />)}</View></Animated.View>;
+  return <Animated.View style={[styles.group, style, rippleStyle]}>{block.rows.map(row => <Row key={row.id} {...{ row, time, fontSize, plain, reduced, offset, disabled, onSeek }} animate={running && distance <= 2} past={side < 0} />)}</Animated.View>;
 });
 
 function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, retry, sync }: { lyrics: TrackLyrics; view: SessionView | null; duration: number; active: boolean; height: number; disabled: boolean; onSeek: (seconds: number) => void; retry: () => void; sync: ReturnType<typeof useLyricSync> }) {
@@ -244,7 +245,7 @@ function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, 
   const syncPlayback = useCallback(async () => { resume(); try { await resync(); } finally { resume(); } }, [resync, resume]);
   const armResume = useCallback(() => { stopTimer(); if (!plain && running) resumeTimer.current = setTimeout(() => setFollowing(true), 5000); }, [plain, running, stopTimer]);
   const lineSeek = useCallback((seconds: number) => { stopTimer(); preview(seconds); setFollowing(true); seek.current(seconds); }, [preview, stopTimer]);
-  const renderItem = useCallback(({ item, index }: { item: LyricBlock; index: number }) => <Group block={item} {...{ index, focus, following, time, fontSize, plain, reduced, running, disabled, scrollMotion, followingUI }} offset={lyrics.offsetMs} onSeek={lineSeek} />, [focus, following, time, fontSize, plain, reduced, running, disabled, lyrics.offsetMs, lineSeek, scrollMotion, followingUI]);
+  const renderItem = useCallback(({ item, index }: { item: LyricBlock; index: number }) => <Group block={item} {...{ index, following, time, fontSize, plain, reduced, running, disabled, scrollMotion, followingUI }} distance={Math.min(4, Math.abs(index - focus))} side={index < focus ? -1 : index === focus ? 0 : 1} offset={lyrics.offsetMs} onSeek={lineSeek} />, [focus, following, time, fontSize, plain, reduced, running, disabled, lyrics.offsetMs, lineSeek, scrollMotion, followingUI]);
   const contentStyle = useMemo(() => ({ paddingHorizontal: 26, paddingTop: plain ? 24 : height * 0.43, paddingBottom: plain ? 90 : height * 0.57 }), [plain, height]);
   return <View style={styles.fill}>
     <FadeMask style={styles.fill} maskElement={<LinearGradient colors={["transparent", "black", "black", "transparent"]} locations={[0, 0.14, 0.82, 1]} style={StyleSheet.absoluteFill} />}>

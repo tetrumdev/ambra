@@ -7,6 +7,7 @@ export const librarySections: Array<{ id: Exclude<LibrarySection, "overview">; l
   { id: "artists", label: "Artists" },
   { id: "albums", label: "Albums" },
   { id: "tracks", label: "Tracks" },
+  { id: "downloaded", label: "Downloaded" },
 ];
 
 export type LibraryArtist = {

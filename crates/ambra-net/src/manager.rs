@@ -790,6 +790,30 @@ impl ConnectionManager {
         Ok(())
     }
 
+    /// For an app coming back from being suspended: its connection may have died meanwhile
+    /// without being noticed, so it must answer at once or be replaced before this returns.
+    pub async fn revive(&self) -> Result<Arc<HttpConnection>> {
+        let active = self.active.read().await.clone();
+        if let Some(active) = active.filter(|active| !active.is_closed()) {
+            self.drop_if_silent(&active).await;
+        }
+        self.connect().await
+    }
+
+    /// Closes `connection` when it no longer answers; `run` then reconnects.
+    async fn drop_if_silent(&self, connection: &Arc<HttpConnection>) {
+        if answers(connection).await {
+            return;
+        }
+        tracing::info!("Connection stopped answering; replacing it");
+        let mut slot = self.active.write().await;
+        if slot.as_ref().is_some_and(|current| Arc::ptr_eq(current, connection)) {
+            slot.take();
+        }
+        drop(slot);
+        connection.close();
+    }
+
     pub async fn request(&self, mut request: Request<Body>) -> Result<Response<Incoming>> {
         let connection = self.connect().await?;
         request.headers_mut().remove(hyper::header::AUTHORIZATION);
@@ -803,7 +827,14 @@ impl ConnectionManager {
         let result = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => return Err("Connection cancelled".into()),
-            result = tokio::time::timeout(Duration::from_secs(65), connection.request(request)) => result?,
+            result = tokio::time::timeout(Duration::from_secs(65), connection.request(request)) => match result {
+                Ok(result) => result,
+                Err(elapsed) => {
+                    // A session can die without closing (UDP paths, a suspended phone): replace it.
+                    self.drop_if_silent(&connection).await;
+                    return Err(elapsed.into());
+                }
+            },
         };
         if result
             .as_ref()

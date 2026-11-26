@@ -1,3 +1,4 @@
+import { isDownloadedOnServer, offlineSource, removeLocalDownloads, removeServerDownloads, useDownloadedTracks } from "./utils/offlineDownloads";
 import { isDeviceTrack } from "./utils/nativeAudioSource";
 import { DownloadDialog } from "./components/DownloadDialog";
 import { DownloadActivity } from "./components/DownloadActivity";
@@ -176,14 +177,15 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
   }, [refreshSearchProviders, localOnly, services]);
   const library = useMusicLibrary(localOnly, sharedPlayback);
   const search = useTrackSearch(localOnly ? "" : searchQuery, searchProvider);
+  const downloadedTracks = useDownloadedTracks();
   const availableTracks = useMemo(() => {
     const tracksById = new Map<string, Track>();
-    for (const tracks of [listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]) {
+    for (const tracks of [downloadedTracks, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]) {
       for (const track of tracks) tracksById.set(track.globalId, track);
     }
     const tracks = [...tracksById.values()];
     return sharedPlayback ? tracks.filter(track => !isDeviceTrack(track)) : tracks;
-  }, [sharedPlayback, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
+  }, [sharedPlayback, downloadedTracks, listeningHistory.tracks, browseTracks, playlistStore.tracks, servicePlaylistStore.tracks, library.catalogTracks, search.knownTracks]);
   // Root restores the playback mode and remounts when its queue authority changes.
   const [usingCore] = useState(sharedPlayback);
   /* eslint-disable react-hooks/rules-of-hooks -- `usingCore` never changes while mounted. */
@@ -384,22 +386,25 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     ? `playlist:${selectedPlaylist.id}`
     : "library:tracks";
   const collectionSort = collectionSorts[collectionSortKey] ?? null;
+  const libraryTracks = useMemo(() => librarySection === "downloaded"
+    ? downloadedTracks.map((track, index) => ({ ...track, libraryId: index + 1 }))
+    : library.tracks, [librarySection, downloadedTracks, library.tracks]);
   // Kept between renders: every list under it compares this array to skip its own work.
   const baseCollectionTracks = useMemo(
-    () => mixPlaylist ? mixTracks ?? [] : selectedPlaylist ? playlistTracks(selectedPlaylist, availableTracks) : library.tracks,
-    [mixPlaylist, mixTracks, selectedPlaylist, availableTracks, library.tracks],
+    () => mixPlaylist ? mixTracks ?? [] : selectedPlaylist ? playlistTracks(selectedPlaylist, availableTracks) : libraryTracks,
+    [mixPlaylist, mixTracks, selectedPlaylist, availableTracks, libraryTracks],
   );
   const collectionPackages = selectedPlaylist?.packages;
   const collectionStats = collectionSort?.key === "plays" || collectionSort?.key === "lastPlayed"
     ? listeningHistory.stats : undefined;
   const collection = useMemo(() => {
     if (!selectedPlaylist) {
-      return { playlist: null, tracks: sortCollectionTracks(library.tracks, collectionSort, collectionStats) };
+      return { playlist: null, tracks: sortCollectionTracks(libraryTracks, collectionSort, collectionStats) };
     }
     // Packaged songs stay together, in their own order, however the playlist is sorted.
     const sorted = sortCollectionTracks(baseCollectionTracks, collectionSort, collectionStats);
     return { playlist: selectedPlaylist, tracks: groupPackagedTracks(sorted, collectionPackages ?? []) };
-  }, [selectedPlaylist, library.tracks, baseCollectionTracks, collectionSort, collectionPackages, collectionStats]);
+  }, [selectedPlaylist, libraryTracks, baseCollectionTracks, collectionSort, collectionPackages, collectionStats]);
   const collectionTracks = collection.tracks;
   // Built when a song is played or queued from the page, not on every render.
   const activeCollectionContext = () => collection.playlist
@@ -427,6 +432,11 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
     if (selectedPlaylist) {
       if (selectedPlaylist.provider) void servicePlaylistStore.removeTracks(selectedPlaylist.id, trackIds).catch(() => {});
       else playlistStore.removeTracks(selectedPlaylist.id, trackIds);
+    } else if (librarySection === "downloaded") {
+      const local = trackIds.filter(id => offlineSource(id));
+      const server = trackIds.filter(isDownloadedOnServer);
+      if (local.length) void removeLocalDownloads(local).catch(() => {});
+      if (server.length) void removeServerDownloads(server).catch(() => {});
     } else {
       library.removeTracks(trackIds);
     }

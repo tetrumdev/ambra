@@ -44,6 +44,21 @@ pub struct MediaAccessToken(pub String);
 #[derive(Clone)]
 pub struct Caller { pub client_id: Option<String> }
 
+/// Developer switch for clients without the native encrypted transport (Expo Go):
+/// `AMBRA_ALLOW_LAN_HTTP=1` lets devices on private networks pair and use their token over
+/// plain HTTP. Off by default: anyone on that network could then read the token and audio.
+pub fn lan_http_allowed(ip: std::net::IpAddr) -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("AMBRA_ALLOW_LAN_HTTP").is_ok_and(|value| value == "1")) && private_lan(ip)
+}
+
+fn private_lan(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        std::net::IpAddr::V6(ip) => ip.to_ipv4_mapped().is_some_and(|ip| ip.is_private() || ip.is_link_local()) || ip.is_unique_local() || ip.is_unicast_link_local(),
+    }
+}
+
 #[derive(Clone)]
 pub struct AccessPolicy {
     origins: Arc<Vec<String>>,
@@ -157,11 +172,10 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     {
         return (StatusCode::FORBIDDEN, "Origin is not allowed").into_response();
     }
-    let peer_is_loopback = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .is_some_and(|ConnectInfo(peer)| peer.ip().is_loopback());
+    let peer_ip = request.extensions().get::<ConnectInfo<SocketAddr>>().map(|ConnectInfo(peer)| peer.ip());
+    let peer_is_loopback = peer_ip.is_some_and(|ip| ip.is_loopback());
     let remote_peer = request.extensions().get::<ambra_net::transport::RemotePeer>().cloned();
+    let lan_http = remote_peer.is_none() && peer_ip.is_some_and(lan_http_allowed);
     let local = remote_peer.is_none() && peer_is_loopback && headers.get(HOST).is_none_or(|host| loopback_host(host.as_bytes()));
     let path = request.uri().path().to_owned();
 
@@ -177,7 +191,7 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
     if local || request.method() == Method::OPTIONS || public_path(&path) {
         return next.run(request).await;
     }
-    if remote_peer.is_none() {
+    if remote_peer.is_none() && !lan_http {
         return (StatusCode::UPGRADE_REQUIRED, "Use Ambra native encrypted networking; legacy remote clients must pair again").into_response();
     }
     let (token, stripped) = take_token(&request);
@@ -203,8 +217,9 @@ pub async fn enforce(State(policy): State<AccessPolicy>, mut request: Request, n
         }
     }
     request.extensions_mut().insert(Caller { client_id: Some(client_id) });
-    // Native bridges authenticate child media requests; never put the device bearer in a manifest.
-    let _ = token;
+    // Native bridges authenticate child media requests; never put the device bearer in a manifest,
+    // except for plain-HTTP LAN clients, whose players can't add it to segment requests themselves.
+    if lan_http { request.extensions_mut().insert(MediaAccessToken(token)); }
     if let Some(uri) = stripped {
         *request.uri_mut() = uri;
     }
@@ -226,6 +241,16 @@ fn retire(session: Arc<ambra_net::transport::Session>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_http_is_only_ever_considered_for_private_networks() {
+        for lan in ["192.168.50.20", "10.0.0.5", "172.16.1.1", "169.254.1.1", "fd7a::1", "fe80::1", "::ffff:192.168.1.2"] {
+            assert!(private_lan(lan.parse().unwrap()), "{lan}");
+        }
+        for public in ["8.8.8.8", "100.64.1.1", "2606:4700::1111", "127.0.0.1"] {
+            assert!(!private_lan(public.parse().unwrap()), "{public}");
+        }
+    }
 
     #[test]
     fn only_loopback_host_names_count_as_local() {

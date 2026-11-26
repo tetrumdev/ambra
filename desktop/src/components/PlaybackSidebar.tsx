@@ -529,13 +529,9 @@ const SidebarRow = memo(function SidebarRow({
           onClick={event => onAction("play", event, entry)}>
           <img src={pausing ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
-        <button type="button" className="coverImgContainer" data-track-cover-play data-drag-handle
-          disabled={!available && !entry.current}
-          aria-label={`${pausing ? "Pause" : entry.historyId !== undefined ? "Play again" : "Play"} ${track.name} (cover)`}
-          onClick={event => {
-            event.stopPropagation();
-            if (event.detail <= 1) onAction("play", event, entry);
-          }}>
+        {/* Only the play button plays; the cover opens the song's playback options, like its title. */}
+        <button type="button" className="coverImgContainer" data-playback-menu-trigger data-drag-handle
+          disabled={!available && !entry.current} aria-label={`Playback options for ${track.name}`}>
           <TrackArtwork track={track} alt="" className="coverImg" draggable={false} />
         </button>
       </div>

@@ -31,13 +31,27 @@ export function installSmoothCaret() {
   let frame = 0;
   let lastX = Number.NaN;
   let blink: Animation | undefined;
-  // shortcut: a field moved by its siblings without resizing is only caught on the next event; track per frame if that shows up.
+  let follow = 0;
+  let placed = "";
   const resize = new ResizeObserver(() => schedule());
+  // A focused field can move without resizing or any event (a search bar widening beside its
+  // neighbours, a panel sliding in): checked every frame, and redrawn when it has moved.
+  const watch = () => {
+    follow = 0;
+    if (!field) return;
+    const rect = field.getBoundingClientRect();
+    const where = `${rect.left},${rect.top},${rect.width},${rect.height}`;
+    if (where !== placed) schedule();
+    follow = requestAnimationFrame(watch);
+  };
 
   const release = () => {
     if (!field) return;
     field.removeAttribute("data-smooth-caret");
     resize.disconnect();
+    cancelAnimationFrame(follow);
+    follow = 0;
+    placed = "";
     box.remove();
     blink?.cancel();
     field = null;
@@ -52,6 +66,7 @@ export function installSmoothCaret() {
     field.setAttribute("data-smooth-caret", "");
     field.after(box);
     resize.observe(field);
+    follow = requestAnimationFrame(watch);
     return true;
   };
 
@@ -73,16 +88,20 @@ export function installSmoothCaret() {
     mirror.textContent = `${input.value.slice(0, selectionStart!)}​`;
     const text = mirror.getBoundingClientRect();
 
+    // The content box from computed styles: WebView2 reports a search field's clientLeft and
+    // clientWidth for its inner text box, padding already taken off, which counted it twice.
+    const borderLeft = parseFloat(style.borderLeftWidth);
+    const borderTop = parseFloat(style.borderTopWidth);
     const padLeft = parseFloat(style.paddingLeft);
     const padTop = parseFloat(style.paddingTop);
-    const width = input.clientWidth - padLeft - parseFloat(style.paddingRight);
-    const height = input.clientHeight - padTop - parseFloat(style.paddingBottom);
+    const width = input.offsetWidth - borderLeft - parseFloat(style.borderRightWidth) - padLeft - parseFloat(style.paddingRight);
+    const height = input.offsetHeight - borderTop - parseFloat(style.borderBottomWidth) - padTop - parseFloat(style.paddingBottom);
     const fieldRect = input.getBoundingClientRect();
-    box.style.left = "0px";
-    box.style.top = "0px";
-    const origin = box.getBoundingClientRect();
-    box.style.left = `${fieldRect.left + input.clientLeft + padLeft - origin.left}px`;
-    box.style.top = `${fieldRect.top + input.clientTop + padTop - origin.top}px`;
+    placed = `${fieldRect.left},${fieldRect.top},${fieldRect.width},${fieldRect.height}`;
+    // Layout offsets, not screen rectangles: the box is the field's sibling, so both share an
+    // offset parent, and an animation or transform mid-flight can't skew where it lands.
+    box.style.left = `${input.offsetLeft + borderLeft + padLeft}px`;
+    box.style.top = `${input.offsetTop + borderTop + padTop}px`;
     box.style.width = `${Math.max(0, width)}px`;
     box.style.height = `${Math.max(0, height)}px`;
 

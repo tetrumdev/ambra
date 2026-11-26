@@ -2,11 +2,32 @@ import { createAudioPlayer } from "expo-audio";
 import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
-import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, prefetchMedia, refreshSession, sessionView, setLocalControl, setLocalPlayback, subscribe } from "./client";
+import * as SecureStore from "expo-secure-store";
+import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, playingOutputs, prefetchMedia, refreshSession, sampleSyncClock, sessionView, setLocalControl, setLocalPlayback, subscribe, syncClockOffset } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { phoneUrlForSource } from "./downloads";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
+
+/**
+ * How long this phone's sound takes to reach the ear beyond what the player reports, set by the
+ * listener: Bluetooth and AirPlay speakers add a delay the phone can't measure. Playing in step
+ * with other outputs, the phone plays that much earlier.
+ */
+const LATENCY_KEY = "ambra.phone.latencyMs";
+let latencyMs = 0;
+const latencyListeners = new Set<() => void>();
+void SecureStore.getItemAsync(LATENCY_KEY).then(saved => {
+  const value = Number(saved);
+  if (saved !== null && Number.isFinite(value)) { latencyMs = value; for (const listener of latencyListeners) listener(); }
+}).catch(() => {});
+export const phoneLatencyMs = () => latencyMs;
+export function subscribePhoneLatency(listener: () => void) { latencyListeners.add(listener); return () => { latencyListeners.delete(listener); }; }
+export function setPhoneLatencyMs(value: number) {
+  latencyMs = Math.round(Math.min(1000, Math.max(-200, value)));
+  for (const listener of latencyListeners) listener();
+  void SecureStore.setItemAsync(LATENCY_KEY, String(latencyMs)).catch(() => {});
+}
 let info: PhoneEndpointInfo | null = null;
 const listeners = new Set<() => void>();
 export const phoneEndpointInfo = () => info;
@@ -46,7 +67,8 @@ export function followPhoneOutput() {
     let signature = "";
     let owned = false;
     publish({ ...descriptor, ready: false, error: null });
-    const ownsOutput = () => sessionView()?.output?.endpointId === id;
+    // One of the outputs the session plays on: leading it, or following in step (a synced group).
+    const ownsOutput = () => playingOutputs(sessionView()).some(output => output.endpointId === id);
     const metadata = () => {
       const track = currentTrack(sessionView());
       return { title: track?.name ?? "Ambra", artist: track?.artist, albumTitle: track?.album, artworkUrl: track?.cover || undefined };
@@ -75,11 +97,18 @@ export function followPhoneOutput() {
     };
     // While this phone plays the server's song, its screens follow its own player.
     let shownLocal: { playing: boolean; buffering: boolean; positionSeconds: number; at: number } | null = null;
-    const playsCore = () => ownsOutput() && player!.controls(sessionView()?.loadedSource);
+    // Playing alone, the phone's own player is in charge of play, pause and seek (and its
+    // screens follow it). In a group the server is, so every output moves together.
+    const playsAlone = () => {
+      const outputs = playingOutputs(sessionView());
+      return outputs.length === 1 && outputs[0].endpointId === id;
+    };
+    const playsCore = () => playsAlone() && player!.controls(sessionView()?.loadedSource);
     const showLocal = () => {
       const status = player!.status();
       if (!playsCore()) { shownLocal = null; setLocalPlayback(null); return; }
-      const playing = status.isPlaying || status.buffering;
+      // Loading or skipping while paused stays paused on screen.
+      const playing = status.isPlaying || (status.buffering && player!.wantsToPlay());
       const buffering = status.buffering;
       const at = Date.now();
       const expected = shownLocal ? shownLocal.positionSeconds + (shownLocal.playing && !shownLocal.buffering ? (at - shownLocal.at) / 1000 : 0) : NaN;
@@ -90,12 +119,18 @@ export function followPhoneOutput() {
     };
     const changed = () => {
       const status = player!.status();
-      const next = JSON.stringify([status.currentSource, status.isPlaying, status.buffering, status.ended, status.error, status.control?.seq]);
+      // Readiness for a group's start goes out at once: the whole group waits on it.
+      const next = JSON.stringify([status.currentSource, status.isPlaying, status.buffering, status.ended, status.error, status.control?.seq, status.syncReady ?? null, status.syncAnchor?.atServerMs ?? null]);
       if (next !== signature) { signature = next; void report(); }
       showLocal();
     };
     player = new PhonePlayback({
-      create: source => createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false }),
+      create: source => {
+        const created = createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false });
+        // Keeping in step with a group nudges the speed a little; the pitch must not move with it.
+        created.shouldCorrectPitch = true;
+        return created;
+      },
       activate: () => configureAudioSession(true),
       // A song downloaded to this phone plays from that copy, sparing the network.
       mediaUrl: source => phoneUrlForSource(source) ?? phoneMediaUrl(source),
@@ -103,6 +138,8 @@ export function followPhoneOutput() {
       metadata,
       ownsOutput,
       changed,
+      serverOffset: syncClockOffset,
+      outputLatencyMs: phoneLatencyMs,
       transport: (action, details) => {
         // A command lost to a network change is reconciled from the next report; only a
         // phone that is no longer the output stops.
@@ -111,7 +148,7 @@ export function followPhoneOutput() {
     });
     setLocalControl((action, details) => {
       if (!player || !playsCore()) return false;
-      const playing = player.status().isPlaying || player.status().buffering;
+      const playing = player.status().isPlaying || (player.status().buffering && player.wantsToPlay());
       if (action === "play" || action === "pause" || action === "toggle") {
         void player.local(action === "toggle" ? (playing ? "pause" : "play") : action);
         return true;
@@ -172,6 +209,25 @@ export function followPhoneOutput() {
       void report();
     }, 1000);
 
+    // Keeps the server's clock estimate fresh: every 2 s in a synced group, where milliseconds
+    // matter, with a quick handful first; rarely otherwise.
+    void (async () => {
+      let quick = 5;
+      while (!abort.signal.aborted) {
+        const syncing = player?.syncing() ?? false;
+        await sampleSyncClock(abort.signal).catch(() => {});
+        if (syncing && quick > 0) quick--;
+        if (!syncing) quick = 5;
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(done, syncing ? (quick > 0 ? 200 : 2000) : 20_000);
+          const latest = player;
+          // Joining a group wakes it at once.
+          const poll = setInterval(() => { if (!syncing && latest?.syncing()) done(); }, 250);
+          function done() { clearTimeout(timer); clearInterval(poll); abort.signal.removeEventListener("abort", done); resolve(); }
+          abort.signal.addEventListener("abort", done, { once: true });
+        });
+      }
+    })();
     await report();
     while (!abort.signal.aborted) {
       try {

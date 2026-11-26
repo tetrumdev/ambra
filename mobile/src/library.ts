@@ -309,6 +309,20 @@ export async function discover(signal?: AbortSignal): Promise<Discover> {
   return { ...value, tracks: value.tracks.map(track => "globalId" in track ? track : playableTrack(track)) };
 }
 
+export type RecommendationMix = import("../../desktop/src/api/server").RecommendationMix;
+export type ProviderRecommendations = { mixes: RecommendationMix[]; albums: CatalogAlbum[] };
+/** A service's own home: its mixes by section, and albums it suggests (desktop's ProviderHome). */
+export function providerRecommendations(provider: Service, signal?: AbortSignal) {
+  return request<ProviderRecommendations>(`/api/providers/${provider}/recommendations`, { signal, timeoutMs: 55_000 });
+}
+export function recommendationArtwork(provider: Service, id: string, signal?: AbortSignal) {
+  return request<{ imageUrl: string | null; albumImageUrls?: string[] }>(`/api/providers/${provider}/recommendations/${encodeURIComponent(id)}/artwork`, { signal, timeoutMs: 55_000 });
+}
+export async function recommendationMix(provider: Service, id: string, signal?: AbortSignal): Promise<Track[]> {
+  const tracks = await request<RemoteTrack[]>(`/api/providers/${provider}/recommendations/${encodeURIComponent(id)}`, { signal, timeoutMs: 55_000 });
+  return tracks.filter(track => track.provider === provider).map(playableTrack);
+}
+
 /** Artists and albums in the library, grouped as desktop's library sections group them. */
 export type LibraryArtist = CatalogArtist & { albumCount: number; trackCount: number };
 export type LibraryAlbum = CatalogAlbum & { trackCount: number };

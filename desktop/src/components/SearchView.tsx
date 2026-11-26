@@ -1,7 +1,6 @@
 import { albumForTrack, sortAlbumTracks, type BrowseEntity } from "../utils/browse";
 import { nowPlayingState, useNowPlaying } from "../hooks/useNowPlaying";
 import { ArtistLinks } from "./ArtistLinks";
-import { TrackTitleLink } from "./TrackTitleLink";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
 import { categoryOrder } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
@@ -213,12 +212,8 @@ function SearchResult({
           }}>
           <img src={state === "playing" ? "/pause.svg" : "/play.svg"} alt="" aria-hidden="true" />
         </button>
-        <button type="button" className="searchResultArtwork" data-track-cover-play disabled={!available}
-          aria-label={`${state === "playing" ? "Pause" : "Play"} ${track.name} (cover)`}
-          onClick={event => {
-            event.stopPropagation();
-            if (event.detail <= 1) playSong(true);
-          }}>
+        {/* Only the play button plays; the cover and title open the song's playback options. */}
+        <button type="button" className="searchResultArtwork" disabled={!available} aria-label={`Playback options for ${track.name}`}>
           <TrackArtwork
             preferProviderThumbnail
             className="searchResultCover"
@@ -234,9 +229,9 @@ function SearchResult({
       </div>
 
       <div className="searchResultInfo" inert={!available}>
-        <TrackTitleLink track={track} onOpenEntity={onOpenEntity} className="searchResultName" />
+        <button type="button" className="searchResultName searchResultTitle" data-tooltip={track.name} data-tooltip-overflow="">{track.name}</button>
         <div className="searchResultArtist">By <ArtistLinks track={track} onOpenEntity={onOpenEntity} /></div>
-        <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track) }); }}>{track.album}</button></div>
+        <div className="searchResultAlbum">On <button type="button" className="entityLink" onClick={event => { event.stopPropagation(); onOpenEntity({ kind: "album", album: albumForTrack(track), revealTrack: { trackId: track.globalId } }); }}>{track.album}</button></div>
         <div className="searchResultMeta">
           <span className="searchResultQuality">
             <ProviderIcon provider={track.provider} />

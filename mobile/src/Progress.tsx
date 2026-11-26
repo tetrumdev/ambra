@@ -15,7 +15,7 @@ const clock = (seconds: number) => {
   return `${String(Math.floor(whole / 60)).padStart(2, "0")}:${String(whole % 60).padStart(2, "0")}`;
 };
 
-const grow = { damping: 18, stiffness: 260, mass: 0.8 };
+const grow = { damping: 24, stiffness: 260, mass: 0.8 };
 const HEIGHT = 7;
 const HELD_HEIGHT = 14;
 /** How far past the margins the bar reaches while held. */
@@ -41,6 +41,7 @@ export function Progress({
 }) {
   const width = useRef(1);
   const drag = useRef({ start: 0, value: 0, moved: false, edge: 0 });
+  const texture = useRef({ x: 0, at: 0 });
   const [scrub, setScrub] = useState<number | null>(null);
   const [showRemaining, setShowRemaining] = useState(true);
   // After letting go, the bar stays where it was dropped until the server confirms the seek.
@@ -83,6 +84,13 @@ export function Progress({
       const raw = drag.current.start + event.translationX / width.current;
       const next = Math.min(1, Math.max(0, raw));
       if (Math.abs(event.translationX) > 2) drag.current.moved = true;
+      // A fine, steady texture while the playhead moves, like a gentle vibration under the
+      // thumb; it stops as soon as the thumb does. (Expo's haptics have no continuous effect.)
+      const now = Date.now();
+      if (Math.abs(event.absoluteX - texture.current.x) >= 2.5 && now - texture.current.at >= 22) {
+        texture.current = { x: event.absoluteX, at: now };
+        void Haptics.selectionAsync();
+      }
       // A firmer tap at either end, once per arrival.
       const edge = raw <= 0 ? -1 : raw >= 1 ? 1 : 0;
       if (edge !== 0 && edge !== drag.current.edge)
@@ -106,9 +114,10 @@ export function Progress({
     height: HEIGHT + (HELD_HEIGHT - HEIGHT) * pressed.value,
     borderRadius: (HEIGHT + (HELD_HEIGHT - HEIGHT) * pressed.value) / 2,
     marginHorizontal: -HELD_REACH * pressed.value,
-    backgroundColor: `rgba(255, 255, 255, ${0.35 + 0.15 * pressed.value})`,
+    backgroundColor: `rgba(255, 255, 255, ${Math.round(350 + 150 * pressed.value) / 1000})`,
   }));
-  const fillStyle = useAnimatedStyle(() => ({ width: `${fill.value * 100}%` }));
+  // Rounded, so a value easing toward 0 never prints as an exponent like "1e-9%".
+  const fillStyle = useAnimatedStyle(() => ({ width: `${Math.round(fill.value * 10000) / 100}%` }));
   const timesStyle = useAnimatedStyle(() => ({
     opacity: 0.75 + 0.25 * pressed.value,
     transform: [{ translateY: 4 * pressed.value }],

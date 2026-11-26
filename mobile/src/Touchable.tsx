@@ -1,15 +1,20 @@
 import { useEffect, useMemo, type ReactNode } from "react";
-import { Animated, Easing, Pressable, useAnimatedValue, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
+import { Animated, Easing, Pressable, useAnimatedValue, type GestureResponderEvent, type PressableProps, type StyleProp, type ViewStyle } from "react-native";
 import { useReducedMotion } from "react-native-reanimated";
 import { disabledOpacity, motion, PRESSED_ALPHA, haptic as feedback } from "./theme";
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const press = { duration: motion.press.duration, easing: Easing.bezier(...motion.press.curve) };
-const settle = { duration: motion.settle.duration, easing: Easing.bezier(...motion.settle.curve) };
 /** Long enough that a resting thumb doesn't open menus, short enough to feel deliberate. */
 export const HOLD_MS = 380;
 
-type Props = Omit<PressableProps, "style" | "children"> & {
+/** Where a touch landed on screen, so menus can open from it. */
+export type Anchor = { x: number; y: number };
+/** Where something sits on screen, in window coordinates. */
+export type Frame = { x: number; y: number; width: number; height: number };
+export const anchorOf = (event: GestureResponderEvent): Anchor => ({ x: event.nativeEvent.pageX, y: event.nativeEvent.pageY });
+
+type Props = Omit<PressableProps, "style" | "children" | "onLongPress"> & {
   style?: StyleProp<ViewStyle>;
   children: ReactNode;
   /** How far it sinks under a finger. */
@@ -19,9 +24,13 @@ type Props = Omit<PressableProps, "style" | "children"> & {
   haptic?: keyof typeof feedback | null;
   /** Buttons answer on touch; rows wait for the tap, so scrolling a list never buzzes. */
   hapticOnPressIn?: boolean;
+  onLongPress?: (event: GestureResponderEvent) => void;
 };
 
-/** Touch controls sink and settle with haptic feedback. Holding opens options. */
+/**
+ * Touch controls give like something soft: they sink under a finger and flow back on release,
+ * with haptic feedback. A hold keeps squeezing until the menu opens.
+ */
 export function Touchable({ style, children, scale = 0.95, highlight = false, haptic = "tap", hapticOnPressIn = false, disabled, onPressIn, onPressOut, onPress, onLongPress, ...rest }: Props) {
   const down = useAnimatedValue(0);
   const reduceMotion = useReducedMotion();
@@ -29,12 +38,13 @@ export function Touchable({ style, children, scale = 0.95, highlight = false, ha
   useEffect(() => () => down.stopAnimation(), [down]);
   // Native Animated keeps press/recycle lifetimes out of the Worklets runtime.
   const animated = useMemo(() => ({
-    ...(!reduceMotion ? { transform: [{ scale: down.interpolate({ inputRange: [0, 1], outputRange: [1, scale] }) }] } : {}),
-    ...(highlight ? { backgroundColor: down.interpolate({ inputRange: [0, 1], outputRange: ["rgba(255, 255, 255, 0)", `rgba(255, 255, 255, ${PRESSED_ALPHA})`] }) } : {}),
+    ...(!reduceMotion ? { transform: [{ scale: down.interpolate({ inputRange: [-1, 0, 1, 2], outputRange: [1 + (1 - scale) * 0.4, 1, scale, scale - (1 - scale) * 0.6] }) }] } : {}),
+    ...(highlight ? { backgroundColor: down.interpolate({ inputRange: [-1, 0, 1, 2], outputRange: ["rgba(255, 255, 255, 0)", "rgba(255, 255, 255, 0)", `rgba(255, 255, 255, ${PRESSED_ALPHA})`, `rgba(255, 255, 255, ${PRESSED_ALPHA * 1.6})`], extrapolate: "clamp" }) } : {}),
   }), [down, scale, highlight, reduceMotion]);
   const release = () => {
     if (reduceMotion) down.setValue(0);
-    else Animated.timing(down, { toValue: 0, ...settle, useNativeDriver: true, isInteraction: false }).start();
+    // Flows back to rest, without rebounding past it.
+    else Animated.timing(down, { toValue: 0, duration: 220, easing: Easing.bezier(0.2, 0.7, 0.2, 1), useNativeDriver: true, isInteraction: false }).start();
   };
   return (
     <AnimatedPressable
@@ -44,7 +54,13 @@ export function Touchable({ style, children, scale = 0.95, highlight = false, ha
       delayLongPress={HOLD_MS}
       onPressIn={event => {
         if (reduceMotion) down.setValue(1);
-        else Animated.timing(down, { toValue: 1, ...press, useNativeDriver: true, isInteraction: false }).start();
+        else {
+          // A quick dip, then a slow squeeze that builds toward the hold.
+          Animated.sequence([
+            Animated.timing(down, { toValue: 1, ...press, useNativeDriver: true, isInteraction: false }),
+            ...(onLongPress ? [Animated.timing(down, { toValue: 2, duration: HOLD_MS, easing: Easing.in(Easing.quad), useNativeDriver: true, isInteraction: false })] : []),
+          ]).start();
+        }
         if (hapticOnPressIn && haptic) feedback[haptic]();
         onPressIn?.(event);
       }}

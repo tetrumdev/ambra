@@ -49,7 +49,7 @@ test("approved pairing saves the matching server and token", async () => {
   await client.awaitPairing("new-request", new AbortController().signal);
   expect(store.get(tokenKey)).toBe("new-token");
   expect(store.get(payloadKey)).toBe("ambra://pair/new-server");
-  expect(opened.at(-1)).toEqual({ payload: "ambra://pair/new-server", token: "new-token" });
+  expect(opened.at(-1)).toEqual({ payload: "ambra://pair/new-server", token: "new-token", method: null });
 });
 
 test("canceling an approval response cannot overwrite the original pairing", async () => {
@@ -78,7 +78,7 @@ test("cancel during storage waits for rollback before restoring the original ser
   await expect(pairing).rejects.toMatchObject({ name: "AbortError" });
   expect(await restoring).toEqual({ address: "ambra://pair/original", paired: true });
   expect(store.get(tokenKey)).toBe("old-token");
-  expect(opened.at(-1)).toEqual({ payload: "ambra://pair/original", token: "old-token" });
+  expect(opened.at(-1)).toEqual({ payload: "ambra://pair/original", token: "old-token", method: null });
 });
 
 test("failed bridge activation preserves the previous saved pairing", async () => {

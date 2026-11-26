@@ -124,12 +124,18 @@ pub async fn run(arguments: Vec<String>) -> Result<String, String> {
         ["pair", "qr"] => {
             let response = local("GET", "/api/local/pairing/qr", None).await?;
             let payload = response["payload"].as_str().ok_or("No pairing payload")?;
-            let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
+            // Low error correction keeps the long link's code small enough to fit a terminal.
+            let code = qrcode::QrCode::with_error_correction_level(payload.as_bytes(), qrcode::EcLevel::L)
+                .map_err(|e| e.to_string())?;
+            use qrcode::render::unicode::Dense1x2;
             Ok(format!(
                 "{}\n{}\nScan this on the device, or paste the link. Then approve the six-digit code it shows: `ambra-server pair approve <code>`.",
-                code.render::<char>()
+                // Half blocks draw two rows per line. Terminals are light-on-dark, so the code's
+                // light modules are the drawn ones and its dark modules are the background.
+                code.render::<Dense1x2>()
+                    .dark_color(Dense1x2::Light)
+                    .light_color(Dense1x2::Dark)
                     .quiet_zone(true)
-                    .module_dimensions(2, 1)
                     .build(),
                 payload
             ))

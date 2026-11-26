@@ -43,6 +43,8 @@ export type PhoneDownload = {
   providerTrackId: string;
   requestedQuality: DownloadQuality;
   qualityLabel: string;
+  sampleRateKHz: number | null;
+  bitDepth: number | null;
   sizeBytes: number;
   metadata: import("../../desktop/src/api/server").RemoteTrack;
   url: string;
@@ -71,6 +73,18 @@ const DOWNLOADABLE = new Set(["tidal", "qobuz", "spotify"]);
 export const isDownloadable = (id: string) => DOWNLOADABLE.has(id.split(":", 1)[0]);
 export const onPhone = (id: string) => state.phone.has(id);
 export const onServer = (id: string) => state.server.has(id);
+/** How a song row marks it: downloading now, or saved here in Hi-Res or other quality (Qobuz's check). */
+export type DownloadMark = "downloading" | "hiRes" | "saved" | null;
+function markOf(id: string): DownloadMark {
+  if (state.active?.current === id) return "downloading";
+  const entry = state.phone.get(id);
+  if (!entry) return null;
+  // Desktop's rule (utils/audioQuality.ts): lossy files report no bit depth.
+  return (entry.bitDepth ?? 0) > 16 || (entry.bitDepth != null && (entry.sampleRateKHz ?? 0) > 48) ? "hiRes" : "saved";
+}
+/** Re-renders only when this song's own mark changes. */
+export const useDownloadMark = (id: string) => useSyncExternalStore(subscribe, () => markOf(id));
+
 /** This phone's loopback URL for the song, when it's downloaded here. */
 export const phoneDownloadUrl = (id: string) => state.phone.get(id)?.url ?? null;
 
@@ -180,10 +194,16 @@ export function followPhoneDownloads(): () => void {
     if (!nativeNetworkAvailable) return;
     const id = await clientId();
     const name = (Constants.deviceName || (Platform.OS === "ios" ? "iPhone" : "Android phone")).slice(0, 64);
+    // Jobs received, confirmed on the next poll; the server sends unconfirmed ones again.
+    const seen = new Set<number>();
+    let received: number[] = [];
     while (!abort.signal.aborted) {
       try {
-        const jobs = await request<ClientJob[]>(`/api/downloads/clients/${id}/jobs?wait=25&name=${encodeURIComponent(name)}`, { signal: abort.signal, timeoutMs: 40_000 });
-        if (jobs.length) { queue.push(...jobs); void work(id); }
+        const jobs = await request<ClientJob[]>(`/api/downloads/clients/${id}/jobs?wait=25&ack=${received.join(",")}&name=${encodeURIComponent(name)}`, { signal: abort.signal, timeoutMs: 40_000 });
+        received = jobs.map(job => job.id);
+        const fresh = jobs.filter(job => !seen.has(job.id));
+        for (const job of fresh) seen.add(job.id);
+        if (fresh.length) { queue.push(...fresh); void work(id); }
       } catch (error) {
         if (error instanceof Unpaired || abort.signal.aborted) return;
         await pause(5000, abort.signal);

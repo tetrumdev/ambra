@@ -1,5 +1,5 @@
 import { Image, type ImageRef } from "expo-image";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { PixelRatio, StyleSheet, type StyleProp, type ViewStyle } from "react-native";
 import Animated, {
   useAnimatedStyle,
@@ -68,7 +68,7 @@ function CoverLayer({
   }));
   return (
     <Animated.View
-      style={[StyleSheet.absoluteFill, styles.shadow, style]}
+      style={[StyleSheet.absoluteFill, styles.shadow, cornerStyle, style]}
       accessibilityElementsHidden={leaving}
       importantForAccessibility={leaving ? "no-hide-descendants" : "auto"}
     >
@@ -91,12 +91,21 @@ export function AlbumCover({
   size,
   direction,
   cornerStyle,
+  instant,
+  onShown,
 }: {
   track: Track | null;
   size: number;
   direction: SkipDirection;
   cornerStyle?: StyleProp<AnimatedStyle<ViewStyle>>;
+  /** True when the new cover already slid in with the finger (the carousel): swap without motion. */
+  instant?: () => boolean;
+  /** The swapped-in cover is on screen. */
+  onShown?: () => void;
 }) {
+  const hooks = useRef({ instant, onShown });
+  useLayoutEffect(() => { hooks.current = { instant, onShown }; });
+  const announce = useRef<number | null>(null);
   const [layers, setLayers] = useState<Layer[]>([
     {
       id: 0,
@@ -119,11 +128,13 @@ export function AlbumCover({
       step: number,
     ) => {
       const id = nextId.current++;
+      const quick = hooks.current.instant?.() ?? false;
+      if (quick) announce.current = id;
       setLayers((current) => {
         const top = current[current.length - 1];
         if (top?.uri === uri) return current;
-        const motion =
-          !top?.uri || !uri || top.album === album ? "fade" : "slide";
+        const motion = quick ? "none"
+          : !top?.uri || !uri || top.album === album ? "fade" : "slide";
         return [
           ...current
             .filter((layer) => !layer.leaving)
@@ -211,6 +222,13 @@ export function AlbumCover({
     };
   }, [provider, album, nativeCover, thumbnail, full, size, direction, show]);
 
+  useLayoutEffect(() => {
+    if (announce.current !== null && layers.some((layer) => layer.id === announce.current && !layer.leaving)) {
+      announce.current = null;
+      hooks.current.onShown?.();
+    }
+  }, [layers]);
+
   return layers.map((layer) => (
     <CoverLayer key={layer.id} layer={layer} size={size} drop={drop} cornerStyle={cornerStyle} />
   ));
@@ -218,6 +236,8 @@ export function AlbumCover({
 
 const styles = StyleSheet.create({
   shadow: {
+    borderRadius: 15,
+    backgroundColor: "black",
     shadowColor: "black",
     shadowOpacity: 0.35,
     shadowRadius: 24,

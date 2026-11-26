@@ -81,6 +81,9 @@ struct ClientAgent {
     name: String,
     seen: Instant,
     queue: VecDeque<ClientJob>,
+    /// Handed out but not yet acknowledged: a long poll's answer can be lost (the phone slept,
+    /// the tunnel reconnected), so these go out again until the app's next poll confirms them.
+    sent: Vec<ClientJob>,
     work: Arc<Notify>,
 }
 
@@ -116,7 +119,8 @@ impl Downloads {
             store,
             clients: SyncMutex::new(HashMap::new()),
             jobs: SyncMutex::new(VecDeque::new()),
-            next_job: AtomicU64::new(1),
+            // Unique across restarts: apps skip job IDs they've already taken.
+            next_job: AtomicU64::new(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(1, |since| since.as_millis() as u64)),
             server_jobs,
             server_receiver: SyncMutex::new(Some(receiver)),
         }
@@ -386,6 +390,9 @@ async fn clients(State(state): State<AppState>) -> Json<Vec<ClientView>> {
 struct CollectQuery {
     wait: Option<u64>,
     name: Option<String>,
+    /// Comma-separated job IDs the app received. Apps that send it (even empty) get unconfirmed
+    /// jobs again; older apps, which never confirm, keep getting each job once.
+    ack: Option<String>,
 }
 
 /// An app's long poll: it is open while it asks, and gets the downloads chosen for it.
@@ -402,19 +409,25 @@ async fn collect(
         return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Only that device can collect its downloads" }))).into_response();
     }
     let name = query.name.map(|name| name.trim().chars().take(64).collect::<String>()).filter(|name| !name.is_empty());
+    let acked = query.ack.map(|ack| ack.split(',').filter_map(|id| id.trim().parse::<u64>().ok()).collect::<Vec<_>>());
     let take = |downloads: &Downloads| {
         let mut clients = lock(&downloads.clients);
         let agent = clients.entry(client_id.clone()).or_insert_with(|| ClientAgent {
             name: name.clone().unwrap_or_else(|| "AMBRA".into()),
             seen: Instant::now(),
             queue: VecDeque::new(),
+            sent: Vec::new(),
             work: Arc::new(Notify::new()),
         });
         agent.seen = Instant::now();
         if let Some(name) = &name {
             agent.name.clone_from(name);
         }
-        (agent.queue.drain(..).collect::<Vec<_>>(), agent.work.clone())
+        let fresh = agent.queue.drain(..).collect::<Vec<_>>();
+        let Some(ack) = &acked else { return (fresh, agent.work.clone()) };
+        agent.sent.retain(|job| !ack.contains(&job.id));
+        agent.sent.extend(fresh);
+        (agent.sent.clone(), agent.work.clone())
     };
     let (jobs, work) = take(&state.downloads);
     if !jobs.is_empty() {
@@ -982,10 +995,15 @@ mod tests {
         assert_eq!(job["quality"], "max");
         assert_eq!(job["targetName"], "Laptop");
 
-        let (_, body) = send(&app, request("GET", "/api/downloads/clients/laptop/jobs", None)).await;
+        let (_, body) = send(&app, request("GET", "/api/downloads/clients/laptop/jobs?ack=", None)).await;
         let collected = json(&body);
         assert_eq!(collected[0]["id"], job["id"]);
         assert_eq!(collected[0]["tracks"], track);
+        // A confirming app gets the job again until it acknowledges it, in case an answer was lost.
+        let (_, body) = send(&app, request("GET", "/api/downloads/clients/laptop/jobs?ack=", None)).await;
+        assert_eq!(json(&body)[0]["id"], job["id"]);
+        let (_, body) = send(&app, request("GET", &format!("/api/downloads/clients/laptop/jobs?ack={}", job["id"]), None)).await;
+        assert_eq!(json(&body), serde_json::json!([]));
         let (status, _) = send(&app, request("POST", "/api/downloads/clients/laptop/progress", Some(serde_json::json!({ "jobId": job["id"], "done": 1, "failed": 0, "finished": true })))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         let (_, body) = send(&app, request("GET", "/api/downloads", None)).await;

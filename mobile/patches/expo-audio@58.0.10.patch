@@ -70,6 +70,28 @@ index 0d63c9b949cfae7a101902fc3bb70fcf46094f68..9a618100fc918297581be300a2003dfb
      /** Fired when the player's status changes (play/pause/seek/load and so on.). */
      playbackStatusUpdate(status: AudioStatus): void;
      /** Fired when audio sampling is enabled and new sample data is available. */
+diff --git a/ios/AudioModule.swift b/ios/AudioModule.swift
+index 42ce9e8f213ebc243db25ef836456757b0daeb09..047da867cb3c8f3c3c7266dbf723ee0942f45666 100644
+--- a/ios/AudioModule.swift
++++ b/ios/AudioModule.swift
+@@ -241,11 +241,12 @@ public class AudioModule: Module {
+           player.ref.rate = playerRate
+         }
+ 
+-        if player.shouldCorrectPitch {
+-          player.pitchCorrectionQuality = pitchCorrectionQuality?.toPitchAlgorithm() ?? .timeDomain
+-          player.ref.currentItem?.audioTimePitchAlgorithm = player.pitchCorrectionQuality
+-        } else {
+-          player.ref.currentItem?.audioTimePitchAlgorithm = .varispeed
++        // Setting the algorithm on a playing item rebuilds its audio processing (an audible
++        // dropout), so it is only set when it actually changes.
++        let algorithm = player.shouldCorrectPitch ? (pitchCorrectionQuality?.toPitchAlgorithm() ?? .timeDomain) : .varispeed
++        if player.shouldCorrectPitch { player.pitchCorrectionQuality = algorithm }
++        if let item = player.ref.currentItem, item.audioTimePitchAlgorithm != algorithm {
++          item.audioTimePitchAlgorithm = algorithm
+         }
+       }
+ 
 diff --git a/ios/AudioPlayer.swift b/ios/AudioPlayer.swift
 index 0f68a52003416eb0e7be03d44dba1be76cd38116..7018388e9ee42f5accf75b8c1b61ed9df4821e0c 100644
 --- a/ios/AudioPlayer.swift

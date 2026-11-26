@@ -43,7 +43,12 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
                 public_tcp: payload.public_tcp.clone(),
             };
             let token = args["token"].as_str().map(str::to_owned);
-            let manager = ConnectionManager::new(identity, selected, token);
+            // A connection type chosen in Settings is the only one tried, as on desktop; none is automatic.
+            let method = match &args["method"] {
+                Value::Null => None,
+                method => Some(serde_json::from_value(method.clone()).map_err(|_| "Unknown connection type")?),
+            };
+            let manager = ConnectionManager::with_method(identity, selected, token, method);
             // Remembers the server's public address learned at home, for use away from it.
             manager.use_endpoint_cache(std::path::Path::new(directory).join("ambra-server-endpoints.json"));
             manager.enable_roaming();
@@ -80,7 +85,7 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
                 .as_ref()
                 .map(|s| s.manager.clone())
                 .ok_or("Native networking is not open")?;
-            manager.connect().await?;
+            manager.revive().await?;
             Ok(serde_json::to_value(manager.status())?)
         }
         "network_changed" => {

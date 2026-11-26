@@ -1058,6 +1058,33 @@
     user-select: text;
 }
 
+.serverPair {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 20px;
+}
+
+.serverPairQr {
+    width: 200px;
+    height: 200px;
+    padding: 10px;
+    border-radius: var(--radius-md);
+    background: #fff;
+    image-rendering: pixelated;
+}
+
+.serverPairLink {
+    flex: 1;
+    min-width: 280px;
+}
+
+.settingsView input.serverPairInput {
+    width: 220px;
+    font-family: var(--font-mono);
+    font-size: var(--text-caption);
+}
+
 .serverNotice {
     max-width: 640px;
     margin: 0 0 20px;

@@ -27,6 +27,12 @@ const assets = {
   playlistAdd: require("../../desktop/public/playlist-add.svg"),
   back: require("../../desktop/public/back.svg"),
   sparkle: require("../../desktop/public/sparkle.svg"),
+  artist: require("../../desktop/public/artist.svg"),
+  volumeMid: require("../../desktop/public/volume-mid.svg"),
+  volumeMuted: require("../../desktop/public/volume-muted.svg"),
+  tidal: require("../../desktop/public/tidal.svg"),
+  qobuz: require("../../desktop/public/qobuz.svg"),
+  spotify: require("../../desktop/public/spotify.svg"),
 };
 
 export type IconName = keyof typeof assets;

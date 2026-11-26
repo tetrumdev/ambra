@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef, type ReactNode, type RefObject } from "react";
 import { StyleSheet, View, type FlatList, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import { GestureDetector, usePanGesture } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { haptic, radius } from "./theme";
-import { HOLD_MS } from "./Touchable";
+import { HOLD_MS, type Frame } from "./Touchable";
+import { closeMenu } from "./shell/ContextMenu";
+import { ROW_HEIGHT } from "./TrackRow";
 
 /** Rows are this tall (TrackRow), so a finger's position names the row under it. */
-export const ROW_HEIGHT = 64;
+export { ROW_HEIGHT };
 /** How close to an edge the finger has to be before the list scrolls by itself. */
 const EDGE = 72;
 const SCROLL_STEP = 14;
@@ -14,7 +16,8 @@ const SCROLL_STEP = 14;
 const STILL = 8;
 
 type Controller = {
-  begin(index: number, absoluteY: number, rowTop: number): void;
+  /** `continued`: the row is already lifted (under its menu), so it doesn't lift again. */
+  begin(index: number, absoluteY: number, rowTop: number, continued?: boolean): void;
   move(absoluteY: number): void;
   end(moved: boolean): void;
   cancel(): void;
@@ -71,7 +74,7 @@ export function useReorder({ list, count, onMove, renderLifted }: {
   const place = useCallback(() => {
     liftedY.set(touch.current.y - frame.current.top - touch.current.grab);
     const next = target(touch.current.y);
-    if (next !== to.get()) { to.set(next); haptic.select(); }
+    if (next !== to.get()) { to.set(next); haptic.tick(); }
   }, [liftedY, target, to]);
   const stopScrolling = useCallback(() => {
     if (timer.current) clearInterval(timer.current);
@@ -94,15 +97,15 @@ export function useReorder({ list, count, onMove, renderLifted }: {
   });
   useLayoutEffect(() => {
     controller.current = {
-      begin(index, absoluteY, rowTop) {
+      begin(index, absoluteY, rowTop, continued = false) {
         container.current?.measureInWindow((_, top, __, height) => { frame.current = { top, height }; });
         touch.current = { grab: Math.max(0, Math.min(ROW_HEIGHT, rowTop)), y: absoluteY, index };
         from.set(index);
         to.set(index);
         liftedY.set(absoluteY - frame.current.top - touch.current.grab);
-        lift.set(withSpring(1, { damping: 18, stiffness: 320 }));
+        lift.set(continued ? 1 : withTiming(1, { duration: 160 }));
         setDragging(index);
-        haptic.hold();
+        if (continued) haptic.tick(); else haptic.hold();
         // Near an edge the list scrolls under the finger, and the row under it follows.
         stopScrolling();
         timer.current = setInterval(() => {
@@ -163,34 +166,50 @@ export function useReorder({ list, count, onMove, renderLifted }: {
 }
 
 /**
- * A row that can be held and dragged. It slides aside while another row passes over it, and
- * is hidden while it's the one lifted (its floating copy follows the finger).
+ * A row you hold: it lifts and its menu opens beside it (`onHold`, with where the row is).
+ * Letting go keeps the menu. In a list that can be reordered, moving the finger instead closes
+ * the menu and carries the row: the others slide out of its way.
  */
-export function ReorderRow({ index, reorder, enabled, onHold, children }: {
+export function ReorderRow({ index, reorder, enabled = true, onHold, children }: {
   index: number;
-  reorder: Reorder;
-  enabled: boolean;
-  /** A hold let go without moving. */
-  onHold?: (index: number) => void;
+  /** Leave out for lists whose order can't change. */
+  reorder?: Reorder;
+  enabled?: boolean;
+  onHold?: (index: number, frame: Frame) => void;
   children: ReactNode;
 }) {
-  const { from, to, controller } = reorder;
-  const startedAt = useRef(0);
+  const unused = useSharedValue(-1);
+  const from = reorder?.from ?? unused;
+  const to = reorder?.to ?? unused;
+  const size = useRef({ width: 0, height: ROW_HEIGHT });
+  const touch = useRef({ x: 0, y: 0, grab: 0, dragging: false });
   const pan = usePanGesture({
     runOnJS: true,
-    enabled,
+    enabled: enabled && (!!onHold || !!reorder),
     activateAfterLongPress: HOLD_MS,
     onActivate: event => {
-      startedAt.current = event.absoluteY;
-      controller.current.begin(index, event.absoluteY, event.y);
+      touch.current = { x: event.absoluteX, y: event.absoluteY, grab: event.y, dragging: false };
+      haptic.hold();
+      onHold?.(index, { x: event.absoluteX - event.x, y: event.absoluteY - event.y, width: size.current.width, height: size.current.height });
     },
-    onUpdate: event => controller.current.move(event.absoluteY),
+    onUpdate: event => {
+      if (!reorder) return;
+      if (!touch.current.dragging) {
+        if (Math.hypot(event.absoluteX - touch.current.x, event.absoluteY - touch.current.y) <= STILL) return;
+        touch.current.dragging = true;
+        closeMenu();
+        reorder.controller.current.begin(index, event.absoluteY, touch.current.grab, true);
+      }
+      reorder.controller.current.move(event.absoluteY);
+    },
     onDeactivate: event => {
-      const moved = Math.abs(event.absoluteY - startedAt.current) > STILL;
-      controller.current.end(moved && !event.canceled);
-      if (!moved && !event.canceled) onHold?.(index);
+      if (touch.current.dragging) reorder?.controller.current.end(!event.canceled);
+      touch.current.dragging = false;
     },
-    onFinalize: event => { if (event.canceled) controller.current.cancel(); },
+    onFinalize: event => {
+      if (event.canceled && touch.current.dragging) reorder?.controller.current.cancel();
+      touch.current.dragging = false;
+    },
   });
   const style = useAnimatedStyle(() => {
     const start = from.get();
@@ -199,11 +218,11 @@ export function ReorderRow({ index, reorder, enabled, onHold, children }: {
     const shift = index === start ? 0
       : start < end && index > start && index <= end ? -ROW_HEIGHT
       : start > end && index >= end && index < start ? ROW_HEIGHT : 0;
-    return { opacity: index === start ? 0 : 1, transform: [{ translateY: withTiming(shift, { duration: 160 }) }] };
+    return { opacity: index === start ? 0 : 1, transform: [{ translateY: withTiming(shift, { duration: 180, easing: Easing.bezier(0.2, 0.7, 0.2, 1) }) }] };
   });
   return (
     <GestureDetector gesture={pan}>
-      <Animated.View collapsable={false} style={style}>{children}</Animated.View>
+      <Animated.View collapsable={false} onLayout={event => { size.current = { width: event.nativeEvent.layout.width, height: event.nativeEvent.layout.height }; }} style={style}>{children}</Animated.View>
     </GestureDetector>
   );
 }
@@ -223,7 +242,9 @@ const styles = StyleSheet.create({
     right: 12,
     height: ROW_HEIGHT,
     borderRadius: radius.md,
-    backgroundColor: "#1c1c1c",
+    backgroundColor: "#0e0e0e",
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "rgba(255, 255, 255, 0.12)",
     shadowColor: "black",
     shadowRadius: 18,
     shadowOffset: { width: 0, height: 8 },

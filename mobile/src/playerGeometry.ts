@@ -1,5 +1,5 @@
 export const MINI_HEIGHT = 64;
-export const NAVIGATION_HEIGHT = 48;
+export const NAVIGATION_HEIGHT = 58;
 export const MINI_ART_SIZE = 44;
 
 export function playerLayout(width: number, height: number, topInset: number, bottomInset: number) {

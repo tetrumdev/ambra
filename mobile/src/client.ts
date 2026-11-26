@@ -16,6 +16,26 @@ const ADDRESS_KEY = "ambra.server";
 const PAYLOAD_KEY = "ambra.pairingPayload.v1";
 const TOKEN_KEY = "ambra.token";
 const CLIENT_KEY = "ambra.client";
+/** Expo Go has no native bridge: it reaches the server's LAN address directly with its token. */
+const DIRECT_KEY = "ambra.direct.v1";
+const SESSION_KEY = "ambra.session";
+/** A connection type to use alone (desktop's Server settings); none means automatic. */
+const METHOD_KEY = "ambra.connectionMethod";
+export const connectionMethods = ["Lan", "Public", "HyperDHT", "TcpPunch", "Tailcat"] as const;
+export type ConnectionMethod = typeof connectionMethods[number];
+let method: ConnectionMethod | null = null;
+export const connectionMethod = () => method;
+/** Uses only `next` from now on (or chooses automatically), reconnecting at once. */
+export async function setConnectionMethod(next: ConnectionMethod | null) {
+  method = next;
+  await (next ? SecureStore.setItemAsync(METHOD_KEY, next) : SecureStore.deleteItemAsync(METHOD_KEY));
+  if (!directMode) await restore();
+}
+/** The server's default port, where its LAN address answers plain HTTP. */
+const DEFAULT_PORT = 38147;
+
+/** True in Expo Go and other builds without the native networking module. */
+export const directMode = !nativeNetworkAvailable;
 
 export type Track = {
   globalId: string;
@@ -45,7 +65,29 @@ export type QueueSnapshot = {
   tracks?: Track[];
 };
 export type Output = { endpointId: string; deviceId: string; endpointName: string; deviceName: string };
-export type Endpoint = { id: string; name: string; devices: { id: string; name: string; isDefault: boolean }[]; selectedDeviceId: string | null };
+export type Endpoint = {
+  id: string;
+  name: string;
+  devices: { id: string; name: string; isDefault: boolean }[];
+  selectedDeviceId: string | null;
+  /** The app's last report; `syncV1` means it can play in step with other outputs. */
+  status?: { syncV1?: boolean; satellitesV1?: boolean; volume?: number } | null;
+};
+/** Named groups of outputs a session plays on together (desktop's stages). */
+export type Stage = { id: string; name: string; outputs: Output[]; volumes?: Record<string, number>; targetLufs?: number };
+/** A server runs several sessions, each with its own queue and outputs. */
+export type Session = {
+  id: string;
+  name: string;
+  playing: boolean;
+  output: Output | null;
+  outputs?: Output[];
+  track: { title?: string; artist?: string; album?: string; cover?: string } | null;
+  stages?: Stage[];
+  activeStage?: string;
+};
+export const MAIN_SESSION = "main";
+export const GENERAL_STAGE = "general";
 export type SessionView = {
   instanceId: string;
   revision: number;
@@ -57,6 +99,9 @@ export type SessionView = {
   error: string | null;
   output: Output | null;
   outputOnline: boolean;
+  /** Every output playing in step, the leading one first. Missing from older servers. */
+  outputs?: Output[];
+  audioQuality?: { bitDepth?: number | null; sampleRate?: number | null; codec?: string | null; label?: string | null } | null;
   /** What the output was asked to play, as the core sent it. */
   loadedSource?: string | null;
   queueRevision: number;
@@ -68,6 +113,9 @@ type ArrivingView = Omit<SessionView, "queue"> & { queue?: SessionView["queue"];
 export class Unpaired extends Error {}
 
 let baseUrl = "";
+/** The device token, sent by this app itself only in direct mode; the native bridge adds it otherwise. */
+let directToken: string | null = null;
+let session = MAIN_SESSION;
 let pairingPayload: string | null = null;
 let connectionEpoch = 0;
 let pairingStorage = Promise.resolve();
@@ -86,9 +134,11 @@ function assertConnection(epoch: number) {
 function resetSession() {
   connectionEpoch++;
   baseUrl = "";
+  directToken = null;
   view = null;
   viewAt = Date.now();
   playbackClock.reset();
+  syncClock.reset();
   show();
 }
 
@@ -98,26 +148,99 @@ export async function restore() {
   const epoch = connectionEpoch;
   await pairingStorage;
   assertConnection(epoch);
-  const [address, saved, payload] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, PAYLOAD_KEY].map(key => SecureStore.getItemAsync(key)));
+  const [address, saved, payload, direct, chosen, chosenMethod] = await Promise.all([ADDRESS_KEY, TOKEN_KEY, PAYLOAD_KEY, DIRECT_KEY, SESSION_KEY, METHOD_KEY].map(key => SecureStore.getItemAsync(key)));
   assertConnection(epoch);
+  session = chosen || MAIN_SESSION;
+  method = connectionMethods.find(known => known === chosenMethod) ?? null;
   pairingPayload = payload;
+  if (directMode) {
+    const pairing = parseDirect(direct);
+    if (!pairing) return { address: payload ?? address, paired: false };
+    baseUrl = pairing.base;
+    directToken = pairing.token;
+    return { address: pairing.base, paired: true };
+  }
   if (!saved || !payload || !nativeNetworkAvailable) {
     // Never silently pin a key based on the legacy random server ID.
     baseUrl = "";
     return { address: payload ?? address, paired: false };
   }
-  const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: saved });
+  const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: saved, method });
   assertConnection(epoch);
   baseUrl = opened.baseUrl;
   return { address: payload, paired: true };
 }
 
-export const networkStatus = () => networkCall<{ state: string; method?: string; error?: string; tailcatPath?: { kind: "unknown" | "direct" | "derp"; region?: number } }>("status");
+type NetworkStatus = { state: string; method?: string; error?: string; tailcatPath?: { kind: "unknown" | "direct" | "derp"; region?: number } };
+export async function networkStatus(): Promise<NetworkStatus> {
+  if (!directMode) return networkCall<NetworkStatus>("status");
+  if (!baseUrl) return { state: "Offline", error: "Not paired" };
+  try {
+    const response = await fetch(`${baseUrl}/api/health`, { signal: deadline(4000) });
+    return response.ok ? { state: "Connected", method: "Direct LAN" } : { state: "Offline", error: `The server answered ${response.status}` };
+  } catch {
+    return { state: "Offline", error: "Can't reach the server on this network" };
+  }
+}
+
+/** Aborts after `ms`, or with `signal`; React Native lacks AbortSignal.timeout and .any. */
+function deadline(ms: number, signal?: AbortSignal) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  signal?.addEventListener("abort", () => controller.abort());
+  controller.signal.addEventListener("abort", () => clearTimeout(timer));
+  return controller.signal;
+}
+
+function parseDirect(raw: string | null): { base: string; token: string } | null {
+  try {
+    const value = raw ? JSON.parse(raw) as { base?: unknown; token?: unknown } : null;
+    return typeof value?.base === "string" && typeof value.token === "string" ? { base: value.base, token: value.token } : null;
+  } catch { return null; }
+}
 
 async function forget() {
   resetSession();
+  if (directMode) { await writePairing(() => SecureStore.deleteItemAsync(DIRECT_KEY)); return; }
   await writePairing(() => SecureStore.deleteItemAsync(TOKEN_KEY));
   await networkCall("close");
+}
+
+/** The session this app follows; requests for the first one name none, as older servers expect. */
+export const currentSession = () => session;
+function inSession(path: string) {
+  return session === MAIN_SESSION ? path : `${path}${path.includes("?") ? "&" : "?"}session=${encodeURIComponent(session)}`;
+}
+
+/** Follows another of the server's sessions from now on; this phone remembers the choice. */
+export function setSession(id: string) {
+  if (id === session) return;
+  session = id;
+  void (id === MAIN_SESSION ? SecureStore.deleteItemAsync(SESSION_KEY) : SecureStore.setItemAsync(SESSION_KEY, id)).catch(() => {});
+  view = null;
+  viewAt = Date.now();
+  playbackClock.reset();
+  wakeFollower();
+  show();
+}
+
+/** The server's sessions; none from a server too old to run more than one. */
+export async function sessions(signal?: AbortSignal): Promise<Session[]> {
+  try {
+    return JSON.parse(rebased(JSON.stringify(await request<Session[]>("/api/sessions", { signal, timeoutMs: 10_000 })))) as Session[];
+  } catch (error) {
+    if ((error as { status?: number }).status === 404) return [];
+    throw error;
+  }
+}
+export const createSession = (name: string) => request<Session>("/api/sessions", { method: "POST", body: JSON.stringify({ name }) });
+export const setStages = (id: string, stages: Stage[], active?: string) =>
+  request<Session[]>(`/api/sessions/${encodeURIComponent(id)}/stages`, { method: "POST", body: JSON.stringify({ stages, active }) });
+
+/** Every output a session plays on, the leading one first. */
+export function playingOutputs(current: { output: Output | null; outputs?: Output[] } | null | undefined): Output[] {
+  if (!current) return [];
+  return current.outputs ?? (current.output ? [current.output] : []);
 }
 
 export async function clientId() {
@@ -132,7 +255,9 @@ export async function clientId() {
 
 /** A URL on the selected server's capability-protected native bridge. */
 export function serverUrl(path: string) {
-  return `${baseUrl}${path}`;
+  if (!directToken) return `${baseUrl}${path}`;
+  // Media elements can't send headers; the server also takes the token as a query parameter.
+  return `${baseUrl}${path}${path.includes("?") ? "&" : "?"}access_token=${encodeURIComponent(directToken)}`;
 }
 
 /** Lists use the server's bounded thumbnail instead of decoding original album artwork. */
@@ -190,7 +315,7 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     const response = await fetch(`${baseUrl}${path}`, {
       ...init,
       signal: timeout.signal,
-      headers: { ...(init.body ? { "Content-Type": "application/json" } : {}) },
+      headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(directToken ? { Authorization: `Bearer ${directToken}` } : {}) },
     });
     assertConnection(epoch);
     if (response.status === 401) {
@@ -203,7 +328,11 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     return body as T;
   } catch (error) {
     // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
-    if (timeout.signal.aborted && !init.signal?.aborted) throw new Error("The server took too long to answer. Check your connection and try again.");
+    if (timeout.signal.aborted && !init.signal?.aborted) {
+      // No answer may mean a connection that died without closing; the bridge checks and replaces it.
+      if (!directMode) void networkCall("resume").catch(() => {});
+      throw new Error("The server took too long to answer. Check your connection and try again.");
+    }
     throw error;
   } finally {
     clearTimeout(timer);
@@ -215,11 +344,24 @@ export type PairingStarted = { requestId: string; code: string };
 
 /** `name` is how the server lists this phone, e.g. in its outputs. */
 export async function requestPairing(address: string, name: string, signal?: AbortSignal) {
+  if (directMode) {
+    resetSession();
+    const epoch = connectionEpoch;
+    const base = await findDirectServer(address.trim(), signal);
+    assertConnection(epoch);
+    baseUrl = base;
+    pairingPayload = base;
+    const id = await clientId();
+    assertConnection(epoch);
+    return request<PairingStarted>("/api/pair/request", {
+      method: "POST", body: JSON.stringify({ clientId: id, clientName: name.slice(0, 64) }), timeoutMs: 30_000, signal,
+    });
+  }
   if (!address.trim().startsWith("ambra://pair/")) throw new Error("Paste the pairing link from ambra-server pair qr. Legacy addresses need re-pairing.");
   pairingPayload = address.trim();
   resetSession();
   const epoch = connectionEpoch;
-  const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload });
+  const opened = await networkCall<{ baseUrl: string }>("open", { payload: pairingPayload, method });
   assertConnection(epoch);
   if (signal?.aborted) throw Object.assign(new Error("Pairing canceled"), { name: "AbortError" });
   baseUrl = opened.baseUrl;
@@ -228,6 +370,36 @@ export async function requestPairing(address: string, name: string, signal?: Abo
   return request<PairingStarted>("/api/pair/request", {
     method: "POST", body: JSON.stringify({ clientId: id, clientName: name.slice(0, 64) }), timeoutMs: 30_000, signal,
   });
+}
+
+/**
+ * Direct mode's server address: a typed one (`192.168.1.20` or `http://host:port`), or the pairing
+ * link's LAN hints tried on the server's HTTP port, keeping the one whose public key matches.
+ */
+async function findDirectServer(address: string, signal?: AbortSignal): Promise<string> {
+  let candidates: string[];
+  let key: string | null = null;
+  if (address.startsWith("ambra://pair/")) {
+    const encoded = address.slice("ambra://pair/".length).replace(/-/g, "+").replace(/_/g, "/");
+    let payload: { publicKey?: string; localAddresses?: string[] };
+    try { payload = JSON.parse(atob(encoded + "=".repeat((4 - encoded.length % 4) % 4))); } catch { throw new Error("That pairing link is damaged. Copy it again."); }
+    key = payload.publicKey ?? null;
+    // IPv6 hints come as [addr]:port; their brackets stay for the URL.
+    const hosts = [...new Set((payload.localAddresses ?? []).map(hint => hint.replace(/:\d+$/, "")))];
+    candidates = hosts.map(host => `http://${host}:${DEFAULT_PORT}`);
+    if (!candidates.length) throw new Error("This pairing link has no address on your network. Type the server's address instead, like 192.168.1.20.");
+  } else {
+    const typed = (/^https?:\/\//.test(address) ? address : `http://${address}`).replace(/\/+$/, "");
+    candidates = [/:\d+$/.test(typed) ? typed : `${typed}:${DEFAULT_PORT}`];
+  }
+  const found = await Promise.any(candidates.map(async base => {
+    const response = await fetch(`${base}/api/server/info`, { signal: deadline(4000, signal) });
+    const info = await response.json() as { service?: string; publicKey?: string };
+    if (info.service !== "ambra" || (key && info.publicKey !== key)) throw new Error("Not this server");
+    return base;
+  })).catch(() => null);
+  if (!found) throw new Error("Couldn't find the server on this Wi-Fi. Check that LAN sharing is on and the phone is on the same network.");
+  return found;
 }
 
 /** Resolves once someone approves the code at the server. */
@@ -241,6 +413,13 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
   while (!signal.aborted) {
     const status = await request<{ status: string; token?: string }>(`/api/pair/request/${requestId}`, { signal });
     assertActive();
+    if (status.status === "approved" && status.token && directMode) {
+      assertActive();
+      await writePairing(() => SecureStore.setItemAsync(DIRECT_KEY, JSON.stringify({ base: payload, token: status.token })));
+      assertActive();
+      directToken = status.token;
+      return;
+    }
     if (status.status === "approved" && status.token) {
       await writePairing(async () => {
         assertActive();
@@ -253,7 +432,7 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
           assertActive();
           resetSession();
           epoch = connectionEpoch;
-          const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: status.token });
+          const opened = await networkCall<{ baseUrl: string }>("open", { payload, token: status.token, method });
           assertActive();
           baseUrl = opened.baseUrl;
         } catch (error) {
@@ -271,6 +450,23 @@ export async function awaitPairing(requestId: string, signal: AbortSignal) {
 let view: SessionView | null = null;
 let viewAt = Date.now();
 const playbackClock = new SessionClock();
+/**
+ * The server's clock for playing in step with other outputs, on this phone's monotonic clock
+ * (`performance.now`), which unlike the wall clock never jumps.
+ */
+const syncClock = new SessionClock();
+/** One timed round trip to the server's clock. A reading far off the estimate means the server restarted. */
+export async function sampleSyncClock(signal?: AbortSignal) {
+  const sent = performance.now();
+  const report = await request<{ serverTimeMs: number }>(inSession("/api/session/clock"), { signal, timeoutMs: 3000 });
+  const received = performance.now();
+  const known = syncClock.offset(received);
+  const offset = report.serverTimeMs - (sent + received) / 2;
+  if (known !== null && Math.abs(known - offset) > 1000 + (received - sent)) syncClock.reset();
+  syncClock.sample(report.serverTimeMs, sent, received);
+}
+/** The server's clock less this phone's monotonic one, or null before any round trip. */
+export const syncClockOffset = () => syncClock.offset(performance.now());
 const listeners = new Set<() => void>();
 
 /**
@@ -345,7 +541,13 @@ function accept(next: ArrivingView) {
 export async function follow(signal: AbortSignal) {
   let wake = new AbortController();
   // iOS suspends the app in the background; coming back asks again at once for the true position.
-  const subscription = AppState.addEventListener("change", state => { if (state === "active") { wake.abort(); void networkCall("resume").catch(() => {}); } });
+  wakeFollower = () => wake.abort();
+  // The connection may have died while suspended: ask again once it's known to answer (or replaced).
+  const subscription = AppState.addEventListener("change", state => {
+    if (state !== "active") return;
+    if (directMode) wake.abort();
+    else void networkCall("resume").catch(() => {}).finally(() => wake.abort());
+  });
   try {
     while (!signal.aborted) {
       const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}&patches=1` : "";
@@ -356,12 +558,15 @@ export async function follow(signal: AbortSignal) {
       wakeSignal.addEventListener("abort", abort);
       if (signal.aborted || wakeSignal.aborted) stop.abort();
       try {
-        const next = await request<ArrivingView>(`/api/session${since}`, { signal: stop.signal, timeoutMs: 35_000 });
-        if (!accept(next)) accept(await request<ArrivingView>("/api/session", { signal }));
+        const asked = session;
+        const next = await request<ArrivingView>(inSession(`/api/session${since}`), { signal: stop.signal, timeoutMs: 35_000 });
+        if (asked === session && !accept(next)) accept(await request<ArrivingView>(inSession("/api/session"), { signal }));
 
       } catch (error) {
         if (error instanceof Unpaired) throw error;
-        if (!wake.signal.aborted && !signal.aborted) await new Promise(resolve => setTimeout(resolve, 2000));
+        // The session was removed on another device: back to the first one.
+        if ((error as { status?: number }).status === 404 && session !== MAIN_SESSION) setSession(MAIN_SESSION);
+        else if (!wake.signal.aborted && !signal.aborted) await new Promise(resolve => setTimeout(resolve, 2000));
       } finally {
         signal.removeEventListener("abort", abort);
         wakeSignal.removeEventListener("abort", abort);
@@ -369,9 +574,11 @@ export async function follow(signal: AbortSignal) {
       if (wake.signal.aborted) wake = new AbortController();
     }
   } finally {
+    wakeFollower = () => {};
     subscription.remove();
   }
 }
+let wakeFollower = () => {};
 
 let commandChain: Promise<unknown> = Promise.resolve();
 function inOrder<T>(work: () => Promise<T>): Promise<T> {
@@ -388,7 +595,7 @@ export function command(action: string, details: Record<string, unknown> = {}) {
   const epoch = connectionEpoch;
   return inOrder(async () => {
     assertConnection(epoch);
-    accept(await request<ArrivingView>(`/api/session/command${view ? `?queue=${view.queueRevision}&patches=1` : ""}`, {
+    accept(await request<ArrivingView>(inSession(`/api/session/command${view ? `?queue=${view.queueRevision}&patches=1` : ""}`), {
       method: "POST",
       body: JSON.stringify({ action, ...details }),
     }));
@@ -406,20 +613,20 @@ export function endpointRequest<T>(id: string, path: string, init: RequestInit =
 
 /** Re-anchor lyrics to a fresh session and compensate for delivery delay, as desktop does. */
 export async function refreshSession(signal: AbortSignal, options: { clock?: "recent" | "force" } = {}) {
-  if (options.clock && !view) accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+  if (options.clock && !view) accept(await request<ArrivingView>(inSession("/api/session"), { signal, timeoutMs: 10_000 }));
   const instance = view?.instanceId;
   if (options.clock && (options.clock === "force" || !playbackClock.recent(Date.now()))) {
     await Promise.all(Array.from({ length: 3 }, async () => {
       const sent = Date.now();
       try {
-        const report = await request<{ serverTimeMs: number }>("/api/session/clock", { signal, timeoutMs: 3000 });
+        const report = await request<{ serverTimeMs: number }>(inSession("/api/session/clock"), { signal, timeoutMs: 3000 });
         if (!signal.aborted && instance === view?.instanceId) playbackClock.sample(report.serverTimeMs, sent, Date.now());
       } catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
     }));
   }
-  const path = `/api/session${view ? `?queue=${view.queueRevision}&patches=1` : ""}`;
+  const path = inSession(`/api/session${view ? `?queue=${view.queueRevision}&patches=1` : ""}`);
   if (!accept(await request<ArrivingView>(path, { signal, timeoutMs: 10_000 }))) {
-    accept(await request<ArrivingView>("/api/session", { signal, timeoutMs: 10_000 }));
+    accept(await request<ArrivingView>(inSession("/api/session"), { signal, timeoutMs: 10_000 }));
   }
 }
 
@@ -458,11 +665,11 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
   return inOrder(async () => {
     assertConnection(epoch);
     for (let attempt = 0; attempt < 4; attempt++) {
-      if (!view) accept(await request<ArrivingView>("/api/session"));
+      if (!view) accept(await request<ArrivingView>(inSession("/api/session")));
       const current = view!;
       const queue = change(current.queue, current.queueRevision);
       try {
-        accept(await request<ArrivingView>("/api/session/queue", {
+        accept(await request<ArrivingView>(inSession("/api/session/queue"), {
           method: "POST",
           // Media URLs carry only an ephemeral bridge capability, removed from shared state.
           body: JSON.stringify({ base: current.queueRevision, queue, ...(play ? { playTrackId: queue.current?.globalTrackId } : {}) })
@@ -472,7 +679,7 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
       } catch (error) {
         const conflict = error as { status?: number; body?: { session?: ArrivingView } };
         if (conflict.status !== 409) throw error;
-        accept(conflict.body?.session ?? await request<ArrivingView>("/api/session"));
+        accept(conflict.body?.session ?? await request<ArrivingView>(inSession("/api/session")));
       }
     }
     throw new Error("The queue keeps changing on another device. Please try again.");

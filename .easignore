@@ -11,6 +11,10 @@
 !/desktop/public
 !/desktop/src
 /desktop/src/*
+# The iPhone app's icon is desktop's Icon Composer file (mobile/app.json `ios.icon`).
+!/desktop/src-tauri
+/desktop/src-tauri/*
+!/desktop/src-tauri/icons
 !/desktop/src/utils
 !/desktop/src/types
 !/desktop/src/assets

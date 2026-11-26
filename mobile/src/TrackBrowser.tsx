@@ -1,20 +1,17 @@
-import { LinearGradient } from "expo-linear-gradient";
-import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { FlatList, StyleSheet, Text, View } from "react-native";
-import { Artwork } from "./Artwork";
-import { changeQueue, command, currentTrack, type PlaylistContents, type SessionView, type Track } from "./client";
-import { Icon } from "./Icons";
-import { Menu } from "./Menu";
+import { changeQueue, command, currentTrack, type PlaylistContents, type SessionView } from "./client";
 import { editUpcoming } from "./queueModel";
+import { openMenu } from "./shell/ContextMenu";
 import { Sheet } from "./Sheet";
 import { colors, fonts, haptic, radius, space, textSize } from "./theme";
-import { Touchable } from "./Touchable";
-import { ROW_HEIGHT, ReorderRow, moved, useReorder } from "./reorder";
+import { Touchable, type Frame } from "./Touchable";
+import { TrackRow, ROW_HEIGHT, type Bound } from "./TrackRow";
+import { ReorderRow, moved, useReorder } from "./reorder";
 
-const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+export { TrackRow };
 const message = (reason: unknown, fallback: string) => reason instanceof Error ? reason.message : fallback;
 
-type Bound = "first" | "middle" | "last";
 /** Where each song sits in the songs bound with it; a package with one playable song isn't shown. */
 export function boundRows(contents: Pick<PlaylistContents, "playlist" | "tracks"> | null) {
   const rows = new Map<string, Bound>();
@@ -27,56 +24,12 @@ export function boundRows(contents: Pick<PlaylistContents, "playlist" | "tracks"
   return rows;
 }
 
-export const TrackRow = memo(function TrackRow({ track, index, active, playing, bound, downloaded, holdDrags = false, onPress, onMore, onHold }: {
-  track: Track;
-  index: number;
-  active: boolean;
-  playing: boolean;
-  /** Bound songs read as one block, in desktop's amber (.libraryItem[data-package]). */
-  bound?: Bound;
-  /** Saved on this phone, shown with desktop's download glyph. */
-  downloaded?: boolean;
-  onPress: (index: number) => void;
-  /** The ⋯ button: desktop's edit menu. */
-  onMore?: (index: number) => void;
-  /** Holding the row: desktop's playback menu; the edit menu when there's none. */
-  onHold?: (index: number) => void;
-  /** The hold belongs to a drag gesture around the row (`ReorderRow`), which opens the menu itself. */
-  holdDrags?: boolean;
-}) {
-  return (
-    <Touchable
-      accessibilityRole="button"
-      accessibilityLabel={`${active ? (playing ? "Pause" : "Resume") : "Play"} ${track.name}, ${track.artist}`}
-      accessibilityHint={[bound && "Bound with the songs around it.", onMore && "Hold for more options."].filter(Boolean).join(" ") || undefined}
-      accessibilityState={{ selected: active }}
-      highlight
-      scale={0.98}
-      haptic="select"
-      unstable_pressDelay={40}
-      onPress={() => onPress(index)}
-      onLongPress={!holdDrags && (onHold ?? onMore) ? () => (onHold ?? onMore)!(index) : undefined}
-      style={[styles.trackRow, bound && styles[bound]]}
-    >
-      {bound && <LinearGradient pointerEvents="none" colors={["rgba(53, 32, 0, 0.5)", "transparent"]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={StyleSheet.absoluteFill} />}
-      <Artwork track={track} />
-      <View style={styles.trackText}>
-        <Text numberOfLines={1} style={[styles.trackName, active && styles.activeName]}>{track.name}</Text>
-        <Text numberOfLines={1} style={styles.trackArtist}>{track.artist}</Text>
-      </View>
-      {downloaded && <Icon name="download" size={11} color={colors.muted} />}
-      {active ? <Icon name={playing ? "pause" : "play"} size={12} /> : <Text style={styles.duration}>{clock(track.durationSeconds)}</Text>}
-      {onMore ? <Touchable accessibilityRole="button" accessibilityLabel={`Options for ${track.name}`} haptic="select" hitSlop={6} onPress={() => onMore(index)} style={styles.more}>
-        <Icon name="more" rotation={90} size={16} color={colors.muted} />
-      </Touchable> : <View style={styles.moreSpacer} />}
-    </Touchable>
-  );
-});
-
-/** The shared queue, laid out like desktop's: what's playing, then what's next. */
-export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: SessionView | null; onClose: () => void; onMenuVisibilityChange?: (visible: boolean) => void }) {
+/**
+ * The shared queue, laid out like desktop's: what's playing, then what's next. Swipe a song
+ * left to remove it, right to play it now; hold and drag to move it.
+ */
+export function QueueSheet({ view, onClose }: { view: SessionView | null; onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
-  const [menu, setMenu] = useState<number | null>(null);
   const now = currentTrack(view);
   const playing = !!view?.playing;
   const byId = useMemo(() => new Map(view?.queue.tracks?.map(track => [track.globalId, track])), [view?.queue.tracks]);
@@ -96,7 +49,14 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
     perform(() => changeQueue((queue, revision) => editUpcoming(queue, revision, expected, index, action), action === "play"));
   }, [perform]);
   const onPress = useCallback((index: number) => edit(index, "play"), [edit]);
-  const onMore = useCallback((index: number) => setMenu(index), []);
+  const onMore = useCallback((index: number, frame: Frame) => {
+    const track = byId.get(latest.current?.queue.upcoming[index]?.globalTrackId ?? "");
+    if (!track) return;
+    openMenu({ lifted: { frame, node: <TrackRow track={track} index={index} active={false} playing={false} onPress={() => {}} /> }, actions: [
+      { label: "Play from Here", icon: "skip", run: () => edit(index, "play") },
+      { label: "Remove from Queue", icon: "remove", destructive: true, run: () => edit(index, "remove") },
+    ] });
+  }, [byId, edit]);
   const toggle = useCallback(() => perform(() => command(latest.current?.playing ? "pause" : "play")), [perform]);
   const clear = () => {
     const expected = view?.queueRevision;
@@ -105,8 +65,6 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
       return { ...queue, upcoming: [] };
     }));
   };
-  const menuTrack = menu !== null ? byId.get(upcoming[menu]?.globalTrackId ?? "") : undefined;
-  // Hold an upcoming song, then drag it to its new place in the queue.
   const list = useRef<FlatList<unknown>>(null);
   const reorder = useReorder({
     list,
@@ -124,25 +82,25 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
     },
   });
 
-  return <>
+  return (
     <Sheet
       label="Queue"
       tall
       onClose={onClose}
-      grip={<View style={styles.sheetHeading}>
-        <View style={styles.sheetHeadingText}>
-          <Text style={styles.sheetTitle}>Queue</Text>
-          <Text style={styles.sheetSubtitle} numberOfLines={1}>{view?.output?.deviceName ?? "No output selected"}</Text>
+      grip={<View style={styles.heading}>
+        <View style={styles.headingText}>
+          <Text style={styles.title}>Queue</Text>
+          <Text style={styles.subtitle} numberOfLines={1}>{view?.output?.deviceName ?? "No output selected"}</Text>
         </View>
-        {upcoming.length > 0 && <Touchable accessibilityRole="button" accessibilityLabel="Clear upcoming songs" haptic="warning" onPress={clear} style={styles.retry}><Text style={styles.clearLabel}>Clear</Text></Touchable>}
+        {upcoming.length > 0 && <Touchable accessibilityRole="button" accessibilityLabel="Clear upcoming songs" haptic="warning" scale={0.9} onPress={clear} style={styles.clear}><Text style={styles.clearLabel}>Clear</Text></Touchable>}
       </View>}
     >
-      {() => <View style={styles.queueList} {...reorder.containerProps}>
-        {error && <Text accessibilityRole="alert" style={[styles.notice, styles.errorText]}>{error}</Text>}
+      {() => <View style={styles.list} {...reorder.containerProps}>
+        {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         <FlatList
           ref={list as never}
           {...reorder.listProps}
-          style={styles.queueList}
+          style={styles.list}
           data={upcoming}
           initialNumToRender={12}
           maxToRenderPerBatch={8}
@@ -150,18 +108,20 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
           keyExtractor={(item, index) => `${item.globalTrackId}:${index}`}
           extraData={byId}
           ListHeaderComponent={<View onLayout={event => reorder.onRowsLayout(event.nativeEvent.layout.height)}>
-            <Text style={styles.sectionLabel}>Now Playing</Text>
+            <Text style={styles.section}>Now Playing</Text>
             {now
               ? <TrackRow track={now} index={-1} active playing={playing} onPress={toggle} />
               : <Text style={styles.empty}>Nothing playing</Text>}
-            <Text style={styles.sectionLabel}>Up Next{upcoming.length ? `  •  ${upcoming.length}` : ""}</Text>
+            <Text style={styles.section}>Up Next{upcoming.length ? `  ·  ${upcoming.length}` : ""}</Text>
           </View>}
-          ListEmptyComponent={<Text style={styles.empty}>Nothing up next. Hold a song and choose Add to Queue.</Text>}
+          ListEmptyComponent={<Text style={styles.empty}>Nothing up next</Text>}
           renderItem={({ item, index }) => {
             const track = byId.get(item.globalTrackId);
-            return <ReorderRow index={index} reorder={reorder} enabled onHold={onMore}>
+            return <ReorderRow index={index} reorder={reorder} onHold={onMore}>
               {track
-                ? <TrackRow track={track} index={index} active={false} playing={false} holdDrags onPress={onPress} onMore={onMore} />
+                ? <TrackRow track={track} index={index} active={false} playing={false} onPress={onPress} onMenu={onMore}
+                  swipeStart={{ icon: "play", label: "Play", run: () => edit(index, "play") }}
+                  swipeEnd={{ icon: "remove", label: "Remove", destructive: true, run: () => edit(index, "remove") }} />
                 : <Text style={[styles.empty, styles.unavailable]}>Unavailable song</Text>}
             </ReorderRow>;
           }}
@@ -169,55 +129,20 @@ export function QueueSheet({ view, onClose, onMenuVisibilityChange }: { view: Se
         {reorder.overlay}
       </View>}
     </Sheet>
-    {menu !== null && menuTrack && <Menu track={menuTrack} onClose={() => setMenu(null)} onVisibilityChange={onMenuVisibilityChange} actions={[
-      { label: "Play from Here", icon: "skip", run: () => edit(menu, "play") },
-      { label: "Remove from Queue", icon: "remove", run: () => edit(menu, "remove") },
-    ]} />}
-  </>;
+  );
 }
 
 const styles = StyleSheet.create({
-  browser: { flex: 1, backgroundColor: colors.black },
-  listContent: { paddingHorizontal: 12 },
-  statusShade: { position: "absolute", top: 0, left: 0, right: 0, backgroundColor: colors.black, opacity: 0.85 },
-  hero: { flexDirection: "row", gap: 18, alignItems: "flex-end", paddingHorizontal: 8, paddingBottom: 22 },
-  mosaic: { width: 132, height: 132, flexDirection: "row", flexWrap: "wrap", overflow: "hidden", borderRadius: radius.md, borderCurve: "continuous", backgroundColor: "#141414" },
-  tile: { width: "50%", height: "50%" },
-  heroText: { flex: 1, gap: space.sm, paddingBottom: 4 },
-  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 44, lineHeight: 50, fontWeight: "500" },
-  summary: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption },
-  playActions: { flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 8, marginBottom: 14 },
-  playButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, backgroundColor: colors.text, borderRadius: radius.pill, height: 46 },
-  shuffleButton: { flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderColor: colors.text, borderWidth: 1, borderRadius: radius.pill, height: 46 },
-  playLabel: { color: colors.black, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
-  shuffleLabel: { color: colors.text, fontFamily: fonts.sans, fontWeight: "600", fontSize: 15 },
-  loading: { paddingVertical: 32 },
-  trackRow: { flexDirection: "row", alignItems: "center", gap: space.md, height: 64, paddingLeft: 8, borderRadius: radius.md, borderCurve: "continuous", overflow: "hidden" },
-  first: { borderBottomLeftRadius: 0, borderBottomRightRadius: 0 },
-  middle: { borderRadius: 0 },
-  last: { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
-  trackText: { flex: 1, gap: space.xs },
-  trackName: { color: "rgba(255, 255, 255, 0.9)", fontFamily: fonts.sans, fontSize: 15 },
-  activeName: { color: colors.text, fontWeight: "700" },
-  trackArtist: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail },
-  duration: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption, fontVariant: ["tabular-nums"] },
-  more: { width: 40, height: 48, alignItems: "center", justifyContent: "center" },
-  moreSpacer: { width: 16 },
-  notice: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, flexShrink: 1, paddingHorizontal: 8, paddingVertical: 6 },
-  errorText: { color: colors.error },
+  heading: { flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: 8, paddingTop: 2, paddingBottom: 8 },
+  headingText: { flex: 1, gap: 2 },
+  title: { color: colors.text, fontFamily: fonts.serif, fontSize: 32, fontWeight: "500" },
+  subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption },
+  clear: { minHeight: 36, justifyContent: "center", paddingHorizontal: 14, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line },
+  clearLabel: { color: colors.secondary, fontFamily: fonts.sans, fontWeight: "600", fontSize: textSize.detail },
+  list: { flex: 1 },
+  error: { color: colors.error, fontFamily: fonts.sans, fontSize: textSize.detail, lineHeight: 20, paddingHorizontal: 8, paddingVertical: 6 },
   empty: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.small, lineHeight: 20, paddingVertical: 24, paddingHorizontal: 8 },
-  errorBox: { flexDirection: "row", alignItems: "center", gap: space.sm },
-  retry: { minHeight: 44, justifyContent: "center", paddingHorizontal: 10 },
-  retryLabel: { color: colors.text, fontFamily: fonts.sans, fontWeight: "600", fontSize: textSize.small },
-  toast: { position: "absolute", alignSelf: "center", backgroundColor: colors.raised, borderColor: colors.line, borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.pill, paddingHorizontal: 18, paddingVertical: 10 },
-  toastText: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.detail, fontWeight: "600" },
-  sheetHeading: { flexDirection: "row", alignItems: "center", gap: space.md, paddingHorizontal: 8, paddingTop: 6, paddingBottom: 8 },
-  sheetHeadingText: { flex: 1, gap: 2 },
-  sheetTitle: { color: colors.text, fontFamily: fonts.serif, fontSize: 32, fontWeight: "500" },
-  sheetSubtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.caption },
-  clearLabel: { color: colors.secondary, fontFamily: fonts.sans, fontWeight: "600", fontSize: textSize.small },
-  queueList: { flex: 1 },
   unavailable: { height: ROW_HEIGHT, paddingVertical: 0, lineHeight: ROW_HEIGHT },
   // .queueSectionTitle in desktop/src/components/Queue.css.
-  sectionLabel: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingHorizontal: 8, paddingTop: 18, paddingBottom: 6 },
+  section: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase", paddingHorizontal: 8, paddingTop: 18, paddingBottom: 6 },
 });

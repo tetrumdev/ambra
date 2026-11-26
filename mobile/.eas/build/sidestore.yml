@@ -10,6 +10,14 @@ build:
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           fi
           . "$HOME/.cargo/env"
+          # The bundled Tailcat library is built with Go, at the version CI uses (crates/ambra-net/tailcat/go.mod).
+          if ! go version 2>/dev/null | grep -q "go1.27.4"; then
+            case "$(uname -m)" in arm64) go_arch=arm64 ;; *) go_arch=amd64 ;; esac
+            mkdir -p "$HOME/.go-sdk"
+            curl -sSfL "https://go.dev/dl/go1.27.4.darwin-$go_arch.tar.gz" | tar -C "$HOME/.go-sdk" -xz
+            export PATH="$HOME/.go-sdk/go/bin:$PATH"
+          fi
+          go version
           bash scripts/build-network.sh ios
     - eas/prebuild
     - run:

@@ -51,8 +51,38 @@ fn monotonic_ms() -> f64 {
 
 /// How often the server's clock is read again, to follow the two clocks drifting apart.
 const CLOCK_EVERY: Duration = Duration::from_secs(2);
-/// Readings compared; the one with the quickest round trip was held up least on the way.
-const CLOCK_WINDOW: Duration = Duration::from_secs(20);
+/// Readings compared: long enough to see the two clocks drift apart, short enough that a
+/// change in the network path soon stops mattering.
+const CLOCK_WINDOW: Duration = Duration::from_secs(60);
+/// Real clocks drift far less than this (parts per million); a steeper line is noise.
+const CLOCK_MAX_SKEW: f64 = 2e-4;
+/// A drift is only fitted over readings spanning at least this long.
+const CLOCK_MIN_SKEW_SPAN_MS: f64 = 10_000.0;
+
+/// The server's clock less this one's at `now_ms`, from `(at_ms, round_trip_ms, offset_ms)`
+/// readings. A reading is true to within half its round trip, so only those nearly as quick
+/// as the quickest count, and a weighted line through them gives the offset and its drift: the
+/// estimate moves smoothly instead of jumping whenever a quicker reading arrives. Mirrors
+/// `desktop/src/utils/clockEstimate.ts`.
+fn estimate_clock_offset(readings: &[(f64, f64, f64)], now_ms: f64) -> Option<f64> {
+    let valid: Vec<_> = readings.iter().copied().filter(|(at, trip, offset)| at.is_finite() && offset.is_finite() && *trip >= 0.0).collect();
+    let quickest = valid.iter().map(|reading| reading.1).fold(f64::INFINITY, f64::min);
+    let good: Vec<_> = valid.into_iter().filter(|reading| reading.1 <= quickest * 1.5 + 1.0).collect();
+    if good.is_empty() { return None; }
+    let weight = |trip: f64| 1.0 / (trip / 2.0 + 0.25).powi(2);
+    let total: f64 = good.iter().map(|reading| weight(reading.1)).sum();
+    let mean_at = good.iter().map(|reading| weight(reading.1) * reading.0).sum::<f64>() / total;
+    let mean_offset = good.iter().map(|reading| weight(reading.1) * reading.2).sum::<f64>() / total;
+    let first = good.iter().map(|reading| reading.0).fold(f64::INFINITY, f64::min);
+    let last = good.iter().map(|reading| reading.0).fold(f64::NEG_INFINITY, f64::max);
+    let mut skew = 0.0;
+    if good.len() >= 4 && last - first >= CLOCK_MIN_SKEW_SPAN_MS {
+        let variance: f64 = good.iter().map(|reading| weight(reading.1) * (reading.0 - mean_at).powi(2)).sum();
+        let covariance: f64 = good.iter().map(|reading| weight(reading.1) * (reading.0 - mean_at) * (reading.2 - mean_offset)).sum();
+        if variance > 0.0 { skew = (covariance / variance).clamp(-CLOCK_MAX_SKEW, CLOCK_MAX_SKEW); }
+    }
+    Some(mean_offset + skew * (now_ms - mean_at))
+}
 /// A reading this far from the estimate means the server restarted (its clock starts anew).
 const CLOCK_JUMP_MS: f64 = 1000.0;
 
@@ -523,9 +553,9 @@ fn close_players(players: Vec<std::sync::Arc<NativeAudioPlayer>>) {
 }
 
 /// Follows the server's clock, NTP-style: each reading is taken as true halfway through its
-/// round trip, and the quickest recent one is trusted most.
+/// round trip, and the quickest recent ones are fitted together (`estimate_clock_offset`).
 async fn follow_clock(agent: std::sync::Arc<Agent>) {
-    let mut readings = VecDeque::<(Instant, f64, f64)>::new();
+    let mut readings = VecDeque::<(f64, f64, f64)>::new();
     loop {
         let sent = monotonic_ms();
         let mut request = agent.client.get(format!("{}/api/session/clock", agent.base_url)).timeout(Duration::from_secs(5));
@@ -541,9 +571,9 @@ async fn follow_clock(agent: std::sync::Arc<Agent>) {
             if agent.clock_offset().is_some_and(|known| (known - offset).abs() > CLOCK_JUMP_MS + round_trip) {
                 readings.clear();
             }
-            readings.retain(|(at, _, _)| at.elapsed() < CLOCK_WINDOW);
-            readings.push_back((Instant::now(), round_trip, offset));
-            let best = readings.iter().min_by(|a, b| a.1.total_cmp(&b.1)).map(|(_, _, offset)| *offset);
+            readings.retain(|(at, _, _)| received - at < CLOCK_WINDOW.as_secs_f64() * 1000.0);
+            readings.push_back((received, round_trip, offset));
+            let best = estimate_clock_offset(readings.make_contiguous(), monotonic_ms());
             if let Ok(mut known) = agent.clock_offset_ms.lock() { *known = best; }
             // Players keep the group's timeline on the server's clock as the two drift apart.
             native_audio::sync::set_server_clock_offset(best);
@@ -722,6 +752,24 @@ async fn run(agent: &Agent, command: &str, args: &Value) -> Result<Value, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clock_estimate_ignores_slow_readings_and_follows_drift() {
+        // The server's clock gains 50 ppm; slow readings are off by half their extra delay.
+        let truth = |at: f64| 1_000.0 + at * 5e-5;
+        let mut readings = Vec::new();
+        for step in 0..30 {
+            let at = f64::from(step) * 2_000.0;
+            let (trip, bias) = if step % 3 == 0 { (40.0, 15.0) } else { (4.0, 0.0) };
+            readings.push((at, trip, truth(at) + bias));
+        }
+        let now = 60_000.0;
+        let estimate = estimate_clock_offset(&readings, now).unwrap();
+        assert!((estimate - truth(now)).abs() < 0.05, "{estimate} vs {}", truth(now));
+        // A single reading is simply taken as it is.
+        assert_eq!(estimate_clock_offset(&[(0.0, 3.0, 7.0)], 5_000.0), Some(7.0));
+        assert_eq!(estimate_clock_offset(&[], 0.0), None);
+    }
 
     #[test]
     fn shared_output_never_accepts_private_device_files() {

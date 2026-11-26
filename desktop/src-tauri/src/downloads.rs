@@ -242,13 +242,16 @@ fn http_client() -> reqwest::Client {
 /// happens in `work`, so the server keeps hearing from this device meanwhile.
 async fn collect(app: AppHandle, jobs: tokio::sync::mpsc::UnboundedSender<(Server, Job)>) {
     let client = http_client();
+    // Jobs received, confirmed on the next poll; the server sends unconfirmed ones again.
+    let mut seen = std::collections::HashSet::new();
+    let mut received = String::new();
     loop {
         let Some(server) = Server::current(&app) else {
             tokio::time::sleep(RETRY_AFTER).await;
             continue;
         };
         let path = format!(
-            "/api/downloads/clients/{}/jobs?wait={POLL_WAIT_SECONDS}&name={}",
+            "/api/downloads/clients/{}/jobs?wait={POLL_WAIT_SECONDS}&ack={received}&name={}",
             server.client_id,
             encode(&server.client_name),
         );
@@ -259,8 +262,12 @@ async fn collect(app: AppHandle, jobs: tokio::sync::mpsc::UnboundedSender<(Serve
             .await;
         match response {
             Ok(response) if response.status().is_success() => {
-                for job in response.json::<Vec<Job>>().await.unwrap_or_default() {
-                    let _ = jobs.send((server.clone(), job));
+                let collected = response.json::<Vec<Job>>().await.unwrap_or_default();
+                received = collected.iter().map(|job| job.id.to_string()).collect::<Vec<_>>().join(",");
+                for job in collected {
+                    if seen.insert(job.id) {
+                        let _ = jobs.send((server.clone(), job));
+                    }
                 }
             }
             _ => tokio::time::sleep(RETRY_AFTER).await,
