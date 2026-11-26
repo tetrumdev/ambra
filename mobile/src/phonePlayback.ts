@@ -290,6 +290,25 @@ export class PhonePlayback {
     return typeof args.control === "number" && args.control < this.control.seq;
   }
 
+  /**
+   * A skip forward while this phone plays alone: on to the song the core queued here at once, as
+   * at a song's end; the core moves its queue on when it hears (session.rs, "moved on to the
+   * queued song by itself"). Nothing waits on the server, so a skip from the lock screen keeps
+   * sound going and iOS doesn't suspend the app meanwhile. False when nothing is queued here.
+   */
+  skipToQueued() {
+    const next = this.next;
+    if (!next || next === this.source || !this.player || this.loading || this.sync || !this.host.ownsOutput()) return false;
+    const playing = this.intendedPlaying || this.player.playing;
+    this.skipping = false;
+    this.ended = false;
+    void this.load(next, 0, playing).catch(() => {});
+    return true;
+  }
+
+  /** Where the current song is, in seconds. */
+  position() { return this.player?.currentTime ?? 0; }
+
   /** Pauses the current song while a skip goes to the core; false if nothing plays here. */
   holdForSkip() {
     if (!this.player || this.loading) return false;

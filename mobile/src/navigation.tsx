@@ -23,7 +23,7 @@ export type Route =
   | { kind: "mix"; provider: Service; mix: RecommendationMix }
   | { kind: "album"; album: CatalogAlbum }
   | { kind: "artist"; artist: CatalogArtist }
-  | { kind: "downloads" };
+  | { kind: "downloads"; collection?: string };
 
 export type Tab = "Home" | "Search" | "Library";
 export const tabs: Tab[] = ["Home", "Search", "Library"];

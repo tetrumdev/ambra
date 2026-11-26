@@ -65,7 +65,7 @@ export function PlaylistScreen({ id, provider, name }: { id: string; provider?: 
     ...(editable ? [{ label: "Rename Playlist", icon: "edit" as const, run: () => setPrompt({ title: "Rename playlist", initial: title, confirmLabel: "Save",
       onSubmit: value => provider ? renameServicePlaylist(provider, id, value).then(() => setReload(count => count + 1)) : renamePlaylist(id, value) }) }] : []),
     { label: "Duplicate Playlist", icon: "duplicate", run: () => void duplicatePlaylist(title, tracks).then(() => showToast("Playlist duplicated")).catch(failure => showToast(reason(failure, "Couldn't duplicate this playlist."), true)) },
-    { label: "Download Playlist", icon: "download", disabled: !tracks.length, run: () => openDownloadSheet(tracks, title) },
+    { label: "Download Playlist", icon: "download", disabled: !tracks.length, run: () => openDownloadSheet(tracks, title, { id: provider ? `${provider}:${id}` : id, kind: "playlist" }) },
     ...(ambra ? [{ label: improving ? "Improving…" : "Improve Playlist", icon: "sparkle" as const, disabled: !!improving || !tracks.length, run: () => {
       const controller = new AbortController();
       improvement.current = controller;
@@ -127,7 +127,7 @@ export function MixScreen({ provider, mix }: { provider: Service; mix: Recommend
     loading={!tracks && !error}
     error={error}
     onRefresh={() => setAttempt(count => count + 1)}
-    collectionActions={offlineActive() ? [] : [{ label: "Download Mix", icon: "download", disabled: !shown.length, run: () => openDownloadSheet(shown, mix.title) }]}
+    collectionActions={offlineActive() ? [] : [{ label: "Download Mix", icon: "download", disabled: !shown.length, run: () => openDownloadSheet(shown, mix.title, { id: `${provider}:${mix.id}`, kind: "mix" }) }]}
   />;
 }
 
@@ -157,7 +157,7 @@ export function AlbumScreen({ album }: { album: CatalogAlbum }) {
     source={{ kind: "search", id: `album:${album.id}` }}
     loading={!tracks && !error}
     error={error}
-    collectionActions={offlineActive() ? [] : [{ label: "Download Album", icon: "download", disabled: !shown.length, run: () => openDownloadSheet(shown, album.title) }]}
+    collectionActions={offlineActive() ? [] : [{ label: "Download Album", icon: "download", disabled: !shown.length, run: () => openDownloadSheet(shown, album.title, { id: album.id, kind: "album" }) }]}
   />;
 }
 
@@ -224,19 +224,35 @@ export function SectionScreen({ section }: { section: "artists" | "albums" | "tr
   </View>;
 }
 
-/** Songs saved on this phone, which play with or without a server. */
-export function DownloadsScreen() {
-  const { phone, active } = useDownloads();
-  const tracks = useMemo(() => [...phone.values()].map(phoneTrack), [phone]);
-  const size = [...phone.values()].reduce((sum, entry) => sum + entry.sizeBytes, 0);
+/**
+ * Songs saved on this phone, which play with or without a server: the playlists, albums and
+ * mixes sent here first, each as one, then every song. Given a collection, just its songs.
+ */
+export function DownloadsScreen({ collection: collectionKey }: { collection?: string }) {
+  const { phone, active, collections } = useDownloads();
+  const { push } = useNavigation();
+  const all = useMemo(() => new Map([...phone.values()].map(entry => [entry.id, phoneTrack(entry)])), [phone]);
+  const shown = useMemo(() => collections
+    .map(collection => ({ ...collection, tracks: collection.trackIds.flatMap(id => all.get(id) ?? []) }))
+    .filter(collection => collection.tracks.length > 0), [collections, all]);
+  const opened = collectionKey ? shown.find(collection => `${collection.kind}:${collection.id}` === collectionKey) : undefined;
+  const tracks = useMemo(() => opened ? opened.tracks : [...all.values()], [opened, all]);
+  const size = tracks.reduce((sum, track) => sum + (phone.get(track.globalId)?.sizeBytes ?? 0), 0);
+  const header = !collectionKey && shown.length > 0 ? <CardRow title="Playlists and Albums" cards={shown.map(collection => ({
+    key: `${collection.kind}:${collection.id}`, title: collection.title, subtitle: songs(collection.tracks.length),
+    image: null, images: [...new Set(collection.tracks.map(track => thumbnailArtwork(track)).filter((url): url is string => !!url))].slice(0, 4),
+    onPress: () => push({ kind: "downloads", collection: `${collection.kind}:${collection.id}` }),
+  }))} /> : undefined;
   return <TrackListScreen
-    title="Downloads"
-    subtitle={`${(size / 1024 ** 3).toFixed(size > 1024 ** 3 ? 1 : 2)} GB${active ? ` · ${active.done + 1} of ${active.total}` : ""}`}
+    title={opened?.title ?? "Downloads"}
+    subtitle={`${(size / 1024 ** 3).toFixed(size > 1024 ** 3 ? 1 : 2)} GB${!opened && active ? ` · ${active.done + 1} of ${active.total}` : ""}`}
     art={<CollectionArt tracks={tracks} />}
     tracks={tracks}
-    source={{ kind: "library", id: "downloads" }}
+    source={{ kind: "library", id: opened ? `downloads:${collectionKey}` : "downloads" }}
+    header={header}
     remove={{ label: "Remove Download", run: track => removePhoneDownloads([track.globalId]) }}
-    collectionActions={[{ label: "Remove All Downloads", icon: "remove", destructive: true, disabled: !tracks.length, run: () => void removePhoneDownloads([...phone.keys()]).then(() => showToast("Downloads removed")) }]}
+    collectionActions={[{ label: opened ? "Remove Downloads" : "Remove All Downloads", icon: "remove", destructive: true, disabled: !tracks.length,
+      run: () => void removePhoneDownloads(tracks.map(track => track.globalId)).then(() => showToast("Downloads removed")) }]}
   />;
 }
 

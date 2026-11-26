@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import * as FileSystem from "expo-file-system/legacy";
 import { Platform } from "react-native";
 import { useSyncExternalStore } from "react";
 import type { Track } from "../../desktop/src/types/music";
@@ -58,9 +59,14 @@ type Downloads = {
   jobs: DownloadJob[];
   /** What this phone is downloading right now. */
   active: { done: number; total: number; current: string | null } | null;
+  /** Playlists, albums and mixes downloaded here, so Downloads lists each as one, as Qobuz does. */
+  collections: DownloadedCollection[];
 };
 
-let state: Downloads = { phone: new Map(), server: new Set(), jobs: [], active: null };
+/** A playlist, album or mix sent to this phone, its songs in order. */
+export type DownloadedCollection = { id: string; kind: "playlist" | "album" | "mix"; title: string; trackIds: string[] };
+
+let state: Downloads = { phone: new Map(), server: new Set(), jobs: [], active: null, collections: [] };
 const listeners = new Set<() => void>();
 function publish(change: Partial<Downloads>) {
   state = { ...state, ...change };
@@ -100,6 +106,33 @@ export async function refreshPhoneDownloads() {
 export async function removePhoneDownloads(ids: string[]) {
   await networkCall("offline_remove", { ids });
   await refreshPhoneDownloads();
+  // A collection with none of its songs left here is gone from Downloads too.
+  const kept = state.collections.filter(collection => collection.trackIds.some(id => state.phone.has(id)));
+  if (kept.length !== state.collections.length) await saveCollections(kept);
+}
+
+// Kept on this phone with its downloads, as a small file; the server knows nothing of it.
+const collectionsFile = () => FileSystem.documentDirectory ? `${FileSystem.documentDirectory}downloaded-collections.json` : null;
+async function saveCollections(collections: DownloadedCollection[]) {
+  publish({ collections });
+  const file = collectionsFile();
+  if (file) await FileSystem.writeAsStringAsync(file, JSON.stringify(collections)).catch(() => {});
+}
+async function loadCollections() {
+  const file = collectionsFile();
+  if (!file) return;
+  try {
+    if (!(await FileSystem.getInfoAsync(file)).exists) return;
+    const saved = JSON.parse(await FileSystem.readAsStringAsync(file)) as unknown;
+    if (!Array.isArray(saved)) return;
+    publish({ collections: saved.filter((item): item is DownloadedCollection => !!item && typeof item.id === "string" && typeof item.title === "string"
+      && ["playlist", "album", "mix"].includes(item.kind) && Array.isArray(item.trackIds) && item.trackIds.every((id: unknown) => typeof id === "string")) });
+  } catch { /* Unreadable: its songs still show one by one. */ }
+}
+
+/** Remembers a collection sent to this phone; sent again, it takes the newer songs. */
+export function rememberCollection(collection: DownloadedCollection) {
+  return saveCollections([collection, ...state.collections.filter(other => !(other.id === collection.id && other.kind === collection.kind))]);
 }
 
 let jobPoll: ReturnType<typeof setTimeout> | undefined;
@@ -144,6 +177,8 @@ const pause = (ms: number, signal: AbortSignal) => new Promise<void>(resolve => 
   signal.addEventListener("abort", () => { clearTimeout(timer); resolve(); }, { once: true });
 });
 
+const QUALITY_RANK: Record<DownloadQuality, number> = { lossy: 0, cd: 1, hiRes: 2, max: 3 };
+
 /** Downloads one song in the native bridge and waits until it's saved or has failed. */
 async function downloadOne(track: ClientJob["tracks"][number], quality: DownloadQuality, signal: AbortSignal) {
   const { id } = await networkCall<{ id: string }>("offline_download", { provider: track.provider, providerTrackId: track.providerTrackId, quality });
@@ -184,7 +219,11 @@ export function followPhoneDownloads(): () => void {
         };
         for (const track of job.tracks) {
           if (abort.signal.aborted) return;
-          report(`${track.provider}:${track.providerTrackId}`, false);
+          const id = `${track.provider}:${track.providerTrackId}`;
+          // Already here at this quality or better (a playlist sent again): never downloaded twice.
+          const saved = state.phone.get(id);
+          if (saved && QUALITY_RANK[saved.requestedQuality] >= QUALITY_RANK[job.quality]) { done++; continue; }
+          report(id, false);
           try { await downloadOne(track, job.quality, abort.signal); done++; }
           catch (reason) { failed++; error = reason instanceof Error ? reason.message : String(reason); }
           await refreshPhoneDownloads();
@@ -224,7 +263,7 @@ export function followPhoneDownloads(): () => void {
 export async function startPhoneDownloads() {
   if (!nativeNetworkAvailable) return;
   await networkCall("offline_open").catch(() => {});
-  await refreshPhoneDownloads();
+  await Promise.all([refreshPhoneDownloads(), loadCollections()]);
 }
 
 /** This phone's copy of the song a server media URL plays, when it has one. */

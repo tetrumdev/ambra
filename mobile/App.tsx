@@ -1,10 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
 import { useEffect, useState } from "react";
-import { View } from "react-native";
+import { AppState, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Unpaired, follow, restore, networkStatus, serverAnswering } from "./src/client";
+import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability } from "./src/client";
+import { deviceOnline, subscribeDevicePath } from "./modules/ambra-network/src";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
 import { colors } from "./src/theme";
@@ -14,7 +15,11 @@ import { refreshLibrary } from "./src/library";
 import { forgetState } from "./src/sharedState";
 import { useOfflineSession } from "./src/offlineSession";
 
-/** The server counts as away after this long out of reach, and downloads play from the phone. */
+/**
+ * The server counts as away after this long out of reach, and downloads play from the phone;
+ * at once when the phone has no network at all. A song this phone is already playing from the
+ * server plays on (it's downloaded ahead) and the switch waits for it to stop.
+ */
 const OFFLINE_AFTER_MS = 5_000;
 
 type Saved = { address: string | null; paired: boolean };
@@ -31,8 +36,10 @@ export default function App() {
   usePhoneOutput(paired);
   const [unreachableSince, setUnreachableSince] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [cut, setCut] = useState(false);
+  const [busy, setBusy] = useState(false);
   const { phone } = useDownloads();
-  const offline = paired && unreachableSince !== null && now - unreachableSince >= OFFLINE_AFTER_MS && phone.size > 0;
+  const offline = paired && unreachableSince !== null && phone.size > 0 && !busy && (cut || now - unreachableSince >= OFFLINE_AFTER_MS);
   useOfflineSession(offline);
   useEffect(() => { void startPhoneDownloads(); }, []);
   useEffect(() => {
@@ -61,17 +68,28 @@ export default function App() {
     let away = false;
     const refresh = () => void networkStatus().then(status => {
       if (disposed) return;
-      const connected = status.state.startsWith("Connected") && serverAnswering();
-      setNetworkError(connected ? null : status.error ?? (status.state.startsWith("Connected") ? "The server isn't answering" : `Server ${status.state.toLowerCase()}`));
+      const noNetwork = !deviceOnline();
+      const connected = !noNetwork && status.state.startsWith("Connected") && serverAnswering();
+      setCut(noNetwork);
+      setBusy(!connected && playingHere());
+      setNetworkError(connected ? null : noNetwork ? "No network" : status.error ?? (status.state.startsWith("Connected") ? "The server isn't answering" : `Server ${status.state.toLowerCase()}`));
       // Back from being away: what changed meanwhile is loaded again. (Not inside the state
       // updater: the library publishing there updates other components mid-render.)
       if (connected && away) void refreshLibrary();
       away = !connected;
       setUnreachableSince(current => connected ? null : current ?? Date.now());
     }).catch(error => { if (!disposed) { away = true; setNetworkError(String(error)); setUnreachableSince(current => current ?? Date.now()); } });
+    // Every 3 s on screen; in the background, where only the switch to downloads depends on it,
+    // every 15 s, so it doesn't wake the phone for nothing.
+    let timer: ReturnType<typeof setTimeout>;
+    const next = () => { timer = setTimeout(() => { refresh(); next(); }, AppState.currentState === "active" ? 3000 : 15_000); };
     refresh();
-    const timer = setInterval(refresh, 3000);
-    return () => { disposed = true; clearInterval(timer); };
+    next();
+    const state = AppState.addEventListener("change", current => { if (current === "active") { clearTimeout(timer); refresh(); next(); } });
+    // Losing the network, or a request finding the server gone, is looked at straight away.
+    const path = subscribeDevicePath(refresh);
+    const reach = subscribeReachability(refresh);
+    return () => { disposed = true; clearTimeout(timer); state.remove(); path(); reach(); };
   }, [paired]);
 
   useEffect(() => {

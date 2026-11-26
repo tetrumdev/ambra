@@ -10,6 +10,7 @@ mock.module("expo-constants", () => ({ default: { deviceName: "Test phone" } }))
 mock.module("react-native", () => ({ AppState: { addEventListener: () => ({ remove() {} }) }, Platform: { OS: "ios" } }));
 let downloads: unknown[] = [];
 mock.module("../modules/ambra-activity/src", () => ({ showDownloadActivity: async () => {}, finishDownloadActivity: async () => {} }));
+mock.module("expo-file-system/legacy", () => ({ documentDirectory: null }));
 mock.module("../modules/ambra-network/src", () => ({
   nativeNetworkAvailable: true,
   networkCall: async (operation: string) => operation === "offline_list" ? downloads : { baseUrl: "http://127.0.0.1:9000/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },

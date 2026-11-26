@@ -39,6 +39,12 @@ const instanceId = () => `phone-${Date.now()}-${Math.random().toString(36).slice
 /** The server shows the phone offline after this long without word from it. */
 const QUIET_MS = 8000;
 /**
+ * Word to the server at least this often keeps the phone listed (the server waits 8 s); any
+ * change goes out at once besides. Each report wakes the radio, which stays up a few seconds
+ * after, so this is most of what listening costs the battery: once a second was 3,600 an hour.
+ */
+const KEEPALIVE_MS = 4000;
+/**
  * The phone's own position is shown again once it drifts this far from the one last shown.
  * Small, because lyrics follow it: the first reading after a seek or skip is taken before the
  * audio has started moving, and only a later one corrects it.
@@ -56,7 +62,9 @@ export function followPhoneOutput() {
   let player: PhonePlayback | null = null;
   let unsubscribe = () => {};
   let foreground: { remove(): void } | null = null;
-  let heartbeat: ReturnType<typeof setInterval> | null = null;
+  let heartbeat: ReturnType<typeof setTimeout> | null = null;
+  // Wakes the clock readings when this phone joins a synced group.
+  let wakeClock = () => {};
   let reportTimer: ReturnType<typeof setTimeout> | null = null;
   let depart = () => {};
 
@@ -123,6 +131,7 @@ export function followPhoneOutput() {
       setLocalPlayback(shownLocal);
     };
     const changed = () => {
+      if (player?.syncing()) wakeClock();
       const status = player!.status();
       // Readiness for a group's start goes out at once: the whole group waits on it.
       const next = JSON.stringify([status.currentSource, status.isPlaying, status.buffering, status.ended, status.error, status.control?.seq, status.syncReady ?? null, status.syncAnchor?.atServerMs ?? null]);
@@ -131,7 +140,7 @@ export function followPhoneOutput() {
     };
     player = new PhonePlayback({
       create: source => {
-        const created = createAudioPlayer(source, { updateInterval: 250, keepAudioSessionActive: true, allowsExternalPlayback: false });
+        const created = createAudioPlayer(source, { updateInterval: 500, keepAudioSessionActive: true, allowsExternalPlayback: false });
         // Keeping in step with a group nudges the speed a little; the pitch must not move with it.
         created.shouldCorrectPitch = true;
         return created;
@@ -170,7 +179,17 @@ export function followPhoneOutput() {
         if (!held.holdForSkip()) return false;
         return answer => { if (!answer) held.endSkip(false); };
       }
+      // Skips this phone can make by itself, as the core would: on to the song queued here, or
+      // back to the start (session.rs RESTART_AFTER_SECONDS). Nothing waits on the server.
+      if (action === "next" && player.skipToQueued()) return true;
+      if (action === "previous" && player.position() > 3) {
+        void player.local("seek", 0);
+        return true;
+      }
       if (action === "next" || action === "previous") {
+        // In the background, silence would let iOS suspend the app before the core's answer
+        // loads the new song: the old one plays on until then.
+        if (AppState.currentState !== "active") return false;
         // Silence the old song until the core moves on, so a slow or lost skip can't let it
         // play on. The core then loads the next song, or seeks for a previous that restarts.
         const before = queueMark(sessionView());
@@ -201,7 +220,7 @@ export function followPhoneOutput() {
       if (state === "active") { void report(); void refreshSession(abort.signal).catch(() => {}); }
     });
     let quiet = false;
-    heartbeat = setInterval(() => {
+    const beat = () => {
       const silence = Date.now() - lastContact;
       // Out of reach: keep playing what is already downloaded, under this phone's own control,
       // until the server answers again. Only the server choosing another output stops it.
@@ -213,27 +232,28 @@ export function followPhoneOutput() {
         quiet = false;
         publish({ ...descriptor, ready: true, error: null });
       }
-      // Each second only while this phone plays for the session; otherwise every 3 s keeps it
-      // listed (the server waits 8 s) without holding the radio awake.
-      const playingHere = ownsOutput() && !!sessionView()?.playing;
-      if (playingHere || silence >= 3000) void report();
-    }, 1000);
+      // Each second in a synced group, which the server keeps in step from them; otherwise only
+      // to stay listed.
+      const syncing = player?.syncing() ?? false;
+      if (syncing || silence >= KEEPALIVE_MS) void report();
+      heartbeat = setTimeout(beat, syncing ? 1000 : Math.max(1000, KEEPALIVE_MS - (Date.now() - lastContact)));
+    };
+    heartbeat = setTimeout(beat, 1000);
 
     // Keeps the server's clock estimate fresh: every 2 s in a synced group, where milliseconds
-    // matter, with a quick handful first; rarely otherwise.
+    // matter, with a quick handful first; otherwise once a minute while on screen, so a group
+    // can start at once, and never in the background. Joining a group wakes it (`changed`).
     void (async () => {
       let quick = 5;
       while (!abort.signal.aborted) {
         const syncing = player?.syncing() ?? false;
-        await sampleSyncClock(abort.signal).catch(() => {});
+        if (syncing || AppState.currentState === "active") await sampleSyncClock(abort.signal).catch(() => {});
         if (syncing && quick > 0) quick--;
         if (!syncing) quick = 5;
         await new Promise<void>(resolve => {
-          const timer = setTimeout(done, syncing ? (quick > 0 ? 200 : 2000) : 20_000);
-          const latest = player;
-          // Joining a group wakes it at once.
-          const poll = setInterval(() => { if (!syncing && latest?.syncing()) done(); }, 250);
-          function done() { clearTimeout(timer); clearInterval(poll); abort.signal.removeEventListener("abort", done); resolve(); }
+          const timer = setTimeout(done, syncing ? (quick > 0 ? 200 : 2000) : 60_000);
+          if (!syncing) wakeClock = done;
+          function done() { clearTimeout(timer); wakeClock = () => {}; abort.signal.removeEventListener("abort", done); resolve(); }
           abort.signal.addEventListener("abort", done, { once: true });
         });
       }
@@ -274,7 +294,7 @@ export function followPhoneOutput() {
     abort.abort();
     unsubscribe();
     foreground?.remove();
-    if (heartbeat) clearInterval(heartbeat);
+    if (heartbeat) clearTimeout(heartbeat);
     if (reportTimer) clearTimeout(reportTimer);
     setLocalControl(null);
     setLocalPlayback(null);

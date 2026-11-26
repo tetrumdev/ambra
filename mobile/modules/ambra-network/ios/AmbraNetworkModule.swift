@@ -6,8 +6,19 @@ private final class PathSignature: @unchecked Sendable {
   var value: String?
 }
 
+/// Whether the phone has any network path at all; read from any thread.
+private final class PathOnline: @unchecked Sendable {
+  private let lock = NSLock()
+  private var current = true
+  var value: Bool {
+    get { lock.lock(); defer { lock.unlock() }; return current }
+    set { lock.lock(); current = newValue; lock.unlock() }
+  }
+}
+
 public class AmbraNetworkModule: Module {
   private var monitor: NWPathMonitor?
+  private let online = PathOnline()
 
   private static func directory() throws -> URL {
     let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
@@ -28,6 +39,9 @@ public class AmbraNetworkModule: Module {
 
   public func definition() -> ModuleDefinition {
     Name("AmbraNetwork")
+    // No network at all (airplane mode, no signal): the app plays its downloads at once rather
+    // than waiting for requests to the server to fail.
+    Events("onPathChange")
 
     // A Wi-Fi change can leave connections hanging instead of failing. Rust checks them
     // the moment the system switches paths, so playback moves to the next path at once.
@@ -42,7 +56,13 @@ public class AmbraNetworkModule: Module {
 
       let monitor = NWPathMonitor()
       let previous = PathSignature()
-      monitor.pathUpdateHandler = { path in
+      let online = self.online
+      monitor.pathUpdateHandler = { [weak self] path in
+        let reachable = path.status == .satisfied
+        if online.value != reachable {
+          online.value = reachable
+          self?.sendEvent("onPathChange", ["online": reachable])
+        }
         let interfaces = path.availableInterfaces.map { "\($0.type)-\($0.name)" }.joined(separator: ",")
         let signature = "\(path.status)|\(interfaces)"
         defer { previous.value = signature }
@@ -56,6 +76,10 @@ public class AmbraNetworkModule: Module {
     OnDestroy {
       self.monitor?.cancel()
       self.monitor = nil
+    }
+
+    Function("online") { () -> Bool in
+      self.online.value
     }
 
     AsyncFunction("call") { (operation: String, args: String) -> String in

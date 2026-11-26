@@ -9,7 +9,7 @@ import {
   type ComponentType,
   type ReactElement,
 } from "react";
-import { BackHandler, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from "react-native";
+import { AppState, BackHandler, StyleSheet, Text, View, useWindowDimensions, type ViewProps } from "react-native";
 import { BlurTargetView, BlurView } from "expo-blur";
 import MaskedView from "@react-native-masked-view/masked-view";
 import { LinearGradient } from "expo-linear-gradient";
@@ -82,14 +82,25 @@ const PULL_FOR_QUEUE = 72;
 // MaskedView 0.3.2's constructor intersection loses React component props with TypeScript 6.
 const DockMask = MaskedView as unknown as ComponentType<ViewProps & { maskElement: ReactElement }>;
 
+/** Whether the app is on screen; in the background, nothing that only draws needs to tick. */
+function useOnScreen() {
+  const [active, setActive] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", state => setActive(state === "active"));
+    return () => subscription.remove();
+  }, []);
+  return active;
+}
+
 /** Where the song is now: the last report carried forward while playing. */
 function usePosition(playing: boolean, reported: number, duration: number) {
   const [, tick] = useState(0);
+  const onScreen = useOnScreen();
   useEffect(() => {
-    if (!playing) return;
+    if (!playing || !onScreen) return;
     const timer = setInterval(() => tick((value) => value + 1), 250);
     return () => clearInterval(timer);
-  }, [playing]);
+  }, [playing, onScreen]);
   return Math.min(duration, reported + (playing ? sessionViewAge() : 0));
 }
 
@@ -111,15 +122,16 @@ function LiveProgress({ view, duration, active, disabled, onSeek }: {
  */
 function MiniProgress({ view, duration, shown }: { view: SessionView | null; duration: number; shown: boolean }) {
   const fill = useSharedValue(0);
+  const onScreen = useOnScreen();
   useEffect(() => {
     if (!view || duration <= 0) { fill.set(0); return; }
     const playing = view.playing && !view.buffering;
     const at = () => Math.min(1, (view.positionSeconds + (playing ? sessionViewAge() : 0)) / duration);
     fill.set(at());
-    if (!playing || !shown) return;
+    if (!playing || !shown || !onScreen) return;
     const timer = setInterval(() => fill.set(at()), 500);
     return () => clearInterval(timer);
-  }, [view, duration, fill, shown]);
+  }, [view, duration, fill, shown, onScreen]);
   const style = useAnimatedStyle(() => ({ transform: [{ scaleX: fill.get() }] }));
   return <View style={styles.miniProgress}><Animated.View style={[styles.miniFill, style]} /></View>;
 }
@@ -536,7 +548,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
       case "mix": return <MixScreen provider={route.provider} mix={route.mix} />;
       case "album": return <AlbumScreen album={route.album} />;
       case "artist": return <ArtistScreen artist={route.artist} />;
-      case "downloads": return <DownloadsScreen />;
+      case "downloads": return <DownloadsScreen collection={route.collection} />;
     }
   }, []);
   return (

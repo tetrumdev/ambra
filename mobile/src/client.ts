@@ -307,11 +307,22 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
 let answeredAt = 0;
 let unansweredAt = 0;
 export const serverAnswering = () => answeredAt >= unansweredAt;
+const reachabilityListeners = new Set<() => void>();
+/** Hears the server start or stop answering, the moment a request shows it. */
+export function subscribeReachability(listener: () => void) {
+  reachabilityListeners.add(listener);
+  return () => { reachabilityListeners.delete(listener); };
+}
+function answered(yes: boolean) {
+  const before = serverAnswering();
+  if (yes) answeredAt = Date.now();
+  else unansweredAt = Date.now();
+  if (serverAnswering() !== before) for (const listener of reachabilityListeners) listener();
+}
 /** The bridge answers for a server it can't reach with these. */
 const unreachable = (status: number) => status === 502 || status === 503 || status === 504;
 function heard(status?: number) {
-  if (status !== undefined && unreachable(status)) unansweredAt = Date.now();
-  else answeredAt = Date.now();
+  answered(status === undefined || !unreachable(status));
 }
 
 // Connection policy and retry live in Rust. A possibly delivered mutation is never replayed.
@@ -344,7 +355,7 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     return body as T;
   } catch (error) {
     // No answer at all, rather than one the caller stopped waiting for.
-    if (!init.signal?.aborted && (timeout.signal.aborted || error instanceof TypeError)) unansweredAt = Date.now();
+    if (!init.signal?.aborted && (timeout.signal.aborted || error instanceof TypeError)) answered(false);
     // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
     if (timeout.signal.aborted && !init.signal?.aborted) {
       // No answer may mean a connection that died without closing; the bridge checks and replaces it.
@@ -505,6 +516,9 @@ function show() {
   for (const listener of listeners) listener();
 }
 
+/** Whether this phone is playing the server's song itself right now. */
+export const playingHere = () => !!local?.playing;
+
 export function setLocalPlayback(next: LocalPlayback | null) {
   if (!next && !local) return;
   local = next;
@@ -635,8 +649,8 @@ async function followStream(stop: AbortSignal): Promise<boolean> {
   } catch (error) {
     // Gone quiet: it is opened again, like one the server ended. One that never sent the
     // session at all is held up on the way (a proxy keeping the body back): ask instead.
-    if (silence.signal.aborted && !stop.aborted) { unansweredAt = Date.now(); return lines > 0; }
-    if (!stop.aborted && error instanceof TypeError) unansweredAt = Date.now();
+    if (silence.signal.aborted && !stop.aborted) { answered(false); return lines > 0; }
+    if (!stop.aborted && error instanceof TypeError) answered(false);
     throw error;
   } finally {
     clearTimeout(timer);
@@ -669,6 +683,9 @@ export async function follow(signal: AbortSignal) {
   wakeFollower = () => wake.abort();
   // The connection may have died while suspended: ask again once it's known to answer (or replaced).
   const subscription = AppState.addEventListener("change", state => {
+    // In the background the stream's four positions a second would wake the phone for screens no
+    // one sees: it's followed by asking for changes instead, and the stream opens again on return.
+    if (state === "background") { wake.abort(); return; }
     if (state !== "active") return;
     if (directMode) wake.abort();
     else void networkCall("resume").catch(() => {}).finally(() => wake.abort());
@@ -678,7 +695,7 @@ export async function follow(signal: AbortSignal) {
   let streams = true;
   try {
     while (!signal.aborted) {
-      const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}&patches=1` : "";
+      const since = view ? `?since=${view.revision}&wait=30&queue=${view.queueRevision}&patches=1` : "";
       const stop = new AbortController();
       const abort = () => stop.abort();
       signal.addEventListener("abort", abort);
@@ -686,8 +703,9 @@ export async function follow(signal: AbortSignal) {
       wakeSignal.addEventListener("abort", abort);
       if (signal.aborted || wakeSignal.aborted) stop.abort();
       try {
-        if (!streams || !await followStream(stop.signal)) {
-          streams = false;
+        const background = AppState.currentState === "background";
+        if (!streams || background || !await followStream(stop.signal)) {
+          if (!background) streams = false;
           const asked = session;
           const next = await request<ArrivingView>(inSession(`/api/session${since}`), { signal: stop.signal, timeoutMs: 35_000 });
           if (asked === session && !accept(next)) accept(await request<ArrivingView>(inSession("/api/session"), { signal }));

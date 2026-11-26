@@ -4,7 +4,7 @@ import type { Track } from "../../desktop/src/types/music";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
 import { nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { clientId } from "./client";
-import { downloadClients, downloadQualities, isDownloadable, requestDownloads, useDownloads, type DownloadClient, type DownloadQuality } from "./downloads";
+import { downloadClients, downloadQualities, isDownloadable, rememberCollection, requestDownloads, useDownloads, type DownloadClient, type DownloadedCollection, type DownloadQuality } from "./downloads";
 import { Icon } from "./Icons";
 import { addToPlaylist, addToServicePlaylist, createPlaylist, trackCredits, useLibrary, type CreditGroup } from "./library";
 import { reason, showToast } from "./navigation";
@@ -14,15 +14,18 @@ import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
 
-type DownloadRequest = { tracks: Track[]; title: string };
+type DownloadRequest = { tracks: Track[]; title: string; collection?: Omit<DownloadedCollection, "title" | "trackIds"> };
 let downloadRequest: DownloadRequest | null = null;
 const downloadListeners = new Set<() => void>();
 const setDownloadRequest = (next: DownloadRequest | null) => { downloadRequest = next; for (const listener of downloadListeners) listener(); };
 
-/** Opens the download menu for these songs, as every desktop Download action does. */
-export function openDownloadSheet(tracks: Track[], title: string) {
+/**
+ * Opens the download menu for these songs, as every desktop Download action does. A playlist,
+ * album or mix names itself, so on this phone its downloads list as one.
+ */
+export function openDownloadSheet(tracks: Track[], title: string, collection?: DownloadRequest["collection"]) {
   const unique = new Map(tracks.filter(track => isDownloadable(track.globalId)).map(track => [track.globalId, track]));
-  setDownloadRequest({ tracks: [...unique.values()], title });
+  setDownloadRequest({ tracks: [...unique.values()], title, collection });
 }
 
 const songs = (count: number) => `${count} ${count === 1 ? "song" : "songs"}`;
@@ -75,6 +78,9 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
     setError(null);
     try {
       const created = await requestDownloads(request.tracks, quality, target);
+      if (request.collection && self && target.kind === "clients" && target.clientIds.includes(self)) {
+        void rememberCollection({ ...request.collection, title: request.title, trackIds: request.tracks.map(track => track.globalId) });
+      }
       haptic.success();
       // To this phone alone: the island at the top follows it, as in Qobuz.
       if (close) { close(); return; }

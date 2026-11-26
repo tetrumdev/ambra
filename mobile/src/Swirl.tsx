@@ -116,13 +116,11 @@ export function Swirl({ track, playing, darkened = false }: {
     travel.updatedAt = performance.now();
     let disposed = false;
     let lastDrawnAt = -Infinity;
-    // Reused every frame, and sent only while the colors are changing.
+    // Reused every frame. The frame's state is all set again each time: expo-gl's presenting a
+    // frame isn't promised to leave it alone, and these few calls cost nothing beside the draw.
     const colorsArray = new Float32Array(12);
     const biasArray = new Float32Array(4);
     const backdropArray = new Float32Array(4);
-    let colorsSettled = false;
-    gl.viewport(0, 0, bufferWidth, bufferHeight);
-    gl.uniform2f(u.resolution, bufferWidth, bufferHeight);
 
     let wait: ReturnType<typeof setTimeout> | undefined;
     // Sleeps until the next frame is due, rather than waking the JS thread at every display refresh.
@@ -153,18 +151,17 @@ export function Swirl({ track, playing, darkened = false }: {
 
       const { from, to, startedAt } = transition.current;
       const progress = easedProgress((now - startedAt) / COLOR_TRANSITION_MS);
-      if (progress < 1 || !colorsSettled) {
-        const palette = mixPalette(from, to, progress);
-        for (let index = 0; index < 12; index++) colorsArray[index] = palette[index];
-        for (let index = 0; index < 4; index++) {
-          biasArray[index] = palette[12 + index];
-          backdropArray[index] = palette[palette.length - 4 + index];
-        }
-        gl.uniform3fv(u.colors, colorsArray);
-        gl.uniform4fv(u.bias, biasArray);
-        gl.uniform4fv(u.backdrop, backdropArray);
-        colorsSettled = progress >= 1;
+      const palette = mixPalette(from, to, progress);
+      for (let index = 0; index < 12; index++) colorsArray[index] = palette[index];
+      for (let index = 0; index < 4; index++) {
+        biasArray[index] = palette[12 + index];
+        backdropArray[index] = palette[palette.length - 4 + index];
       }
+      gl.viewport(0, 0, bufferWidth, bufferHeight);
+      gl.uniform2f(u.resolution, bufferWidth, bufferHeight);
+      gl.uniform3fv(u.colors, colorsArray);
+      gl.uniform4fv(u.bias, biasArray);
+      gl.uniform4fv(u.backdrop, backdropArray);
 
       // The swirl drifts to a stop on pause and gathers pace again on play, never freezing mid-motion.
       const elapsed = Math.min(0.1, Math.max(0, (now - travel.updatedAt) / 1000));
