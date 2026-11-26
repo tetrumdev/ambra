@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, FlatList, Platform, RefreshControl, StyleS
 import type { Track } from "../../../desktop/src/types/music";
 import { changeQueue, command, currentTrack, sessionView, thumbnailArtwork, type QueueItem } from "../client";
 import { Icon } from "../Icons";
-import { CompactBar, PageHeader, useNavigation, useNowPlaying, useRun } from "../navigation";
+import { CompactBar, PageHeader, useFrontPageScroll, useNavigation, useNowPlaying, useRun } from "../navigation";
 import { playEntries, playlistEntries, shuffledEntries } from "../queueModel";
 import { serviceAllowed, servicePreferences, subscribeServicePreferences } from "../servicePreferences";
 import { openMenu, type MenuAction } from "../shell/ContextMenu";
@@ -74,6 +74,7 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
   const bound = useMemo(() => boundRows(packages ? { playlist: { id: source.id, name: title, trackIds: shown.map(track => track.globalId), packages }, tracks: shown } : null), [packages, shown, source.id, title]);
   const { openSong, enqueue } = useTrackMenus(remove);
   const list = useRef<FlatList<Track>>(null);
+  const front = useFrontPageScroll(list);
   const reorder = useReorder({
     list: list as never,
     count: shown.length,
@@ -143,6 +144,7 @@ export function TrackListScreen({ title, subtitle, art, tracks, source, packages
     <View style={styles.screen} {...reorder.containerProps}>
       <AnimatedFlatList
         ref={list}
+        scrollsToTop={front}
         scrollEnabled={reorder.listProps.scrollEnabled}
         scrollEventThrottle={16}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], {

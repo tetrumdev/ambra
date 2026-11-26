@@ -165,6 +165,7 @@ export function Root() {
     if (ready) void applySharedPlayback((connected || recoveringSharedPlayback) && preferSharedPlayback).catch(() => {});
   }, [ready, connected, recoveringSharedPlayback, preferSharedPlayback, applySharedPlayback]);
 
+  const saveState = useSyncExternalStore(subscribeServerState, serverStateStatus);
   const client = useMemo(() => ({ connected, network, sharedPlayback, setSharedPlayback, reconnect }),
     [connected, network, sharedPlayback, setSharedPlayback, reconnect]);
 
@@ -174,20 +175,46 @@ export function Root() {
       <App key={`${sharedPlayback ? "shared" : "local"}:${playerGeneration}`} localOnly={!showServerLibrary} sharedPlayback={sharedPlayback}
         awaitingSharedPlayback={!sharedPlayback && reachable && preferSharedPlayback && !modeError} onPlaybackRelease={registerPlaybackRelease} />
     </AudioSettingsProvider></div>
-    {serverConnection?.server && !connected && !settling && <div className="stateSaveError" role="status">
-      <span>{serverConnection.server.name} disconnected. Local music remains available.</span>
-      <button onClick={reconnect}>Reconnect</button>
-    </div>}
-    {modeError && <div className="stateSaveError" role="alert">{modeError}</div>}
-    <ServerSaveError />
+    <StatusNotice notices={[
+      ...(serverConnection?.server && !connected && !settling
+        ? [{ text: `Can't reach ${serverConnection.server.name}. Music on this computer still plays.`, action: { label: "Reconnect", run: reconnect } }] : []),
+      ...(modeError ? [{ text: modeError }] : []),
+      ...(saveState.error ? [{ text: saveState.error, action: saveState.conflict
+        ? { label: "Reload", run: reloadServerState }
+        : { label: "Retry", run: () => void flushServerState().catch(() => {}) } }] : []),
+    ]} />
   </ClientConnectionContext.Provider>;
 }
 
-function ServerSaveError() {
-  const state = useSyncExternalStore(subscribeServerState, serverStateStatus);
-  return state.error ? <div className="stateSaveError" role="alert">
-    <span>{state.error}</span>
-    {state.conflict ? <button onClick={reloadServerState}>Reload server state</button>
-      : <button onClick={() => void flushServerState().catch(() => {})}>Retry shared save</button>}
-  </div> : null;
+type Notice = { text: string; action?: { label: string; run: () => void } };
+
+/**
+ * What's wrong with the connection or saving, kept out of the way: a small dot beside the page
+ * history buttons (never over the player). Clicked, it says what's going on.
+ */
+function StatusNotice({ notices }: { notices: Notice[] }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+  const shown = notices.length > 0;
+  useEffect(() => { if (!shown) setOpen(false); }, [shown]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent | KeyboardEvent) => {
+      if (event instanceof KeyboardEvent ? event.key === "Escape" : !root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", close);
+    return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", close); };
+  }, [open]);
+  if (!shown) return null;
+  return <div ref={root} className="statusNotice">
+    <button type="button" className="statusNoticeDot" aria-label={notices.map(notice => notice.text).join(" ")} aria-expanded={open}
+      onClick={() => setOpen(value => !value)}><span /></button>
+    {open && <div className="statusNoticePanel" role="status">
+      {notices.map(notice => <p key={notice.text}>
+        <span>{notice.text}</span>
+        {notice.action && <button type="button" onClick={() => { notice.action!.run(); setOpen(false); }}>{notice.action.label}</button>}
+      </p>)}
+    </div>}
+  </div>;
 }

@@ -4,7 +4,8 @@ export async function readJsonLines<T>(
   receive: (value: T) => void,
   heard: () => void,
 ) {
-  const reader = body.pipeThrough(new TextDecoderStream()).getReader();
+  // The phone's DOM types (Expo's TextDecoderStream) say it takes any BufferSource; bytes are one.
+  const reader = body.pipeThrough(new TextDecoderStream() as ReadableWritablePair<string, Uint8Array>).getReader();
   let buffered = "";
   try {
     for (;;) {

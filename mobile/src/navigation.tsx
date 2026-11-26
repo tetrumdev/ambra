@@ -46,6 +46,28 @@ type Navigation = {
 const NavigationContext = createContext<Navigation | null>(null);
 /** Where a page sits in its tab's stack; headers show Back on every page but the first. */
 const PageIndexContext = createContext(0);
+/** Whether a page is the one in front (top of the chosen tab), and how often its tab was tapped again. */
+const FrontPageContext = createContext({ front: false, toTop: 0 });
+type Scrollable = { scrollTo?(options: { y: number; animated: boolean }): void; scrollToOffset?(options: { offset: number; animated: boolean }): void };
+
+/**
+ * iOS's conventions for a page's list: tapping the status bar scrolls the page in front to the
+ * top (iOS does it only while just one list on screen asks for it, so the others don't), and
+ * so does tapping its tab again. Returns the list's `scrollsToTop`.
+ */
+export function useFrontPageScroll(list: { current: unknown }) {
+  const { front, toTop } = useContext(FrontPageContext);
+  const handled = useRef(toTop);
+  useEffect(() => {
+    if (toTop === handled.current) return;
+    handled.current = toTop;
+    if (!front) return;
+    const target = list.current as Scrollable | null;
+    if (target?.scrollToOffset) target.scrollToOffset({ offset: 0, animated: true });
+    else target?.scrollTo?.({ y: 0, animated: true });
+  }, [toTop, front, list]);
+  return front;
+}
 export function useNavigation() {
   const navigation = useContext(NavigationContext);
   if (!navigation) throw new Error("Screens need the navigation stack");
@@ -183,7 +205,7 @@ export const TabPager = memo(function TabPager({ tab, onTab, page, bottomInset, 
             {tabs.map((name, index) => (
               <TabColumn key={name} index={index} page={page} width={width} active={name === tab}>
                 {stacks[name].map(({ id, route }, at) => (
-                  <StackPage key={id} index={at} depth={depths[name]} width={width} top={at === stacks[name].length - 1} kept={at >= stacks[name].length - KEPT}>
+                  <StackPage key={id} index={at} depth={depths[name]} width={width} top={at === stacks[name].length - 1} front={name === tab && at === stacks[name].length - 1} toTop={popToRoot} kept={at >= stacks[name].length - KEPT}>
                     {render(route)}
                   </StackPage>
                 ))}
@@ -213,7 +235,8 @@ function TabColumn({ index, page, width, active, children }: { index: number; pa
   );
 }
 
-function StackPage({ index, depth, width, top, kept, children }: { index: number; depth: SharedValue<number>; width: number; top: boolean; kept: boolean; children: ReactNode }) {
+function StackPage({ index, depth, width, top, front, toTop, kept, children }: { index: number; depth: SharedValue<number>; width: number; top: boolean; front: boolean; toTop: number; kept: boolean; children: ReactNode }) {
+  const frontPage = useMemo(() => ({ front, toTop }), [front, toTop]);
   const style = useAnimatedStyle(() => {
     const offset = index - depth.get();
     if (offset >= 0) return { transform: [{ translateX: Math.min(1, offset) * width }], opacity: 1 };
@@ -224,7 +247,7 @@ function StackPage({ index, depth, width, top, kept, children }: { index: number
   if (!kept) return null;
   return (
     <Animated.View pointerEvents={top ? "auto" : "none"} accessibilityElementsHidden={!top} importantForAccessibility={top ? "auto" : "no-hide-descendants"} style={[StyleSheet.absoluteFill, styles.page, style]}>
-      <PageIndexContext.Provider value={index}>{children}</PageIndexContext.Provider>
+      <PageIndexContext.Provider value={index}><FrontPageContext.Provider value={frontPage}>{children}</FrontPageContext.Provider></PageIndexContext.Provider>
       {index > 0 && <Animated.View pointerEvents="none" style={[styles.pageEdge, edge]} />}
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.shade, shade]} />
     </Animated.View>

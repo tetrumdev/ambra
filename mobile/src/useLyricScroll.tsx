@@ -167,5 +167,7 @@ export function useLyricScroll({ blocks, focus, time, height, fontSize, running,
     retry.current = null;
     requestAnimationFrame(align);
   }, [align]);
-  return { list, motion, followingUI, record, recordWord, contentSize, failed, realign };
+  /** A tapped line is moved to from where the list was scrolled, not jumped to. */
+  const glide = useCallback(() => { target.current.force = false; }, []);
+  return { list, motion, followingUI, record, recordWord, contentSize, failed, realign, glide };
 }

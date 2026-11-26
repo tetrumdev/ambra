@@ -1,8 +1,9 @@
 import { Image } from "expo-image";
-import type { ReactElement } from "react";
+import { useRef, type ReactElement } from "react";
 import { FlatList, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 import { usePageGesture } from "../shell/gestures";
+import { useFrontPageScroll } from "../navigation";
 import { colors, fonts, space, textSize } from "../theme";
 import { Touchable, anchorOf, type Anchor } from "../Touchable";
 
@@ -55,7 +56,7 @@ export function CardRow({ title, cards, empty, size = CARD }: { title: string; c
   return (
     <View style={styles.section}>
       <Text accessibilityRole="header" style={styles.heading}>{title}</Text>
-      {cards.length ? <ScrollView horizontal block={page ?? undefined} showsHorizontalScrollIndicator={false} decelerationRate="fast" snapToInterval={size + GAP} snapToAlignment="start" contentContainerStyle={styles.row}>
+      {cards.length ? <ScrollView horizontal scrollsToTop={false} block={page ?? undefined} showsHorizontalScrollIndicator={false} decelerationRate="fast" snapToInterval={size + GAP} snapToAlignment="start" contentContainerStyle={styles.row}>
         {cards.map(card => <CardView key={card.key} card={card} width={size} />)}
       </ScrollView> : empty ? <Text style={styles.empty}>{empty}</Text> : null}
     </View>
@@ -66,8 +67,12 @@ export function CardRow({ title, cards, empty, size = CARD }: { title: string; c
 export function CardGrid({ cards, header, bottomInset, onScroll }: { cards: Card[]; header?: ReactElement; bottomInset: number; onScroll?: React.ComponentProps<typeof FlatList>["onScroll"] }) {
   const { width } = useWindowDimensions();
   const size = (width - 20 * 2 - 16) / 2;
+  const list = useRef<FlatList<Card>>(null);
+  const front = useFrontPageScroll(list);
   return (
     <FlatList
+      ref={list}
+      scrollsToTop={front}
       data={cards}
       keyExtractor={card => card.key}
       numColumns={2}

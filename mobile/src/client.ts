@@ -5,6 +5,7 @@ import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/sr
 import { SessionClock } from "./sessionClock";
 import { artworkPalettePath, parseArtworkPalette } from "../../desktop/src/utils/artworkPalette";
 import { applyQueuePatch, queuePatchApplies, type QueuePatch } from "../../desktop/src/utils/queuePatch";
+import { readJsonLines } from "../../desktop/src/utils/jsonLines";
 
 /**
  * The remote's line to the Ambra server: pairing, following the core's session
@@ -299,6 +300,20 @@ export async function trackLyrics(track: Track, signal: AbortSignal): Promise<Tr
   return parseTrackLyrics(await request<unknown>(`/api/lyrics?${query}`, { signal, timeoutMs: 30_000 }));
 }
 
+/**
+ * Whether the server last answered. The bridge can say it's connected over a link that died
+ * without closing; only requests getting through (or not) show that.
+ */
+let answeredAt = 0;
+let unansweredAt = 0;
+export const serverAnswering = () => answeredAt >= unansweredAt;
+/** The bridge answers for a server it can't reach with these. */
+const unreachable = (status: number) => status === 502 || status === 503 || status === 504;
+function heard(status?: number) {
+  if (status !== undefined && unreachable(status)) unansweredAt = Date.now();
+  else answeredAt = Date.now();
+}
+
 // Connection policy and retry live in Rust. A possibly delivered mutation is never replayed.
 export async function request<T>(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
   return send<T>(path, init);
@@ -318,6 +333,7 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
       headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(directToken ? { Authorization: `Bearer ${directToken}` } : {}) },
     });
     assertConnection(epoch);
+    heard(response.status);
     if (response.status === 401) {
       await forget();
       throw new Unpaired("This phone isn't paired with the server");
@@ -327,6 +343,8 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     if (!response.ok) throw Object.assign(new Error(body?.error ?? `The server answered ${response.status}`), { status: response.status, body });
     return body as T;
   } catch (error) {
+    // No answer at all, rather than one the caller stopped waiting for.
+    if (!init.signal?.aborted && (timeout.signal.aborted || error instanceof TypeError)) unansweredAt = Date.now();
     // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
     if (timeout.signal.aborted && !init.signal?.aborted) {
       // No answer may mean a connection that died without closing; the bridge checks and replaces it.
@@ -513,7 +531,33 @@ export const notifySession = () => show();
 
 export const sessionView = () => offline ? offline.view() : shown;
 /** Seconds since the view's position was true. */
-export const sessionViewAge = () => offline ? offline.age() : local && view ? Math.max(0, (Date.now() - local.at) / 1000) : playbackClock.age(view?.serverTimeMs, viewAt, Date.now());
+export function sessionViewAge() {
+  if (offline) return offline.age();
+  const now = Date.now();
+  if (local && view) return Math.max(0, (now - local.at) / 1000);
+  const offset = playbackClock.offset(now);
+  const age = offset !== null && view?.serverTimeMs !== undefined ? (now + offset - view.serverTimeMs) / 1000 : null;
+  // As desktop's `coreViewAge`: an estimate from before a sleep or a server restart can be far off; arrival is safe.
+  const arrived = Math.max(0, (now - viewAt) / 1000);
+  return age !== null && age >= 0 && age <= arrived + 1 ? age : arrived;
+}
+
+const positionListeners = new Set<() => void>();
+/** Hears a view that moved only its position; `subscribe` isn't told, so screens don't redraw for it. */
+export function subscribePosition(listener: () => void) {
+  positionListeners.add(listener);
+  return () => { positionListeners.delete(listener); };
+}
+const POSITION_FIELDS = new Set(["queue", "revision", "positionSeconds", "serverTimeMs"]);
+function sameApartFromPosition(current: SessionView, next: Record<string, unknown>) {
+  for (const key of new Set([...Object.keys(current), ...Object.keys(next)])) {
+    if (POSITION_FIELDS.has(key)) continue;
+    const left = (current as Record<string, unknown>)[key];
+    const right = next[key];
+    if (left !== right && JSON.stringify(left) !== JSON.stringify(right)) return false;
+  }
+  return true;
+}
 
 export function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -531,10 +575,91 @@ function accept(next: ArrivingView) {
   const queue = arrived !== undefined ? JSON.parse(rebased(JSON.stringify(arrived))) as SessionView["queue"]
     : patched ? applyQueuePatch(known.queue, patch) : known!.queue;
   if (view?.instanceId !== next.instanceId) playbackClock.reset();
-  view = { ...rest, queue };
   viewAt = Date.now();
+  // As on desktop, the stream sends the position four times a second: a view that differs only
+  // there updates the current one in place, for readers that sample it, and nothing redraws.
+  if (view && queue === view.queue && sameApartFromPosition(view, rest)) {
+    for (const target of new Set([view, shown])) {
+      if (!target) continue;
+      target.revision = rest.revision;
+      target.serverTimeMs = rest.serverTimeMs;
+      if (target === view || !local) target.positionSeconds = rest.positionSeconds;
+    }
+    for (const listener of positionListeners) listener();
+    return true;
+  }
+  view = { ...rest, queue };
   show();
   return true;
+}
+
+/** A stream that sends nothing for this long has stalled on the way and is opened again. */
+const STREAM_SILENCE_MS = 15_000;
+
+/**
+ * Desktop's `followStream`: one whole view per line, the session as it is and then as it
+ * changes, positions included. False when this server (or this fetch) has no stream.
+ */
+async function followStream(stop: AbortSignal): Promise<boolean> {
+  const epoch = connectionEpoch;
+  const asked = session;
+  const silence = new AbortController();
+  const quit = () => silence.abort();
+  stop.addEventListener("abort", quit);
+  if (stop.aborted) quit();
+  let timer = setTimeout(quit, STREAM_SILENCE_MS);
+  let lines = 0;
+  const alive = () => { heard(); clearTimeout(timer); timer = setTimeout(quit, STREAM_SILENCE_MS); };
+  try {
+    const known = view ? `queue=${view.queueRevision}&patches=1` : "patches=1";
+    const response = await fetch(`${baseUrl}${inSession(`/api/session/stream?${known}`)}`, {
+      signal: silence.signal,
+      headers: directToken ? { Authorization: `Bearer ${directToken}` } : {},
+    });
+    assertConnection(epoch);
+    heard(response.status);
+    if (response.status === 401) {
+      await forget();
+      throw new Unpaired("This phone isn't paired with the server");
+    }
+    if (response.status === 404 && asked !== MAIN_SESSION) { setSession(MAIN_SESSION); return true; }
+    if (response.status === 404 || !response.body) return false;
+    if (!response.ok) throw Object.assign(new Error(`The server answered ${response.status}`), { status: response.status });
+    await readJsonLines<ArrivingView>(response.body, next => {
+      lines++;
+      if (epoch !== connectionEpoch || asked !== session) { quit(); return; }
+      // A queue this phone can't patch is asked for whole, as desktop does.
+      if (!accept(next)) void request<ArrivingView>(inSession("/api/session")).then(accept, () => {});
+    }, alive);
+    return true;
+  } catch (error) {
+    // Gone quiet: it is opened again, like one the server ended. One that never sent the
+    // session at all is held up on the way (a proxy keeping the body back): ask instead.
+    if (silence.signal.aborted && !stop.aborted) { unansweredAt = Date.now(); return lines > 0; }
+    if (!stop.aborted && error instanceof TypeError) unansweredAt = Date.now();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    stop.removeEventListener("abort", quit);
+  }
+}
+
+/** One timed round trip to the server's clock, for carrying positions forward from when the server took them. */
+async function samplePlaybackClock(signal?: AbortSignal) {
+  const instance = view?.instanceId;
+  const sent = Date.now();
+  const report = await request<{ serverTimeMs: number }>(inSession("/api/session/clock"), { signal, timeoutMs: 3000 });
+  if (!signal?.aborted && instance === view?.instanceId) playbackClock.sample(report.serverTimeMs, sent, Date.now());
+}
+
+/** Desktop's `syncServerClock`: a few readings one after another, then one every 15 seconds while open. */
+function keepPlaybackClock(signal: AbortSignal) {
+  void (async () => {
+    for (let index = 0; !signal.aborted; index++) {
+      if (AppState.currentState === "active") await samplePlaybackClock(signal).catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, index < 4 ? 0 : 15_000));
+    }
+  })();
 }
 
 /** Keeps the view current until `signal` aborts; rejects with `Unpaired` if the token stops working. */
@@ -548,6 +673,9 @@ export async function follow(signal: AbortSignal) {
     if (directMode) wake.abort();
     else void networkCall("resume").catch(() => {}).finally(() => wake.abort());
   });
+  keepPlaybackClock(signal);
+  // Older servers have no stream; they're followed by asking again for each change instead.
+  let streams = true;
   try {
     while (!signal.aborted) {
       const since = view ? `?since=${view.revision}&wait=25&queue=${view.queueRevision}&patches=1` : "";
@@ -558,10 +686,12 @@ export async function follow(signal: AbortSignal) {
       wakeSignal.addEventListener("abort", abort);
       if (signal.aborted || wakeSignal.aborted) stop.abort();
       try {
-        const asked = session;
-        const next = await request<ArrivingView>(inSession(`/api/session${since}`), { signal: stop.signal, timeoutMs: 35_000 });
-        if (asked === session && !accept(next)) accept(await request<ArrivingView>(inSession("/api/session"), { signal }));
-
+        if (!streams || !await followStream(stop.signal)) {
+          streams = false;
+          const asked = session;
+          const next = await request<ArrivingView>(inSession(`/api/session${since}`), { signal: stop.signal, timeoutMs: 35_000 });
+          if (asked === session && !accept(next)) accept(await request<ArrivingView>(inSession("/api/session"), { signal }));
+        }
       } catch (error) {
         if (error instanceof Unpaired) throw error;
         // The session was removed on another device: back to the first one.
@@ -616,13 +746,11 @@ export async function refreshSession(signal: AbortSignal, options: { clock?: "re
   if (options.clock && !view) accept(await request<ArrivingView>(inSession("/api/session"), { signal, timeoutMs: 10_000 }));
   const instance = view?.instanceId;
   if (options.clock && (options.clock === "force" || !playbackClock.recent(Date.now()))) {
-    await Promise.all(Array.from({ length: 3 }, async () => {
-      const sent = Date.now();
-      try {
-        const report = await request<{ serverTimeMs: number }>(inSession("/api/session/clock"), { signal, timeoutMs: 3000 });
-        if (!signal.aborted && instance === view?.instanceId) playbackClock.sample(report.serverTimeMs, sent, Date.now());
-      } catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
-    }));
+    // One after another: readings taken together hold each other up, and only quick ones count.
+    for (let index = 0; index < 3 && instance === view?.instanceId; index++) {
+      try { await samplePlaybackClock(signal); }
+      catch (error) { if (signal.aborted) throw error; } // Older servers still support a fresh position report.
+    }
   }
   const path = inSession(`/api/session${view ? `?queue=${view.queueRevision}&patches=1` : ""}`);
   if (!accept(await request<ArrivingView>(path, { signal, timeoutMs: 10_000 }))) {

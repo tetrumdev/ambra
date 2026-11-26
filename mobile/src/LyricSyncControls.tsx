@@ -1,17 +1,22 @@
 import { useEffect, useState } from "react";
 import { BackHandler, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import Animated, { Easing, useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import type { LyricSync } from "./lyricSync";
 import { Touchable } from "./Touchable";
 import { Icon } from "./Icons";
 import { fonts, colors, radius, space, textSize } from "./theme";
 
-export function LyricSyncControls({ value, loaded, error, following, plain, height, onResume, onResync, onNudge, onReset, onToggle }: {
-  value: LyricSync; loaded: boolean; error: string | null; following: boolean; plain: boolean; height: number;
+export function LyricSyncControls({ value, loaded, error, following, plain, height, playing, onResume, onResync, onNudge, onReset, onToggle }: {
+  value: LyricSync; loaded: boolean; error: string | null; following: boolean; plain: boolean; height: number; playing: boolean;
   onResume: () => void; onResync: () => Promise<void>; onNudge: (delta: number) => void; onReset: () => void; onToggle: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // Steps back while the song plays, so the lyrics have the stage.
+  const quiet = useSharedValue(1);
+  useEffect(() => { quiet.set(withTiming(playing && !open ? 0.45 : 1, { duration: 400, easing: Easing.out(Easing.cubic) })); }, [playing, open, quiet]);
+  const quietStyle = useAnimatedStyle(() => ({ opacity: quiet.get() }));
   useEffect(() => {
     if (!open) return;
     const back = BackHandler.addEventListener("hardwareBackPress", () => { setOpen(false); return true; });
@@ -29,12 +34,11 @@ export function LyricSyncControls({ value, loaded, error, following, plain, heig
     {open && <>
       <Pressable accessibilityLabel="Close lyric timing" accessibilityRole="button" style={StyleSheet.absoluteFill} onPress={() => setOpen(false)} />
       <View accessibilityViewIsModal onAccessibilityEscape={() => setOpen(false)} style={styles.panel}>
-        <ScrollView style={{ maxHeight: Math.max(120, height - 72) }} contentContainerStyle={styles.panelContent}>
+        <ScrollView scrollsToTop={false} style={{ maxHeight: Math.max(120, height - 72) }} contentContainerStyle={styles.panelContent}>
           <Text style={styles.title}>Lyric timing</Text>
-          <Text style={styles.detail}>{timing} · Saved for this song on this phone</Text>
+          <Text style={styles.detail}>{timing}</Text>
           <Touchable accessibilityRole="button" disabled={busy} onPress={() => { void resync(); }} style={styles.action}><Text style={styles.label}>{busy ? "Re-syncing…" : "Re-sync to playback"}</Text></Touchable>
           {!plain && <>
-            <Text style={styles.detail}>+ shows lyrics sooner. − shows lyrics later.</Text>
             <View style={styles.nudges}>{[-500, -100, 100, 500].map(delta => <Touchable key={delta} accessibilityRole="button" accessibilityLabel={`Show lyrics ${Math.abs(delta) / 1000} seconds ${delta > 0 ? "earlier" : "later"}`} disabled={!loaded} onPress={() => onNudge(delta)} style={styles.nudge}><Text style={styles.label}>{delta > 0 ? "+" : "−"}{Math.abs(delta) / 1000}</Text></Touchable>)}</View>
             <Touchable accessibilityRole="button" disabled={!loaded} onPress={onReset} style={styles.action}><Text style={styles.label}>Reset timing</Text></Touchable>
           </>}
@@ -43,17 +47,19 @@ export function LyricSyncControls({ value, loaded, error, following, plain, heig
         </ScrollView>
       </View>
     </>}
-    <View style={styles.controls}>
-      {!plain && !following && <Touchable accessibilityRole="button" accessibilityLabel="Return to current lyric" scale={0.96} onPress={onResume} style={styles.control}><Icon name="lyrics" size={15} /><Text style={styles.label}>Live lyrics</Text></Touchable>}
-      <Touchable accessibilityRole="button" accessibilityLabel="Adjust lyric sync" accessibilityState={{ expanded: open }} onPress={() => setOpen(value => !value)} style={styles.control}><Text style={styles.label}>Sync</Text></Touchable>
-    </View>
+    {!plain && !following && <Touchable accessibilityRole="button" accessibilityLabel="Return to current lyric" scale={0.96} onPress={onResume} style={styles.resume}><Icon name="lyrics" size={15} /><Text style={styles.label}>Live lyrics</Text></Touchable>}
+    <Animated.View style={[styles.sync, quietStyle]}>
+      <Touchable accessibilityRole="button" accessibilityLabel="Adjust lyric sync" accessibilityState={{ expanded: open }} hitSlop={8} scale={0.9} onPress={() => setOpen(value => !value)} style={styles.control}><Text style={styles.small}>Sync</Text></Touchable>
+    </Animated.View>
   </View>;
 }
 
 const styles = StyleSheet.create({
-  controls: { position: "absolute", bottom: 8, alignSelf: "center", flexDirection: "row", borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: "#454545", backgroundColor: "rgba(22,22,22,0.96)", paddingHorizontal: 5 },
-  control: { minHeight: 44, paddingHorizontal: 13, flexDirection: "row", alignItems: "center", gap: space.sm },
-  panel: { position: "absolute", bottom: 64, alignSelf: "center", width: 280, maxWidth: "94%", backgroundColor: "#181818", borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: "#484848", overflow: "hidden" },
+  resume: { position: "absolute", bottom: 8, alignSelf: "center", minHeight: 40, paddingHorizontal: 16, flexDirection: "row", alignItems: "center", gap: space.sm, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(30,30,30,0.7)" },
+  sync: { position: "absolute", bottom: 12, right: 18 },
+  control: { minHeight: 28, paddingHorizontal: 11, justifyContent: "center", borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: "rgba(255,255,255,0.14)", backgroundColor: "rgba(30,30,30,0.6)" },
+  small: { color: colors.secondary, fontFamily: fonts.sans, fontSize: textSize.caption, fontWeight: "500" },
+  panel: { position: "absolute", bottom: 52, right: 14, width: 280, maxWidth: "94%", backgroundColor: "#181818", borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: "#484848", overflow: "hidden" },
   panelContent: { padding: 16, gap: space.md },
   title: { color: colors.text, fontFamily: fonts.sans, fontSize: 17, fontWeight: "600" },
   detail: { color: "#b3b3b3", fontFamily: fonts.sans, fontSize: textSize.caption, lineHeight: 17 },

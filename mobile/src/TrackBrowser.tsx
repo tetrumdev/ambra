@@ -99,6 +99,7 @@ export function QueueSheet({ view, onClose }: { view: SessionView | null; onClos
         {error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
         <FlatList
           ref={list as never}
+          scrollsToTop={false}
           {...reorder.listProps}
           style={styles.list}
           data={upcoming}

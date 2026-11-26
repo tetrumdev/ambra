@@ -142,12 +142,14 @@ function ControlButton({
   haptic,
   disabled,
   children,
+  compact = false,
 }: {
   label: string;
   onPress: () => void;
   haptic: Haptics.ImpactFeedbackStyle;
   disabled: boolean;
   children: ReactNode;
+  compact?: boolean;
 }) {
   const down = useSharedValue(0);
   const icon = useAnimatedStyle(() => ({
@@ -165,10 +167,19 @@ function ControlButton({
       }}
       onPressOut={() => down.set(withTiming(0, settle))}
       onPress={onPress}
-      style={[styles.button, disabled && styles.disabled]}
+      style={[styles.button, compact && styles.compact, disabled && styles.disabled]}
     >
       <Animated.View style={icon}>{children}</Animated.View>
     </Pressable>
+  );
+}
+
+/** The open player's play button, also the mini-player's: the same morph, press and haptic. */
+export function PlayPauseButton({ playing, disabled, size, onToggle }: { playing: boolean; disabled: boolean; size: number; onToggle: () => void }) {
+  return (
+    <ControlButton label={playing ? "Pause" : "Play"} disabled={disabled} haptic={Haptics.ImpactFeedbackStyle.Medium} onPress={onToggle} compact={size < 30}>
+      <PlayPauseIcon playing={playing} size={size} />
+    </ControlButton>
   );
 }
 
@@ -202,14 +213,7 @@ export function Controls({
       >
         <SkipIcon backwards activation={activations.previous} width={38} />
       </ControlButton>
-      <ControlButton
-        label={playing ? "Pause" : "Play"}
-        disabled={disabled}
-        haptic={Haptics.ImpactFeedbackStyle.Medium}
-        onPress={onToggle}
-      >
-        <PlayPauseIcon playing={playing} size={36} />
-      </ControlButton>
+      <PlayPauseButton playing={playing} disabled={disabled} size={36} onToggle={onToggle} />
       <ControlButton
         label="Next"
         disabled={disabled}
@@ -238,5 +242,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  compact: { width: 44, height: 44 },
   disabled: { opacity: 0.35 },
 });

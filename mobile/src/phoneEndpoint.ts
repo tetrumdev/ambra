@@ -6,6 +6,7 @@ import * as SecureStore from "expo-secure-store";
 import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, playingOutputs, prefetchMedia, refreshSession, sampleSyncClock, sessionView, setLocalControl, setLocalPlayback, subscribe, syncClockOffset } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { phoneUrlForSource } from "./downloads";
+import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
 
@@ -37,8 +38,12 @@ type Job = { id: number; command: string; args: Record<string, unknown> };
 const instanceId = () => `phone-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 /** The server shows the phone offline after this long without word from it. */
 const QUIET_MS = 8000;
-/** The phone's own position is shown again once it drifts this far from the one last shown. */
-const LOCAL_DRIFT_SECONDS = 0.5;
+/**
+ * The phone's own position is shown again once it drifts this far from the one last shown.
+ * Small, because lyrics follow it: the first reading after a seek or skip is taken before the
+ * audio has started moving, and only a later one corrects it.
+ */
+const LOCAL_DRIFT_SECONDS = 0.08;
 /** Changes when a skip moves the queue, even onto another copy of the same song. */
 const queueMark = (view: SessionView | null) => {
   const queue = view?.queue;
@@ -140,6 +145,8 @@ export function followPhoneOutput() {
       changed,
       serverOffset: syncClockOffset,
       outputLatencyMs: phoneLatencyMs,
+      systemVolume,
+      setSystemVolume,
       transport: (action, details) => {
         // A command lost to a network change is reconciled from the next report; only a
         // phone that is no longer the output stops.

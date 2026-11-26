@@ -8,6 +8,7 @@ import {
 import { Icon } from "./Icons";
 import { phoneEndpointInfo, phoneLatencyMs, setPhoneLatencyMs, subscribePhoneEndpoint, subscribePhoneLatency } from "./phoneEndpoint";
 import { PHONE_DEVICE_ID } from "./phonePlayback";
+import { subscribeSystemVolume } from "../modules/ambra-activity/src";
 import { Sheet } from "./Sheet";
 import { VolumeSlider } from "./shell/Slider";
 import { colors, fonts, glass, haptic, radius, space, springs, textSize } from "./theme";
@@ -121,8 +122,20 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const levels = useRef(new Map<string, number>());
   useEffect(() => () => { for (const timer of timers.current.values()) clearTimeout(timer); }, []);
+  // This phone's level is the system volume: its slider moves with the buttons as they're pressed.
+  // Not while the finger is on it, which would echo the slider's own changes back at it.
+  const touched = useRef(0);
+  const phoneKey = phone?.id ? key({ endpointId: phone.id, endpointName: phone.name, deviceId: PHONE_DEVICE_ID, deviceName: "This phone" }) : null;
+  useEffect(() => {
+    if (!phoneKey) return;
+    return subscribeSystemVolume(level => {
+      if (Date.now() - touched.current < 400) return;
+      setVolumes(current => ({ ...current, [phoneKey]: Math.round(level * 100) }));
+    });
+  }, [phoneKey]);
   const setVolume = (output: Output, level: number) => {
     const id = key(output);
+    if (id === phoneKey) touched.current = Date.now();
     levels.current.set(id, level);
     setVolumes(current => ({ ...current, [id]: level }));
     if (timers.current.has(id)) return;
@@ -137,7 +150,7 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
       <Text style={styles.title}>Output</Text>
       <Text style={styles.subtitle} numberOfLines={1}>{playing.length > 1 ? `Playing on ${playing.length} outputs in step` : playing[0] ? `Playing on ${playing[0].deviceName}` : "Choose where to play"}</Text>
     </View>}>
-      {() => <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+      {() => <ScrollView scrollsToTop={false} style={styles.list} contentContainerStyle={styles.listContent}>
         {list.length > 1 && <>
           <Text style={styles.section}>Session</Text>
           <Chips items={list.map(item => ({ id: item.id, label: item.name, detail: item.playing ? "Playing" : undefined }))} selected={session} onSelect={id => { haptic.tick(); setSession(id); }} />
@@ -204,7 +217,7 @@ function PhoneDelay() {
 
 /** A row of choices with a pill that springs from one to the next. */
 function Chips({ items, selected, busy, onSelect }: { items: { id: string; label: string; detail?: string }[]; selected: string; busy?: string | null; onSelect(id: string): void }) {
-  return <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
+  return <ScrollView horizontal scrollsToTop={false} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chips}>
     {items.map(item => {
       const on = item.id === selected;
       return <Touchable key={item.id} accessibilityRole="radio" accessibilityState={{ checked: on }} accessibilityLabel={item.label} haptic="tick" scale={0.92} onPress={() => onSelect(item.id)} style={[styles.chip, on && styles.chipOn]}>

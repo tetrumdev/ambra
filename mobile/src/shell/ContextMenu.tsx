@@ -113,7 +113,7 @@ function MenuPanel({ request, onClosed }: { request: MenuRequest; onClosed: () =
         style={[styles.panel, { left, top, width: panelWidth, height: panelHeight, transformOrigin: `${originX}px ${originY}px 0px` }, !size && styles.measuring, panelStyle]}
       >
         <BlurView pointerEvents="none" tint="dark" intensity={50} style={StyleSheet.absoluteFill} />
-        <ScrollView bounces={false} scrollEnabled={!!size && !!panelHeight && panelHeight < size.height} showsVerticalScrollIndicator={false}>
+        <ScrollView scrollsToTop={false} bounces={false} scrollEnabled={!!size && !!panelHeight && panelHeight < size.height} showsVerticalScrollIndicator={false}>
           <View onLayout={event => { if (!size) setSize(event.nativeEvent.layout); }}>
             {!lifted && (request.track || request.title) && <View style={styles.heading}>
               {request.track && <Artwork track={request.track} size={40} />}

@@ -7,6 +7,11 @@ const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 const press = { duration: motion.press.duration, easing: Easing.bezier(...motion.press.curve) };
 /** Long enough that a resting thumb doesn't open menus, short enough to feel deliberate. */
 export const HOLD_MS = 380;
+/**
+ * How long a touch waits before it shows as a press, as iOS lists do: one that turns into a
+ * scroll or a swipe meanwhile never sinks or buzzes. A quick tap still lands at once.
+ */
+const PRESS_DELAY_MS = 90;
 
 /** Where a touch landed on screen, so menus can open from it. */
 export type Anchor = { x: number; y: number };
@@ -51,6 +56,8 @@ export function Touchable({ style, children, scale = 0.95, highlight = false, ha
       {...rest}
       collapsable={false}
       disabled={disabled}
+      // Buttons that answer on touch do so at once; anything that might be scrolled past waits.
+      unstable_pressDelay={hapticOnPressIn ? 0 : PRESS_DELAY_MS}
       delayLongPress={HOLD_MS}
       onPressIn={event => {
         if (reduceMotion) down.setValue(1);

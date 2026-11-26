@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Animated, RefreshControl, StyleSheet, Text, View, useAnimatedValue } from "react-native";
+import { useEffect, useMemo, useRef, useState, type ComponentRef } from "react";
+import { ActivityIndicator, Animated, RefreshControl, StyleSheet, Text, View, useAnimatedValue, ScrollView } from "react-native";
 import type { CatalogAlbum, CatalogArtist } from "../../../desktop/src/api/server";
 import type { Track } from "../../../desktop/src/types/music";
 import { musicProviderName } from "../../../desktop/src/utils/musicProviderName";
@@ -13,7 +13,7 @@ import {
   removeFromPlaylist, removeFromServicePlaylist, renamePlaylist, renameServicePlaylist, reorderLibrary, reorderPlaylist, servicePlaylistContents, useLibrary,
   type ArtistProfile, type Discover, type ProviderRecommendations, type RecommendationMix, type ServicePlaylistContents,
 } from "../library";
-import { CompactBar, PageHeader, reason, showToast, useNavigation, useNowPlaying, useRun, type Route } from "../navigation";
+import { CompactBar, PageHeader, reason, showToast, useFrontPageScroll, useNavigation, useRun, type Route } from "../navigation";
 import { playEntries } from "../queueModel";
 import { services, type Service } from "../servicePreferences";
 import type { MenuAction } from "../shell/ContextMenu";
@@ -231,7 +231,7 @@ export function DownloadsScreen() {
   const size = [...phone.values()].reduce((sum, entry) => sum + entry.sizeBytes, 0);
   return <TrackListScreen
     title="Downloads"
-    subtitle={`On this phone · ${(size / 1024 ** 3).toFixed(size > 1024 ** 3 ? 1 : 2)} GB${active ? ` · downloading ${active.done + 1} of ${active.total}` : ""}`}
+    subtitle={`${(size / 1024 ** 3).toFixed(size > 1024 ** 3 ? 1 : 2)} GB${active ? ` · ${active.done + 1} of ${active.total}` : ""}`}
     art={<CollectionArt tracks={tracks} />}
     tracks={tracks}
     source={{ kind: "library", id: "downloads" }}
@@ -263,6 +263,8 @@ export function LibraryScreen() {
   const { phone } = useDownloads();
   const { push, bottomInset } = useNavigation();
   const scroll = useAnimatedValue(0);
+  const list = useRef<ComponentRef<typeof ScrollView>>(null);
+  const front = useFrontPageScroll(list);
   const [prompt, setPrompt] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [importing, setImporting] = useState<{ done: number; total: number } | null>(null);
@@ -271,10 +273,10 @@ export function LibraryScreen() {
   const albums = useMemo(() => libraryAlbums(library.tracks).length, [library.tracks]);
   const covers = (trackIds: string[]) => trackIds.map(id => library.playlistTracks.get(id) ?? library.tracks.find(track => track.globalId === id)).map(track => thumbnailArtwork(track)).filter((url): url is string => !!url).slice(0, 4);
   return <View style={styles.screen}>
-    <Animated.ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} scrollEventThrottle={16}
+    <Animated.ScrollView ref={list} scrollsToTop={front} style={styles.screen} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} scrollEventThrottle={16}
       onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); void refreshLibrary().finally(() => setRefreshing(false)); }} tintColor="white" />}>
-      <PageHeader title="Library" subtitle={offline ? "Offline · showing songs on this phone" : undefined} scroll={scroll}
+      <PageHeader title="Library" scroll={scroll}
         right={<View style={styles.headerButtons}>
           {!offline && <RoundButton icon="add" label="New playlist" onPress={() => setPrompt(true)} />}
           <RoundButton icon="settings" label="Settings" onPress={() => push({ kind: "settings" })} />
@@ -290,8 +292,8 @@ export function LibraryScreen() {
         </View>
         {library.error && <Text accessibilityRole="alert" style={styles.error}>{library.error}</Text>}
       </>}
-      <Row title="Downloads" detail={`${songs(phone.size)} on this phone`} icon="download" onPress={() => push({ kind: "downloads" })} />
-      {!offline && !directMode && <Row title={importing ? `Importing ${importing.done} of ${importing.total}…` : "Import Music"} detail="Add music files from this phone to your library" icon="add" onPress={() => {
+      <Row title="Downloads" detail={songs(phone.size)} icon="download" onPress={() => push({ kind: "downloads" })} />
+      {!offline && !directMode && <Row title={importing ? `Importing ${importing.done} of ${importing.total}…` : "Import Music"} icon="add" onPress={() => {
         if (importing) return;
         void importMusic((done, total) => setImporting({ done, total })).then(({ imported, failed }) => {
           if (failed.length) showToast(`${imported} imported, ${failed.length} failed: ${failed[0]}`, true);
@@ -354,10 +356,11 @@ export function HomeScreen() {
   const library = useLibrary();
   const { phone } = useDownloads();
   const { push, bottomInset } = useNavigation();
-  const { outputName } = useNowPlaying();
   const run = useRun();
   const { openPlayback } = useTrackMenus();
   const scroll = useAnimatedValue(0);
+  const list = useRef<ComponentRef<typeof ScrollView>>(null);
+  const front = useFrontPageScroll(list);
   const [source, setSource] = useState<"ambra" | Service>("ambra");
   const [found, setFound] = useState<Discover | null>(null);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
@@ -383,14 +386,11 @@ export function HomeScreen() {
   const older = useMemo(() => ordered.filter(entry => entry.lastPlayedAt <= cutoff).reverse().slice(0, 20).map(entry => entry.track), [ordered, cutoff]);
   const downloaded = useMemo(() => [...phone.values()].map(phoneTrack), [phone]);
   const covers = (trackIds: string[]) => trackIds.map(id => library.playlistTracks.get(id)).map(track => thumbnailArtwork(track)).filter((url): url is string => !!url).slice(0, 4);
-  const hour = new Date().getHours();
-  const greeting = hour < 5 ? "Good night" : hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
   return (
     <View style={styles.screen}>
-      <Animated.ScrollView style={styles.screen} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} scrollEventThrottle={16}
+      <Animated.ScrollView ref={list} scrollsToTop={front} style={styles.screen} contentContainerStyle={{ paddingBottom: bottomInset + 24 }} scrollEventThrottle={16}
         onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}>
-        <PageHeader title={greeting} scroll={scroll}
-          subtitle={offline ? "Offline · your downloads still play" : outputName ? `Playing on ${outputName}` : undefined}
+        <PageHeader title="Home" scroll={scroll}
           right={<RoundButton icon="settings" label="Settings" onPress={() => push({ kind: "settings" })} />} />
         {!offline && connected.length > 0 && <Segmented<"ambra" | Service> label="Recommendations from" value={shownSource} onChange={setSource}
           items={[{ value: "ambra" as const, label: "AMBRA" }, ...connected.map(service => ({ value: service, label: musicProviderName(service) }))]} />}
@@ -406,7 +406,7 @@ export function HomeScreen() {
             {downloaded.length > 0 && <CardRow title="On This Phone" cards={trackCards(downloaded, "downloads")} />}
           </>}
       </Animated.ScrollView>
-      <CompactBar title={greeting} scroll={scroll} />
+      <CompactBar title="Home" scroll={scroll} />
     </View>
   );
 }

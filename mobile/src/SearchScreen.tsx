@@ -9,7 +9,7 @@ import { changeQueue, command, currentTrack, sessionView, type QueueItem } from 
 import { TrackRow } from "./TrackRow";
 import { playEntries } from "./queueModel";
 import { catalogSearch, type CatalogPage } from "./library";
-import { useNavigation, useNowPlaying, useRun } from "./navigation";
+import { useFrontPageScroll, useNavigation, useNowPlaying, useRun } from "./navigation";
 import { useTrackMenus } from "./TrackMenus";
 import { CardRow } from "./screens/Cards";
 import { albumCard, artistCard } from "./screens/Pages";
@@ -55,6 +55,8 @@ export function SearchScreen() {
   const session = useRef<SearchSession | null>(null);
   const input = useRef<ComponentRef<typeof TextInput>>(null);
   const scroll = useAnimatedValue(0);
+  const list = useRef<FlatList<Track>>(null);
+  const front = useFrontPageScroll(list);
   const focus = useAnimatedValue(0);
   useEffect(() => { Animated.spring(focus, { toValue: focused ? 1 : 0, damping: 22, stiffness: 260, mass: 0.7, useNativeDriver: true }).start(); }, [focused, focus]);
   const searchKey = JSON.stringify([query.trim(), selected, provider, attempt]);
@@ -102,7 +104,7 @@ export function SearchScreen() {
   const found = catalog?.key === searchKey && query.trim() ? catalog.value : null;
   const titleHeight = 58;
   return <View style={styles.screen}>
-    <AnimatedFlatList data={results} keyExtractor={track => track.globalId} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+    <AnimatedFlatList ref={list} scrollsToTop={front} data={results} keyExtractor={track => track.globalId} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
       scrollEventThrottle={16} onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
       contentContainerStyle={{ paddingTop: insets.top + titleHeight + 132, paddingHorizontal: 12, paddingBottom: bottomInset + 24 }}
       scrollIndicatorInsets={{ top: insets.top + titleHeight + 120, bottom: bottomInset }} extraData={`${nowId}:${playing}`} initialNumToRender={12} maxToRenderPerBatch={8}

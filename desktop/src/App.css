@@ -78,39 +78,81 @@ body,
     right: 0;
     height: 32px;
 }
-.stateSaveError button {
-    color: var(--ink);
-    background: #333;
-    border: 1px solid #888;
-    border-radius: 6px;
-    padding: 8px 16px;
-    font: inherit;
+/* The connection's state, beside the page history buttons: a quiet dot that explains itself
+   when clicked. Not shown over the player, where those buttons aren't either. */
+.statusNotice {
+    position: fixed;
+    top: 5px;
+    left: 100px;
+    z-index: 52;
 }
-.stateSaveError {
-    flex-shrink: 0;
-    z-index: 10000;
-    display: flex;
-    gap: var(--space-3);
-    align-items: center;
-    justify-content: center;
-    padding: 1px 12px;
-    border-top: 1px solid #cf9d62;
-    background: #382818;
-    font:
-        13px/18px var(--font-sans);
+:root:has(.pageHistoryControls[data-in-titlebar]) .statusNotice {
+    top: 2px;
+    left: 156px;
 }
-.stateSaveError span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+:root:not(:has(.pageHistoryControls)) .statusNotice {
+    display: none;
 }
-.stateSaveError button {
-    flex-shrink: 0;
-    padding: 0 6px;
+.statusNoticeDot {
+    display: grid;
+    place-items: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: 0;
-    border-radius: 3px;
+    border-radius: 7px;
     background: transparent;
+    transition: background-color var(--motion-hover);
+}
+.statusNoticeDot:is(:hover, :focus-visible) {
+    background: rgb(255 255 255 / 10%);
+}
+.statusNoticeDot span {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: rgb(232 176 104 / 70%);
+}
+.statusNoticePanel {
+    position: absolute;
+    top: 32px;
+    left: 0;
+    width: max-content;
+    max-width: 300px;
+    padding: 4px 0;
+    border: 1px solid rgb(255 255 255 / 10%);
+    border-radius: 12px;
+    background: rgb(28 28 28 / 82%);
+    backdrop-filter: blur(20px);
+    color: rgb(255 255 255 / 80%);
+    font: 13px/18px var(--font-sans);
+    animation: statusNoticeIn var(--motion-hover) both;
+}
+.statusNoticePanel p {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    justify-content: space-between;
+    margin: 0;
+    padding: 6px 12px;
+}
+.statusNoticePanel button {
+    flex-shrink: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-weight: 600;
+}
+.statusNoticePanel button:is(:hover, :focus-visible) {
+    text-decoration: underline;
+}
+@keyframes statusNoticeIn {
+    from { opacity: 0; transform: translateY(-3px); }
+}
+:root[data-reduce-motion] .statusNoticePanel {
+    animation: none;
 }
 :root:has([data-window-drag-region]) {
     --library-titlebar-height: 32px;

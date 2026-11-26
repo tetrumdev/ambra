@@ -5,6 +5,7 @@ import { configureAudioSession } from "./audioSession";
 import { notifySession, setOfflineSession, type QueueSnapshot, type SessionView } from "./client";
 import { downloadsSnapshot, phoneDownloadUrl } from "./downloads";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
+import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
 
 /**
  * Playback with no server: songs downloaded to this phone, played from its encrypted copies
@@ -35,6 +36,8 @@ export class OfflineSession {
       ownsOutput: () => !this.released,
       transport: (action, details) => { void this.command(action, details).catch(() => {}); },
       changed: () => this.update(),
+      systemVolume,
+      setSystemVolume,
     });
     this.current = this.build();
   }

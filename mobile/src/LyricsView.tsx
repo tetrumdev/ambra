@@ -6,7 +6,7 @@ import Animated, { Easing, useAnimatedReaction, useAnimatedStyle, useFrameCallba
 import { scheduleOnRN } from "react-native-worklets";
 import { needsLyricsRetry, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
 import { lyricActive } from "../../desktop/src/utils/lyricsTiming";
-import { sessionViewAge, type SessionView, type Track } from "./client";
+import { sessionViewAge, subscribePosition, type SessionView, type Track } from "./client";
 import { refreshLyricPlayback } from "./lyricsPlayback";
 import { focusBlock, lyricBlocks, lyricSeekSeconds, lyricWordRuns, type LyricBlock, type LyricRow } from "./lyricsModel";
 import { useLyrics } from "./useLyrics";
@@ -39,7 +39,10 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
   const [previewRevision, setPreviewRevision] = useState(0);
   const position = useCallback(() => {
     const candidate = held.current;
-    const pending = candidate && candidate.revision === view?.revision && Date.now() - candidate.at < 5000 ? candidate : null;
+    // Held only until the view shows the seek: a phone playing it reports it before the server
+    // moves on, and after the wait for audio, which this guess would otherwise run ahead of.
+    if (candidate && view && Math.abs(view.positionSeconds - candidate.seconds) < 1.5) held.current = null;
+    const pending = held.current && held.current.revision === view?.revision && Date.now() - held.current.at < 5000 ? held.current : null;
     return lyricPositionMs(pending && view ? { ...view, positionSeconds: pending.seconds } : view,
       pending ? (Date.now() - pending.at) / 1000 : sessionViewAge(), duration, offset);
   }, [view, duration, offset]);
@@ -62,6 +65,8 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
       time.set(report.time);
     }
     activation.current = { shown, offset };
+    // The stream's position reports change the view in place; each one corrects the clock.
+    return subscribePosition(() => sample.set({ ...report, time: position(), wall: Date.now() }));
   }, [view, duration, offset, position, sample, time, initialized, previewRevision, active, foreground]);
   useEffect(() => {
     if (!active || !foreground) return;
@@ -244,7 +249,7 @@ function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, 
     if (next !== previous) scheduleOnRN(setFocus, next);
   });
   const [following, setFollowing] = useState(true);
-  const { list: listRef, motion: scrollMotion, followingUI, record, recordWord, contentSize, failed, realign } = useLyricScroll({ blocks, focus, time, height, fontSize, running, following, reduced, plain });
+  const { list: listRef, motion: scrollMotion, followingUI, record, recordWord, contentSize, failed, realign, glide } = useLyricScroll({ blocks, focus, time, height, fontSize, running, following, reduced, plain });
   const resumeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seek = useRef(onSeek);
   useEffect(() => { seek.current = onSeek; }, [onSeek]);
@@ -254,19 +259,28 @@ function LyricLines({ lyrics, view, duration, active, height, disabled, onSeek, 
   const resume = useCallback(() => { stopTimer(); setFollowing(true); realign(); }, [stopTimer, realign]);
   const syncPlayback = useCallback(async () => { resume(); try { await resync(); } finally { resume(); } }, [resync, resume]);
   const armResume = useCallback(() => { stopTimer(); if (!plain && running) resumeTimer.current = setTimeout(() => setFollowing(true), 5000); }, [plain, running, stopTimer]);
-  const lineSeek = useCallback((seconds: number) => { stopTimer(); preview(seconds); setFollowing(true); seek.current(seconds); }, [preview, stopTimer]);
+  const lineSeek = useCallback((seconds: number) => {
+    stopTimer();
+    preview(seconds);
+    // The tapped line is the one to centre now, before the clock's next frame says so; otherwise
+    // the list goes back to the line that was playing first and only then on to this one.
+    if (!plain) setFocus(focusBlock(lyrics, blocks, seconds * 1000 + lyrics.offsetMs));
+    glide();
+    setFollowing(true);
+    seek.current(seconds);
+  }, [preview, stopTimer, plain, lyrics, blocks, glide]);
   const renderItem = useCallback(({ item, index }: { item: LyricBlock; index: number }) => <Group block={item} {...{ index, following, time, fontSize, plain, reduced, running, disabled, scrollMotion, followingUI }} distance={Math.min(4, Math.abs(index - focus))} side={index < focus ? -1 : index === focus ? 0 : 1} offset={lyrics.offsetMs} onSeek={lineSeek} />, [focus, following, time, fontSize, plain, reduced, running, disabled, lyrics.offsetMs, lineSeek, scrollMotion, followingUI]);
   const contentStyle = useMemo(() => ({ paddingHorizontal: 26, paddingTop: plain ? 24 : height * 0.43, paddingBottom: plain ? 90 : height * 0.57 }), [plain, height]);
   return <View style={styles.fill}>
     <FadeMask style={styles.fill} maskElement={<LinearGradient colors={["transparent", "black", "black", "transparent"]} locations={[0, 0.14, 0.82, 1]} style={StyleSheet.absoluteFill} />}>
-      <LyricMeasurements record={record} recordWord={recordWord}><LyricList ref={listRef} data={blocks} keyExtractor={block => block.id} renderItem={renderItem} CellRendererComponent={LyricCell} style={styles.fill} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={6} maxToRenderPerBatch={5} windowSize={5} removeClippedSubviews={false} scrollEventThrottle={16} onContentSizeChange={contentSize}
+      <LyricMeasurements record={record} recordWord={recordWord}><LyricList ref={listRef} scrollsToTop={false} data={blocks} keyExtractor={block => block.id} renderItem={renderItem} CellRendererComponent={LyricCell} style={styles.fill} contentContainerStyle={contentStyle} showsVerticalScrollIndicator={false} initialNumToRender={6} maxToRenderPerBatch={5} windowSize={5} removeClippedSubviews={false} scrollEventThrottle={16} onContentSizeChange={contentSize}
         onScrollBeginDrag={() => { if (!plain) setFollowing(false); stopTimer(); }} onScrollEndDrag={armResume} onMomentumScrollBegin={stopTimer} onMomentumScrollEnd={armResume}
         onScrollToIndexFailed={failed}
         ListHeaderComponent={plain ? <View style={styles.plainNote}><Text style={styles.credit}>Lyrics aren’t time-synced.</Text>{needsLyricsRetry(lyrics) && <Touchable onPress={retry} scale={0.97}><Text style={styles.retryText}>Check for synced lyrics</Text></Touchable>}</View> : undefined}
         ListFooterComponent={<Credits {...{ lyrics, plain, followingUI, reduced }} motion={scrollMotion} index={blocks.length - 1} />}
       /></LyricMeasurements>
     </FadeMask>
-    {lyrics.sync !== "none" && <LyricSyncControls value={sync.value} loaded={sync.loaded} error={sync.error} {...{ following, plain, height }} onResume={resume} onResync={syncPlayback} onNudge={delta => { sync.update(value => nudgeLyricSync(value, delta)); resume(); }} onReset={() => { sync.update(value => ({ ...value, correctionMs: 0 })); resume(); }} onToggle={() => { sync.update(value => ({ ...value, unsynced: !value.unsynced })); resume(); }} />}
+    {lyrics.sync !== "none" && <LyricSyncControls value={sync.value} loaded={sync.loaded} error={sync.error} {...{ following, plain, height }} playing={!!view?.playing && !view.buffering} onResume={resume} onResync={syncPlayback} onNudge={delta => { sync.update(value => nudgeLyricSync(value, delta)); resume(); }} onReset={() => { sync.update(value => ({ ...value, correctionMs: 0 })); resume(); }} onToggle={() => { sync.update(value => ({ ...value, unsynced: !value.unsynced })); resume(); }} />}
   </View>;
 }
 

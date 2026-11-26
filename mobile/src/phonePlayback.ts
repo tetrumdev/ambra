@@ -21,6 +21,9 @@ type Host = {
   serverOffset?(): number | null;
   /** How long sound takes from the player to the ear: the listener's setting for this phone. */
   outputLatencyMs?(): number;
+  /** The system volume (0 to 1), as the phone's buttons set it; without one, the player's own is used. */
+  systemVolume?(): number;
+  setSystemVolume?(volume: number): void;
 };
 
 /** Between play() and the first sound, as near as can be told; corrected while playing. */
@@ -87,6 +90,12 @@ export class PhonePlayback {
   private progress: { time: number; at: number } | null = null;
 
   constructor(private host: Host) {}
+
+  /** The system volume when this phone has one in reach (its buttons may have moved it), else the player's. */
+  private currentVolume() {
+    const system = this.host.systemVolume?.();
+    return system === undefined || !Number.isFinite(system) ? this.volume : Math.round(system * 100);
+  }
 
   /** Whether this phone is in a synced group, so it keeps its clock close to the server's. */
   syncing() { return this.sync !== null; }
@@ -403,7 +412,8 @@ export class PhonePlayback {
       if (controller.signal.aborted || !this.host.ownsOutput()) throw new Error("This phone is no longer the selected output.");
       const player = this.host.create(url);
       this.player = player;
-      player.volume = this.volume / 100;
+      // With the system volume in charge, the player itself stays at full.
+      player.volume = this.host.setSystemVolume ? 1 : this.volume / 100;
       this.subscription = player.addListener("playbackStatusUpdate", status => this.observe(player, status));
       this.remoteSubscription = player.addListener("remoteCommand", event => {
         if (this.player === player && this.host.ownsOutput() && (event.action === "next" || event.action === "previous")) {
@@ -495,10 +505,11 @@ export class PhonePlayback {
         return null;
       case "set_native_audio_volume":
         this.volume = Math.min(100, Math.max(0, Number(args.volume) || 0));
-        if (this.player) this.player.volume = this.volume / 100;
+        if (this.host.setSystemVolume) this.host.setSystemVolume(this.volume / 100);
+        else if (this.player) this.player.volume = this.volume / 100;
         return null;
-      case "native_audio_volume": return this.volume;
-      case "native_audio_settings": return { version: 1, selectedOutputId: PHONE_DEVICE_ID, presets: [], normalization: "off", normalizationTargetLufs: -18, outputs: [{ id: PHONE_DEVICE_ID, name: "Phone", enabled: true, volume: this.volume, exclusiveMode: false, resyncDelayMs: 0, latencyMs: (this.host.outputLatencyMs?.() ?? 0), presetId: null }] };
+      case "native_audio_volume": return this.currentVolume();
+      case "native_audio_settings": return { version: 1, selectedOutputId: PHONE_DEVICE_ID, presets: [], normalization: "off", normalizationTargetLufs: -18, outputs: [{ id: PHONE_DEVICE_ID, name: "Phone", enabled: true, volume: this.currentVolume(), exclusiveMode: false, resyncDelayMs: 0, latencyMs: (this.host.outputLatencyMs?.() ?? 0), presetId: null }] };
       default: throw new Error("This audio setting isn't available on the phone.");
     }
   }

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { ActivityIndicator, Animated, StyleSheet, Switch, Text, View, useAnimatedValue } from "react-native";
+import { useEffect, useRef, useState, useSyncExternalStore, type ComponentRef } from "react";
+import { ActivityIndicator, Animated, StyleSheet, Switch, Text, View, useAnimatedValue, ScrollView } from "react-native";
 import Constants from "expo-constants";
 import type { ServiceAuthStatus } from "../../desktop/src/api/server";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
@@ -10,7 +10,7 @@ import { Segmented } from "./shell/Segmented";
 import { loadServicePreferences, services, servicePreferences, setServiceEnabled, subscribeServicePreferences, type Service } from "./servicePreferences";
 import { Button, Field } from "./DesignControls";
 import { Touchable } from "./Touchable";
-import { CompactBar, PageHeader, useNavigation } from "./navigation";
+import { CompactBar, PageHeader, useFrontPageScroll, useNavigation } from "./navigation";
 import { useDownloads } from "./downloads";
 import { signIn, signOut } from "./playlistTools";
 import { refreshLibrary } from "./library";
@@ -29,6 +29,8 @@ const methodItems: { value: ConnectionMethod | "auto"; label: string }[] = [
 export function SettingsScreen({ onChangeServer }: { onChangeServer: () => void }) {
   const { push, bottomInset } = useNavigation();
   const scroll = useAnimatedValue(0);
+  const list = useRef<ComponentRef<typeof ScrollView>>(null);
+  const front = useFrontPageScroll(list);
   const { phone, active } = useDownloads();
   const downloadedBytes = [...phone.values()].reduce((sum, entry) => sum + entry.sizeBytes, 0);
   const enabled = useSyncExternalStore(subscribeServicePreferences, servicePreferences);
@@ -86,9 +88,9 @@ export function SettingsScreen({ onChangeServer }: { onChangeServer: () => void 
     setError(null);
     void setServiceEnabled(service, value).catch(reason => setError(reason instanceof Error ? reason.message : "Couldn't save this setting.")).finally(() => setBusy(null));
   };
-  return <View style={styles.screen}><Animated.ScrollView style={styles.screen} scrollEventThrottle={16} onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
+  return <View style={styles.screen}><Animated.ScrollView ref={list} scrollsToTop={front} style={styles.screen} scrollEventThrottle={16} onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
     contentContainerStyle={{ paddingBottom: bottomInset + 24 }}>
-    <View style={styles.offset}><PageHeader title="Settings" subtitle="Your server. Your music." scroll={scroll} /></View>
+    <View style={styles.offset}><PageHeader title="Settings" scroll={scroll} /></View>
     <View style={styles.body}>
     <Text accessibilityRole="header" style={styles.sectionTitle}>Server</Text>
     <View style={styles.card}>

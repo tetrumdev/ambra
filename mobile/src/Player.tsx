@@ -31,6 +31,7 @@ import { Image } from "expo-image";
 import {
   command,
   currentTrack,
+  offlineActive,
   playingOutputs,
   sessionView,
   sessionViewAge,
@@ -38,7 +39,8 @@ import {
   type SessionView,
   type Track,
 } from "./client";
-import { Controls } from "./Controls";
+import { Controls, PlayPauseButton } from "./Controls";
+import { StatusDot } from "./StatusDot";
 import { AlbumCover } from "./AlbumCover";
 import { Artwork } from "./Artwork";
 import { LyricsView } from "./LyricsView";
@@ -265,9 +267,15 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
   );
   const view = useSyncExternalStore(subscribe, sessionView);
   const track = currentTrack(view);
-  // Shown at once, until the session moves on with the server's answer.
-  const [wanted, setWanted] = useState<{ playing: boolean; revision: number } | null>(null);
-  const revision = view?.revision ?? 0;
+  // Shown at once, and kept until the session says the same (or gives up on it): an answer that
+  // still has the old state, or a position report on the way, would flick the button back.
+  const [wanted, setWanted] = useState<boolean | null>(null);
+  const confirmed = wanted !== null && (view?.playing ?? false) === wanted;
+  useEffect(() => {
+    if (wanted === null) return;
+    const timer = setTimeout(() => setWanted(null), confirmed ? 0 : 3000);
+    return () => clearTimeout(timer);
+  }, [wanted, confirmed]);
   // A skip while playing keeps showing "playing": the output pauses for a moment while the next
   // song loads, which isn't a pause the listener asked for. It ends once the new song plays,
   // the listener pauses, or after a few seconds.
@@ -279,7 +287,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
     const timer = setTimeout(() => setSkipHold(null), holding ? 4000 : 0);
     return () => clearTimeout(timer);
   }, [skipHold, holding]);
-  const playing = holding ? true : wanted?.revision === revision ? wanted.playing : (view?.playing ?? false);
+  const playing = holding ? true : wanted ?? (view?.playing ?? false);
   const duration = view?.duration || track?.durationSeconds || 0;
   const disabled = !track || !view?.output;
   const send = (action: string, details?: Record<string, unknown>) => {
@@ -297,7 +305,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
     });
   };
   const toggle = () => {
-    setWanted({ playing: !playing, revision });
+    setWanted(!playing);
     send(playing ? "pause" : "play");
   };
   const byId = new Map(view?.queue.tracks?.map(item => [item.globalId, item]));
@@ -425,12 +433,13 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
   });
   const backgroundStyle = useAnimatedStyle(() => {
     const p = frame.get().expansion;
-    // Barely lifted off black in the mini-player; its hairline gives it an edge.
-    const gray = 13 * (1 - p);
+    // A frosted lift off the page in the mini-player, its hairline giving it an edge; opaque
+    // black soon after it starts to open, under the swirl.
     // Rounded: a spring creeping toward 1 makes numbers like 1.2e-8, which aren't valid in a
     // color string and crashed the native side.
-    const level = Math.round(gray);
-    return { backgroundColor: `rgb(${level}, ${level}, ${level})`, borderColor: `rgba(255, 255, 255, ${Math.round(100 * (1 - p)) / 1000})` };
+    const level = Math.round(40 * (1 - p));
+    const alpha = Math.round(1000 * Math.min(1, 0.4 + 4 * p)) / 1000;
+    return { backgroundColor: `rgba(${level}, ${level}, ${level}, ${alpha})`, borderColor: `rgba(255, 255, 255, ${Math.round(140 * (1 - p)) / 1000})` };
   });
   // Transforms only: moving or resizing with left/top would lay the player out again every frame.
   const artStyle = useAnimatedStyle(() => {
@@ -495,7 +504,8 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
     return { transform: [{ translateY: d * 10 }, { scale: 1 - d * 0.05 }], opacity: 1 - d * 0.25 };
   });
 
-  const shownError = error ?? view?.error ?? connectionError;
+  // The connection's state is the corner dot's (StatusDot); this is playback's own.
+  const shownError = error ?? view?.error;
   const outputs = playingOutputs(view);
   const outputName = outputs.length > 1 ? `${outputs[0].deviceName} + ${outputs.length - 1}` : view?.output?.deviceName;
   const shownArtist = (!expanded && shownError) || (track?.artist ?? (expanded
@@ -549,7 +559,12 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
           </Animated.View>
           <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.shade, shadeStyle]} />
         </Animated.View>
-        <Animated.View pointerEvents="none" style={[styles.surface, styles.surfaceBackground, surfaceStyle, backgroundStyle]} />
+        <Animated.View pointerEvents="none" style={[styles.surface, styles.surfaceBackground, surfaceStyle, backgroundStyle]}>
+          {/* Frosted like the dock under it while small; gone well before the player is open. */}
+          {!expanded && <Animated.View style={[StyleSheet.absoluteFill, miniStyle]}>
+            <BlurView style={StyleSheet.absoluteFill} tint="dark" intensity={55} blurTarget={libraryBackdrop} blurMethod="dimezisBlurViewSdk31Plus" />
+          </Animated.View>}
+        </Animated.View>
         <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFill, { borderTopLeftRadius: screenCornerRadius, borderTopRightRadius: screenCornerRadius, overflow: "hidden" }, swirlStyle]}>
           {/* Darkened like the desktop lyrics view, and more behind the white controls. */}
           <Swirl track={track} playing={playing && expanded} darkened />
@@ -621,7 +636,8 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
                   <Touchable accessibilityRole="button" accessibilityLabel={`Open player${track ? `: ${track.name}, ${track.artist}` : ""}`} accessibilityHint="Swipe up to open, sideways to skip" scale={0.98} haptic="soft" onPress={openPlayer} style={StyleSheet.absoluteFill}><View /></Touchable>
                 </View>
               </GestureDetector>
-              <Touchable accessibilityRole="button" accessibilityLabel={playing ? "Pause" : "Play"} disabled={disabled} haptic="firm" hapticOnPressIn scale={0.8} onPress={toggle} style={styles.miniButton}><Icon name={playing ? "pause" : "play"} size={20} /></Touchable>
+              <Touchable accessibilityRole="button" accessibilityLabel={`Change audio output, currently ${outputName ?? "none selected"}`} haptic="select" scale={0.8} onPress={() => setOutputOpen(true)} style={styles.miniButton}><Icon name="output" size={19} color={view?.output ? colors.secondary : colors.muted} /></Touchable>
+              <PlayPauseButton playing={playing} disabled={disabled} size={24} onToggle={toggle} />
               <MiniProgress view={view} duration={duration} shown={!expanded} />
             </Animated.View>
           </Animated.View>
@@ -632,6 +648,7 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
       <SheetHosts />
       <ContextMenuHost />
       <ToastHost bottom={expanded ? insets.bottom + 72 : dockHeight + 8} />
+      <StatusDot message={connectionError} offline={offlineActive()} hidden={expanded} />
     </View>
   );
 }

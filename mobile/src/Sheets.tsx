@@ -91,7 +91,7 @@ function DownloadSheet({ request, onClose }: { request: DownloadRequest; onClose
       <Text style={styles.title} numberOfLines={2}>Download {request.title}</Text>
       <Text style={styles.detail}>{songs(request.tracks.length)}</Text>
     </View>}>
-      {close => <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+      {close => <ScrollView scrollsToTop={false} style={styles.body} contentContainerStyle={styles.bodyContent}>
         {request.tracks.length === 0 ? <Text style={styles.error}>None of these songs can be downloaded. Only songs from a streaming service can.</Text>
           : step === "started" ? <>
             {progress.length === 0 && <Text style={styles.detail}>Download started.</Text>}
@@ -152,7 +152,7 @@ export function PlaylistPicker({ tracks, onClose }: { tracks: Track[]; onClose: 
   const single = tracks.length === 1 ? tracks[0] : null;
   return (
     <Sheet label="Add to Playlist" tall onClose={onClose} grip={<View style={styles.heading}><Text style={styles.title}>Add to Playlist</Text></View>}>
-      {() => <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent} keyboardShouldPersistTaps="handled">
+      {() => <ScrollView scrollsToTop={false} style={styles.body} contentContainerStyle={styles.bodyContent} keyboardShouldPersistTaps="handled">
         <View style={styles.create}>
           <Field value={name} onChangeText={setName} placeholder="New playlist" style={styles.input} accessibilityLabel="New AMBRA playlist name" />
           <Button title="Create" variant="primary" disabled={!name.trim() || busy} onPress={() => add(() => createPlaylist(name, tracks), name.trim())} />
@@ -193,7 +193,7 @@ export function CreditsSheet({ track, onClose }: { track: Track; onClose: () => 
       <Text style={styles.title} numberOfLines={2}>Credits</Text>
       <Text style={styles.detail} numberOfLines={1}>{track.name} · {track.artist}</Text>
     </View>}>
-      {() => <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
+      {() => <ScrollView scrollsToTop={false} style={styles.body} contentContainerStyle={styles.bodyContent}>
         {!credits && !error && <ActivityIndicator color={colors.muted} style={styles.loading} />}
         {error && <Text style={styles.error}>{error}</Text>}
         {credits?.credits.length === 0 && <Text style={styles.detail}>No credits are available for this song.</Text>}

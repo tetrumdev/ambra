@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Unpaired, follow, restore, networkStatus } from "./src/client";
+import { Unpaired, follow, restore, networkStatus, serverAnswering } from "./src/client";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
 import { colors } from "./src/theme";
@@ -15,7 +15,7 @@ import { forgetState } from "./src/sharedState";
 import { useOfflineSession } from "./src/offlineSession";
 
 /** The server counts as away after this long out of reach, and downloads play from the phone. */
-const OFFLINE_AFTER_MS = 10_000;
+const OFFLINE_AFTER_MS = 5_000;
 
 type Saved = { address: string | null; paired: boolean };
 
@@ -61,8 +61,8 @@ export default function App() {
     let away = false;
     const refresh = () => void networkStatus().then(status => {
       if (disposed) return;
-      const connected = status.state.startsWith("Connected");
-      setNetworkError(connected ? null : status.error ?? `Server ${status.state.toLowerCase()}`);
+      const connected = status.state.startsWith("Connected") && serverAnswering();
+      setNetworkError(connected ? null : status.error ?? (status.state.startsWith("Connected") ? "The server isn't answering" : `Server ${status.state.toLowerCase()}`));
       // Back from being away: what changed meanwhile is loaded again. (Not inside the state
       // updater: the library publishing there updates other components mid-render.)
       if (connected && away) void refreshLibrary();

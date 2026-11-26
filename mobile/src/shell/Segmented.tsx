@@ -30,7 +30,7 @@ export function Segmented<T extends string>({ items, value, onChange, label }: {
   }, [frame, left, right]);
   const pill = useAnimatedStyle(() => ({ left: left.get(), width: Math.max(0, right.get() - left.get()) }));
   return (
-    <ScrollView horizontal block={page ?? undefined} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row} accessibilityRole="radiogroup" accessibilityLabel={label}>
+    <ScrollView horizontal scrollsToTop={false} block={page ?? undefined} showsHorizontalScrollIndicator={false} contentContainerStyle={styles.row} accessibilityRole="radiogroup" accessibilityLabel={label}>
       <View>
         <Animated.View pointerEvents="none" style={[styles.pill, pill, !frame && styles.hidden]} />
         <View style={styles.items}>
