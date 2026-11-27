@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { AppState, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability } from "./src/client";
+import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability, wantsOffline } from "./src/client";
 import { deviceOnline, subscribeDevicePath } from "./modules/ambra-network/src";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
@@ -38,8 +38,10 @@ export default function App() {
   const [now, setNow] = useState(() => Date.now());
   const [cut, setCut] = useState(false);
   const [busy, setBusy] = useState(false);
+  // A play or skip the server didn't answer: downloads take over at once.
+  const [wanted, setWanted] = useState(false);
   const { phone } = useDownloads();
-  const offline = paired && unreachableSince !== null && phone.size > 0 && !busy && (cut || now - unreachableSince >= OFFLINE_AFTER_MS);
+  const offline = paired && unreachableSince !== null && phone.size > 0 && (wanted || (!busy && (cut || now - unreachableSince >= OFFLINE_AFTER_MS)));
   useOfflineSession(offline);
   useEffect(() => { void startPhoneDownloads(); }, []);
   useEffect(() => {
@@ -72,6 +74,7 @@ export default function App() {
       const connected = !noNetwork && status.state.startsWith("Connected") && serverAnswering();
       setCut(noNetwork);
       setBusy(!connected && playingHere());
+      setWanted(!connected && wantsOffline());
       setNetworkError(connected ? null : noNetwork ? "No network" : status.error ?? (status.state.startsWith("Connected") ? "The server isn't answering" : `Server ${status.state.toLowerCase()}`));
       // Back from being away: what changed meanwhile is loaded again. (Not inside the state
       // updater: the library publishing there updates other components mid-render.)

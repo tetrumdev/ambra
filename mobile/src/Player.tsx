@@ -648,8 +648,8 @@ export function Player({ connectionError = null, onChangeServer }: { connectionE
                   <Touchable accessibilityRole="button" accessibilityLabel={`Open player${track ? `: ${track.name}, ${track.artist}` : ""}`} accessibilityHint="Swipe up to open, sideways to skip" scale={0.98} haptic="soft" onPress={openPlayer} style={StyleSheet.absoluteFill}><View /></Touchable>
                 </View>
               </GestureDetector>
-              <Touchable accessibilityRole="button" accessibilityLabel={`Change audio output, currently ${outputName ?? "none selected"}`} haptic="select" scale={0.8} onPress={() => setOutputOpen(true)} style={styles.miniButton}><Icon name="output" size={19} color={view?.output ? colors.secondary : colors.muted} /></Touchable>
-              <PlayPauseButton playing={playing} disabled={disabled} size={24} onToggle={toggle} />
+              <Touchable accessibilityRole="button" accessibilityLabel={`Change audio output, currently ${outputName ?? "none selected"}`} haptic="select" scale={0.8} onPress={() => setOutputOpen(true)} style={styles.miniButton}><Icon name="output" size={16} color={view?.output ? colors.secondary : colors.muted} /></Touchable>
+              <PlayPauseButton playing={playing} disabled={disabled} size={17} onToggle={toggle} />
               <MiniProgress view={view} duration={duration} shown={!expanded} />
             </Animated.View>
           </Animated.View>

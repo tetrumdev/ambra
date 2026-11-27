@@ -2,7 +2,7 @@ import { createAudioPlayer } from "expo-audio";
 import { useEffect } from "react";
 import type { Track } from "../../desktop/src/types/music";
 import { configureAudioSession } from "./audioSession";
-import { notifySession, setOfflineSession, type QueueSnapshot, type SessionView } from "./client";
+import { lastServerQueue, notifySession, setOfflineSession, type QueueSnapshot, type SessionView } from "./client";
 import { downloadsSnapshot, phoneDownloadUrl } from "./downloads";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
@@ -23,7 +23,7 @@ export class OfflineSession {
   private released = false;
   private current: SessionView;
 
-  constructor(private urlFor: (id: string) => string | null, private changed: () => void) {
+  constructor(private urlFor: (id: string) => string | null, private changed: () => void, queue: QueueSnapshot | null = null) {
     this.engine = new PhonePlayback({
       create: source => createAudioPlayer(source, { updateInterval: 500, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
@@ -39,6 +39,8 @@ export class OfflineSession {
       systemVolume,
       setSystemVolume,
     });
+    // Carries on from the server's queue, with the songs that are downloaded here.
+    if (queue) this.adopt(queue);
     this.current = this.build();
   }
 
@@ -94,7 +96,12 @@ export class OfflineSession {
 
   /** Plays songs that aren't downloaded here are left out, since nothing could play them. */
   async change(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play: boolean) {
-    const next = change(this.queue, this.queueRevision);
+    this.adopt(change(this.queue, this.queueRevision));
+    if (play || this.queue.current?.globalTrackId !== this.loadedId) await this.load(play);
+    this.update();
+  }
+
+  private adopt(next: QueueSnapshot) {
     const playable = (item: { globalTrackId: string }) => !!this.urlFor(item.globalTrackId);
     this.queue = {
       ...next,
@@ -106,8 +113,6 @@ export class OfflineSession {
       this.queue = { ...this.queue, upcoming: this.queue.upcoming.filter(item => item !== current) };
     }
     this.queueRevision++;
-    if (play || this.queue.current?.globalTrackId !== this.loadedId) await this.load(play);
-    this.update();
   }
 
   async command(action: string, details: Record<string, unknown> = {}) {
@@ -156,7 +161,7 @@ export class OfflineSession {
 export function useOfflineSession(active: boolean) {
   useEffect(() => {
     if (!active || downloadsSnapshot().phone.size === 0) return;
-    const session = new OfflineSession(phoneDownloadUrl, notifySession);
+    const session = new OfflineSession(phoneDownloadUrl, notifySession, lastServerQueue());
     setOfflineSession(session);
     return () => {
       setOfflineSession(null);

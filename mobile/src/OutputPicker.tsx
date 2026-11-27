@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import {
-  GENERAL_STAGE, command, currentSession, endpointRequest, endpoints, playingOutputs, sessions, setSession, setStages,
+  GENERAL_STAGE, command, currentSession, endpointRequest, endpoints, offlineActive, playingOutputs, sessions, setSession, setStages,
   type Endpoint, type Output, type Session, type SessionView, type Stage,
 } from "./client";
 import { Icon } from "./Icons";
@@ -78,7 +78,8 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
   const rows: Row[] = [];
   if (phone?.id) rows.push({
     output: { endpointId: phone.id, endpointName: phone.name, deviceId: PHONE_DEVICE_ID, deviceName: "This phone" },
-    syncs: true, offline: !phone.ready, phone: true, detail: phone.error ?? (!phone.ready ? "Connecting…" : undefined),
+    // This phone can always play: out of reach of the server it plays its downloads.
+    syncs: true, offline: !phone.ready && !offlineActive(), phone: true, detail: offlineActive() ? "Playing downloads" : !phone.ready ? "Waiting for the server" : undefined,
   });
   const others: Row[] = [];
   for (const endpoint of devices) {

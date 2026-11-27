@@ -93,3 +93,17 @@ test("a skip with nothing to skip to resumes, and a lost one becomes a pause", a
   created[0].emit({ isLoaded: true, playing: false, isBuffering: false, currentTime: 0 });
   expect(playback.status()).toMatchObject({ buffering: false, control: { seq: 1, playing: false } });
 });
+
+test("a player that can swap songs keeps playing them, so iOS keeps the audio session", async () => {
+  const created: { source: string; player: PhonePlayer; emit: Listener }[] = [];
+  const swapped: string[] = [];
+  const base = host(created, []);
+  const playback = new PhonePlayback({ ...base, create: source => Object.assign(base.create(source), { replace: (url: string) => { swapped.push(url); } }) });
+  await playback.execute("load_native_audio", { source: "/api/a", nextSource: "/api/b", positionSeconds: 0, autoplay: true });
+  expect(playback.skipToQueued()).toBe(true);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  expect(created).toHaveLength(1);
+  expect(swapped).toEqual(["bridge/api/b"]);
+  expect(created[0].player.playing).toBe(true);
+  expect(playback.status().currentSource).toBe("/api/b");
+});

@@ -11,7 +11,7 @@ export const HOLD_MS = 380;
  * How long a touch waits before it shows as a press, as iOS lists do: one that turns into a
  * scroll or a swipe meanwhile never sinks or buzzes. A quick tap still lands at once.
  */
-const PRESS_DELAY_MS = 90;
+const PRESS_DELAY_MS = 140;
 
 /** Where a touch landed on screen, so menus can open from it. */
 export type Anchor = { x: number; y: number };

@@ -5,6 +5,8 @@ export const PHONE_DEVICE_ID = "system";
 export type PhonePlayer = Pick<AudioPlayer, "playing" | "isLoaded" | "volume" | "currentTime" | "duration" | "play" | "pause" | "seekTo" | "remove" | "setActiveForLockScreen" | "updateLockScreenMetadata"> & {
   /** Missing from players that never join a synced group. */
   setPlaybackRate?: AudioPlayer["setPlaybackRate"];
+  /** Swaps the song in place; without it every song gets a new player. */
+  replace?: AudioPlayer["replace"];
   addListener<Event extends "playbackStatusUpdate" | "remoteCommand">(event: Event, callback: AudioEvents[Event]): { remove(): void };
 };
 type Host = {
@@ -412,7 +414,10 @@ export class PhonePlayback {
 
   private async load(source: string, position: number, autoplay: boolean, keepSync = false) {
     const sync = this.sync;
-    this.release();
+    // The next song goes into the same player: removing it lets expo-audio end the audio session,
+    // and iOS won't start one again from the background, so a skip there fell silent.
+    const kept = this.player?.replace && !this.error && !this.native?.error ? this.player : null;
+    this.release(kept);
     if (keepSync && sync) {
       // A new player plays at normal speed; the group's timeline carries on.
       this.sync = sync;
@@ -429,16 +434,21 @@ export class PhonePlayback {
       const url = this.host.mediaUrl(source);
       await this.host.activate();
       if (controller.signal.aborted || !this.host.ownsOutput()) throw new Error("This phone is no longer the selected output.");
-      const player = this.host.create(url);
+      const player = kept ?? this.host.create(url);
       this.player = player;
-      // With the system volume in charge, the player itself stays at full.
-      player.volume = this.host.setSystemVolume ? 1 : this.volume / 100;
-      this.subscription = player.addListener("playbackStatusUpdate", status => this.observe(player, status));
-      this.remoteSubscription = player.addListener("remoteCommand", event => {
-        if (this.player === player && this.host.ownsOutput() && (event.action === "next" || event.action === "previous")) {
-          this.host.transport(event.action);
-        }
-      });
+      if (kept) {
+        if (!autoplay) kept.pause();
+        kept.replace!(url);
+      } else {
+        // With the system volume in charge, the player itself stays at full.
+        player.volume = this.host.setSystemVolume ? 1 : this.volume / 100;
+        this.subscription = player.addListener("playbackStatusUpdate", status => this.observe(player, status));
+        this.remoteSubscription = player.addListener("remoteCommand", event => {
+          if (this.player === player && this.host.ownsOutput() && (event.action === "next" || event.action === "previous")) {
+            this.host.transport(event.action);
+          }
+        });
+      }
       await this.ready(player, controller.signal);
       await player.seekTo(Math.max(0, position), 0, 0);
       if (controller.signal.aborted || !this.host.ownsOutput()) throw new Error("Playback was stopped.");
@@ -544,14 +554,17 @@ export class PhonePlayback {
     }
   }
 
-  release() {
+  /** Stops and removes the player; `keep`, the next song's, stays as it is with its listeners. */
+  release(keep: PhonePlayer | null = null) {
     this.clearSync();
     this.loading?.abort();
     this.loading = null;
-    this.subscription?.remove();
-    this.subscription = null;
-    this.remoteSubscription?.remove();
-    this.remoteSubscription = null;
+    if (!keep) {
+      this.subscription?.remove();
+      this.subscription = null;
+      this.remoteSubscription?.remove();
+      this.remoteSubscription = null;
+    }
     this.metadataSignature = "";
     const player = this.player;
     this.player = null;
@@ -564,7 +577,7 @@ export class PhonePlayback {
     this.previous = null;
     this.intendedPlaying = false;
     this.skipping = false;
-    if (player) {
+    if (player && player !== keep) {
       player.pause();
       player.setActiveForLockScreen(false);
       player.remove();

@@ -7,7 +7,7 @@ import { scheduleOnRN } from "react-native-worklets";
 import { Artwork } from "../Artwork";
 import type { Track } from "../client";
 import { Icon, type IconName } from "../Icons";
-import { colors, fonts, glass, haptic, radius, sizes, space, textSize } from "../theme";
+import { colors, fonts, haptic, radius, space, textSize } from "../theme";
 import type { Anchor, Frame } from "../Touchable";
 
 export type MenuAction = { label: string; icon: IconName; destructive?: boolean; disabled?: boolean; run: () => void; section?: boolean };
@@ -37,7 +37,7 @@ export function closeMenu() { dismiss?.(); }
 export const menuOpen = () => current !== null;
 export function subscribeMenu(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; }
 
-const WIDTH = 252;
+const WIDTH = 236;
 const EDGE = 12;
 const GAP = 10;
 const opening = { duration: 240, easing: Easing.bezier(0.16, 1, 0.3, 1) };
@@ -112,9 +112,9 @@ function MenuPanel({ request, onClosed }: { request: MenuRequest; onClosed: () =
         onAccessibilityEscape={() => close()}
         style={[styles.panel, { left, top, width: panelWidth, height: panelHeight, transformOrigin: `${originX}px ${originY}px 0px` }, !size && styles.measuring, panelStyle]}
       >
-        <BlurView pointerEvents="none" tint="dark" intensity={50} style={StyleSheet.absoluteFill} />
+        <BlurView pointerEvents="none" tint="dark" intensity={70} style={StyleSheet.absoluteFill} />
         <ScrollView scrollsToTop={false} bounces={false} scrollEnabled={!!size && !!panelHeight && panelHeight < size.height} showsVerticalScrollIndicator={false}>
-          <View onLayout={event => { if (!size) setSize(event.nativeEvent.layout); }}>
+          <View style={styles.list} onLayout={event => { if (!size) setSize(event.nativeEvent.layout); }}>
             {!lifted && (request.track || request.title) && <View style={styles.heading}>
               {request.track && <Artwork track={request.track} size={40} />}
               <View style={styles.headingText}>
@@ -123,7 +123,7 @@ function MenuPanel({ request, onClosed }: { request: MenuRequest; onClosed: () =
               </View>
             </View>}
             {request.actions.map((action, index) => (
-              <MenuItem key={action.label} action={action} divider={index > 0 || (!lifted && !!(request.track || request.title))} onPress={() => close(action.run)} />
+              <MenuItem key={action.label} action={action} rule={(index > 0 && !!action.section) || (index === 0 && !lifted && !!(request.track || request.title))} onPress={() => close(action.run)} />
             ))}
           </View>
         </ScrollView>
@@ -132,25 +132,29 @@ function MenuPanel({ request, onClosed }: { request: MenuRequest; onClosed: () =
   );
 }
 
-function MenuItem({ action, divider, onPress }: { action: MenuAction; divider: boolean; onPress: () => void }) {
+/** Desktop's menu option (.uiMenuOption): a rounded highlight under the finger, no rules between options. */
+function MenuItem({ action, rule, onPress }: { action: MenuAction; rule: boolean; onPress: () => void }) {
   const tint = action.destructive ? colors.error : colors.text;
   return (
-    <Pressable
-      accessibilityRole="menuitem"
-      accessibilityState={{ disabled: action.disabled }}
-      disabled={action.disabled}
-      onPressIn={() => haptic.tick()}
-      onPress={onPress}
-      style={({ pressed }) => [styles.item, divider && (action.section ? styles.section : styles.divider), pressed && styles.pressed, action.disabled && styles.disabled]}
-    >
-      <Text style={[styles.label, { color: tint }]} numberOfLines={1}>{action.label}</Text>
-      <Icon name={action.icon} size={sizes.menuIcon} color={tint} />
-    </Pressable>
+    <>
+      {rule && <View style={styles.rule} />}
+      <Pressable
+        accessibilityRole="menuitem"
+        accessibilityState={{ disabled: action.disabled }}
+        disabled={action.disabled}
+        onPressIn={() => haptic.tick()}
+        onPress={onPress}
+        style={({ pressed }) => [styles.item, pressed && styles.pressed, action.disabled && styles.disabled]}
+      >
+        <Text style={[styles.label, { color: tint }]} numberOfLines={1}>{action.label}</Text>
+        <Icon name={action.icon} size={15} color={action.destructive ? colors.error : colors.secondary} />
+      </Pressable>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  scrim: { backgroundColor: "rgba(0, 0, 0, 0.62)" },
+  scrim: { backgroundColor: "rgba(0, 0, 0, 0.5)" },
   lifted: {
     position: "absolute",
     borderRadius: radius.md,
@@ -163,22 +167,27 @@ const styles = StyleSheet.create({
   panel: {
     position: "absolute",
     overflow: "hidden",
-    borderRadius: radius.lg,
+    borderRadius: radius.md + 2,
     borderCurve: "continuous",
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: glass.border,
-    backgroundColor: glass.panel,
+    borderColor: "rgba(255, 255, 255, 0.14)",
+    // Desktop's --glass-menu, a little clearer for the stronger blur behind it.
+    backgroundColor: "rgba(29, 29, 29, 0.62)",
+    shadowColor: "black",
+    shadowOpacity: 0.45,
+    shadowRadius: 32,
+    shadowOffset: { width: 0, height: 14 },
   },
+  list: { padding: 5 },
   measuring: { opacity: 0 },
-  heading: { flexDirection: "row", alignItems: "center", gap: space.md, padding: space.md },
+  heading: { flexDirection: "row", alignItems: "center", gap: space.md, padding: 7 },
   headingText: { flex: 1, gap: 2 },
   title: { color: colors.text, fontFamily: fonts.sans, fontSize: textSize.small, fontWeight: "600" },
   subtitle: { color: colors.muted, fontFamily: fonts.sans, fontSize: textSize.detail },
-  item: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 46, paddingHorizontal: space.lg },
-  divider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: glass.border },
-  // A thicker rule between playback and editing, as desktop's menus group them.
-  section: { borderTopWidth: 6, borderTopColor: "rgba(0, 0, 0, 0.45)" },
+  item: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 42, paddingHorizontal: 11, borderRadius: radius.sm + 1, borderCurve: "continuous" },
+  // Between playback and editing, as desktop's menus group them.
+  rule: { height: StyleSheet.hairlineWidth, marginVertical: 5, marginHorizontal: 6, backgroundColor: "rgba(255, 255, 255, 0.12)" },
   pressed: { backgroundColor: "rgba(255, 255, 255, 0.1)" },
   disabled: { opacity: 0.4 },
-  label: { flex: 1, fontFamily: fonts.sans, fontSize: 15 },
+  label: { flex: 1, fontFamily: fonts.sans, fontSize: 14, letterSpacing: 0.1 },
 });

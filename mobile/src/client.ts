@@ -315,7 +315,7 @@ export function subscribeReachability(listener: () => void) {
 }
 function answered(yes: boolean) {
   const before = serverAnswering();
-  if (yes) answeredAt = Date.now();
+  if (yes) { answeredAt = Date.now(); offlineWanted = false; }
   else unansweredAt = Date.now();
   if (serverAnswering() !== before) for (const listener of reachabilityListeners) listener();
 }
@@ -535,9 +535,32 @@ type Offline = {
   change(change: (queue: QueueSnapshot, revision: number) => QueueSnapshot, play: boolean): Promise<void>;
 };
 let offline: Offline | null = null;
+const offlineWaiters = new Set<(session: Offline) => void>();
 export function setOfflineSession(next: Offline | null) {
   offline = next;
+  if (next) for (const waiter of offlineWaiters) waiter(next);
   show();
+}
+/** A play or skip found the server gone: downloads take over at once, not after the usual wait. */
+let offlineWanted = false;
+export const wantsOffline = () => offlineWanted;
+/** The queue as the server last showed it, for downloads to carry on from. */
+export const lastServerQueue = () => view?.queue ?? null;
+/**
+ * Replays a listener's play or skip on the phone alone when the server didn't answer it (App.tsx
+ * switches to downloads); the error stands when the server did answer, or nothing is downloaded.
+ */
+async function offlineInstead<T>(reason: unknown, work: (session: Offline) => Promise<T>): Promise<T> {
+  if (reason instanceof Unpaired || serverAnswering()) throw reason;
+  offlineWanted = true;
+  for (const listener of reachabilityListeners) listener();
+  const session = offline ?? await new Promise<Offline | null>(resolve => {
+    const done = (found: Offline | null) => { clearTimeout(timer); offlineWaiters.delete(done); resolve(found); };
+    const timer = setTimeout(() => done(null), 2000);
+    offlineWaiters.add(done);
+  });
+  if (!session) throw reason;
+  return work(session);
 }
 export const offlineActive = () => offline !== null;
 /** Lets the offline session announce its changes to everything following the session. */
@@ -747,7 +770,7 @@ export function command(action: string, details: Record<string, unknown> = {}) {
       method: "POST",
       body: JSON.stringify({ action, ...details }),
     }));
-  }).then(() => { settle?.(view); }, reason => { settle?.(null); throw reason; });
+  }).then(() => { settle?.(view); }, reason => { settle?.(null); return offlineInstead(reason, session => session.command(action, details)); });
 }
 
 export function endpoints(signal: AbortSignal) {
@@ -829,7 +852,7 @@ export function changeQueue(change: (queue: QueueSnapshot, revision: number) => 
       }
     }
     throw new Error("The queue keeps changing on another device. Please try again.");
-  }).then(() => { settle?.(view); }, reason => { settle?.(null); throw reason; });
+  }).then(() => { settle?.(view); }, reason => { settle?.(null); return offlineInstead(reason, session => session.change(change, play)); });
 }
 
 export type MobilePlaylist = { id: string; name: string; trackIds: string[]; packages?: string[][] };

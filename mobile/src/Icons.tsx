@@ -25,7 +25,8 @@ const assets = {
   edit: require("../../desktop/public/edit.svg"),
   duplicate: require("../../desktop/public/duplicate.svg"),
   playlistAdd: require("../../desktop/public/playlist-add.svg"),
-  back: require("../../desktop/public/back.svg"),
+  /** A plain chevron for going back (desktop's back is the skip mark, which reads as "previous song" here). */
+  back: require("../assets/chevron.svg"),
   sparkle: require("../../desktop/public/sparkle.svg"),
   artist: require("../../desktop/public/artist.svg"),
   volumeMid: require("../../desktop/public/volume-mid.svg"),

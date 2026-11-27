@@ -100,7 +100,7 @@ export function SwipeRow({ start, end, children, enabled = true }: {
 }
 
 const styles = StyleSheet.create({
-  frame: { overflow: "hidden", borderRadius: 12, borderCurve: "continuous" },
+  frame: { overflow: "hidden" },
   // Deep amber on black, like desktop's selection; red for removing.
   wash: { backgroundColor: "#1d1303" },
   destructive: { backgroundColor: "#260a0a" },
