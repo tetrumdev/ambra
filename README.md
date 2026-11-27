@@ -54,6 +54,7 @@ AMBRA is an open-source music player for audiophiles, music lovers, and everyday
   - [x] Qobuz
   - [x] Spotify
 - [ ] Visualizer
+- [ ] Classical Mode
 - [ ] Add additional streaming and downloading support
   - [ ] Youtube Music
   - [ ] Jellyfin
