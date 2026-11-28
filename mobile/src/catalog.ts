@@ -4,7 +4,7 @@ import { SearchSession, type SearchSnapshot } from "../../desktop/src/utils/sear
 import { enrichCatalogPage } from "../../desktop/src/utils/catalogSearch";
 import { SearchCache } from "../../desktop/src/utils/searchCache";
 import { albumTracks } from "./library";
-import { phoneMediaUrl, request } from "./client";
+import { phoneMediaUrl, request, serverAddress } from "./client";
 import { services, type EnabledServices, type Service } from "./servicePreferences";
 
 export const serviceStatus = (signal: AbortSignal) => request<ServiceAuthStatus>("/api/auth/status", { signal, timeoutMs: 10_000 });
@@ -49,8 +49,21 @@ export async function catalogPage(query: string, provider: Service, signal: Abor
 const firstPageFromCatalog = (query: string, provider: Service, signal: AbortSignal, offset: number, limit: number) =>
   offset === 0 ? catalogPage(query, provider, signal) : searchPage(query, provider, signal, offset, limit);
 
+let searchProviders: { at: number; server: string; request: Promise<{ providers: Service[] }> } | null = null;
+
+/** The services search can ask; one answer serves the searches of the next minute. Callers check their own signal. */
+export async function configuredProviders() {
+  if (!searchProviders || searchProviders.server !== serverAddress() || Date.now() - searchProviders.at > 60_000) {
+    // Not tied to one search's signal: the next keystroke's search shares it.
+    const entry = { at: Date.now(), server: serverAddress(), request: request<{ providers: Service[] }>("/api/search/providers", { timeoutMs: 10_000 }) };
+    searchProviders = entry;
+    entry.request.catch(() => { if (searchProviders === entry) searchProviders = null; });
+  }
+  return searchProviders.request;
+}
+
 export async function openSearch(query: string, selected: EnabledServices, provider: "all" | Service, signal: AbortSignal, onUpdate: (snapshot: SearchSnapshot) => void) {
-  const configured = await request<{ providers: Service[] }>("/api/search/providers", { signal, timeoutMs: 10_000 });
+  const configured = await configuredProviders();
   if (signal.aborted) return null;
   const providers = services.filter(service => selected[service] && configured.providers.includes(service) && (provider === "all" || provider === service));
   const session = new SearchSession({ query, providers, combined: provider === "all", fetchPage: firstPageFromCatalog, onUpdate, albumTracks });
@@ -68,12 +81,14 @@ type SearchCallbacks = {
 };
 
 /**
- * The search screen's search for one query, after a short debounce: songs, artists and albums
+ * The search screen's search for one query, after the same 150 ms debounce as desktop: songs, artists and albums
  * from one session, ranked and ordered as on desktop. Nothing is reported once `signal` aborts.
  * Returns a cleanup that cancels the debounce. Kept apart from the screen so the search
  * benchmark (bench/) runs exactly what the phone runs.
  */
 export function startSearch(trimmed: string, selected: EnabledServices, provider: "all" | Service, signal: AbortSignal, report: SearchCallbacks) {
+  // Asked during the debounce, so the search starts as soon as it ends.
+  if (trimmed) configuredProviders().catch(() => {});
   const timer = setTimeout(() => {
     if (!trimmed) return;
     void openSearch(trimmed, selected, provider, signal, next => {
@@ -81,6 +96,6 @@ export function startSearch(trimmed: string, selected: EnabledServices, provider
     }).then(next => { if (!signal.aborted) report.session(next); }).catch(reason => {
       if (!signal.aborted) report.error(reason);
     });
-  }, 300);
+  }, 150);
   return () => clearTimeout(timer);
 }

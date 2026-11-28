@@ -171,7 +171,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
   const refreshSearchProviders = useCallback(() => {
     if (localOnly) return;
     const request = ++searchProvidersRequest.current;
-    void configuredSearchProviders().then((providers) => {
+    void configuredSearchProviders(undefined, true).then((providers) => {
       if (request !== searchProvidersRequest.current) return;
       setSearchProviders(providers);
       setPreferences((current) => current.search.provider !== "all" && !providers.includes(current.search.provider)

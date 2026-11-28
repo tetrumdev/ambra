@@ -263,11 +263,27 @@ export type SearchPage = {
   nextOffset: number | null;
 };
 
-export async function configuredSearchProviders(signal?: AbortSignal): Promise<StreamingProvider[]> {
-  const response = await fetch(`${serverBaseUrl}/api/search/providers`, { signal });
-  if (!response.ok) throw new Error("Could not load available music services");
-  const body = await response.json() as { providers: StreamingProvider[] };
-  return body.providers;
+let searchProviders: { at: number; server: string; request: Promise<StreamingProvider[]> } | null = null;
+
+/**
+ * The services search can ask. One answer serves every caller for a minute, so a search doesn't
+ * wait on this round trip; `fresh` asks again, as the app does whenever a service signs in or out.
+ */
+export async function configuredSearchProviders(signal?: AbortSignal, fresh = false): Promise<StreamingProvider[]> {
+  signal?.throwIfAborted();
+  if (fresh || !searchProviders || searchProviders.server !== serverBaseUrl || Date.now() - searchProviders.at > 60_000) {
+    // Not tied to the caller's signal: other searches share it.
+    const request = fetch(`${serverBaseUrl}/api/search/providers`, { signal: AbortSignal.timeout(8000) }).then(async response => {
+      if (!response.ok) throw new Error("Could not load available music services");
+      return (await response.json() as { providers: StreamingProvider[] }).providers;
+    });
+    const entry = { at: Date.now(), server: serverBaseUrl, request };
+    searchProviders = entry;
+    request.catch(() => { if (searchProviders === entry) searchProviders = null; });
+  }
+  const providers = await searchProviders.request;
+  signal?.throwIfAborted();
+  return providers;
 }
 
 export type ArtworkQuality = {

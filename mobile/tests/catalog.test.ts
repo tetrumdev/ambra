@@ -72,11 +72,15 @@ test("invalid cursors fail rather than repeating pages forever", async () => {
 });
 
 test("canceled discovery cannot start searches or publish stale results", async () => {
+  // Past the minute an earlier test's service list is reused for, so discovery is asked again.
+  const now = Date.now;
+  Date.now = () => now() + 120_000;
   let finish!: (value: Response) => void;
   globalThis.fetch = (() => new Promise<Response>(resolve => { finish = resolve; })) as unknown as typeof fetch;
   const abort = new AbortController();
   const updates: unknown[] = [];
   const searching = catalog.openSearch("old query", { tidal: true, qobuz: true, spotify: true }, "all", abort.signal, next => updates.push(next));
+  Date.now = now;
   abort.abort();
   finish(respond({ providers: ["tidal"] }));
   expect(await searching).toBeNull();

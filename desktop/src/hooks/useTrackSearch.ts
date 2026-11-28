@@ -72,9 +72,12 @@ export function startTrackSearch(query: string, provider: SearchProvider, sessio
       drain();
     }
   };
+  // Asked during the debounce rather than after it; usually answered from the last minute's list.
+  const discovery = configuredSearchProviders(controller.signal);
+  discovery.catch(() => {});
   const timer = window.setTimeout(() => {
     const discoveryTimeout = window.setTimeout(() => controller.abort(), 8000);
-    void configuredSearchProviders(controller.signal).then(providers => {
+    void discovery.then(providers => {
       window.clearTimeout(discoveryTimeout);
       if (controller.signal.aborted) return;
       const selected = provider === "all" ? providers : providers.filter(value => value === provider);
