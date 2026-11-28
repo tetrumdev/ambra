@@ -68,22 +68,26 @@ function percentile(values: number[], p: number) {
 const mean = (values: number[]) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
 const rate = (values: (boolean | null)[]) => mean(values.filter((value): value is boolean => value !== null).map(Number));
 
-type Timing = { first: number | null; settled: number | null; done: number | null; reshuffles: number; leadChanges: number; requests: number; upstream: number; byKind: Record<string, number>; cpu: number[] };
+type Timing = { first: number | null; settled: number | null; done: number | null; reshuffles: number; bySection: Record<string, number>; copySwaps: number; leadChanges: number; requests: number; upstream: number; byKind: Record<string, number>; cpu: number[] };
 
 const visible = (view: View) => view.tracks.length > 0 || view.albums.length > 0 || view.artists.length > 0;
 const signature = (view: View) => JSON.stringify([view.order[0], view.tracks.slice(0, 5).map(t => t.globalId), view.albums.slice(0, 5).map(a => a.id), view.artists.slice(0, 5).map(a => a.id)]);
 
 function timing(run: Run): Timing {
   const shown = run.views.filter(visible);
-  let reshuffles = 0, leadChanges = 0, settled: number | null = shown[0]?.at ?? null;
+  const bySection: Record<string, number> = { tracks: 0, albums: 0, artists: 0 };
+  let reshuffles = 0, leadChanges = 0, copySwaps = 0, settled: number | null = shown[0]?.at ?? null;
   for (let i = 1; i < shown.length; i++) {
     const before = shown[i - 1], after = shown[i];
     if (signature(before) !== signature(after)) settled = after.at;
     if (before.order[0] !== after.order[0]) leadChanges++;
     // A card that was on screen moved or went away; new cards filling empty places don't count.
-    for (const [a, b] of [[before.tracks.map(t => t.globalId), after.tracks.map(t => t.globalId)], [before.albums.map(x => x.id), after.albums.map(x => x.id)], [before.artists.map(x => x.id), after.artists.map(x => x.id)]]) {
-      if (a.slice(0, 5).some((id, index) => b[index] !== id)) reshuffles++;
+    for (const [section, a, b] of [["tracks", before.tracks.map(t => t.globalId), after.tracks.map(t => t.globalId)], ["albums", before.albums.map(x => x.id), after.albums.map(x => x.id)], ["artists", before.artists.map(x => x.id), after.artists.map(x => x.id)]] as const) {
+      if (a.slice(0, 5).some((id, index) => b[index] !== id)) { reshuffles++; bySection[section]++; }
     }
+    // The same song in the same place, shown from another copy (service or edition).
+    const song = (t: Track) => `${t.name.toLowerCase()}|${t.artist.toLowerCase()}`;
+    if (before.tracks.slice(0, 5).some((t, i) => after.tracks[i] && after.tracks[i].globalId !== t.globalId && song(after.tracks[i]) === song(t))) copySwaps++;
   }
   const requests = run.requests.filter(entry => entry.kind !== "other");
   const byKind: Record<string, number> = {};
@@ -91,7 +95,7 @@ function timing(run: Run): Timing {
   // The server answers a repeated search from its 5-minute cache; only the first goes upstream.
   const upstream = new Set(requests.filter(entry => entry.kind !== "providers").map(entry => entry.key)).size;
   const done = run.views.filter(view => !view.searching).at(-1)?.at ?? null;
-  return { first: shown[0]?.at ?? null, settled, done, reshuffles, leadChanges, requests: requests.length, upstream, byKind, cpu: run.cpu };
+  return { first: shown[0]?.at ?? null, settled, done, reshuffles, bySection, copySwaps, leadChanges, requests: requests.length, upstream, byKind, cpu: run.cpu };
 }
 
 /** Everything recorded for the query, plus what the run found: where the ideal ranking is looked for. */
@@ -157,7 +161,9 @@ function aggregate(results: QueryResult[]) {
       firstP50: percentile(firsts, 0.5), firstP95: percentile(firsts, 0.95),
       settledP50: percentile(settles, 0.5), settledP95: percentile(settles, 0.95),
       neverShown: timings.filter(t => t.first === null).length,
-      reshufflesMean: mean(timings.map(t => t.reshuffles)), reshufflesP95: percentile(timings.map(t => t.reshuffles), 0.95),
+      reshufflesMean: mean(timings.map(t => t.reshuffles)),
+      reshufflesBySection: Object.fromEntries(["tracks", "albums", "artists"].map(section => [section, mean(timings.map(t => t.bySection?.[section] ?? 0))])),
+      copySwapsMean: mean(timings.map(t => t.copySwaps ?? 0)), reshufflesP95: percentile(timings.map(t => t.reshuffles), 0.95),
       leadChangesMean: mean(timings.map(t => t.leadChanges)),
       requestsMean: mean(timings.map(t => t.requests)), requestsP95: percentile(timings.map(t => t.requests), 0.95),
       upstreamMean: mean(timings.map(t => t.upstream)), upstreamP95: percentile(timings.map(t => t.upstream), 0.95),
@@ -265,7 +271,7 @@ function print(result: Record<string, Record<string, ReturnType<typeof summarize
     ["artist's songs shown", s => s.hierarchy.artistTracksShown], ["artist's albums shown", s => s.hierarchy.artistAlbumsShown],
     ["first results p50 ms", s => s.speed.firstP50], ["first results p95 ms", s => s.speed.firstP95],
     ["settled p50 ms", s => s.speed.settledP50], ["settled p95 ms", s => s.speed.settledP95],
-    ["reshuffles/query", s => s.speed.reshufflesMean], ["lead changes/query", s => s.speed.leadChangesMean],
+    ["reshuffles/query", s => s.speed.reshufflesMean], ["  tracks", s => s.speed.reshufflesBySection?.tracks], ["  albums", s => s.speed.reshufflesBySection?.albums], ["  artists", s => s.speed.reshufflesBySection?.artists], ["  copy swaps", s => s.speed.copySwapsMean], ["lead changes/query", s => s.speed.leadChangesMean],
     ["requests/query", s => s.speed.requestsMean], ["upstream/query", s => s.speed.upstreamMean],
     ["CPU/publish p50 ms", s => s.speed.cpuPerPublishP50], ["CPU/publish p95 ms", s => s.speed.cpuPerPublishP95],
   ];
