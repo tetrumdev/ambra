@@ -1,5 +1,11 @@
 import { fallbackQuery, leadingSong, matchingTrackArtist, searchText, textRelevance } from "./catalogRanking";
-import type { SearchPage, StreamingProvider } from "../api/server";
+import type { CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
+import type { Track } from "../types/music";
+
+/** The album a song's copy is on, as a catalog album of that copy's service. */
+export function albumOfTrack(track: Track, provider: StreamingProvider): CatalogAlbum {
+  return {id: track.albumId!.startsWith(`${provider}:`) ? track.albumId! : `${provider}:${track.albumId}`, provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, artists: track.albumArtists, imageUrl: track.cover, upc: track.upc, releaseDate: track.releaseDate, version: track.albumVersion, maximumBitDepth: track.maximumBitDepth, maximumSamplingRateKHz: track.maximumSamplingRateKHz};
+}
 
 /**
  * One service's catalog answer, completed from its own songs: the artists and albums credited on
@@ -24,7 +30,7 @@ export async function enrichCatalogPage(query: string, provider: StreamingProvid
     }
     if (track.albumId) {
       page.albums ??= [];
-      page.albums.push({id: track.albumId.startsWith(`${provider}:`) ? track.albumId : `${provider}:${track.albumId}`, provider, title: track.album, artist: track.albumArtists.map(artist => artist.name).join(", ") || track.artist, artists: track.albumArtists, imageUrl: track.cover, upc: track.upc, releaseDate: track.releaseDate, version: track.albumVersion, maximumBitDepth: track.maximumBitDepth, maximumSamplingRateKHz: track.maximumSamplingRateKHz});
+      page.albums.push(albumOfTrack(track, provider));
     }
   }
   const missingArtist = credit && !page.artists?.some(artist => textRelevance(artist.name, credit) === 5) ? credit : null;

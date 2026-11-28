@@ -153,8 +153,12 @@ export function lossless(track: Track) {
 function requestedEdition(track: Track, query: string) {
   const terms = normalized(query).split(" ");
   const edition = normalized(`${track.name} ${track.version ?? ""} ${track.album} ${track.albumVersion ?? ""}`);
-  const album = normalized(track.album);
-  const albumMatch = album.length > 3 && album !== title(track.name) && normalized(query).includes(album) ? 10 : 0;
+  // By its family, so every edition of the album asked for counts ("Rumours" and "Rumours (2001 Remaster)").
+  const album = albumFamily(track);
+  // An album named like the song (its single, "Overcompensate" for "Overcompensate (edit)") or like
+  // the artist (a self-titled album) isn't asked for by naming the song or the artist.
+  const albumMatch = album.length > 3 && !` ${title(track.name)} `.includes(` ${album} `) && album !== normalized(track.artist)
+    && normalized(query).includes(album) ? 10 : 0;
   return albumMatch + terms.filter(term => /^(live|acoustic|instrumental|remix|demo|clean|remaster|remastered)$/.test(term))
     .reduce((score, term) => score + Number(edition.split(" ").includes(term)), 0);
 }

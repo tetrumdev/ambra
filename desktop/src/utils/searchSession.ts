@@ -4,6 +4,7 @@ import type { Track } from "../types/music";
 import { albumTitleFamily, asksForClean, distinctFirst, everyCopy, explicitAudio, groupSearchResults, lossless, rankSearchGroups, sameSong, STRONG_MATCH, type RecordingGroup } from "./searchRanking";
 import { artistCredits, matchTrack, queryVariants } from "./searchMatch";
 import { musicProviderName } from "./musicProviderName";
+import { albumOfTrack } from "./catalogSearch";
 
 export type SearchSnapshot = {
   results: Track[];
@@ -120,7 +121,11 @@ export class SearchSession {
     const albumCandidates = sources.flatMap(source => source.albums);
     const order = categoryOrder(this.options.query, candidates, artistCandidates, albumCandidates, this.shownLead);
     const intent = order[0];
-    const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : named, intent === "tracks");
+    // The leading song's own album, from the copy shown: a service may return the song but not its
+    // album, leaving only another service's (often Spotify's) card for it.
+    const lead = named[0];
+    const own = lead?.albumId && lead.provider !== "local" ? [albumOfTrack(lead, lead.provider)] : [];
+    const albums = rankAlbums([...albumCandidates, ...own], this.options.query, intent === "albums" ? [] : named, intent === "tracks");
     const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named, intent === "tracks");
     const errors = [...this.sources].filter(([, source]) => source.error)
       .map(([provider]) => musicProviderName(provider));

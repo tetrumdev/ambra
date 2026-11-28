@@ -348,9 +348,14 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
       group.fusion += 1 / (60 + rank);
       group.providers.add(item.provider);
     }
-    if (compareEditions(item, group.album, [asked(item) * 2 + standard(item), asked(group.album) * 2 + standard(group.album)]) > 0) group.album = item;
+    // An edition asked for, then any lossless copy over Spotify's, then the standard edition.
+    const lead = (album: CatalogAlbum) => asked(album) * 4 + Number(album.provider !== "spotify") * 2 + standard(album);
+    if (compareEditions(item, group.album, [lead(item), lead(group.album)]) > 0) group.album = item;
   }
-  groups.sort((a, b) => b.score - a.score || b.fusion - a.fusion);
+  // A release found only on Spotify, in lossy audio, follows an equally good one found elsewhere,
+  // unless it is the leading song's own release (scored 1.05 above): then nothing else has it.
+  const ranked = (group: typeof groups[number]) => group.score * (group.score < 1.05 && [...group.providers].every(provider => provider === "spotify") ? 0.85 : 1);
+  groups.sort((a, b) => ranked(b) - ranked(a) || b.fusion - a.fusion);
   const related = groups.filter(group => group.score >= RELATED);
   return (related.length || tracks.length ? related : groups).map(group => withAlbumVersions(group.album, group.copies));
 }
