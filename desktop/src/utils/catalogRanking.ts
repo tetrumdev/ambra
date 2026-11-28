@@ -75,9 +75,11 @@ const artistKey = (name: string) => fold(name).replace(/ /g, "");
  * Artists the query names, and those credited on the songs it names; best first. A service's
  * search pads its artists with loosely related acts: those are left out whenever anything
  * does match. `tracks` are the songs the query plainly names; with none, and no artist
- * matching, the query wasn't understood and the services' own artists are kept.
+ * matching, the query wasn't understood and the services' own artists are kept. With
+ * `songIntent` (the query is after a song), the named song's artist leads the acts merely named
+ * like the song ("Bohemian Rhapsody", a cover act, before Queen).
  */
-export function rankArtists(values: CatalogArtist[], query: string, tracks: TrackCredit[] = []) {
+export function rankArtists(values: CatalogArtist[], query: string, tracks: TrackCredit[] = [], songIntent = false) {
   const credit = matchingTrackArtist(query, tracks) ?? leadingSong(query, tracks)?.artist;
   const credited = credit ? artistCredits([credit]) : new Set<string>();
   // Whoever the leading songs are by, when the query names them even in part: "kendrick lam"
@@ -93,7 +95,7 @@ export function rankArtists(values: CatalogArtist[], query: string, tracks: Trac
     const performs = performers.has(name);
     const services = (artist.sources ?? [artist]).length;
     return {
-      score: (performs ? Math.max(typed, 0.9) + 0.15 : credited.has(name) ? Math.max(typed, 0.9) : typed) + 0.02 * (services - 1),
+      score: (performs || (songIntent && credited.has(name)) ? Math.max(typed, 0.9) + 0.15 : credited.has(name) ? Math.max(typed, 0.9) : typed) + 0.02 * (services - 1),
       // Credited artists answer the query through their song, however little of it names them.
       coverage: performs || credited.has(name) ? 1 : coverage,
       spelled: exact || performs || credited.has(name),
@@ -117,7 +119,18 @@ export function rankArtists(values: CatalogArtist[], query: string, tracks: Trac
   for (const kept of [(artist: CatalogArtist) => scores.get(artist)!.spelled, (artist: CatalogArtist) => scores.get(artist)!.coverage >= 0.99]) {
     if (related.some(kept)) related = related.filter(kept);
   }
-  return related.length || tracks.length ? related : result;
+  const ranked = related.length || tracks.length ? related : result;
+  // Another act of a name already shown ("Kendrick Lamar" twice on one service, "Radiohead -")
+  // follows every other name: still there under "Show all", but the first cards are all different.
+  const first = new Set<string>();
+  const repeated = (artist: CatalogArtist) => {
+    const key = artistKey(artist.name);
+    if (first.has(key)) return true;
+    first.add(key);
+    return false;
+  };
+  const flags = ranked.map(repeated);
+  return [...ranked.filter((_, index) => !flags[index]), ...ranked.filter((_, index) => flags[index])];
 }
 
 // Labels that mark another pressing of the same album rather than a different record.

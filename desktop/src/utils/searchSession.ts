@@ -93,7 +93,7 @@ export class SearchSession {
     const order = categoryOrder(this.options.query, candidates, artistCandidates, albumCandidates);
     const intent = order[0];
     const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : named);
-    const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named);
+    const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named, intent === "tracks");
     const errors = [...this.sources].filter(([, source]) => source.error)
       .map(([provider]) => musicProviderName(provider));
     return {
