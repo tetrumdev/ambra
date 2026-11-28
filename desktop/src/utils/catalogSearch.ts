@@ -28,7 +28,7 @@ export async function enrichCatalogPage(query: string, provider: StreamingProvid
     }
   }
   const missingArtist = credit && !page.artists?.some(artist => textRelevance(artist.name, credit) === 5) ? credit : null;
-  const variant = missingArtist ?? (/\band\b/i.test(query) && page.albums?.some(album => textRelevance(album.title, query) === 5) ? null : fallbackQuery(query, page.artists ?? [], Boolean(page.tracks.length || page.artists?.length || page.albums?.length)));
+  const variant = missingArtist ?? (/\band\b/i.test(query) && page.albums?.some(album => textRelevance(album.title, query) === 5) ? null : fallbackQuery(query, Boolean(page.tracks.length || page.artists?.length || page.albums?.length)));
   if (!variant || signal?.aborted) return page;
   try {
     const extra = await fetchCatalog(variant, signal ? AbortSignal.any([signal, AbortSignal.timeout(1800)]) : AbortSignal.timeout(1800));

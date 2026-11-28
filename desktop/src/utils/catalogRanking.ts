@@ -33,9 +33,8 @@ export function textRelevance(value: string, query: string): number {
   return 0;
 }
 // Retrieval variants are deliberately bounded; fuzzy ranking never changes entity identity.
-export function fallbackQuery(query: string, artists: CatalogArtist[], hasResults: boolean): string | null {
+export function fallbackQuery(query: string, hasResults: boolean): string | null {
   if (/\band\b/i.test(query)) return query.replace(/\band\b/gi, "&");
-  if (/^[a-z]{4,8}$/i.test(query.trim()) && !artists.some(artist => textRelevance(artist.name, query) === 5)) return [...query.trim()].join(" ");
   const normalized = searchText(query);
   return !hasResults && normalized !== query.toLowerCase().trim() ? normalized : null;
 }
