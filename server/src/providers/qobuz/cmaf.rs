@@ -4,7 +4,7 @@ use std::{io, ops::Range, sync::Arc};
 
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt, stream};
-use qbz_qobuz::{CMAF_PREFETCH_CONCURRENCY, CmafStreamingInfo, cmaf::fetch_verified_segment};
+use qbz_qobuz::{CMAF_PREFETCH_CONCURRENCY, CmafStreamingInfo, cmaf::{SegmentTableEntry, fetch_verified_segment}};
 
 pub struct CmafSource {
     setup: CmafStreamingInfo,
@@ -13,7 +13,8 @@ pub struct CmafSource {
 }
 
 impl CmafSource {
-    pub(super) fn new(setup: CmafStreamingInfo, http: reqwest::Client) -> Self {
+    pub(super) fn new(mut setup: CmafStreamingInfo, http: reqwest::Client) -> Self {
+        add_seek_table(&mut setup.flac_header, &setup.segment_table);
         // The init table describes *decrypted* FLAC lengths. The first entry
         // starts after the FLAC header, so ranges never address container bytes.
         let header_len = setup.flac_header.len() as u64;
@@ -82,11 +83,44 @@ impl CmafSource {
     }
 }
 
+/// Qobuz's header is `fLaC` and STREAMINFO alone, often without a length. Players then guess
+/// the length from the bitrate and seek by byte ratio while reporting the time asked for, so
+/// the time they show drifts from what is heard (iOS: seeks near the end land past it or short
+/// of it). Every segment starts on a frame, so the init table gives an exact seek point for
+/// each, and their samples add up to the length.
+fn add_seek_table(header: &mut Vec<u8>, segments: &[SegmentTableEntry]) {
+    const STREAMINFO_END: usize = 4 + 4 + 34;
+    if header.len() != STREAMINFO_END || &header[..4] != b"fLaC" || header[4] & 0x7f != 0 {
+        return;
+    }
+    let max_block = u16::from_be_bytes([header[10], header[11]]);
+    let mut points = Vec::new();
+    let (mut sample, mut offset) = (0u64, 0u64);
+    for entry in segments {
+        if entry.sample_count > 0 {
+            points.extend_from_slice(&sample.to_be_bytes());
+            points.extend_from_slice(&offset.to_be_bytes());
+            points.extend_from_slice(&max_block.min(u16::try_from(entry.sample_count).unwrap_or(u16::MAX)).to_be_bytes());
+        }
+        sample += u64::from(entry.sample_count);
+        offset += u64::from(entry.byte_len);
+    }
+    if points.is_empty() || sample >= 1 << 36 {
+        return;
+    }
+    // Total samples: the low 36 bits of STREAMINFO bytes 10..18.
+    let packed = u64::from_be_bytes(header[18..26].try_into().unwrap());
+    header[18..26].copy_from_slice(&(packed & !((1 << 36) - 1) | sample).to_be_bytes());
+    header[4] = 0; // STREAMINFO is no longer the last block
+    header.push(0x80 | 3); // last block: SEEKTABLE
+    header.extend_from_slice(&(points.len() as u32).to_be_bytes()[1..]);
+    header.extend_from_slice(&points);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures_util::TryStreamExt;
-    use qbz_qobuz::cmaf::SegmentTableEntry;
     use std::sync::Mutex;
 
     fn segment(payload: &[u8]) -> Vec<u8> {
@@ -167,5 +201,28 @@ mod tests {
         requested.sort_unstable();
         assert_eq!(requested, [1, 2]);
         server.abort();
+    }
+
+    #[test]
+    fn header_gains_exact_seek_points_and_length() {
+        // fLaC, STREAMINFO (last, 34 bytes): blocks of 4096, 44.1 kHz stereo 16-bit, length unknown.
+        let mut header = b"fLaC".to_vec();
+        header.extend_from_slice(&[0x80, 0, 0, 34, 0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0]);
+        header.extend_from_slice(&((44_100u64 << 44) | (1 << 41) | (15 << 36)).to_be_bytes());
+        header.extend_from_slice(&[0; 16]);
+        let segments = [(1000, 441_000), (900, 441_000), (50, 1000)].map(|(byte_len, sample_count)| SegmentTableEntry { byte_len, sample_count });
+        add_seek_table(&mut header, &segments);
+
+        assert_eq!(header[4], 0, "STREAMINFO is no longer last");
+        let packed = u64::from_be_bytes(header[18..26].try_into().unwrap());
+        assert_eq!(packed >> 44, 44_100);
+        assert_eq!(packed & ((1 << 36) - 1), 883_000);
+        assert_eq!(&header[42..46], &[0x83, 0, 0, 54]);
+        let point = |index: usize| {
+            let at = 46 + index * 18;
+            (u64::from_be_bytes(header[at..at + 8].try_into().unwrap()), u64::from_be_bytes(header[at + 8..at + 16].try_into().unwrap()), u16::from_be_bytes([header[at + 16], header[at + 17]]))
+        };
+        assert_eq!([point(0), point(1), point(2)], [(0, 0, 4096), (441_000, 1000, 4096), (882_000, 1900, 1000)]);
+        assert_eq!(header.len(), 46 + 54);
     }
 }

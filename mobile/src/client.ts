@@ -321,6 +321,12 @@ function answered(yes: boolean) {
 }
 /** The bridge answers for a server it can't reach with these. */
 const unreachable = (status: number) => status === 502 || status === 503 || status === 504;
+/**
+ * A request that got no answer at all. React Native's fetch throws a TypeError; Expo's (installed
+ * as the global fetch) throws a plain Error reading "fetch failed: <reason>", such as iOS's
+ * "Could not connect to the server." when the connection is gone after a sleep.
+ */
+const noAnswer = (error: unknown) => error instanceof TypeError || (error instanceof Error && error.message.startsWith("fetch failed"));
 function heard(status?: number) {
   answered(status === undefined || !unreachable(status));
 }
@@ -355,13 +361,14 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     return body as T;
   } catch (error) {
     // No answer at all, rather than one the caller stopped waiting for.
-    if (!init.signal?.aborted && (timeout.signal.aborted || error instanceof TypeError)) answered(false);
-    // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
-    if (timeout.signal.aborted && !init.signal?.aborted) {
+    if (!init.signal?.aborted && (timeout.signal.aborted || noAnswer(error))) {
+      answered(false);
       // No answer may mean a connection that died without closing; the bridge checks and replaces it.
       if (!directMode) void networkCall("resume").catch(() => {});
-      throw new Error("The server took too long to answer. Check your connection and try again.");
     }
+    // Our own deadline, not the caller giving up: say so instead of the fetch's "request has been canceled".
+    if (timeout.signal.aborted && !init.signal?.aborted) throw new Error("The server took too long to answer. Check your connection and try again.");
+    if (!init.signal?.aborted && noAnswer(error)) throw new Error("Couldn't reach the server. Check your connection and try again.");
     throw error;
   } finally {
     clearTimeout(timer);
@@ -673,7 +680,7 @@ async function followStream(stop: AbortSignal): Promise<boolean> {
     // Gone quiet: it is opened again, like one the server ended. One that never sent the
     // session at all is held up on the way (a proxy keeping the body back): ask instead.
     if (silence.signal.aborted && !stop.aborted) { answered(false); return lines > 0; }
-    if (!stop.aborted && error instanceof TypeError) answered(false);
+    if (!stop.aborted && noAnswer(error)) answered(false);
     throw error;
   } finally {
     clearTimeout(timer);

@@ -43,7 +43,8 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
         const [found, all] = await Promise.all([endpoints(abort.signal), sessions(abort.signal).catch(() => [])]);
         if (!abort.signal.aborted) { setDevices(found); setList(all); }
       } catch (reason) {
-        if (!abort.signal.aborted) setError(message(reason, "Couldn't load audio outputs."));
+        // Playing downloads, the server's outputs are out of reach by design.
+        if (!abort.signal.aborted && !offlineActive()) setError(message(reason, "Couldn't load audio outputs."));
       } finally { running = false; if (!abort.signal.aborted) setLoading(false); }
     };
     void refresh();
@@ -76,10 +77,12 @@ export function OutputPicker({ view, onClose }: { view: SessionView | null; onCl
   const activeStage = current?.activeStage ?? GENERAL_STAGE;
 
   const rows: Row[] = [];
-  if (phone?.id) rows.push({
-    output: { endpointId: phone.id, endpointName: phone.name, deviceId: PHONE_DEVICE_ID, deviceName: "This phone" },
+  // Playing downloads, the offline session's output is this phone: one row, already selected.
+  const offlineOutput = offlineActive() ? view?.output ?? null : null;
+  if (phone?.id || offlineOutput) rows.push({
+    output: offlineOutput ? { ...offlineOutput, deviceName: "This phone" } : { endpointId: phone!.id, endpointName: phone!.name, deviceId: PHONE_DEVICE_ID, deviceName: "This phone" },
     // This phone can always play: out of reach of the server it plays its downloads.
-    syncs: true, offline: !phone.ready && !offlineActive(), phone: true, detail: offlineActive() ? "Playing downloads" : !phone.ready ? "Waiting for the server" : undefined,
+    syncs: true, offline: !phone?.ready && !offlineActive(), phone: true, detail: offlineActive() ? "Playing downloads" : !phone?.ready ? "Waiting for the server" : undefined,
   });
   const others: Row[] = [];
   for (const endpoint of devices) {

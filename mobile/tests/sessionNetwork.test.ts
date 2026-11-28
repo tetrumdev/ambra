@@ -77,3 +77,15 @@ test("polling removes foreground abort listeners on every successful poll and te
     AbortSignal.prototype.removeEventListener = removed;
   }
 });
+
+test("Expo's fetch failing to connect marks the server unreachable without showing the raw error", async () => {
+  globalThis.fetch = (async () => respond(snapshot())) as unknown as typeof fetch;
+  await client.refreshSession(new AbortController().signal);
+  expect(client.serverAnswering()).toBe(true);
+  await Bun.sleep(2); // reachability compares millisecond timestamps
+  // expo/fetch's FetchError: a plain Error, not React Native's TypeError.
+  globalThis.fetch = (async () => { throw new Error("fetch failed: Could not connect to the server."); }) as unknown as typeof fetch;
+  const failure = await client.refreshSession(new AbortController().signal).catch((error: Error) => error);
+  expect(client.serverAnswering()).toBe(false);
+  expect(String(failure)).not.toContain("fetch failed");
+});
