@@ -5,7 +5,9 @@
     "build": "bun install --cwd desktop --frozen-lockfile && bun run --cwd desktop tauri build",
     "mobile": "bun install --cwd mobile --frozen-lockfile && bun run --cwd mobile start",
     "server:install": "cargo install --path server --locked",
-    "release": "./scripts/release.sh"
+    "release": "./scripts/release.sh",
+    "search:bench": "bun bench/run.ts",
+    "search:report": "bun bench/report.ts"
   },
   "dependencies": {
     "dashjs": "^5.2.1"

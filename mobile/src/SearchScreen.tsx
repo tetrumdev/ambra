@@ -3,17 +3,15 @@ import { ActivityIndicator, Animated, FlatList, StyleSheet, Text, TextInput, Vie
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchSession, SearchSnapshot } from "../../desktop/src/utils/searchSession";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
-import { openSearch } from "./catalog";
+import { startSearch, type mergeCatalog } from "./catalog";
 import type { Track } from "../../desktop/src/types/music";
 import { changeQueue, command, currentTrack, sessionView, type QueueItem } from "./client";
 import { TrackRow } from "./TrackRow";
 import { playEntries } from "./queueModel";
-import { catalogSearch, type CatalogPage } from "./library";
 import { useFrontPageScroll, useNavigation, useNowPlaying, useRun } from "./navigation";
 import { useTrackMenus } from "./TrackMenus";
 import { CardRow } from "./screens/Cards";
 import { albumCard, artistCard } from "./screens/Pages";
-import { searchText, textRelevance } from "../../desktop/src/utils/catalogRanking";
 import { servicePreferences, services, subscribeServicePreferences, type Service } from "./servicePreferences";
 import { Segmented } from "./shell/Segmented";
 import { Icon } from "./Icons";
@@ -23,16 +21,6 @@ import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<Track>);
 const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], isSearching: false, hasMore: false, error: null, canRetry: false };
-
-/** Merges each service's catalog answer, best name matches first and one card per name. */
-function mergeCatalog(query: string, pages: CatalogPage[]) {
-  const unique = <T,>(items: T[], key: (item: T) => string) => [...new Map(items.map(item => [key(item), item])).values()];
-  const artists = unique(pages.flatMap(page => page.artists), artist => searchText(artist.name))
-    .sort((a, b) => textRelevance(b.name, query) - textRelevance(a.name, query)).slice(0, 12);
-  const albums = unique(pages.flatMap(page => page.albums), album => `${searchText(album.title)}:${searchText(album.artist)}`)
-    .sort((a, b) => textRelevance(b.title, query) - textRelevance(a.title, query)).slice(0, 16);
-  return { artists, albums };
-}
 
 /**
  * One search across every service. The field sits at the top and stays there; the title above
@@ -65,25 +53,13 @@ export function SearchScreen() {
     const abort = new AbortController();
     session.current = null;
     const trimmed = query.trim();
-    const timer = setTimeout(() => {
-      if (!trimmed) return;
-      void openSearch(trimmed, selected, provider, abort.signal, next => {
-        if (!abort.signal.aborted) setResponse({ key: searchKey, snapshot: next });
-      }).then(next => { if (!abort.signal.aborted) session.current = next; }).catch(reason => {
-        if (!abort.signal.aborted) setResponse({ key: searchKey, snapshot: { ...empty, error: reason instanceof Error ? reason.message : "Search failed. Try again.", canRetry: true } });
-      });
-    }, 300);
-    // Artists and albums, as desktop's catalog search finds them, alongside the songs.
-    const catalogTimer = setTimeout(() => {
-      if (!trimmed) return;
-      const providers = services.filter(service => selected[service] && (provider === "all" || provider === service));
-      void Promise.allSettled(providers.map(service => catalogSearch(trimmed, service, abort.signal))).then(results => {
-        if (abort.signal.aborted) return;
-        const pages = results.flatMap(result => result.status === "fulfilled" ? [result.value] : []);
-        setCatalog({ key: searchKey, value: mergeCatalog(trimmed, pages) });
-      });
-    }, 350);
-    return () => { clearTimeout(timer); clearTimeout(catalogTimer); abort.abort(); };
+    const stop = startSearch(trimmed, selected, provider, abort.signal, {
+      tracks: next => setResponse({ key: searchKey, snapshot: next }),
+      session: next => { session.current = next; },
+      error: reason => setResponse({ key: searchKey, snapshot: { ...empty, error: reason instanceof Error ? reason.message : "Search failed. Try again.", canRetry: true } }),
+      catalog: value => setCatalog({ key: searchKey, value }),
+    });
+    return () => { stop(); abort.abort(); };
   }, [query, selected, provider, searchKey]);
   const results = snapshot.results;
   const entries = useMemo<QueueItem[]>(() => results.map((track, index) => ({ globalTrackId: track.globalId, source: { kind: "search", id: query.trim(), entryId: index + 1 } })), [results, query]);

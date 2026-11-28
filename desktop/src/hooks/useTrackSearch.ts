@@ -27,6 +27,89 @@ async function resolvePlayback(track: Track, signal?: AbortSignal) {
   return resolved;
 }
 
+/**
+ * One search, from the query changing to its last update: the debounce, service discovery, the
+ * session and the warming of leading songs. Returns its cleanup. Kept apart from the hook so the
+ * search benchmark (bench/) runs exactly what the app runs.
+ */
+export function startTrackSearch(query: string, provider: SearchProvider, sessionRef: { current: SearchSession | null },
+  setSnapshot: (snapshot: SearchSnapshot) => void, remember: (tracks: Track[]) => void): () => void {
+  const trimmedQuery = query.trim();
+  const controller = new AbortController();
+  let session: SearchSession | null = null;
+  sessionRef.current = null;
+  setSnapshot(trimmedQuery ? { ...empty, isSearching: true } : empty);
+  if (!trimmedQuery) return () => {};
+
+  // Enrich a bounded set of leading recording groups, including hidden TIDAL alternatives.
+  const warmed = new Set<string>();
+  const queue: Track[] = [];
+  let active = 0;
+  const drain = () => {
+    while (active < 2 && queue.length && !controller.signal.aborted) {
+      const track = queue.shift()!;
+      active++;
+      void resolvePlayback(track, controller.signal).then(resolved => {
+        if (!controller.signal.aborted) session?.replaceTrack(resolved);
+      }).catch(() => {}).finally(() => { active--; drain(); });
+    }
+  };
+  const onUpdate = (next: SearchSnapshot) => {
+    if (controller.signal.aborted) return;
+    setSnapshot(next);
+    remember(next.candidates);
+    if (!next.isSearching && warmed.size < 5) {
+      const leaders = new Set(next.results.slice(0, 5).map(track => track.globalId));
+      const alternatives = groupSearchResults(next.candidates, trimmedQuery)
+        .filter(group => leaders.has(group.track.globalId)).flatMap(group => group.alternatives);
+      for (const track of alternatives) {
+        if (warmed.size >= 5) break;
+        if (track.provider !== "tidal" || warmed.has(track.globalId)) continue;
+        warmed.add(track.globalId);
+        queue.push(track);
+      }
+      drain();
+    }
+  };
+  const timer = window.setTimeout(() => {
+    const discoveryTimeout = window.setTimeout(() => controller.abort(), 8000);
+    void configuredSearchProviders(controller.signal).then(providers => {
+      window.clearTimeout(discoveryTimeout);
+      if (controller.signal.aborted) return;
+      const selected = provider === "all" ? providers : providers.filter(value => value === provider);
+      session = new SearchSession({
+        query: trimmedQuery, providers: selected, combined: provider === "all", onUpdate,
+        albumTracks: async (album, signal) => (await loadAlbumTracks(album, signal)).map(cachedTrack),
+        fetchPage: async (...args) => {
+          const page = await searchServerCatalog(args[0], args[1], args[2]);
+          // Use the brief result-merging window to fetch covers before their cards mount.
+          if (!args[2].aborted) page.tracks.slice(0, 5).forEach((track, index) => {
+            void preloadArtwork(providerThumbnail(track.nativeCover ?? track.cover), false, {
+              fetchPriority: index === 0 ? "high" : "auto", timeoutMs: 3000,
+            }).catch(() => {});
+          });
+          return { ...page, tracks: page.tracks.map(cachedTrack) };
+        },
+      });
+      sessionRef.current = session;
+      return session.loadMore();
+    }).catch(error => {
+      // A cleanup abort must not publish into a newer query.
+      if (sessionRef.current === session && !disposed) {
+        setSnapshot({ ...empty, error: controller.signal.aborted ? "Loading music services timed out." : String(error), canRetry: true });
+      }
+    }).finally(() => window.clearTimeout(discoveryTimeout));
+  }, 150);
+  let disposed = false;
+  return () => {
+    disposed = true;
+    window.clearTimeout(timer);
+    controller.abort();
+    session?.cancel();
+    if (sessionRef.current === session) sessionRef.current = null;
+  };
+}
+
 export function useTrackSearch(query: string, provider: SearchProvider) {
   const [snapshot, setSnapshot] = useState<SearchSnapshot>(empty);
   const [knownTracks, setKnownTracks] = useState<Track[]>([]);
@@ -55,82 +138,8 @@ export function useTrackSearch(query: string, provider: SearchProvider) {
     }
   }, [knownTracks, remember, snapshot.candidates]);
 
-  useEffect(() => {
-    const trimmedQuery = query.trim();
-    const controller = new AbortController();
-    let session: SearchSession | null = null;
-    sessionRef.current = null;
-    setSnapshot(trimmedQuery ? { ...empty, isSearching: true } : empty);
-    if (!trimmedQuery) return;
-
-    // Enrich a bounded set of leading recording groups, including hidden TIDAL alternatives.
-    const warmed = new Set<string>();
-    const queue: Track[] = [];
-    let active = 0;
-    const drain = () => {
-      while (active < 2 && queue.length && !controller.signal.aborted) {
-        const track = queue.shift()!;
-        active++;
-        void resolvePlayback(track, controller.signal).then(resolved => {
-          if (!controller.signal.aborted) session?.replaceTrack(resolved);
-        }).catch(() => {}).finally(() => { active--; drain(); });
-      }
-    };
-    const onUpdate = (next: SearchSnapshot) => {
-      if (controller.signal.aborted) return;
-      setSnapshot(next);
-      remember(next.candidates);
-      if (!next.isSearching && warmed.size < 5) {
-        const leaders = new Set(next.results.slice(0, 5).map(track => track.globalId));
-        const alternatives = groupSearchResults(next.candidates, trimmedQuery)
-          .filter(group => leaders.has(group.track.globalId)).flatMap(group => group.alternatives);
-        for (const track of alternatives) {
-          if (warmed.size >= 5) break;
-          if (track.provider !== "tidal" || warmed.has(track.globalId)) continue;
-          warmed.add(track.globalId);
-          queue.push(track);
-        }
-        drain();
-      }
-    };
-    const timer = window.setTimeout(() => {
-      const discoveryTimeout = window.setTimeout(() => controller.abort(), 8000);
-      void configuredSearchProviders(controller.signal).then(providers => {
-        window.clearTimeout(discoveryTimeout);
-        if (controller.signal.aborted) return;
-        const selected = provider === "all" ? providers : providers.filter(value => value === provider);
-        session = new SearchSession({
-          query: trimmedQuery, providers: selected, combined: provider === "all", onUpdate,
-          albumTracks: async (album, signal) => (await loadAlbumTracks(album, signal)).map(cachedTrack),
-          fetchPage: async (...args) => {
-            const page = await searchServerCatalog(args[0], args[1], args[2]);
-            // Use the brief result-merging window to fetch covers before their cards mount.
-            if (!args[2].aborted) page.tracks.slice(0, 5).forEach((track, index) => {
-              void preloadArtwork(providerThumbnail(track.nativeCover ?? track.cover), false, {
-                fetchPriority: index === 0 ? "high" : "auto", timeoutMs: 3000,
-              }).catch(() => {});
-            });
-            return { ...page, tracks: page.tracks.map(cachedTrack) };
-          },
-        });
-        sessionRef.current = session;
-        return session.loadMore();
-      }).catch(error => {
-        // A cleanup abort must not publish into a newer query.
-        if (sessionRef.current === session && !disposed) {
-          setSnapshot({ ...empty, error: controller.signal.aborted ? "Loading music services timed out." : String(error), canRetry: true });
-        }
-      }).finally(() => window.clearTimeout(discoveryTimeout));
-    }, 150);
-    let disposed = false;
-    return () => {
-      disposed = true;
-      window.clearTimeout(timer);
-      controller.abort();
-      session?.cancel();
-      if (sessionRef.current === session) sessionRef.current = null;
-    };
-  }, [query, provider, attempt, remember]);
+  // `attempt` restarts the search after a failed service discovery.
+  useEffect(() => startTrackSearch(query, provider, sessionRef, setSnapshot, remember), [query, provider, attempt, remember]);
 
   const loadMore = useCallback(() => { void sessionRef.current?.loadMore(); }, []);
   const retry = useCallback(() => {
