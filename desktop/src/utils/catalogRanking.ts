@@ -359,6 +359,9 @@ const albumKey = derived((album: CatalogAlbum) => `${fold(albumBaseTitle(album.t
 const trackCredits = derived((track: Evidence) => artistCredits([track.artist]));
 const trackAlbum = derived((track: Evidence) => fold(albumBaseTitle(track.album)));
 
+/** How far another section must overtake the one leading on screen to replace it. */
+const LEAD_HOLD = 0.1;
+
 /** How much a service's n-th answer (from 0) says about what the query means. */
 const nativeWeight = (rank: number) => 1 / (1 + rank / 2);
 
@@ -372,9 +375,10 @@ const nativeWeight = (rank: number) => 1 / (1 + rank / 2);
  * to be named by its title; songs that are merely by the artist asked for, or on the album asked
  * for, count for that artist or album instead. A self-titled album counts for its artist, so
  * "weezer" is the band before the blue album, and "abbey road" is the album rather than a
- * lesser-known song of that name every service also has.
+ * lesser-known song of that name every service also has. `held`, the section already leading on
+ * screen, keeps the lead unless another section clearly overtakes it.
  */
-export function categoryOrder(query: string, tracks: Evidence[], artists: CatalogArtist[], albums: CatalogAlbum[]): SearchCategory[] {
+export function categoryOrder(query: string, tracks: Evidence[], artists: CatalogArtist[], albums: CatalogAlbum[], held?: SearchCategory): SearchCategory[] {
   const services = [...new Set([...tracks, ...artists, ...albums].map(item => item.provider ?? "single"))];
   // Each key's best (lowest) place in each service's answer.
   const ranks = <T,>(items: T[], key: (item: T) => string, provider: (item: T) => string) => {
@@ -443,5 +447,6 @@ export function categoryOrder(query: string, tracks: Evidence[], artists: Catalo
     return fit * (0.3 + 0.35 * albumBacking(key) + 0.35 * Math.min(1, 2 * owned));
   }));
   const scores: Record<SearchCategory, number> = { tracks: trackScore, artists: artistScore, albums: albumScore };
+  if (held) scores[held] += LEAD_HOLD;
   return (["tracks", "artists", "albums"] as SearchCategory[]).sort((a, b) => scores[b] - scores[a]);
 }

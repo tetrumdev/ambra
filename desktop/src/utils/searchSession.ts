@@ -75,8 +75,9 @@ export class SearchSession {
   private completing = 0;
   /** The lookups among those on services with lossless audio: only they can change the copy shown. */
   private improving = 0;
-  /** The songs on screen, first to fifth, by the copy shown. */
+  /** The songs on screen, first to fifth, by the copy shown, and the section leading. */
   private shown: string[] = [];
+  private shownLead: SearchCategory | undefined;
   /**
    * A shown song's hold on its place: a late answer must outrank it clearly to move it, so the
    * list doesn't reshuffle over evidence that barely separates two songs.
@@ -117,7 +118,7 @@ export class SearchSession {
     const named = ranked.filter(group => group.relevance >= STRONG_MATCH).slice(0, 3).map(group => group.track);
     const artistCandidates = sources.flatMap(source => source.artists);
     const albumCandidates = sources.flatMap(source => source.albums);
-    const order = categoryOrder(this.options.query, candidates, artistCandidates, albumCandidates);
+    const order = categoryOrder(this.options.query, candidates, artistCandidates, albumCandidates, this.shownLead);
     const intent = order[0];
     const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : named, intent === "tracks");
     const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named, intent === "tracks");
@@ -186,7 +187,10 @@ export class SearchSession {
     }
     // The first visible list is consolidated when sources finish close together.
     // A slow/offline source can delay useful results by at most the bounded grace period.
-    if (this.initialResultsReleased) this.shown = next.results.slice(0, SHOWN).map(track => track.globalId);
+    if (this.initialResultsReleased) {
+      this.shown = next.results.slice(0, SHOWN).map(track => track.globalId);
+      this.shownLead = next.order[0];
+    }
     this.options.onUpdate(this.initialResultsReleased ? next : { ...next, results: [], allResults: [], candidates: [], artists: [], albums: [] });
   }
 
