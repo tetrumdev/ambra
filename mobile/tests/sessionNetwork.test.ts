@@ -89,3 +89,12 @@ test("Expo's fetch failing to connect marks the server unreachable without showi
   expect(client.serverAnswering()).toBe(false);
   expect(String(failure)).not.toContain("fetch failed");
 });
+
+test("Qobuz songs play on the phone as HLS, which Apple's player can seek", () => {
+  expect(client.phonePlaybackSource("/api/providers/qobuz/tracks/11339501/stream")).toBe("/api/providers/qobuz/tracks/11339501/playlist.m3u8");
+  expect(client.phonePlaybackSource("/api/providers/qobuz/tracks/7/stream?access_token=x")).toBe("/api/providers/qobuz/tracks/7/playlist.m3u8?access_token=x");
+  // Others are left as they are.
+  for (const source of ["/api/providers/tidal/tracks/7/playlist.m3u8", "/api/providers/spotify/tracks/7/stream", "/api/downloads/play/qobuz/7", "/api/providers/qobuz/tracks/7/streamed"]) {
+    expect(client.phonePlaybackSource(source)).toBe(source);
+  }
+});

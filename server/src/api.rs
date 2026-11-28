@@ -3,6 +3,7 @@ mod discover;
 mod downloads;
 mod playlists;
 mod provider_recommendations;
+mod qobuz_hls;
 mod vocal_timing;
 
 use crate::library_sync::{Change, Events, Journal};
@@ -2497,6 +2498,10 @@ async fn hls_manifest(
     Path((provider, track_id)): Path<(String, String)>,
     access: Option<Extension<crate::access::MediaAccessToken>>,
 ) -> Result<Response, ApiError> {
+    if provider == "qobuz" {
+        let query = access.as_ref().map_or_else(String::new, |Extension(token)| format!("?{}={}", crate::access::TOKEN_PARAMETER, urlencoding::encode(&token.0)));
+        return qobuz_hls::playlist(&state, &track_id, &query).await;
+    }
     ensure_tidal_provider(&provider)?;
 
     let source = tidal_provider(&state)?
@@ -2577,6 +2582,9 @@ async fn dash_initialization(
     State(state): State<AppState>,
     Path((provider, track_id)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
+    if provider == "qobuz" {
+        return qobuz_hls::initialization(&state, &track_id).await;
+    }
     ensure_tidal_provider(&provider)?;
 
     let source = tidal_provider(&state)?
@@ -2601,6 +2609,9 @@ async fn dash_segment(
     State(state): State<AppState>,
     Path((provider, track_id, segment_number)): Path<(String, String, u32)>,
 ) -> Result<Response, ApiError> {
+    if provider == "qobuz" {
+        return qobuz_hls::segment(&state, &track_id, segment_number).await;
+    }
     ensure_tidal_provider(&provider)?;
 
     let source = tidal_provider(&state)?

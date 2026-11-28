@@ -2,6 +2,7 @@
 pub mod bridge;
 /// TEMPORARY: playback diagnostics.
 pub mod diagnostics;
+pub mod flac_hls;
 pub mod gate;
 pub mod hyperdht;
 pub mod identity;

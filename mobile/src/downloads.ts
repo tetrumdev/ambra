@@ -95,6 +95,9 @@ export const useDownloadMark = (id: string) => useSyncExternalStore(subscribe, (
 /** This phone's loopback URL for the song, when it's downloaded here. */
 export const phoneDownloadUrl = (id: string) => state.phone.get(id)?.url ?? null;
 
+/** What the player opens for a download: a FLAC one as HLS (bridge `offline.rs`), which it can seek. */
+export const phonePlayableDownload = (url: string) => /\.flac$/i.test(url) ? `${url}/playlist.m3u8` : url;
+
 export async function refreshPhoneDownloads() {
   if (!nativeNetworkAvailable) return;
   try {

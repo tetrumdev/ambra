@@ -839,6 +839,13 @@ export function prefetchMedia(source: string) {
   if (path && nativeNetworkAvailable) void networkCall("prefetch", { path }).catch(() => {});
 }
 
+/**
+ * What this phone's player opens for a song from the server. A Qobuz song comes as HLS
+ * (server `qobuz_hls.rs`): Apple's player can't seek inside a FLAC file, and lands far from
+ * where it says it is.
+ */
+export const phonePlaybackSource = (source: string) => source.replace(/(\/api\/providers\/qobuz\/tracks\/[^/?#]+)\/stream(?=$|[?#])/, "$1/playlist.m3u8");
+
 export function phoneMediaUrl(source: string) {
   const path = phoneMediaPath(source);
   if (path) return serverUrl(path);

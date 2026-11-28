@@ -72,6 +72,10 @@ pub async fn open(directory: &str) -> Result<Arc<Offline>> {
     let capability = secret.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
     let app = Router::new()
         .route("/{capability}/{file}", get(serve))
+        // FLAC downloads also as HLS: Apple's player can't seek inside a FLAC file (flac_hls).
+        .route("/{capability}/{file}/playlist.m3u8", get(hls_playlist))
+        .route("/{capability}/{file}/dash/init", get(hls_init))
+        .route("/{capability}/{file}/dash/{index}", get(hls_segment))
         .with_state(Served { store: store.clone(), capability: capability.clone() });
     tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -340,6 +344,100 @@ async fn serve(State(served): State<Served>, UrlPath((capability, file)): UrlPat
     response
 }
 
+/// How a download was cut into HLS segments, kept per file while the app runs.
+#[derive(Clone)]
+struct HlsPlan {
+    header: ambra_net::flac_hls::Header,
+    segments: Arc<Vec<ambra_net::flac_hls::Segment>>,
+}
+
+static HLS_PLANS: Mutex<Option<HashMap<String, HlsPlan>>> = Mutex::new(None);
+
+fn read_range(store: &Store, file: &str, start: u64, length: u64) -> std::io::Result<Vec<u8>> {
+    let mut reader = store.open_file(file).map_err(std::io::Error::other)?;
+    reader.seek(SeekFrom::Start(start))?;
+    let mut out = Vec::with_capacity(length as usize);
+    reader.take(length).read_to_end(&mut out)?;
+    Ok(out)
+}
+
+/// Reads the header, and the seek table or else the frames (the file is on this phone, so
+/// reading it through takes a moment), to cut the file into segments.
+fn hls_plan(store: &Store, file: &str) -> Option<HlsPlan> {
+    use ambra_net::flac_hls::{MAX_FRAME, Scan, parse_header};
+    if let Some(plan) = HLS_PLANS.lock().ok().and_then(|plans| plans.as_ref()?.get(file).cloned()) {
+        return Some(plan);
+    }
+    let length = store.open_file(file).ok()?.len();
+    let mut head = read_range(store, file, 0, 64 * 1024).ok()?;
+    let header = loop {
+        match parse_header(&head) {
+            Ok(header) => break header,
+            Err(Some(needed)) if needed as u64 <= length && needed > head.len() => head = read_range(store, file, 0, needed as u64).ok()?,
+            Err(_) => return None,
+        }
+    };
+    let segments = match header.segments(length) {
+        Some(segments) => segments,
+        None => {
+            let mut scan = Scan::new(&header, length);
+            while !scan.done() {
+                let bytes = read_range(store, file, scan.wanted(), 4 * MAX_FRAME as u64).ok()?;
+                if !scan.feed(&bytes) {
+                    return None;
+                }
+            }
+            scan.segments()?
+        }
+    };
+    let plan = HlsPlan { header, segments: Arc::new(segments) };
+    if let Ok(mut plans) = HLS_PLANS.lock() {
+        let plans = plans.get_or_insert_with(HashMap::new);
+        if plans.len() >= 64 {
+            plans.clear();
+        }
+        plans.insert(file.to_owned(), plan.clone());
+    }
+    Some(plan)
+}
+
+/// Runs `work` on the file's plan off the async threads; 404 for anything this can't serve.
+async fn with_plan(served: Served, capability: String, file: String, content_type: &'static str, work: impl FnOnce(&Store, &str, &HlsPlan) -> Option<Vec<u8>> + Send + 'static) -> Response {
+    if capability != served.capability || file.contains(['/', '\\']) || file.starts_with('.') || !file.ends_with(".flac") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let body = tokio::task::spawn_blocking(move || {
+        let plan = hls_plan(&served.store, &file)?;
+        work(&served.store, &file, &plan)
+    }).await.ok().flatten();
+    match body {
+        Some(body) => Response::builder()
+            .header(header::CONTENT_TYPE, content_type)
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Body::from(body))
+            .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+async fn hls_playlist(State(served): State<Served>, UrlPath((capability, file)): UrlPath<(String, String)>) -> Response {
+    with_plan(served, capability, file, "application/vnd.apple.mpegurl", |_, _, plan| {
+        Some(ambra_net::flac_hls::playlist(&plan.segments, plan.header.sample_rate, "").into_bytes())
+    }).await
+}
+
+async fn hls_init(State(served): State<Served>, UrlPath((capability, file)): UrlPath<(String, String)>) -> Response {
+    with_plan(served, capability, file, "audio/mp4", |_, _, plan| Some(ambra_net::flac_hls::init_segment(&plan.header))).await
+}
+
+async fn hls_segment(State(served): State<Served>, UrlPath((capability, file, index)): UrlPath<(String, String, usize)>) -> Response {
+    with_plan(served, capability, file, "audio/mp4", move |store, file, plan| {
+        let segment = *plan.segments.get(index)?;
+        let bytes = read_range(store, file, segment.start, segment.end - segment.start).ok()?;
+        ambra_net::flac_hls::media_segment(&plan.header, index, &segment, &bytes)
+    }).await
+}
+
 /// The channel as a stream.
 fn futures_stream(
     mut receiver: tokio::sync::mpsc::Receiver<std::io::Result<Bytes>>,
@@ -393,10 +491,63 @@ mod tests {
         // A wrong secret or a path outside the store finds nothing.
         let (head, _) = fetch(&url.replace(offline.base_url(), &format!("{}x", offline.base_url())), None).await;
         assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+        // Not FLAC inside: no HLS view of it.
+        let (head, _) = fetch(&format!("{url}/playlist.m3u8"), None).await;
+        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
+        // The store is one per process, so the HLS view is checked here rather than in parallel.
+        flac_downloads_play_as_hls(&offline).await;
 
-        offline.remove(&["tidal:1".into()]).unwrap();
+        offline.remove(&["tidal:1".into(), "qobuz:2".into()]).unwrap();
         assert_eq!(offline.list(), json!([]));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A FLAC file of `frames` frames of 4096 samples, 44.1 kHz stereo 16-bit, no seek table.
+    fn flac(frames: usize) -> Vec<u8> {
+        let crc8 = |bytes: &[u8]| bytes.iter().fold(0u8, |crc, &byte| (0..8).fold(crc ^ byte, |crc, _| if crc & 0x80 != 0 { (crc << 1) ^ 0x07 } else { crc << 1 }));
+        let mut out = b"fLaC".to_vec();
+        out.extend([0x80, 0, 0, 34, 0x10, 0x00, 0x10, 0x00, 0, 0, 0, 0, 0, 0]);
+        out.extend(((44_100u64 << 44) | (1 << 41) | (15 << 36) | (frames as u64 * 4096)).to_be_bytes());
+        out.extend([0u8; 16]);
+        for number in 0..frames {
+            // Frame numbers past 127 take two bytes, coded like UTF-8.
+            let mut head = vec![0xff, 0xf8, 0xc9, 0x18];
+            if number < 128 { head.push(number as u8) } else { head.extend([0xc0 | (number >> 6) as u8, 0x80 | (number & 0x3f) as u8]) }
+            head.push(crc8(&head));
+            out.extend(head);
+            out.extend((0..150).map(|index| (index * 7 + number) as u8));
+        }
+        out
+    }
+
+    async fn flac_downloads_play_as_hls(offline: &Offline) {
+        let audio = flac(150);
+        let mut pending = offline.store.begin("qobuz-2.flac").unwrap();
+        pending.writer().write_all(&audio).unwrap();
+        offline.store.finish(pending).unwrap();
+        offline.store.record(Entry {
+            id: "qobuz:2".into(), provider: "qobuz".into(), provider_track_id: "2".into(), file: "qobuz-2.flac".into(),
+            container: "flac".into(), mime_type: "audio/flac".into(), requested_quality: Quality::Max, quality_label: "FLAC".into(),
+            sample_rate_khz: None, bit_depth: None, size_bytes: audio.len() as u64, downloaded_at: 0, metadata: Value::Null, cover_file: None,
+        }).unwrap();
+        let url = offline.list().as_array().unwrap().iter().find(|entry| entry["id"] == "qobuz:2").unwrap()["url"].as_str().unwrap().to_owned();
+
+        let (head, playlist) = fetch(&format!("{url}/playlist.m3u8"), None).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let playlist = String::from_utf8(playlist).unwrap();
+        // About 13.9 s, read through for segment starts at least 6 s apart: frames 0, 65 and 130.
+        assert_eq!(playlist.matches("#EXTINF:").count(), 3, "{playlist}");
+        assert!(playlist.contains("#EXT-X-MAP:URI=\"dash/init\""));
+        let (head, init) = fetch(&format!("{url}/dash/init"), None).await;
+        assert!(head.starts_with("HTTP/1.1 200") && init.windows(4).any(|window| window == b"dfLa"), "{head}");
+        let (head, segment) = fetch(&format!("{url}/dash/1"), None).await;
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        let moof = u32::from_be_bytes(segment[..4].try_into().unwrap()) as usize;
+        assert_eq!(&segment[moof + 4..moof + 8], b"mdat");
+        // Frames 65 to 129, unchanged: 156 bytes each, 157 from frame 128 (two-byte numbers).
+        assert_eq!(&segment[moof + 8..], &audio[42 + 65 * 156..42 + 128 * 156 + 2 * 157]);
+        let (head, _) = fetch(&format!("{url}/dash/3"), None).await;
+        assert!(head.starts_with("HTTP/1.1 404"), "{head}");
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import type { Track } from "../../desktop/src/types/music";
 import { configureAudioSession } from "./audioSession";
 import { lastServerQueue, notifySession, setOfflineSession, type QueueSnapshot, type SessionView } from "./client";
-import { downloadsSnapshot, phoneDownloadUrl } from "./downloads";
+import { downloadsSnapshot, phoneDownloadUrl, phonePlayableDownload } from "./downloads";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
 
@@ -28,7 +28,7 @@ export class OfflineSession {
       label: "offline",
       create: source => createAudioPlayer(source, { updateInterval: 500, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
-      mediaUrl: source => source,
+      mediaUrl: phonePlayableDownload,
       prefetch: () => {},
       metadata: () => {
         const track = this.track();

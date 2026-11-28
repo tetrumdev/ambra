@@ -3,10 +3,10 @@ import Constants from "expo-constants";
 import { AppState, Platform } from "react-native";
 import { configureAudioSession } from "./audioSession";
 import * as SecureStore from "expo-secure-store";
-import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, playingOutputs, prefetchMedia, refreshSession, sampleSyncClock, sessionView, setLocalControl, setLocalPlayback, subscribe, syncClockOffset } from "./client";
+import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, phonePlaybackSource, playingOutputs, prefetchMedia, refreshSession, sampleSyncClock, sessionView, setLocalControl, setLocalPlayback, subscribe, syncClockOffset } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
 import { diag } from "./diagnostics";
-import { phoneUrlForSource } from "./downloads";
+import { phonePlayableDownload, phoneUrlForSource } from "./downloads";
 import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
 
 export type PhoneEndpointInfo = { id: string; name: string; ready: boolean; error: string | null };
@@ -150,8 +150,11 @@ export function followPhoneOutput() {
       },
       activate: () => configureAudioSession(true),
       // A song downloaded to this phone plays from that copy, sparing the network.
-      mediaUrl: source => phoneUrlForSource(source) ?? phoneMediaUrl(source),
-      prefetch: source => { if (!phoneUrlForSource(source)) prefetchMedia(source); },
+      mediaUrl: source => {
+        const download = phoneUrlForSource(source);
+        return download ? phonePlayableDownload(download) : phoneMediaUrl(phonePlaybackSource(source));
+      },
+      prefetch: source => { if (!phoneUrlForSource(source)) prefetchMedia(phonePlaybackSource(source)); },
       metadata,
       ownsOutput,
       changed,
