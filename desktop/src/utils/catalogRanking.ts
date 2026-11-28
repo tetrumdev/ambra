@@ -169,6 +169,7 @@ export function rankArtists(values: CatalogArtist[], query: string, tracks: Trac
   return [...ranked.filter((_, index) => !flags[index]), ...ranked.filter((_, index) => flags[index])];
 }
 
+const REISSUE = /\b(deluxe|super|expanded|anniversary|collector|collectors|bonus|box set|boxset)\b/;
 // Labels that mark another pressing of the same album rather than a different record.
 // Anything else in brackets (Live, Acoustic, Blue Album…) keeps editions apart.
 const editionWords = new Set(["remaster", "remastered", "remasters", "deluxe", "super", "expanded", "anniversary", "edition", "special", "collector", "collectors", "bonus", "track", "tracks", "version", "reissue", "legacy", "definitive", "explicit", "digital", "the", "and", "s"]);
@@ -326,6 +327,9 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
   // An edition the query names (deluxe, 2011 remaster…) wins over a better-sounding one.
   const terms = searchText(query).split(" ").filter(term => editionWords.has(term) || /^\d{4}$/.test(term));
   const asked = (album: CatalogAlbum) => terms.filter(term => searchText(`${album.title} ${album.version ?? ""}`).split(" ").includes(term)).length;
+  // Unless one is asked for, the album as released stands for it rather than a deluxe, super
+  // deluxe or anniversary reissue that happens to sound better; the reissues stay among its versions.
+  const standard = (album: CatalogAlbum) => Number(terms.length === 0 && !REISSUE.test(searchText(`${album.title} ${album.version ?? ""}`)));
   // Every edition and service of one album collapses into its best copy; earlier results win ties.
   const groups: { album: CatalogAlbum; copies: CatalogAlbum[]; fusion: number; providers: Set<string>; score: number }[] = [];
   const ranks = new Map<string, number>();
@@ -344,7 +348,7 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
       group.fusion += 1 / (60 + rank);
       group.providers.add(item.provider);
     }
-    if (compareEditions(item, group.album, [asked(item), asked(group.album)]) > 0) group.album = item;
+    if (compareEditions(item, group.album, [asked(item) * 2 + standard(item), asked(group.album) * 2 + standard(group.album)]) > 0) group.album = item;
   }
   groups.sort((a, b) => b.score - a.score || b.fusion - a.fusion);
   const related = groups.filter(group => group.score >= RELATED);
