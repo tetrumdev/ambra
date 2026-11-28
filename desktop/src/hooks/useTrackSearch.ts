@@ -41,7 +41,10 @@ export function startTrackSearch(query: string, provider: SearchProvider, sessio
   setSnapshot(trimmedQuery ? { ...empty, isSearching: true } : empty);
   if (!trimmedQuery) return () => {};
 
-  // Enrich a bounded set of leading recording groups, including hidden TIDAL alternatives.
+  // Resolve the TIDAL copies shown among the leading songs, for their exact quality and a quick
+  // start, and the first song's hidden TIDAL copies, one of which may sound better than the copy
+  // shown. Other songs' hidden copies aren't: in the search benchmark, warming them never changed
+  // which copy leads and cost about three upstream requests per search.
   const warmed = new Set<string>();
   const queue: Track[] = [];
   let active = 0;
@@ -59,10 +62,8 @@ export function startTrackSearch(query: string, provider: SearchProvider, sessio
     setSnapshot(next);
     remember(next.candidates);
     if (!next.isSearching && warmed.size < 5) {
-      const leaders = new Set(next.results.slice(0, 5).map(track => track.globalId));
-      const alternatives = groupSearchResults(next.candidates, trimmedQuery)
-        .filter(group => leaders.has(group.track.globalId)).flatMap(group => group.alternatives);
-      for (const track of alternatives) {
+      const leader = next.results[0] && groupSearchResults(next.candidates, trimmedQuery).find(group => group.track.globalId === next.results[0].globalId);
+      for (const track of [...next.results.slice(0, 5), ...leader?.alternatives ?? []]) {
         if (warmed.size >= 5) break;
         if (track.provider !== "tidal" || warmed.has(track.globalId)) continue;
         warmed.add(track.globalId);
