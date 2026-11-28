@@ -264,9 +264,11 @@ export function bestEditions(albums: CatalogAlbum[]): CatalogAlbum[] {
 /**
  * Albums the query names, by the artist it names, or holding the song it names; best first,
  * one entry per album. Like `rankArtists`, a service's unrelated albums are left out whenever
- * anything matches, and kept when the query wasn't understood at all.
+ * anything matches, and kept when the query wasn't understood at all. With `songIntent` (the
+ * query is after a song), the leading song's own release comes first, and other artists'
+ * releases named like the song (covers, mostly) follow that artist's.
  */
-export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackCredit[] = []) {
+export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackCredit[] = [], songIntent = false) {
   const songs = tracks.slice(0, 3).map(track => ({
     album: fold(albumBaseTitle(track.album ?? "")), artists: artistCredits([track.artist]),
   }));
@@ -279,6 +281,10 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
     const names = artistCredits(entry.artists);
     const held = songs.findIndex(song => song.album && song.album === title
       && (names.has("various artists") || names.has("various") || [...song.artists].some(name => names.has(name))));
+    if (songIntent && songs[0]) {
+      if (held === 0) return Math.max(typed, 1.05);
+      if (![...songs[0].artists].some(name => names.has(name))) return (held < 0 ? typed : Math.max(typed, 0.85 - 0.05 * held)) * 0.7;
+    }
     return held < 0 ? typed : Math.max(typed, 0.85 - 0.05 * held);
   };
   // An edition the query names (deluxe, 2011 remaster…) wins over a better-sounding one.
