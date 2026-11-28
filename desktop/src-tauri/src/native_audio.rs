@@ -81,6 +81,8 @@ pub struct NativeAudioPlayer {
 
 #[derive(Clone, Default)]
 struct PlaybackStatus {
+    /// TEMPORARY diagnostics: what the open device adds after the app's queue, in ms.
+    diag_device_latency_ms: f64,
     current_source: Option<String>,
     current_time: f64,
     duration: f64,
@@ -130,6 +132,8 @@ pub(super) struct AudioQuality {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeAudioStatus {
+    /// TEMPORARY diagnostics (see `PlaybackStatus`).
+    diag_device_latency_ms: f64,
     current_source: Option<String>,
     current_time: f64,
     duration: f64,
@@ -453,6 +457,7 @@ pub async fn native_audio_status(
 pub(crate) fn status_on(player: &NativeAudioPlayer) -> NativeAudioStatus {
     let status = lock_status(&player.status).clone();
     NativeAudioStatus {
+        diag_device_latency_ms: status.diag_device_latency_ms,
         current_source: status.current_source,
         current_time: status.current_time,
         duration: status.duration,
@@ -1325,6 +1330,8 @@ impl<O: AudioOutput> PlaybackEngine<O> {
 
     fn install_output(&mut self, output: O, spec: StreamSpec) {
         self.device_latency = output.presentation_latency();
+        let latency_ms = self.device_latency.as_secs_f64() * 1000.0;
+        update_status(&self.status, |status| status.diag_device_latency_ms = latency_ms);
         self.output = Some(output);
         self.resync = ResyncDelay::new(self.audio_settings.selected().resync_delay_ms, spec);
         self.rendering = false;

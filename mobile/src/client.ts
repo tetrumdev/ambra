@@ -1,5 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 import { AppState } from "react-native";
+import { diag, diagEvery } from "./diagnostics";
 import { parseTrackLyrics, type TrackLyrics } from "../../desktop/src/utils/lyricsWire";
 import { networkCall, nativeNetworkAvailable } from "../modules/ambra-network/src";
 import { SessionClock } from "./sessionClock";
@@ -315,6 +316,7 @@ export function subscribeReachability(listener: () => void) {
 }
 function answered(yes: boolean) {
   const before = serverAnswering();
+  if (yes !== before) diag("client.answered", { yes });
   if (yes) { answeredAt = Date.now(); offlineWanted = false; }
   else unansweredAt = Date.now();
   if (serverAnswering() !== before) for (const listener of reachabilityListeners) listener();
@@ -360,6 +362,7 @@ async function send<T>(path: string, init: RequestInit & { timeoutMs?: number } 
     if (!response.ok) throw Object.assign(new Error(body?.error ?? `The server answered ${response.status}`), { status: response.status, body });
     return body as T;
   } catch (error) {
+    if (!init.signal?.aborted) diag("client.request_failed", { path: path.split("?")[0], error: String(error), timedOut: timeout.signal.aborted });
     // No answer at all, rather than one the caller stopped waiting for.
     if (!init.signal?.aborted && (timeout.signal.aborted || noAnswer(error))) {
       answered(false);
@@ -500,6 +503,7 @@ export async function sampleSyncClock(signal?: AbortSignal) {
   const offset = report.serverTimeMs - (sent + received) / 2;
   if (known !== null && Math.abs(known - offset) > 1000 + (received - sent)) syncClock.reset();
   syncClock.sample(report.serverTimeMs, sent, received);
+  diag("client.sync_clock_sample", { serverTimeMs: report.serverTimeMs, roundTripMs: received - sent, offsetMs: syncClock.offset(received) });
 }
 /** The server's clock less this phone's monotonic one, or null before any round trip. */
 export const syncClockOffset = () => syncClock.offset(performance.now());
@@ -528,6 +532,7 @@ export const playingHere = () => !!local?.playing;
 
 export function setLocalPlayback(next: LocalPlayback | null) {
   if (!next && !local) return;
+  diag("client.local_playback", { next });
   local = next;
   show();
 }
@@ -622,6 +627,8 @@ function accept(next: ArrivingView) {
   viewAt = Date.now();
   // As on desktop, the stream sends the position four times a second: a view that differs only
   // there updates the current one in place, for readers that sample it, and nothing redraws.
+  // TEMPORARY diagnostics: what the server says, and how old this phone thinks it is.
+  const viewFields = () => ({ revision: rest.revision, positionSeconds: rest.positionSeconds, serverTimeMs: rest.serverTimeMs, playing: rest.playing, buffering: rest.buffering, duration: rest.duration, loadedSource: rest.loadedSource?.replace(/[?#].*$/, "").slice(-80) ?? null, output: rest.output?.deviceName ?? null, local: local ? { ...local } : null, ageSeconds: sessionViewAge() });
   if (view && queue === view.queue && sameApartFromPosition(view, rest)) {
     for (const target of new Set([view, shown])) {
       if (!target) continue;
@@ -629,10 +636,12 @@ function accept(next: ArrivingView) {
       target.serverTimeMs = rest.serverTimeMs;
       if (target === view || !local) target.positionSeconds = rest.positionSeconds;
     }
+    diagEvery("view_position", 1000, "client.view_position", viewFields());
     for (const listener of positionListeners) listener();
     return true;
   }
   view = { ...rest, queue };
+  diag("client.view", viewFields());
   show();
   return true;
 }
@@ -693,7 +702,11 @@ async function samplePlaybackClock(signal?: AbortSignal) {
   const instance = view?.instanceId;
   const sent = Date.now();
   const report = await request<{ serverTimeMs: number }>(inSession("/api/session/clock"), { signal, timeoutMs: 3000 });
-  if (!signal?.aborted && instance === view?.instanceId) playbackClock.sample(report.serverTimeMs, sent, Date.now());
+  const received = Date.now();
+  if (!signal?.aborted && instance === view?.instanceId) {
+    playbackClock.sample(report.serverTimeMs, sent, received);
+    diag("client.clock_sample", { serverTimeMs: report.serverTimeMs, roundTripMs: received - sent, offsetMs: playbackClock.offset(received) });
+  }
 }
 
 /** Desktop's `syncServerClock`: a few readings one after another, then one every 15 seconds while open. */
@@ -713,6 +726,7 @@ export async function follow(signal: AbortSignal) {
   wakeFollower = () => wake.abort();
   // The connection may have died while suspended: ask again once it's known to answer (or replaced).
   const subscription = AppState.addEventListener("change", state => {
+    diag("client.app_state", { state });
     // In the background the stream's four positions a second would wake the phone for screens no
     // one sees: it's followed by asking for changes instead, and the stream opens again on return.
     if (state === "background") { wake.abort(); return; }
@@ -741,6 +755,7 @@ export async function follow(signal: AbortSignal) {
           if (asked === session && !accept(next)) accept(await request<ArrivingView>(inSession("/api/session"), { signal }));
         }
       } catch (error) {
+        diag("client.follow_error", { error: String(error), status: (error as { status?: number }).status ?? null });
         if (error instanceof Unpaired) throw error;
         // The session was removed on another device: back to the first one.
         if ((error as { status?: number }).status === 404 && session !== MAIN_SESSION) setSession(MAIN_SESSION);
@@ -880,3 +895,21 @@ export async function coverPalette(provider: string, url: string | null, cover?:
     return parseArtworkPalette(await request<unknown>(path));
   } catch { return null; }
 }
+
+/** TEMPORARY diagnostics: sends phone events to the server's log, outside the reachability bookkeeping. */
+export async function sendDiagnostics(events: Record<string, unknown>[]) {
+  if (!baseUrl) throw new Error("Not connected");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch(`${baseUrl}/api/diagnostics`, {
+      method: "POST", signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(directToken ? { Authorization: `Bearer ${directToken}` } : {}) },
+      body: JSON.stringify({ source: "phone", events }),
+    });
+    if (!response.ok) throw new Error(`The server answered ${response.status}`);
+  } finally { clearTimeout(timer); }
+}
+
+/** TEMPORARY diagnostics: what the native bridge recorded since the last call. */
+export const drainBridgeDiagnostics = () => nativeNetworkAvailable && !directMode ? networkCall<Record<string, unknown>[]>("diagnostics") : Promise.resolve([]);

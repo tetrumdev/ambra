@@ -274,6 +274,8 @@ impl ConnectionManager {
     }
     fn state(&self, state: ConnectionState, method: Option<Method>, error: Option<String>) {
         tracing::info!(?state, ?method, server = %self.selected.public_key, ?error, "Native connection state");
+        // TEMPORARY diagnostics: connection changes, for the app getting stuck disconnected.
+        crate::diagnostics::record("bridge_state", serde_json::json!({ "state": format!("{state:?}"), "method": format!("{method:?}"), "error": error }));
         self.status.send_replace(Status {
             state,
             method,
@@ -793,6 +795,7 @@ impl ConnectionManager {
     /// For an app coming back from being suspended: its connection may have died meanwhile
     /// without being noticed, so it must answer at once or be replaced before this returns.
     pub async fn revive(&self) -> Result<Arc<HttpConnection>> {
+        crate::diagnostics::record("bridge_revive", serde_json::json!({}));
         let active = self.active.read().await.clone();
         if let Some(active) = active.filter(|active| !active.is_closed()) {
             self.drop_if_silent(&active).await;
@@ -877,6 +880,7 @@ impl ConnectionManager {
     }
 
     pub fn network_changed(&self) {
+        crate::diagnostics::record("bridge_network_changed", serde_json::json!({}));
         self.network.send_modify(|generation| *generation += 1);
     }
 

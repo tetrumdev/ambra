@@ -8,6 +8,7 @@ import { needsLyricsRetry, type TrackLyrics } from "../../desktop/src/utils/lyri
 import { lyricActive } from "../../desktop/src/utils/lyricsTiming";
 import { sessionViewAge, subscribePosition, type SessionView, type Track } from "./client";
 import { refreshLyricPlayback } from "./lyricsPlayback";
+import { diag, diagEvery } from "./diagnostics";
 import { focusBlock, lyricBlocks, lyricSeekSeconds, lyricWordRuns, type LyricBlock, type LyricRow } from "./lyricsModel";
 import { useLyrics } from "./useLyrics";
 import { lyricPositionMs, nudgeLyricSync } from "./lyricSync";
@@ -55,6 +56,8 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
   }, []);
   useEffect(() => {
     const report = { time: position(), wall: Date.now(), end: (duration || 86_400) * 1000 + offset, playing: !!view?.playing && !view.buffering };
+    // TEMPORARY diagnostics: the time lyrics are told, against the view it came from.
+    diag("lyrics.clock", { lyricMs: Math.round(report.time), playing: report.playing, positionSeconds: view?.positionSeconds ?? null, ageSeconds: sessionViewAge(), held: held.current, offsetMs: offset, track: trackId ?? null, shown: active && foreground });
     sample.set(report);
     const shown = active && foreground;
     if (shown && (!activation.current.shown || activation.current.offset !== offset)) {
@@ -66,8 +69,12 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
     }
     activation.current = { shown, offset };
     // The stream's position reports change the view in place; each one corrects the clock.
-    return subscribePosition(() => sample.set({ ...report, time: position(), wall: Date.now() }));
-  }, [view, duration, offset, position, sample, time, initialized, previewRevision, active, foreground]);
+    return subscribePosition(() => {
+      const time = position();
+      diagEvery("lyrics_position", 1000, "lyrics.clock_position", { lyricMs: Math.round(time), positionSeconds: view?.positionSeconds ?? null, ageSeconds: sessionViewAge() });
+      sample.set({ ...report, time, wall: Date.now() });
+    });
+  }, [view, duration, offset, position, sample, time, initialized, previewRevision, active, foreground, trackId]);
   useEffect(() => {
     if (!active || !foreground) return;
     const abort = new AbortController();
@@ -103,6 +110,7 @@ function useLyricClock(view: SessionView | null, duration: number, offset: numbe
     if (fresh?.queue.current?.globalTrackId !== trackId) return;
     held.current = null;
     const report = { time: lyricPositionMs(fresh, playback.ageSeconds, duration, offset), wall: Date.now(), end: (duration || 86_400) * 1000 + offset, playing: !!fresh?.playing && !fresh.buffering };
+    diag("lyrics.resync", { lyricMs: Math.round(report.time), positionSeconds: fresh?.positionSeconds ?? null, ageSeconds: playback.ageSeconds });
     sample.set(report);
     time.set(report.time);
     initialized.set(false);

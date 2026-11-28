@@ -5,6 +5,7 @@ import { configureAudioSession } from "./audioSession";
 import * as SecureStore from "expo-secure-store";
 import { type SessionView, Unpaired, clientId, command, currentTrack, endpointRequest, phoneMediaUrl, playingOutputs, prefetchMedia, refreshSession, sampleSyncClock, sessionView, setLocalControl, setLocalPlayback, subscribe, syncClockOffset } from "./client";
 import { PHONE_DEVICE_ID, PhonePlayback } from "./phonePlayback";
+import { diag } from "./diagnostics";
 import { phoneUrlForSource } from "./downloads";
 import { setSystemVolume, systemVolume } from "../modules/ambra-activity/src";
 
@@ -101,6 +102,7 @@ export function followPhoneOutput() {
           if (!info?.ready) publish({ ...descriptor, ready: true, error: null });
         }
       } catch (reason) {
+        diag("endpoint.report_failed", { error: String(reason) });
         if (reason instanceof Unpaired) { abort.abort(); player?.release(); }
         if (!abort.signal.aborted && !info?.ready) publish({ ...descriptor, ready: false, error: reason instanceof Error ? reason.message : "Couldn't connect this phone to the server." });
       } finally {
@@ -139,6 +141,7 @@ export function followPhoneOutput() {
       showLocal();
     };
     player = new PhonePlayback({
+      label: "phone",
       create: source => {
         const created = createAudioPlayer(source, { updateInterval: 500, keepAudioSessionActive: true, allowsExternalPlayback: false });
         // Keeping in step with a group nudges the speed a little; the pitch must not move with it.

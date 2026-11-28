@@ -1,5 +1,7 @@
 //! Native networking shared by Ambra's server and clients, with Tailcat as the final fallback.
 pub mod bridge;
+/// TEMPORARY: playback diagnostics.
+pub mod diagnostics;
 pub mod gate;
 pub mod hyperdht;
 pub mod identity;

@@ -270,6 +270,12 @@ async fn presence(State(shared): State<Shared>, Extension(caller): Extension<Cal
         let latency = report.latency_ms.filter(|ms| ms.is_finite()).map_or(0.0, |ms| ms.clamp(0.0, 1000.0));
         let held = report.sampled_at_ms.filter(|ms| ms.is_finite()).map_or(Duration::ZERO, |ms| endpoint.report_delay(now, ms));
         let sampled_at = now.checked_sub(Duration::from_secs_f64(latency / 1000.0) + held).unwrap_or(now);
+        // TEMPORARY diagnostics: every output's position report, as the core will read it.
+        crate::diagnostics::record("server", "report", serde_json::json!({
+            "endpoint": endpoint_id, "name": endpoint.name, "status": status,
+            "networkLatencyMs": latency, "heldMs": held.as_secs_f64() * 1000.0,
+            "sampledMsAgo": now.duration_since(sampled_at).as_secs_f64() * 1000.0,
+        }));
         endpoint.status = status.clone();
         endpoint.status_at = now;
         endpoint.status_sampled_at = sampled_at;
@@ -423,6 +429,15 @@ impl Endpoints {
             if !args.is_object() { args = json!({}); }
             args["satellite"] = json!(device);
         }
+        // TEMPORARY diagnostics: every command sent to an output, and how it ended.
+        crate::diagnostics::record("server", "send", serde_json::json!({ "endpoint": address, "command": command, "args": args }));
+        let asked = Instant::now();
+        let result = self.call_inner(endpoint_id, command, args).await;
+        crate::diagnostics::record("server", "sent", serde_json::json!({ "endpoint": address, "command": command, "tookMs": asked.elapsed().as_secs_f64() * 1000.0, "result": result.as_ref().map_or_else(|error| serde_json::json!({ "error": error }), |value| value.clone()) }));
+        result
+    }
+
+    async fn call_inner(&self, endpoint_id: &str, command: &str, args: Value) -> Result<Value, String> {
         let timeout = if command == "load_native_audio" && args["source"].as_str().is_some_and(|source| source.starts_with("/api/playback/live/")) { Duration::from_secs(45) } else { COMMAND_TIMEOUT };
         let (reply, answer) = oneshot::channel();
         let id = next_id(self);

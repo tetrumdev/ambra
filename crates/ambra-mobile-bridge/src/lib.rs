@@ -88,6 +88,8 @@ async fn call(directory: &str, operation: &str, args: Value) -> ambra_net::Resul
             manager.revive().await?;
             Ok(serde_json::to_value(manager.status())?)
         }
+        // TEMPORARY: playback diagnostics recorded by the bridge since the last call.
+        "diagnostics" => Ok(Value::Array(ambra_net::diagnostics::drain())),
         "network_changed" => {
             if let Some(session) = SESSION.lock().map_err(|_| "Native session lock failed")?.as_ref() {
                 session.manager.network_changed();

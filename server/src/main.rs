@@ -5,6 +5,7 @@ mod artwork_quality;
 mod browser_auth;
 mod cli;
 mod credits;
+mod diagnostics;
 mod discovery;
 mod endpoints;
 mod firewall;

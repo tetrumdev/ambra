@@ -25,6 +25,7 @@ export class OfflineSession {
 
   constructor(private urlFor: (id: string) => string | null, private changed: () => void, queue: QueueSnapshot | null = null) {
     this.engine = new PhonePlayback({
+      label: "offline",
       create: source => createAudioPlayer(source, { updateInterval: 500, keepAudioSessionActive: true, allowsExternalPlayback: false }),
       activate: () => configureAudioSession(true),
       mediaUrl: source => source,

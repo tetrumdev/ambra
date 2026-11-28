@@ -1,10 +1,11 @@
 import { StatusBar } from "expo-status-bar";
 import { useFonts } from "expo-font";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppState, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability, wantsOffline } from "./src/client";
+import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability, wantsOffline, sendDiagnostics, drainBridgeDiagnostics } from "./src/client";
+import { diag, startDiagnostics } from "./src/diagnostics";
 import { deviceOnline, subscribeDevicePath } from "./modules/ambra-network/src";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
@@ -43,7 +44,11 @@ export default function App() {
   const { phone } = useDownloads();
   const offline = paired && unreachableSince !== null && phone.size > 0 && (wanted || (!busy && (cut || now - unreachableSince >= OFFLINE_AFTER_MS)));
   useOfflineSession(offline);
+  const offlineRef = useRef(offline);
+  useEffect(() => { offlineRef.current = offline; diag("app.offline_session", { active: offline, unreachableSince, wanted, busy, cut }); }, [offline]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void startPhoneDownloads(); }, []);
+  // TEMPORARY: playback diagnostics go to the server's log while paired.
+  useEffect(() => paired ? startDiagnostics(sendDiagnostics, drainBridgeDiagnostics) : undefined, [paired]);
   useEffect(() => {
     if (!paired) return;
     forgetState();
@@ -68,10 +73,13 @@ export default function App() {
     if (!paired) return;
     let disposed = false;
     let away = false;
+    let lastSeen = "";
     const refresh = () => void networkStatus().then(status => {
       if (disposed) return;
       const noNetwork = !deviceOnline();
       const connected = !noNetwork && status.state.startsWith("Connected") && serverAnswering();
+      const seen = JSON.stringify([noNetwork, status.state, status.method, status.error, serverAnswering()]);
+      if (seen !== lastSeen) { lastSeen = seen; diag("app.network_status", { noNetwork, status, answering: serverAnswering(), offlineSession: offlineRef.current }); }
       setCut(noNetwork);
       setBusy(!connected && playingHere());
       setWanted(!connected && wantsOffline());

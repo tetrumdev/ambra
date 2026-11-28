@@ -333,6 +333,8 @@ pub async fn serve(bind: Option<String>) -> ServerResult<()> {
             "/api/providers/{provider}/artists/{artist_id}/biography",
             get(credits::artist_biography),
         )
+        // TEMPORARY: playback diagnostics (diagnostics.rs).
+        .route("/api/diagnostics", post(crate::diagnostics::receive))
         .route("/api/credits/track", post(credits::track))
         .route("/api/credits/album", post(credits::album))
         .route("/api/quality/artwork", post(resolve_artwork_quality))
@@ -2265,6 +2267,8 @@ async fn stream_track(
     Path((provider, track_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
+    // TEMPORARY diagnostics: which bytes of a song each player asks for (a seek shows here).
+    crate::diagnostics::record("server", "stream_range", serde_json::json!({ "provider": provider, "track": track_id, "range": headers.get(RANGE).and_then(|range| range.to_str().ok()) }));
     match provider.as_str() {
         "tidal" => {
             let source = tidal_provider(&state)?

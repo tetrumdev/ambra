@@ -980,7 +980,7 @@ fn server_clock_start() -> Instant {
 }
 
 /// Milliseconds on a clock that only moves forward, from an arbitrary start in this process.
-fn server_time_ms() -> f64 {
+pub(crate) fn server_time_ms() -> f64 {
     server_clock_start().elapsed().as_secs_f64() * 1000.0
 }
 
@@ -1172,7 +1172,7 @@ async fn play_track(core: &Core, track_id: &str) {
     core.changed();
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 #[serde(tag = "action", rename_all = "camelCase")]
 enum Command {
     PlayTrack { #[serde(rename = "trackId")] track_id: String },
@@ -1191,6 +1191,9 @@ enum Command {
 }
 
 async fn command(InSession(core): InSession, Query(query): Query<ReadQuery>, Json(command): Json<Command>) -> Response {
+    // TEMPORARY diagnostics: every session command, with where the core thought it was.
+    let before = { let transport = core.transport(); json!({ "positionNow": transport.position_now(), "playing": transport.playing, "buffering": transport.buffering }) };
+    crate::diagnostics::record("server", "session_command", json!({ "session": core.id, "command": format!("{command:?}"), "before": before }));
     let retry_live = matches!(&command, Command::Play | Command::Toggle | Command::Seek { .. }) && core.transport().error.is_some();
     let interrupts_live = retry_live || matches!(&command, Command::Pause | Command::Stop | Command::Seek { .. } | Command::Next | Command::Previous | Command::PlayTrack { .. } | Command::Output { .. } | Command::Outputs { .. })
         || matches!(&command, Command::Toggle) && core.transport().playing;

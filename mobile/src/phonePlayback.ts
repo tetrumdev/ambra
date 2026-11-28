@@ -1,4 +1,5 @@
 import type { AudioEvents, AudioMetadata, AudioPlayer, AudioStatus } from "expo-audio";
+import { diag } from "./diagnostics";
 import { RATE_HOLD_MS, REALIGN_ABOVE, SyncTrim, carriedOver, positionAt, type SyncAnchor } from "./phoneSync";
 
 export const PHONE_DEVICE_ID = "system";
@@ -10,6 +11,8 @@ export type PhonePlayer = Pick<AudioPlayer, "playing" | "isLoaded" | "volume" | 
   addListener<Event extends "playbackStatusUpdate" | "remoteCommand">(event: Event, callback: AudioEvents[Event]): { remove(): void };
 };
 type Host = {
+  /** TEMPORARY diagnostics: which engine this is ("phone", "offline"). */
+  label?: string;
   create(source: string): PhonePlayer;
   activate(): Promise<void>;
   mediaUrl(source: string): string;
@@ -93,6 +96,26 @@ export class PhonePlayback {
 
   constructor(private host: Host) {}
 
+  /** TEMPORARY diagnostics: an event from this engine, with where its player says it is. */
+  private diag(event: string, fields: Record<string, unknown> = {}) {
+    const player = this.player;
+    diag(`playback.${event}`, { engine: this.host.label ?? "phone", source: this.source?.replace(/[?#].*$/, "").slice(-80) ?? null, currentTime: player?.currentTime ?? null, duration: player?.duration ?? null, playing: player?.playing ?? null, ...fields });
+  }
+
+  /** Every seek goes through here, so each is logged with where it asked and where it says it landed. */
+  private async seek(player: PhonePlayer, position: number, why: string) {
+    const before = player.currentTime;
+    const asked = performance.now();
+    this.diag("seek", { why, to: position, before });
+    try {
+      await player.seekTo(position, 0, 0);
+      this.diag("seeked", { why, to: position, before, tookMs: Math.round(performance.now() - asked), after: player.currentTime });
+    } catch (error) {
+      this.diag("seek_failed", { why, to: position, error: String(error) });
+      throw error;
+    }
+  }
+
   /** The system volume when this phone has one in reach (its buttons may have moved it), else the player's. */
   private currentVolume() {
     const system = this.host.systemVolume?.();
@@ -163,7 +186,7 @@ export class PhonePlayback {
     };
     if (wait > 0) {
       // In place now, so starting is only a play().
-      if (Math.abs(player.currentTime - position) > 0.02) void player.seekTo(position, 0, 0);
+      if (Math.abs(player.currentTime - position) > 0.02) void this.seek(player, position, "sync_start");
       sync.startTimer = setTimeout(begin, wait);
     } else {
       // Late: start from where the group already is.
@@ -181,7 +204,7 @@ export class PhonePlayback {
       const latency = (this.host.outputLatencyMs?.() ?? 0);
       const target = positionAt(sync.anchor, performance.now() + this.seekLatencyMs + latency);
       const asked = performance.now();
-      await player.seekTo(Math.max(0, target), 0, 0);
+      await this.seek(player, Math.max(0, target), "sync_realign");
       this.progress = null;
       // Learn how long seeks really take here, so the next one lands closer.
       const took = performance.now() - asked;
@@ -223,6 +246,7 @@ export class PhonePlayback {
     const latency = (this.host.outputLatencyMs?.() ?? 0);
     // What reaches the ear now is what the player played `latency` ago.
     const error = time - latency / 1000 - positionAt(sync.anchor, now);
+    this.diag("sync_check", { errorMs: Math.round(error * 1000), rate: sync.rate });
     if (Math.abs(error) > REALIGN_ABOVE) {
       // A seek needs a moment to settle and show where it landed.
       if (now - this.realignedAt < REALIGN_COOLDOWN_MS) return;
@@ -339,6 +363,7 @@ export class PhonePlayback {
   /** Plays, pauses or seeks at once, for the listener holding this phone. */
   async local(action: "play" | "pause" | "seek", positionSeconds?: number) {
     const player = this.player;
+    this.diag("local", { action, positionSeconds: positionSeconds ?? null });
     if (!player) return;
     this.clearSync();
     const held = this.skipping;
@@ -350,7 +375,7 @@ export class PhonePlayback {
       this.busy = true;
       this.ended = false;
       this.host.changed();
-      try { await player.seekTo(position, 0, 0); } finally { this.busy = false; this.previous = null; this.host.changed(); }
+      try { await this.seek(player, position, "local"); } finally { this.busy = false; this.previous = null; this.host.changed(); }
       if (held && this.player === player && this.intendedPlaying) player.play();
       return;
     }
@@ -363,10 +388,12 @@ export class PhonePlayback {
 
   private observe(player: PhonePlayer, status: AudioStatus) {
     if (this.player !== player) return;
+    this.diag("status", { status: { currentTime: status.currentTime, duration: status.duration, playing: status.playing, isLoaded: status.isLoaded, isBuffering: status.isBuffering, didJustFinish: status.didJustFinish, playbackState: (status as { playbackState?: unknown }).playbackState, timeControlStatus: (status as { timeControlStatus?: unknown }).timeControlStatus, reasonForWaitingToPlay: (status as { reasonForWaitingToPlay?: unknown }).reasonForWaitingToPlay, error: status.error ?? null }, ended: this.ended, busy: this.busy, syncing: !!this.sync });
     const previous = this.previous;
     const at = Date.now();
     this.native = status;
     if (status.didJustFinish) {
+      this.diag("finished", { next: this.next?.replace(/[?#].*$/, "").slice(-80) ?? null });
       // Like desktop's engine, move on to the queued song by itself. The core advances when it
       // sees the report, and the song keeps going even while the server is out of reach.
       const next = this.next;
@@ -426,8 +453,10 @@ export class PhonePlayback {
       this.syncTimer = setInterval(() => this.keepInStep(), SYNC_CHECK_MS);
     }
     const controller = new AbortController();
+    const loadStarted = Date.now();
     this.loading = controller;
     this.source = source;
+    this.diag("load", { position, autoplay, keepSync, reused: !!kept });
     this.busy = true;
     this.intendedPlaying = autoplay;
     try {
@@ -450,7 +479,8 @@ export class PhonePlayback {
         });
       }
       await this.ready(player, controller.signal);
-      await player.seekTo(Math.max(0, position), 0, 0);
+      this.diag("load_ready", { position, autoplay, tookMs: Date.now() - loadStarted });
+      await this.seek(player, Math.max(0, position), "load");
       if (controller.signal.aborted || !this.host.ownsOutput()) throw new Error("Playback was stopped.");
       const metadata = this.host.metadata();
       player.setActiveForLockScreen(true, metadata, { showSeekForward: false, showSeekBackward: false, showNextTrack: true, showPreviousTrack: true });
@@ -468,6 +498,19 @@ export class PhonePlayback {
   }
 
   async execute(command: string, args: Record<string, unknown>): Promise<unknown> {
+    const started = performance.now();
+    this.diag("execute", { command, args: { ...args, source: typeof args.source === "string" ? args.source.replace(/[?#].*$/, "").slice(-80) : undefined } });
+    try {
+      const result = await this.executeInner(command, args);
+      this.diag("executed", { command, tookMs: Math.round(performance.now() - started) });
+      return result;
+    } catch (error) {
+      this.diag("execute_failed", { command, tookMs: Math.round(performance.now() - started), error: String(error) });
+      throw error;
+    }
+  }
+
+  private async executeInner(command: string, args: Record<string, unknown>): Promise<unknown> {
     // A synced group's load, seek or play is held for the group's start; any other plays alone.
     const epoch = (args.sync as { epoch?: unknown } | null | undefined)?.epoch;
     const holding = typeof epoch === "number" && !this.overruled(args) && ["load_native_audio", "seek_native_audio", "play_native_audio"].includes(command);
@@ -520,7 +563,7 @@ export class PhonePlayback {
         this.skipping = false;
         this.busy = true;
         this.ended = false;
-        try { await player?.seekTo(position, 0, 0); } finally { this.busy = false; this.previous = null; }
+        try { if (player) await this.seek(player, position, "core"); } finally { this.busy = false; this.previous = null; }
         // A previous that restarts the song arrives as a seek; play on from the start.
         if (!holding && held && player && this.player === player && this.intendedPlaying) player.play();
         return null;

@@ -373,6 +373,7 @@ impl MediaCache {
         }
         let requested_range = headers.get(header::RANGE).and_then(|value| value.to_str().ok());
         let Some(total) = snapshot.total else {
+            crate::diagnostics::record("bridge_range", serde_json::json!({ "path": path, "method": method.as_str(), "range": requested_range, "total": null }));
             if requested_range.is_some() || *method == Method::HEAD {
                 return self.passthrough(path, method, headers).await;
             }
@@ -383,6 +384,12 @@ impl MediaCache {
             return response;
         };
         let range = requested_range.map(|value| parse_range(value, total));
+        // TEMPORARY diagnostics: the bytes the player asks for show where its audio really is.
+        crate::diagnostics::record("bridge_range", serde_json::json!({
+            "path": path, "method": method.as_str(), "range": requested_range, "parsed": range.flatten(),
+            "total": total, "downloaded": snapshot.downloaded, "done": snapshot.done,
+            "passthrough": range.flatten().is_some_and(|(start, _)| !snapshot.done && start > snapshot.downloaded + FAR_SEEK),
+        }));
         let (start, end) = match range {
             Some(Some(range)) => range,
             Some(None) => {
