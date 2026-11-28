@@ -3,7 +3,8 @@ import { remoteTrack } from "../../desktop/src/utils/remoteTrack";
 import { SearchSession, type SearchSnapshot } from "../../desktop/src/utils/searchSession";
 import { enrichCatalogPage } from "../../desktop/src/utils/catalogSearch";
 import { SearchCache } from "../../desktop/src/utils/searchCache";
-import { albumTracks } from "./library";
+import { leaderWarmup } from "../../desktop/src/utils/searchWarmup";
+import { albumTracks, withPlayback } from "./library";
 import { phoneMediaUrl, request, serverAddress } from "./client";
 import { services, type EnabledServices, type Service } from "./servicePreferences";
 
@@ -89,11 +90,16 @@ type SearchCallbacks = {
 export function startSearch(trimmed: string, selected: EnabledServices, provider: "all" | Service, signal: AbortSignal, report: SearchCallbacks) {
   // Asked during the debounce, so the search starts as soon as it ends.
   if (trimmed) configuredProviders().catch(() => {});
+  let session: SearchSession | null = null;
+  // As on desktop: the leading TIDAL copies' exact quality, which can change the copy shown.
+  const warm = leaderWarmup(trimmed, signal, withPlayback, track => session?.replaceTrack(track));
   const timer = setTimeout(() => {
     if (!trimmed) return;
     void openSearch(trimmed, selected, provider, signal, next => {
-      if (!signal.aborted) report.tracks(next);
-    }).then(next => { if (!signal.aborted) report.session(next); }).catch(reason => {
+      if (signal.aborted) return;
+      report.tracks(next);
+      warm(next);
+    }).then(next => { session = next; if (!signal.aborted) report.session(next); }).catch(reason => {
       if (!signal.aborted) report.error(reason);
     });
   }, 150);

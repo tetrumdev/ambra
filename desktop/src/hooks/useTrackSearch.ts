@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { configuredSearchProviders, loadAlbumTracks, resolveTrackPlayback, searchServerCatalog, type SearchProvider } from "../api/server";
 import type { GlobalTrackId, Track } from "../types/music";
-import { groupSearchResults } from "../utils/searchRanking";
+import { leaderWarmup } from "../utils/searchWarmup";
 import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
 import { preloadArtwork } from "../utils/artworkImages";
 import { providerThumbnail } from "../utils/providerThumbnail";
@@ -41,36 +41,12 @@ export function startTrackSearch(query: string, provider: SearchProvider, sessio
   setSnapshot(trimmedQuery ? { ...empty, isSearching: true } : empty);
   if (!trimmedQuery) return () => {};
 
-  // Resolve the TIDAL copies shown among the leading songs, for their exact quality and a quick
-  // start, and the first song's hidden TIDAL copies, one of which may sound better than the copy
-  // shown. Other songs' hidden copies aren't: in the search benchmark, warming them never changed
-  // which copy leads and cost about three upstream requests per search.
-  const warmed = new Set<string>();
-  const queue: Track[] = [];
-  let active = 0;
-  const drain = () => {
-    while (active < 2 && queue.length && !controller.signal.aborted) {
-      const track = queue.shift()!;
-      active++;
-      void resolvePlayback(track, controller.signal).then(resolved => {
-        if (!controller.signal.aborted) session?.replaceTrack(resolved);
-      }).catch(() => {}).finally(() => { active--; drain(); });
-    }
-  };
+  const warm = leaderWarmup(trimmedQuery, controller.signal, resolvePlayback, track => session?.replaceTrack(track));
   const onUpdate = (next: SearchSnapshot) => {
     if (controller.signal.aborted) return;
     setSnapshot(next);
     remember(next.candidates);
-    if (!next.isSearching && warmed.size < 5) {
-      const leader = next.results[0] && groupSearchResults(next.candidates, trimmedQuery).find(group => group.track.globalId === next.results[0].globalId);
-      for (const track of [...next.results.slice(0, 5), ...leader?.alternatives ?? []]) {
-        if (warmed.size >= 5) break;
-        if (track.provider !== "tidal" || warmed.has(track.globalId)) continue;
-        warmed.add(track.globalId);
-        queue.push(track);
-      }
-      drain();
-    }
+    warm(next);
   };
   // Asked during the debounce rather than after it; usually answered from the last minute's list.
   const discovery = configuredSearchProviders(controller.signal);
