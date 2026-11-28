@@ -351,8 +351,11 @@ export const STRONG_MATCH = 0.6;
  *
  * Songs that match far worse than the best one are left out. When nothing matches the query's
  * words at all (lyrics, a description, another alphabet), the services' own order is kept.
+ *
+ * `held` adds to a song's score: a list already on screen holds its order against answers that
+ * would only nudge it.
  */
-export function rankSearchGroups(tracks: Track[], query: string) {
+export function rankSearchGroups(tracks: Track[], query: string, held: (group: RecordingGroup) => number = () => 0) {
   const groups = groupSearchResults(tracks, query);
   const best = Math.max(0, ...groups.map(group => group.relevance));
   const order = new Map(groups.map((group, index) => [group, index]));
@@ -374,7 +377,7 @@ export function rankSearchGroups(tracks: Track[], query: string) {
     // Then a song by someone else that only mentions the artist, as covers do in their
     // titles ("99 Problems (Jay-Z)"), is not the one asked for.
     const mention = byArtist && credit.get(group)! < 0.5 ? 0.7 : 1;
-    return [group, group.relevance * variant * mention + 0.2 * agreement + 0.02 * releases];
+    return [group, group.relevance * variant * mention + 0.2 * agreement + 0.02 * releases + held(group)];
   }));
   return groups
     .filter(group => group.relevance >= cutoff)

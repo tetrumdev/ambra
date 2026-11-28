@@ -55,6 +55,9 @@ const MAX_COMPLETIONS = 10;
 const ALBUM_SEARCHED_GROUPS = 2;
 /** Other phrasings of the query tried on a service that found nothing good, at most. */
 const MAX_VARIANTS = 2;
+/** How many songs a search shows before "Show all", and how much a shown song's place is held. */
+const SHOWN = 5;
+const HOLD = 0.05;
 /** Services with no lossless audio: their answer can't replace a lossless copy already found. */
 const LOSSY = new Set<StreamingProvider>(["spotify"]);
 
@@ -72,6 +75,16 @@ export class SearchSession {
   private completing = 0;
   /** The lookups among those on services with lossless audio: only they can change the copy shown. */
   private improving = 0;
+  /** The songs on screen, first to fifth, by the copy shown. */
+  private shown: string[] = [];
+  /**
+   * A shown song's hold on its place: a late answer must outrank it clearly to move it, so the
+   * list doesn't reshuffle over evidence that barely separates two songs.
+   */
+  private held = (group: RecordingGroup) => {
+    const place = this.shown.findIndex(id => group.alternatives.some(copy => copy.globalId === id));
+    return place < 0 ? 0 : HOLD * (1 - place / SHOWN);
+  };
 
   constructor(private options: Options) {
     for (const provider of [...new Set(options.providers)].sort()) {
@@ -82,7 +95,7 @@ export class SearchSession {
   snapshot(): SearchSnapshot {
     const sources = [...this.sources.values()];
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
-    const ranked = rankSearchGroups(candidates, this.options.query);
+    const ranked = rankSearchGroups(candidates, this.options.query, this.held);
     // Grouping preserves the native order of a single provider's recordings.
     const groups = this.options.combined ? ranked : groupSearchResults(candidates, "");
     const results = groups.map(group => group.track);
@@ -159,6 +172,7 @@ export class SearchSession {
     }
     // The first visible list is consolidated when sources finish close together.
     // A slow/offline source can delay useful results by at most the bounded grace period.
+    if (this.initialResultsReleased) this.shown = next.results.slice(0, SHOWN).map(track => track.globalId);
     this.options.onUpdate(this.initialResultsReleased ? next : { ...next, results: [], allResults: [], candidates: [], artists: [], albums: [] });
   }
 
