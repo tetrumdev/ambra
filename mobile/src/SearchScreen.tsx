@@ -3,7 +3,7 @@ import { ActivityIndicator, Animated, FlatList, StyleSheet, Text, TextInput, Vie
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchSession, SearchSnapshot } from "../../desktop/src/utils/searchSession";
 import { musicProviderName } from "../../desktop/src/utils/musicProviderName";
-import { startSearch, type mergeCatalog } from "./catalog";
+import { startSearch } from "./catalog";
 import type { Track } from "../../desktop/src/types/music";
 import { changeQueue, command, currentTrack, sessionView, type QueueItem } from "./client";
 import { TrackRow } from "./TrackRow";
@@ -19,6 +19,8 @@ import { Touchable, type Frame } from "./Touchable";
 import { ReorderRow } from "./reorder";
 import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 
+/** Songs shown before the sections that follow them, when the query is after songs. */
+const LEADING_SONGS = 5;
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<Track>);
 const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], order: ["tracks", "artists", "albums"], isSearching: false, hasMore: false, error: null, canRetry: false };
 
@@ -38,7 +40,6 @@ export function SearchScreen() {
   const provider = filter !== "all" && !selected[filter] ? "all" : filter;
   const [response, setResponse] = useState({ key: "", snapshot: empty });
   const [attempt, setAttempt] = useState(0);
-  const [catalog, setCatalog] = useState<{ key: string; value: ReturnType<typeof mergeCatalog> } | null>(null);
   const { openSong, enqueue } = useTrackMenus();
   const session = useRef<SearchSession | null>(null);
   const input = useRef<ComponentRef<typeof TextInput>>(null);
@@ -57,7 +58,6 @@ export function SearchScreen() {
       tracks: next => setResponse({ key: searchKey, snapshot: next }),
       session: next => { session.current = next; },
       error: reason => setResponse({ key: searchKey, snapshot: { ...empty, error: reason instanceof Error ? reason.message : "Search failed. Try again.", canRetry: true } }),
-      catalog: value => setCatalog({ key: searchKey, value }),
     });
     return () => { stop(); abort.abort(); };
   }, [query, selected, provider, searchKey]);
@@ -77,22 +77,31 @@ export function SearchScreen() {
     if (!track) return;
     openSong(index, entries, results, frame, <TrackRow track={track} index={index} active={currentTrack(view)?.globalId === track.globalId} playing={!!view?.playing} detail={musicProviderName(track.provider)} onPress={() => {}} />);
   }, [openSong]);
-  const found = catalog?.key === searchKey && query.trim() ? catalog.value : null;
+  // The sections in the order the query asks for them: those before the songs sit above the
+  // list, those after follow its first few songs (or the header, when there are no songs).
+  const sections = query.trim() ? snapshot.order : [];
+  const row = (section: string) => section === "artists" ? !!snapshot.artists.length && <View key="artists" style={styles.bleed}><CardRow title="Artists" size={112} cards={snapshot.artists.slice(0, 12).map(artist => artistCard(artist, push))} /></View>
+    : section === "albums" ? !!snapshot.albums.length && <View key="albums" style={styles.bleed}><CardRow title="Albums" cards={snapshot.albums.slice(0, 16).map(album => albumCard(album, push))} /></View> : null;
+  const songsAt = results.length ? sections.indexOf("tracks") : sections.length;
+  const above = sections.slice(0, songsAt).map(row);
+  const below = sections.slice(songsAt + 1).map(row).filter(Boolean);
+  const belowAt = Math.min(results.length, LEADING_SONGS) - 1;
   const titleHeight = 58;
+  const withSections = (index: number, song: React.ReactElement) => index !== belowAt || !below.length ? song
+    : <View>{song}{below}{results.length > LEADING_SONGS && <Text style={styles.songsHeading}>More songs</Text>}</View>;
   return <View style={styles.screen}>
     <AnimatedFlatList ref={list} scrollsToTop={front} data={results} keyExtractor={track => track.globalId} keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
       scrollEventThrottle={16} onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scroll } } }], { useNativeDriver: true })}
       contentContainerStyle={{ paddingTop: insets.top + titleHeight + 132, paddingHorizontal: 12, paddingBottom: bottomInset + 24 }}
       scrollIndicatorInsets={{ top: insets.top + titleHeight + 120, bottom: bottomInset }} extraData={`${nowId}:${playing}`} initialNumToRender={12} maxToRenderPerBatch={8}
-      renderItem={({ item, index }) => <ReorderRow index={index} onHold={menu}><TrackRow track={item} index={index} active={nowId === item.globalId} playing={playing} detail={musicProviderName(item.provider)}
+      renderItem={({ item, index }) => withSections(index, <ReorderRow index={index} onHold={menu}><TrackRow track={item} index={index} active={nowId === item.globalId} playing={playing} detail={musicProviderName(item.provider)}
         onPress={play} onMenu={menu}
         swipeStart={{ icon: "playNext", label: "Play Next", run: () => enqueue(index, latest.current.entries, latest.current.results, true) }}
-        swipeEnd={{ icon: "addToQueue", label: "Queue", run: () => enqueue(index, latest.current.entries, latest.current.results, false) }} /></ReorderRow>}
+        swipeEnd={{ icon: "addToQueue", label: "Queue", run: () => enqueue(index, latest.current.entries, latest.current.results, false) }} /></ReorderRow>)}
       onEndReached={() => { if (snapshot.hasMore && !snapshot.isSearching) void session.current?.loadMore(); }} onEndReachedThreshold={0.5}
       ListHeaderComponent={<View>
         {snapshot.error ? <View style={styles.notice}><Text accessibilityRole="alert" style={styles.error}>{snapshot.error}</Text>{snapshot.canRetry && <Touchable accessibilityRole="button" onPress={() => setAttempt(value => value + 1)} style={styles.retry}><Text style={styles.retryText}>Retry search</Text></Touchable>}</View> : null}
-        {!!found?.artists.length && <View style={styles.bleed}><CardRow title="Artists" size={112} cards={found.artists.map(artist => artistCard(artist, push))} /></View>}
-        {!!found?.albums.length && <View style={styles.bleed}><CardRow title="Albums" cards={found.albums.map(album => albumCard(album, push))} /></View>}
+        {above}
         {results.length > 0 && <Text style={styles.songsHeading}>Songs</Text>}
       </View>}
       ListEmptyComponent={!snapshot.isSearching && !snapshot.error ? <Text style={styles.empty}>{query.trim() ? "No results" : ""}</Text> : undefined}

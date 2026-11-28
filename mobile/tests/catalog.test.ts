@@ -58,7 +58,9 @@ test("Ambra search merges recordings across connected services and skips disable
   const session = await catalog.openSearch("Blue", { tidal: true, qobuz: true, spotify: false }, "all", abort.signal, next => { latest.value = next; });
   await session!.loadMore();
   for (let attempt = 0; attempt < 40 && (!latest.value || latest.value.isSearching); attempt++) await Bun.sleep(5);
-  expect(requested.sort()).toEqual(["qobuz", "tidal"]);
+  // Each enabled service is asked, possibly twice (a short single word is also tried spelled out,
+  // as on desktop); the disabled one never is.
+  expect([...new Set(requested)].sort()).toEqual(["qobuz", "tidal"]);
   expect(latest.value!.results).toHaveLength(1);
   expect(latest.value!.allResults).toHaveLength(2);
   expect(latest.value!.results[0].audio).toStartWith("http://phone.test/capability/api/providers/");

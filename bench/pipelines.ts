@@ -89,19 +89,21 @@ export async function runMobile(apps: Apps, clock: VirtualClock, network: Networ
   let tracks: SearchSnapshot | null = null;
   let catalog: { artists: CatalogArtist[]; albums: CatalogAlbum[] } | null = null;
   let error: string | null = null;
-  // As SearchScreen draws it: the artists row, the albums row, then the songs.
   const push = () => {
-    const artists = catalog?.artists ?? [], albums = catalog?.albums ?? [];
-    const order: Section[] = [...artists.length ? ["artists" as const] : [], ...albums.length ? ["albums" as const] : [], "tracks", ...!artists.length ? ["artists" as const] : [], ...!albums.length ? ["albums" as const] : []];
+    const ordered = (tracks as (SearchSnapshot & { order?: Section[] }) | null)?.order;
+    // Since the phone shows the session's own sections in its order. Before (the baseline), it
+    // drew a separate catalog search's artists row, then albums row, then the songs.
+    const artists = ordered ? tracks!.artists : catalog?.artists ?? [], albums = ordered ? tracks!.albums : catalog?.albums ?? [];
+    const order: Section[] = ordered ?? [...artists.length ? ["artists" as const] : [], ...albums.length ? ["albums" as const] : [], "tracks", ...!artists.length ? ["artists" as const] : [], ...!albums.length ? ["albums" as const] : []];
     views.push({ at: clock.now - start, tracks: tracks?.results ?? [], artists, albums, order, searching: tracks ? tracks.isSearching : true,
       error: tracks?.error ?? error, candidates: tracks?.candidates ?? [], allTracks: tracks?.allResults ?? [] });
   };
   const stop = apps.mobile.startSearch(query.trim(), { tidal: true, qobuz: true, spotify: true }, "all", abort.signal, {
-    tracks: next => { tracks = next; push(); },
+    tracks: (next: SearchSnapshot) => { tracks = next; push(); },
     session: () => {},
-    error: reason => { error = String(reason); push(); },
-    catalog: value => { catalog = value; push(); },
-  });
+    error: (reason: unknown) => { error = String(reason); push(); },
+    catalog: (value: { artists: CatalogArtist[]; albums: CatalogAlbum[] }) => { catalog = value; push(); },
+  } as Parameters<Apps["mobile"]["startSearch"]>[4]);
   await clock.run(LIMIT_MS);
   stop();
   abort.abort();
