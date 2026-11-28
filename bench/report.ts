@@ -58,11 +58,32 @@ function table(title: string, rows: [string, string, "up" | "down"][], platform:
 }
 
 function categories(platform: string, profile: string) {
-  const b = before.result[platform][profile].byCategory, a = after.result[platform][profile].byCategory;
-  const lines = [`#### ${platform}, ${profile}: by category (dev + held-out)`, "", "| Category | n | Lead before → after | Top-1 before → after | Tracks MRR | Albums MRR | Artists MRR | Forbidden | Correct copy |", "|---|---:|---|---|---|---|---|---|---|"];
-  for (const name of Object.keys(a)) {
-    const pair = (key: string) => `${fmt(b[name]?.[key], 2)} → ${fmt(a[name]?.[key], 2)}`;
-    lines.push(`| ${name} | ${a[name].queries} | ${pair("leadAccuracy")} | ${pair("top1")} | ${pair("tracksMRR")} | ${pair("albumsMRR")} | ${pair("artistsMRR")} | ${pair("forbiddenTop5")} | ${pair("correctCopy")} |`);
+  const b = before.result[platform][profile].perQuery, a = after.result[platform][profile].perQuery;
+  const names = [...new Set(labels.flatMap(label => label.cat))].sort();
+  const rate = (values: number[]) => values.length ? (values.reduce((x, y) => x + y, 0) / values.length).toFixed(2) : "—";
+  const pair = (subset: typeof labels, read: (entry: any) => number | null) => {
+    const x = subset.map(label => read(b[label.id])).filter((v): v is number => v !== null);
+    const y = subset.map(label => read(a[label.id])).filter((v): v is number => v !== null);
+    return `${rate(x)} → ${rate(y)}`;
+  };
+  const lead = (entry: any) => Number(entry.score.leadHit), top1 = (entry: any) => Number(entry.score.top1);
+  const mrr = (section: string) => (entry: any) => entry.score.section[section]?.mrr ?? null;
+  const forbidden = (entry: any) => Number(entry.score.forbidden);
+  const lines = [`#### ${platform}, ${profile}: by category`, "", "| Category | n dev / held out | Lead dev | Lead held out | Top-1 dev | Top-1 held out | Tracks MRR | Albums MRR | Artists MRR | Forbidden |", "|---|---|---|---|---|---|---|---|---|---|"];
+  for (const name of names) {
+    const all = labels.filter(label => label.cat.includes(name));
+    const dev = all.filter(label => label.split === "dev"), held = all.filter(label => label.split === "holdout");
+    lines.push(`| ${name} | ${dev.length} / ${held.length} | ${pair(dev, lead)} | ${pair(held, lead)} | ${pair(dev, top1)} | ${pair(held, top1)} | ${pair(all, mrr("tracks"))} | ${pair(all, mrr("albums"))} | ${pair(all, mrr("artists"))} | ${pair(all, forbidden)} |`);
+  }
+  return lines.join("\n");
+}
+
+function confusion(platform: string, profile: string) {
+  const lines = [`#### ${platform}, ${profile}: leading section, expected (rows) × shown (columns), all queries, before → after`, "", "| Expected | tracks | albums | artists |", "|---|---|---|---|"];
+  for (const expected of ["tracks", "albums", "artists"]) {
+    const cell = (shown: string) => ["dev", "holdout"].map(split => [before, after].map(r => r.result[platform][profile][split].hierarchy.confusion[expected]?.[shown] ?? 0))
+      .reduce(([x0, y0], [x1, y1]) => [x0 + x1, y0 + y1], [0, 0]).join(" → ");
+    lines.push(`| ${expected} | ${cell("tracks")} | ${cell("albums")} | ${cell("artists")} |`);
   }
   return lines.join("\n");
 }
@@ -114,7 +135,7 @@ const out: string[] = [`Before: \`${before.meta.commit}\`; after: \`${after.meta
 for (const platform of ["desktop", "mobile"]) {
   out.push(`### ${platform[0].toUpperCase()}${platform.slice(1)}`, "", table(`${platform}: hierarchy and accuracy (typical latency)`, metrics, platform, "typical"), "");
   for (const profile of Object.keys(after.result[platform])) out.push(table(`${platform}: speed, ${profile} latency`, speed, platform, profile), "");
-  out.push(categories(platform, "typical"), "", movers(platform, "typical"), "");
+  out.push(confusion(platform, "typical"), "", categories(platform, "typical"), "", movers(platform, "typical"), "");
 }
 out.push("### Parity", "", parity("typical"));
 console.log(out.join("\n"));
