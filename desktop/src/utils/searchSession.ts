@@ -1,7 +1,7 @@
 import { albumBaseTitle, categoryOrder, rankArtists, rankAlbums, searchText, searchTrackTitle, type SearchCategory } from "./catalogRanking";
 import type { CatalogArtist, CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
 import type { Track } from "../types/music";
-import { albumTitleFamily, asksForClean, everyCopy, explicitAudio, groupSearchResults, lossless, rankSearchGroups, sameSong, STRONG_MATCH, type RecordingGroup } from "./searchRanking";
+import { albumTitleFamily, asksForClean, distinctFirst, everyCopy, explicitAudio, groupSearchResults, lossless, rankSearchGroups, sameSong, STRONG_MATCH, type RecordingGroup } from "./searchRanking";
 import { artistCredits, matchTrack, queryVariants } from "./searchMatch";
 import { musicProviderName } from "./musicProviderName";
 
@@ -111,7 +111,7 @@ export class SearchSession {
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
     const ranked = this.rank(candidates);
     // Grouping preserves the native order of a single provider's recordings.
-    const groups = this.options.combined ? ranked : groupSearchResults(candidates, "");
+    const groups = this.options.combined ? distinctFirst(ranked, this.options.query) : groupSearchResults(candidates, "");
     const results = groups.map(group => group.track);
     // The songs the query plainly names: their artists and albums belong in the results.
     const named = ranked.filter(group => group.relevance >= STRONG_MATCH).slice(0, 3).map(group => group.track);

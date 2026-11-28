@@ -1,4 +1,4 @@
-import { artistCredits, matchTrack, variantFactor } from "./searchMatch";
+import { artistCredits, fold, matchTrack, titleParts, variantFactor } from "./searchMatch";
 import { serviceRank } from "./servicePreference";
 import type { Track } from "../types/music";
 
@@ -274,6 +274,8 @@ export type RecordingGroup = {
   fusionScore: number;
 };
 
+/** `variantFactor` of someone else's rendition of a song. */
+const REMAKE = 0.55;
 /** Reciprocal-rank constant: small, so a service's first results count far more than its tenth. */
 const FUSION_RANK = 10;
 
@@ -386,6 +388,25 @@ export function rankSearchGroups(tracks: Track[], query: string, held: (group: R
       || Number(compilation(a.track)) - Number(compilation(b.track))
       || compareSoundQuality(b.track, a.track)
       || byCodePoint(a.track.globalId, b.track.globalId));
+}
+
+/**
+ * The same order, with each song once before any song is repeated: another recording of a title
+ * already listed by the same artist, in the same kind of version (a single or album version, a
+ * second remaster, another remix), follows every other song instead of filling the first places
+ * twice. Remakes (karaoke, piano covers, tributes) stay behind it all the same.
+ */
+export function distinctFirst(groups: RecordingGroup[], query: string) {
+  const seen = new Set<string>();
+  const repeated = groups.map(group => {
+    const { track } = group;
+    if (variantFactor({ title: track.name, notes: track.version ? [track.version] : [], artists: [track.artist], album: track.album }, query) <= REMAKE) return true;
+    const key = `${fold(titleParts(group.track.name).base)}|${normalized(group.track.artist)}|${performance(group.track)}`;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    return false;
+  });
+  return [...groups.filter((_, index) => !repeated[index]), ...groups.filter((_, index) => repeated[index])];
 }
 
 export function rankSearchResults(tracks: Track[], query: string) {
