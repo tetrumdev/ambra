@@ -2,6 +2,34 @@ import { artistCredits, fold, foldTokens, matchEntry, matchName, variantFactor }
 import { serviceRank } from "./servicePreference";
 import type { CatalogArtist, CatalogAlbum } from "../api/server";
 
+/** A value derived from an entry, worked out once per entry object (entries aren't changed in place). */
+function derived<T extends object, V>(compute: (item: T) => V) {
+  const cache = new WeakMap<T, V>();
+  return (item: T) => {
+    if (cache.has(item)) return cache.get(item)!;
+    const value = compute(item);
+    cache.set(item, value);
+    return value;
+  };
+}
+
+// How well each entry explains a query, kept for the last few queries: every answer and
+// background lookup ranks the same entries again. One store per query and kind of fit.
+const fitStores = new Map<string, WeakMap<object, unknown>>();
+function remembered<V>(kind: string, entry: object, query: string, fit: () => V): V {
+  const key = `${kind}|${query}`;
+  let store = fitStores.get(key);
+  if (!store) {
+    store = new WeakMap();
+    fitStores.set(key, store);
+    if (fitStores.size > 16) fitStores.delete(fitStores.keys().next().value!);
+  }
+  if (store.has(entry)) return store.get(entry) as V;
+  const value = fit();
+  store.set(entry, value);
+  return value;
+}
+
 export function searchText(value: string) {
   return value.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase().replace(/&/g, " and ").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
@@ -68,7 +96,16 @@ const RELATED = 0.55;
 /** The same for an artist: a name is short, so one near-miss word must not be enough. */
 const RELATED_ARTIST = 0.65;
 /** One act however a service spells it: "4hero" and "4 Hero", "C.L. Smooth" and "CL Smooth". */
-const artistKey = (name: string) => fold(name).replace(/ /g, "");
+const artistKeys = new Map<string, string>();
+const artistKey = (name: string) => {
+  let key = artistKeys.get(name);
+  if (key === undefined) {
+    key = fold(name).replace(/ /g, "");
+    if (artistKeys.size > 4000) artistKeys.clear();
+    artistKeys.set(name, key);
+  }
+  return key;
+};
 
 /**
  * Artists the query names, and those credited on the songs it names; best first. A service's
@@ -87,7 +124,7 @@ export function rankArtists(values: CatalogArtist[], query: string, tracks: Trac
     .flatMap(track => [...artistCredits([track.artist])]));
   const scores = new Map<CatalogArtist, { score: number; coverage: number; spelled: boolean }>();
   const score = (artist: CatalogArtist) => {
-    const { named, coverage, exact } = matchName(artist.name, query);
+    const { named, coverage, exact } = remembered("artistName", artist, query, () => matchName(artist.name, query));
     // The whole name within a longer query, or a query that is the start of a name.
     const typed = Math.max(named * (0.6 + 0.4 * coverage), coverage * (0.5 + 0.5 * named));
     const name = fold(artist.name);
@@ -146,13 +183,13 @@ export function albumBaseTitle(title: string) {
     .replace(/\s+[-–—:]\s+([^-–—:]+)$/, (whole, label: string) => editionLabel(label) ? "" : whole);
 }
 /** The album an edition belongs to: its title and version without remaster or deluxe labels. */
-export function albumIdentity(album: CatalogAlbum) {
+export const albumIdentity = derived((album: CatalogAlbum) => {
   const version = album.version && !editionLabel(album.version) ? album.version : "";
   // Some services repeat the version in the title ("… (Instrumental)"); others keep it separate.
   const title = searchText(albumBaseTitle(album.title));
   const bare = version && title.endsWith(` ${searchText(version)}`) ? title.slice(0, -searchText(version).length - 1) : title;
   return `${bare}|${searchText(version)}`;
-}
+});
 
 /** Everyone credited on an album, by name; services list collaborators differently. */
 function albumArtistNames(album: CatalogAlbum) {
@@ -169,11 +206,11 @@ function albumArtistNames(album: CatalogAlbum) {
  */
 export function sameAlbum(left: CatalogAlbum, right: CatalogAlbum) {
   if (albumIdentity(left) !== albumIdentity(right)) return false;
-  // One service credits "Pete Rock & C.L. Smooth" as an act, another as two artists.
-  const credits = (album: CatalogAlbum) => artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]);
-  const theirs = credits(right);
-  return [...credits(left)].some(name => theirs.has(name));
+  const theirs = albumCredits(right);
+  return [...albumCredits(left)].some(name => theirs.has(name));
 }
+// One service credits "Pete Rock & C.L. Smooth" as an act, another as two artists.
+const albumCredits = derived((album: CatalogAlbum) => artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]));
 
 // A choice is filed under each credited artist, so a service listing collaborators differently still finds it.
 const preferenceKeys = (album: CatalogAlbum) => [...albumArtistNames(album)].map(name => `${name}|${albumIdentity(album)}`);
@@ -274,7 +311,7 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
   const score = (album: CatalogAlbum) => {
     const entry = { title: album.title, notes: album.version ? [album.version] : [],
       artists: album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist] };
-    const typed = matchEntry(entry, query).score * variantFactor(entry, query);
+    const typed = remembered("albumTyped", album, query, () => matchEntry(entry, query).score * variantFactor(entry, query));
     // The release a named song is on, most of all the leading song's.
     const title = fold(albumBaseTitle(album.title));
     const names = artistCredits(entry.artists);
@@ -317,16 +354,10 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
 export type SearchCategory = "tracks" | "artists" | "albums";
 type Evidence = TrackCredit & { album: string; provider?: string };
 
-// How well each entry explains the query, kept while the query stays the same: every answer and
-// background lookup reruns `categoryOrder` over the same entries.
-let fitQuery = "";
-let fits = new WeakMap<object, number>();
-function remembered(entry: object, query: string, fit: () => number) {
-  if (query !== fitQuery) { fitQuery = query; fits = new WeakMap(); }
-  let value = fits.get(entry);
-  if (value === undefined) { value = fit(); fits.set(entry, value); }
-  return value;
-}
+const songKey = derived((track: Evidence) => `${fold(searchTrackTitle(track.name))}|${fold(track.artist)}`);
+const albumKey = derived((album: CatalogAlbum) => `${fold(albumBaseTitle(album.title))}|${fold(album.artist)}`);
+const trackCredits = derived((track: Evidence) => artistCredits([track.artist]));
+const trackAlbum = derived((track: Evidence) => fold(albumBaseTitle(track.album)));
 
 /** How much a service's n-th answer (from 0) says about what the query means. */
 const nativeWeight = (rank: number) => 1 / (1 + rank / 2);
@@ -360,14 +391,12 @@ export function categoryOrder(query: string, tracks: Evidence[], artists: Catalo
     }
     return (id: string) => [...places.get(id) ?? []].reduce((sum, [, rank]) => sum + nativeWeight(rank), 0) / services.length;
   };
-  const songKey = (track: Evidence) => `${fold(searchTrackTitle(track.name))}|${fold(track.artist)}`;
-  const albumKey = (album: CatalogAlbum) => `${fold(albumBaseTitle(album.title))}|${fold(album.artist)}`;
   const songBacking = ranks(tracks, songKey, track => track.provider ?? "single");
   const artistBacking = ranks(artists, artist => fold(artist.name), artist => artist.provider);
   const albumBacking = ranks(albums, albumKey, album => album.provider);
   // Each service's first ten songs.
   const leading = services.map(service => tracks.filter(track => (track.provider ?? "single") === service).slice(0, 10)
-    .map(track => ({ credits: artistCredits([track.artist]), album: fold(albumBaseTitle(track.album)) }))).filter(list => list.length);
+    .map(track => ({ credits: trackCredits(track), album: trackAlbum(track) }))).filter(list => list.length);
   const share = (owns: (track: { credits: Set<string>; album: string }) => boolean) => leading.length ? leading.reduce((sum, list) => sum + list.filter(owns).length / list.length, 0) / leading.length : 0;
   const best = (values: number[]) => Math.max(0, ...values);
 
@@ -380,7 +409,7 @@ export function categoryOrder(query: string, tracks: Evidence[], artists: Catalo
     const name = fold(artist.name);
     if (seenArtists.has(name)) return 0;
     seenArtists.add(name);
-    const fit = remembered(artist, query, () => artistFit(artist.name));
+    const fit = remembered("artistFit", artist, query, () => artistFit(artist.name));
     if (fit < 0.5) return 0;
     const owned = share(track => track.credits.has(name));
     return fit * (0.3 + 0.35 * artistBacking(name) + 0.35 * Math.min(1, 2 * owned));
@@ -390,7 +419,7 @@ export function categoryOrder(query: string, tracks: Evidence[], artists: Catalo
     const key = songKey(track);
     if (seenSongs.has(key)) return 0;
     seenSongs.add(key);
-    const fit = remembered(track, query, () => {
+    const fit = remembered("songFit", track, query, () => {
       const match = matchEntry({ title: searchTrackTitle(track.name), artists: [track.artist] }, query);
       return match.score * match.title;
     });
@@ -403,7 +432,7 @@ export function categoryOrder(query: string, tracks: Evidence[], artists: Catalo
     seenAlbums.add(key);
     const title = fold(albumBaseTitle(album.title));
     const credits = artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]);
-    const fit = remembered(album, query, () => {
+    const fit = remembered("albumFit", album, query, () => {
       // Its artist's evidence, when the query is that artist's name.
       if (title === fold(album.artist) && artistFit(album.artist) >= 0.8) return 0;
       const match = matchEntry({ title: album.title, notes: album.version ? [album.version] : [], artists: [...credits] }, query);

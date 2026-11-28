@@ -15,7 +15,19 @@ function normalized(value: string) {
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+// Titles and performances are compared many times per ranking; each is worked out once.
+const titles = new Map<string, string>();
 function title(value: string) {
+  let folded = titles.get(value);
+  if (folded === undefined) {
+    folded = foldedTitle(value);
+    if (titles.size > 4000) titles.clear();
+    titles.set(value, folded);
+  }
+  return folded;
+}
+
+function foldedTitle(value: string) {
   return normalized(value
     // "(with John Legend)" credits a guest like "feat." does; a bare "with" is part of a title.
     .replace(/\s*[([]\s*(?:feat\.?|ft\.?|featuring|with)\s+[^)\]]*[)\]]/gi, "")
@@ -28,8 +40,15 @@ function remaster(track: Track) {
   return /\bremaster(?:ed)?\b/i.test(`${track.name} ${track.version ?? ""} ${track.album} ${track.albumVersion ?? ""}`);
 }
 
+const performances = new WeakMap<Track, string>();
 // Only edition annotations count: a song called "Live Forever" is not a live performance.
 function performance(track: Track) {
+  let kinds = performances.get(track);
+  if (kinds === undefined) { kinds = performanceKinds(track); performances.set(track, kinds); }
+  return kinds;
+}
+
+function performanceKinds(track: Track) {
   const annotations = [track.version ?? "", ...(track.name.match(/\([^)]*\)|\[[^\]]*\]|\s[-–—]\s.*$/g) ?? [])];
   return [...new Set(normalized(annotations.join(" ")).match(/\b(live|acoustic|instrumental|acapella|capella|cappella|karaoke|tribute|remix|rmx|mix|edit|demo|session|cover|dub|rework)\b/g) ?? [])].sort().join(" ");
 }
@@ -357,6 +376,20 @@ export const STRONG_MATCH = 0.6;
  * `held` adds to a song's score: a list already on screen holds its order against answers that
  * would only nudge it.
  */
+let variantQuery = "";
+let variants = new WeakMap<Track, number>();
+/** `variantFactor` of a track for a query, worked out once per track while the query stays the same. */
+function trackVariant(track: Track, query: string) {
+  if (query !== variantQuery) { variantQuery = query; variants = new WeakMap(); }
+  let factor = variants.get(track);
+  if (factor === undefined) {
+    factor = variantFactor({ title: track.name, notes: track.version ? [track.version] : [],
+      artists: track.artists.length ? track.artists.map(artist => artist.name) : [track.artist], album: track.album }, query);
+    variants.set(track, factor);
+  }
+  return factor;
+}
+
 export function rankSearchGroups(tracks: Track[], query: string, held: (group: RecordingGroup) => number = () => 0) {
   const groups = groupSearchResults(tracks, query);
   const best = Math.max(0, ...groups.map(group => group.relevance));
@@ -371,8 +404,7 @@ export function rankSearchGroups(tracks: Track[], query: string, held: (group: R
     && group.alternatives.some(copy => matchTrack(copy, query).title >= 0.99));
   const rank = new Map(groups.map(group => {
     const { track } = group;
-    const variant = variantFactor({ title: track.name, notes: track.version ? [track.version] : [],
-      artists: track.artists.length ? track.artists.map(artist => artist.name) : [track.artist], album: track.album }, query);
+    const variant = trackVariant(track, query);
     const agreement = group.fusionScore / (services / (FUSION_RANK + 1));
     // A song released many times over is usually the known one.
     const releases = Math.min(group.alternatives.length, 5) / 5;
@@ -396,11 +428,24 @@ export function rankSearchGroups(tracks: Track[], query: string, held: (group: R
  * second remaster, another remix), follows every other song instead of filling the first places
  * twice. Remakes (karaoke, piano covers, tributes) stay behind it all the same.
  */
+let remakeQuery = "";
+let remakes = new WeakMap<Track, boolean>();
+/** Someone else's rendition (karaoke, a piano cover, a tribute) by its own credit; once per track and query. */
+function remakeOf(track: Track, query: string) {
+  if (query !== remakeQuery) { remakeQuery = query; remakes = new WeakMap(); }
+  let remake = remakes.get(track);
+  if (remake === undefined) {
+    remake = variantFactor({ title: track.name, notes: track.version ? [track.version] : [], artists: [track.artist], album: track.album }, query) <= REMAKE;
+    remakes.set(track, remake);
+  }
+  return remake;
+}
+
 export function distinctFirst(groups: RecordingGroup[], query: string) {
   const seen = new Set<string>();
   const repeated = groups.map(group => {
     const { track } = group;
-    if (variantFactor({ title: track.name, notes: track.version ? [track.version] : [], artists: [track.artist], album: track.album }, query) <= REMAKE) return true;
+    if (remakeOf(track, query)) return true;
     const key = `${fold(titleParts(group.track.name).base)}|${normalized(group.track.artist)}|${performance(group.track)}`;
     if (seen.has(key)) return true;
     seen.add(key);
