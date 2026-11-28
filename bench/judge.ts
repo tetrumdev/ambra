@@ -120,11 +120,19 @@ export type Score = {
   section: Record<Section, { mrr: number; ndcg: number | null; top1: boolean } | null>;
   forbidden: boolean;
   duplicates: number;
+  duplicatesBySection: Record<Section, string[]>;
   copyOk: boolean | null;
   editionOk: boolean | null;
   consistency: { album: boolean | null; artist: boolean | null; artistTracks: boolean | null; artistAlbums: boolean | null };
   disambiguation: boolean | null;
   empty: boolean;
+};
+
+/** What makes two entries the same thing to a listener: duplicates, and items nDCG counts once. */
+const itemKey = {
+  tracks: (track: Track) => `${baseTitle(track.name)}|${norm(track.artist)}|${variantOf(track).join()}`,
+  albums: (album: CatalogAlbum) => `${albumBase(album.title)}|${norm(album.artist)}|${norm(album.version ?? "")}`,
+  artists: (artist: CatalogArtist) => norm(artist.name),
 };
 
 export function score(label: Label, view: View, pool: { tracks: Track[]; albums: CatalogAlbum[]; artists: CatalogArtist[] }): Score {
@@ -138,8 +146,19 @@ export function score(label: Label, view: View, pool: { tracks: Track[]; albums:
     if (!judge) { section[name] = null; continue; }
     const items = visible[name].slice(0, 10);
     const rank = items.findIndex(item => judge.hit(item));
-    const grades = items.slice(0, 5).map(item => judge.hit(item) ? 2 : judge.related(item) ? 1 : 0);
-    const available = (pool[name] as unknown[]).map(item => judge.hit(item) ? 2 : judge.related(item) ? 1 : 0).sort((a, b) => b - a).slice(0, 5);
+    // Each distinct song, album or name counts once, on screen and in the ideal list alike:
+    // a second recording of the expected song is not a second relevant result.
+    const key = itemKey[name] as (item: unknown) => string;
+    const counted = new Set<string>();
+    const grades = items.slice(0, 5).map(item => {
+      const k = key(item);
+      if (counted.has(k)) return 0;
+      counted.add(k);
+      return judge.hit(item) ? 2 : judge.related(item) ? 1 : 0;
+    });
+    const best = new Map<string, number>();
+    for (const item of pool[name] as unknown[]) best.set(key(item), Math.max(best.get(key(item)) ?? 0, judge.hit(item) ? 2 : judge.related(item) ? 1 : 0));
+    const available = [...best.values()].sort((a, b) => b - a).slice(0, 5);
     const ideal = dcg(available);
     section[name] = { mrr: rank < 0 ? 0 : 1 / (rank + 1), ndcg: ideal > 0 ? dcg(grades) / ideal : null, top1: rank === 0 };
   }
@@ -158,13 +177,16 @@ export function score(label: Label, view: View, pool: { tracks: Track[]; albums:
   // The same song, album or name twice among the first ten of a section.
   const dupes = <T>(items: T[], key: (item: T) => string) => {
     const seen = new Set<string>();
-    let count = 0;
-    for (const item of items.slice(0, 10)) { const k = key(item); if (seen.has(k)) count++; seen.add(k); }
-    return count;
+    const repeated: string[] = [];
+    for (const item of items.slice(0, 10)) { const k = key(item); if (seen.has(k)) repeated.push(k); seen.add(k); }
+    return repeated;
   };
-  const duplicates = dupes(view.tracks, track => `${baseTitle(track.name)}|${norm(track.artist)}|${variantOf(track).join()}`)
-    + dupes(view.albums, album => `${albumBase(album.title)}|${norm(album.artist)}|${norm(album.version ?? "")}`)
-    + dupes(view.artists, artist => norm(artist.name));
+  const duplicatesBySection = {
+    tracks: dupes(view.tracks, itemKey.tracks),
+    albums: dupes(view.albums, itemKey.albums),
+    artists: dupes(view.artists, itemKey.artists),
+  };
+  const duplicates = duplicatesBySection.tracks.length + duplicatesBySection.albums.length + duplicatesBySection.artists.length;
 
   // The copy shown for the song asked for: lossless, on a proper album, explicit unless asked clean.
   let copyOk: boolean | null = null;
@@ -223,5 +245,5 @@ export function score(label: Label, view: View, pool: { tracks: Track[]; albums:
       disambiguation = !!top && artistHit(top, label.ar.n) && own.some(id => ids.has(id));
     }
   }
-  return { leadPredicted, leadHit, top1, section, forbidden, duplicates, copyOk, editionOk, consistency, disambiguation, empty };
+  return { leadPredicted, leadHit, top1, section, forbidden, duplicates, duplicatesBySection, copyOk, editionOk, consistency, disambiguation, empty };
 }

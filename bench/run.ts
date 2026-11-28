@@ -311,13 +311,19 @@ async function live() {
         const started = wallClock.now();
         let first: number | null = null, done: number | null = null;
         const ref = { current: null };
+        let last = wallClock.now();
         await new Promise<void>(resolve => {
           const stop = apps.desktop.startTrackSearch(label.q, "all", ref, snapshot => {
             const now = wallClock.now() - started;
+            last = wallClock.now();
             if (first === null && (snapshot.results.length || snapshot.albums.length || snapshot.artists.length)) first = now;
             if (!snapshot.isSearching && first !== null) done = now;
           }, () => {});
-          setTimeout(() => { stop(); resolve(); }, 12_000);
+          // Ends 3 s after the last update once every service answered, or after 12 s.
+          const check = setInterval(() => {
+            const quiet = done !== null && wallClock.now() - last > 3000;
+            if (quiet || wallClock.now() - started > 12_000) { clearInterval(check); stop(); resolve(); }
+          }, 250);
         });
         results.push({ round, pass, id: label.id, first, done, requests: log.length });
       }
