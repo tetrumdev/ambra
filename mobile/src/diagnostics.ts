@@ -24,19 +24,33 @@ export function diagEvery(key: string, ms: number, event: string, fields: Record
 export function startDiagnostics(
   send: (events: Record<string, unknown>[]) => Promise<unknown>,
   drainBridge: () => Promise<Record<string, unknown>[]>,
+  /** Keeps unsent events on disk, so a restart during a disconnect doesn't lose them. */
+  store?: { load(): Promise<string | null>; save(text: string | null): Promise<void> },
 ) {
   let stopped = false;
   let sending = false;
+  let saved = "";
+  const restored = store?.load().then(text => {
+    if (!text) return;
+    try { queue.unshift(...(JSON.parse(text) as Record<string, unknown>[]).map(event => ({ ...event, restored: true }))); } catch { /* unreadable: dropped */ }
+  }).catch(() => {});
+  const persist = async () => {
+    const text = queue.length ? JSON.stringify(queue) : "";
+    if (!store || text === saved) return;
+    saved = text;
+    await store.save(text || null).catch(() => {});
+  };
   const flush = async () => {
     if (sending || stopped) return;
     sending = true;
     try {
+      await restored;
       const bridge = await drainBridge().catch(() => []);
       for (const event of bridge) queue.push({ ...event, event: `bridge.${String(event.event)}`, phoneMs: Math.round(performance.now() * 10) / 10 });
       if (!queue.length) return;
       const batch = queue.splice(0, 500);
       try { await send(batch); } catch { queue.unshift(...batch); if (queue.length > LIMIT) queue.splice(0, queue.length - LIMIT); }
-    } finally { sending = false; }
+    } finally { await persist(); sending = false; }
   };
   const timer = setInterval(() => { void flush(); }, 1000);
   return () => { stopped = true; clearInterval(timer); };

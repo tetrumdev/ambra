@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { Unpaired, follow, restore, networkStatus, playingHere, serverAnswering, subscribeReachability, wantsOffline, sendDiagnostics, drainBridgeDiagnostics } from "./src/client";
 import { diag, startDiagnostics } from "./src/diagnostics";
+import * as FileSystem from "expo-file-system/legacy";
 import { deviceOnline, subscribeDevicePath } from "./modules/ambra-network/src";
 import { Pairing } from "./src/Pairing";
 import { Player } from "./src/Player";
@@ -22,6 +23,13 @@ import { useOfflineSession } from "./src/offlineSession";
  * server plays on (it's downloaded ahead) and the switch waits for it to stop.
  */
 const OFFLINE_AFTER_MS = 5_000;
+
+/** TEMPORARY: unsent playback diagnostics, kept on disk across restarts. */
+const DIAGNOSTICS_FILE = `${FileSystem.documentDirectory}ambra-diagnostics.json`;
+const diagnosticsStore = {
+  load: () => FileSystem.readAsStringAsync(DIAGNOSTICS_FILE).catch(() => null),
+  save: (text: string | null) => text ? FileSystem.writeAsStringAsync(DIAGNOSTICS_FILE, text) : FileSystem.deleteAsync(DIAGNOSTICS_FILE, { idempotent: true }),
+};
 
 type Saved = { address: string | null; paired: boolean };
 
@@ -48,7 +56,7 @@ export default function App() {
   useEffect(() => { offlineRef.current = offline; diag("app.offline_session", { active: offline, unreachableSince, wanted, busy, cut }); }, [offline]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void startPhoneDownloads(); }, []);
   // TEMPORARY: playback diagnostics go to the server's log while paired.
-  useEffect(() => paired ? startDiagnostics(sendDiagnostics, drainBridgeDiagnostics) : undefined, [paired]);
+  useEffect(() => paired ? startDiagnostics(sendDiagnostics, drainBridgeDiagnostics, diagnosticsStore) : undefined, [paired]);
   useEffect(() => {
     if (!paired) return;
     forgetState();
