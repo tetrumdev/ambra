@@ -92,10 +92,24 @@ export class SearchSession {
     }
   }
 
+  private ranking: { candidates: Track[]; shown: string; groups: RecordingGroup[] } | null = null;
+  /**
+   * The songs in order, reused while nothing changed: each publish plans completion lookups and
+   * then takes a snapshot, both from this ranking.
+   */
+  private rank(candidates: Track[]) {
+    const shown = this.shown.join(" ");
+    const last = this.ranking;
+    if (last && last.shown === shown && last.candidates.length === candidates.length && last.candidates.every((track, index) => track === candidates[index])) return last.groups;
+    const groups = rankSearchGroups(candidates, this.options.query, this.held);
+    this.ranking = { candidates, shown, groups };
+    return groups;
+  }
+
   snapshot(): SearchSnapshot {
     const sources = [...this.sources.values()];
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
-    const ranked = rankSearchGroups(candidates, this.options.query, this.held);
+    const ranked = this.rank(candidates);
     // Grouping preserves the native order of a single provider's recordings.
     const groups = this.options.combined ? ranked : groupSearchResults(candidates, "");
     const results = groups.map(group => group.track);
@@ -205,7 +219,7 @@ export class SearchSession {
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
     const albums = sources.flatMap(source => source.albums);
     // Only songs the query plainly names: a loose match isn't worth asking every service about.
-    const strong = rankSearchGroups(candidates, this.options.query).slice(0, COMPLETED_GROUPS).filter(group => group.relevance >= STRONG_MATCH);
+    const strong = this.rank(candidates).slice(0, COMPLETED_GROUPS).filter(group => group.relevance >= STRONG_MATCH);
     // The first song, and the others by its artist. Other artists' songs of the same name (covers,
     // namesakes) are looked for nowhere else: in the search benchmark, completing them never
     // changed the copy that leads, and their late answers reordered the list.
