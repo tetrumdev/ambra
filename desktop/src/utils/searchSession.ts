@@ -191,7 +191,13 @@ export class SearchSession {
     const candidates = sources.flatMap(source => [...source.tracks.values()]);
     const albums = sources.flatMap(source => source.albums);
     // Only songs the query plainly names: a loose match isn't worth asking every service about.
-    const leaders = rankSearchGroups(candidates, this.options.query).slice(0, COMPLETED_GROUPS).filter(group => group.relevance >= STRONG_MATCH);
+    const strong = rankSearchGroups(candidates, this.options.query).slice(0, COMPLETED_GROUPS).filter(group => group.relevance >= STRONG_MATCH);
+    // The first song, and the others by its artist. Other artists' songs of the same name (covers,
+    // namesakes) are looked for nowhere else: in the search benchmark, completing them never
+    // changed the copy that leads, and their late answers reordered the list.
+    const credits = (group: RecordingGroup) => artistCredits(group.alternatives.flatMap(copy => [copy.artist, ...copy.artists.map(artist => artist.name)]));
+    const lead = strong[0] ? credits(strong[0]) : new Set<string>();
+    const leaders = strong.filter((group, index) => index === 0 || [...credits(group)].some(name => lead.has(name)));
     for (const [index, group] of leaders.entries()) {
       const song = `${searchText(group.track.artist)}|${searchText(group.track.name)}`;
       const explicit = explicitAudio(group.alternatives);
