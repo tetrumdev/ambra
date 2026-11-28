@@ -6,7 +6,7 @@ import { SearchSession, type SearchSnapshot } from "../utils/searchSession";
 import { preloadArtwork } from "../utils/artworkImages";
 import { providerThumbnail } from "../utils/providerThumbnail";
 
-const empty: SearchSnapshot = { results: [], allResults: [], candidates: [], artists: [], albums: [], isSearching: false, hasMore: false, error: null, canRetry: false };
+const empty: SearchSnapshot = { results: [], allResults: [], candidates: [], artists: [], albums: [], order: ["tracks", "artists", "albums"], isSearching: false, hasMore: false, error: null, canRetry: false };
 const resolvedTracks = new Map<string, { track: Track; expires: number }>();
 
 function cachedTrack(track: Track) {

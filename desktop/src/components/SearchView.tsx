@@ -2,7 +2,7 @@ import { albumForTrack, sortAlbumTracks, type BrowseEntity } from "../utils/brow
 import { nowPlayingState, useNowPlaying } from "../hooks/useNowPlaying";
 import { ArtistLinks } from "./ArtistLinks";
 import { AlbumArtistLinks } from "./AlbumArtistLinks";
-import { categoryOrder } from "../utils/catalogRanking";
+import type { SearchCategory } from "../utils/catalogRanking";
 import { ProviderIcon } from "./ProviderIcon";
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { TrackArtwork } from "./TrackArtwork";
@@ -35,7 +35,8 @@ type SearchViewProps = {
   tracks: Track[];
   /** Every copy found, services and editions included, for a section's "show all". */
   allTracks: Track[];
-  candidates: Track[];
+  /** The sections in the order to show them (the search's own reading of the query). */
+  order: SearchCategory[];
   artists: CatalogArtist[];
   albums: CatalogAlbum[];
   isSearching: boolean;
@@ -262,7 +263,7 @@ export function SearchView({
   provider,
   tracks,
   allTracks,
-  candidates,
+  order,
   artists,
   albums,
   isSearching,
@@ -308,7 +309,6 @@ export function SearchView({
   useResultGlide(root, [shownTracks, shownArtists, shownAlbums]);
   const [featuredTrack, ...remainingTracks] = shownTracks;
   const menuTrack = openMenu && "trackId" in openMenu ? shownTracks.find(track => track.globalId === openMenu.trackId) : undefined;
-  const order = categoryOrder(query, tracks, artists, albums, candidates);
   const sectionStyle = (category: typeof order[number]) => ({ order: order.indexOf(category), gridColumn: order[0] === category ? "1 / -1" : undefined });
   const count = shownTracks.length + shownArtists.length + shownAlbums.length;
   const status = isSearching ? `Searching ${providerNames[provider]}…` : `${count} results from ${error ? "available services" : providerNames[provider]}`;

@@ -8,7 +8,7 @@
  *   bun run search:bench --fill                replay, sending requests no fixture holds to that server once
  *   bun run search:bench live                  20 queries against the live server, cold then warm, 3 runs
  *
- * Options: --only=id,id  --profiles=typical,fast  --platforms=desktop,mobile  --out=path
+ * Options: --only=id,id  --split=dev  --profiles=typical,fast  --platforms=desktop,mobile  --out=path
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -26,7 +26,9 @@ const mode = args.find(arg => !arg.startsWith("--")) ?? "bench";
 const server = process.env.AMBRA_BENCH_SERVER ?? "http://127.0.0.1:38147";
 
 const labels = (JSON.parse(fs.readFileSync(path.join(import.meta.dir, "queries.json"), "utf8")) as Label[])
-  .filter(label => !option("only") || option("only")!.split(",").includes(label.id));
+  .filter(label => !option("only") || option("only")!.split(",").includes(label.id))
+  // Tuning looks at the dev split only; held-out queries are scored once a change is settled.
+  .filter(label => !option("split") || label.split === option("split"));
 
 
 /** Each query's own first pages from every service, cold, then a filling replay for whatever else the apps ask. */

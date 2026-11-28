@@ -1,4 +1,4 @@
-import { albumBaseTitle, categoryOrder, rankArtists, rankAlbums, searchText, searchTrackTitle } from "./catalogRanking";
+import { albumBaseTitle, categoryOrder, rankArtists, rankAlbums, searchText, searchTrackTitle, type SearchCategory } from "./catalogRanking";
 import type { CatalogArtist, CatalogAlbum, SearchPage, StreamingProvider } from "../api/server";
 import type { Track } from "../types/music";
 import { albumTitleFamily, asksForClean, everyCopy, explicitAudio, groupSearchResults, lossless, rankSearchGroups, sameSong, STRONG_MATCH, type RecordingGroup } from "./searchRanking";
@@ -12,6 +12,8 @@ export type SearchSnapshot = {
   artists: CatalogArtist[];
   albums: CatalogAlbum[];
   candidates: Track[];
+  /** The sections in the order to show them, the one the query is after first. */
+  order: SearchCategory[];
   isSearching: boolean;
   hasMore: boolean;
   error: string | null;
@@ -88,7 +90,8 @@ export class SearchSession {
     const named = ranked.filter(group => group.relevance >= STRONG_MATCH).slice(0, 3).map(group => group.track);
     const artistCandidates = sources.flatMap(source => source.artists);
     const albumCandidates = sources.flatMap(source => source.albums);
-    const intent = categoryOrder(this.options.query, results, artistCandidates, albumCandidates, candidates)[0];
+    const order = categoryOrder(this.options.query, candidates, artistCandidates, albumCandidates);
+    const intent = order[0];
     const albums = rankAlbums(albumCandidates, this.options.query, intent === "albums" ? [] : named);
     const artists = rankArtists(artistCandidates, intent === "albums" && albums[0] ? albums[0].artist : this.options.query, intent === "albums" ? [] : named);
     const errors = [...this.sources].filter(([, source]) => source.error)
@@ -98,6 +101,7 @@ export class SearchSession {
       artists,
       albums,
       results,
+      order,
       allResults: everyCopy(groups),
       isSearching: sources.some(source => source.pending),
       hasMore: sources.some(source => source.nextOffset !== null && !source.error),

@@ -65,9 +65,11 @@ export async function runDesktop(apps: Apps, clock: VirtualClock, network: Netwo
   const viewCpu: number[] = [];
   const ref = { current: null };
   const stop = apps.desktop.startTrackSearch(query, "all", ref, (snapshot: SearchSnapshot) => {
-    // As SearchView reads it: sections ordered by `categoryOrder` over every result.
+    // As SearchView reads it: the snapshot's own section order, or (before snapshots carried one,
+    // as at the baseline) `categoryOrder` over every result, computed on each render.
     const started = realNow();
-    const order = apps.ranking.categoryOrder(query, snapshot.results, snapshot.artists, snapshot.albums, snapshot.candidates);
+    const ordered = (snapshot as SearchSnapshot & { order?: Section[] }).order;
+    const order = ordered ?? (apps.ranking.categoryOrder as unknown as (...args: unknown[]) => Section[])(query, snapshot.results, snapshot.artists, snapshot.albums, snapshot.candidates);
     viewCpu.push(realNow() - started);
     views.push({ at: clock.now - start, tracks: snapshot.results, artists: snapshot.artists, albums: snapshot.albums, order, searching: snapshot.isSearching,
       error: snapshot.error, candidates: snapshot.candidates, allTracks: snapshot.allResults });

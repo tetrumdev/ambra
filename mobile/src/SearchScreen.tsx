@@ -20,7 +20,7 @@ import { ReorderRow } from "./reorder";
 import { colors, fonts, haptic, radius, space, textSize } from "./theme";
 
 const AnimatedFlatList = Animated.createAnimatedComponent(FlatList<Track>);
-const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], isSearching: false, hasMore: false, error: null, canRetry: false };
+const empty: SearchSnapshot = { results: [], allResults: [], artists: [], albums: [], candidates: [], order: ["tracks", "artists", "albums"], isSearching: false, hasMore: false, error: null, canRetry: false };
 
 /**
  * One search across every service. The field sits at the top and stays there; the title above

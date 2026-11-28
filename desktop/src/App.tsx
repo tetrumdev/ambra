@@ -698,7 +698,7 @@ function App({ localOnly, sharedPlayback = false, awaitingSharedPlayback = false
             provider={searchProvider}
             tracks={search.results}
             allTracks={search.allResults}
-            candidates={search.candidates}
+            order={search.order}
             isSearching={search.isSearching}
             artists={search.artists}
             albums={search.albums}

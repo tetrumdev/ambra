@@ -296,48 +296,105 @@ export function rankAlbums(values: CatalogAlbum[], query: string, tracks: TrackC
   return (related.length || tracks.length ? related : groups).map(group => withAlbumVersions(group.album, group.copies));
 }
 
-// Match a title and its actual credited artist together. Artist names embedded in
-// tribute/karaoke titles are only title text, not evidence of that artist credit.
-function entityRelevance(title: string, artist: string, query: string) {
-  const titleMatch = textRelevance(title, query);
-  const match = matchEntry({ title, artists: [artist] }, query);
-  // 6: the query is this title by this artist, however either is punctuated or ordered.
-  return match.coverage >= 0.99 && match.title >= 0.99 && match.artist >= 0.99 ? 6 : titleMatch;
+export type SearchCategory = "tracks" | "artists" | "albums";
+type Evidence = TrackCredit & { album: string; provider?: string };
+
+// How well each entry explains the query, kept while the query stays the same: every answer and
+// background lookup reruns `categoryOrder` over the same entries.
+let fitQuery = "";
+let fits = new WeakMap<object, number>();
+function remembered(entry: object, query: string, fit: () => number) {
+  if (query !== fitQuery) { fitQuery = query; fits = new WeakMap(); }
+  let value = fits.get(entry);
+  if (value === undefined) { value = fit(); fits.set(entry, value); }
+  return value;
 }
 
-export type SearchCategory = "tracks" | "artists" | "albums";
-export function categoryOrder(query: string, tracks: { name: string; artist: string; album: string }[], artists: CatalogArtist[], albums: CatalogAlbum[], evidence: (TrackCredit & { album: string; provider?: string })[] = tracks): SearchCategory[] {
-  const best = (values: number[]) => Math.max(0, ...values);
-  const artistMatch = best(artists.map(a => textRelevance(a.name, query)));
-  const albumMatch = best(albums.map(a => entityRelevance(a.title, a.artist, query)));
-  const trackMatch = best(tracks.map(t => entityRelevance(searchTrackTitle(t.name), t.artist, query)));
-  const support = {tracks: 0, artists: 0, albums: 0};
-  const counts = new Map<string, number>();
-  const seen = new Set<string>();
-  for (const track of evidence) {
-    const provider = track.provider ?? "single";
-    const key = `${provider}:${searchText(searchTrackTitle(track.name))}:${searchText(track.artist)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    const index = counts.get(provider) ?? 0;
-    counts.set(provider, index + 1);
-    if (index >= 3) continue;
-    const weight = [6, 3, 1][index];
-    if (textRelevance(searchTrackTitle(track.name), query) === 5) support.tracks += weight;
-    if (textRelevance(track.artist, query) === 5) support.artists += weight;
-    if (textRelevance(track.album, query) >= 4) support.albums += weight;
-  }
-  // Native leading recordings inform intent before title-only ranking can bury
-  // album matches. Low-ranked namesakes and duplicate editions add no support.
-  const scores: Record<SearchCategory, number> = {
-    tracks: trackMatch * 10 + Math.min(20, support.tracks),
-    artists: artistMatch * 10 + Math.min(20, support.artists),
-    albums: albumMatch * 10 + Math.min(20, support.albums),
+/** How much a service's n-th answer (from 0) says about what the query means. */
+const nativeWeight = (rank: number) => 1 / (1 + rank / 2);
+
+/**
+ * Which section the query is after, best first, from every service's own answer in its own
+ * order (`tracks`, `artists` and `albums` as found, not as ranked here).
+ *
+ * Each section is scored by its best entry: how much of the query that entry explains, times
+ * how firmly the services back it: how near the top of each service's answer it is and, for an
+ * artist or an album, how many of each service's leading songs are theirs. A song or an album has
+ * to be named by its title; songs that are merely by the artist asked for, or on the album asked
+ * for, count for that artist or album instead. A self-titled album counts for its artist, so
+ * "weezer" is the band before the blue album, and "abbey road" is the album rather than a
+ * lesser-known song of that name every service also has.
+ */
+export function categoryOrder(query: string, tracks: Evidence[], artists: CatalogArtist[], albums: CatalogAlbum[]): SearchCategory[] {
+  const services = [...new Set([...tracks, ...artists, ...albums].map(item => item.provider ?? "single"))];
+  // Each key's best (lowest) place in each service's answer.
+  const ranks = <T,>(items: T[], key: (item: T) => string, provider: (item: T) => string) => {
+    const places = new Map<string, Map<string, number>>();
+    const next = new Map<string, number>();
+    for (const item of items) {
+      const service = provider(item), id = key(item);
+      const byService = places.get(id) ?? new Map<string, number>();
+      if (byService.has(service)) continue;
+      const rank = next.get(service) ?? 0;
+      next.set(service, rank + 1);
+      byService.set(service, rank);
+      places.set(id, byService);
+    }
+    return (id: string) => [...places.get(id) ?? []].reduce((sum, [, rank]) => sum + nativeWeight(rank), 0) / services.length;
   };
-  // A leading exact song match must not lose to namesake artists merely
-  // because they contribute more unrelated songs further down the results.
-  if (leadingSong(query, tracks) && support.tracks > 0 && support.tracks >= support.albums && trackMatch >= artistMatch && trackMatch >= albumMatch) {
-    scores.tracks = Math.max(scores.tracks, scores.artists, scores.albums);
-  }
+  const songKey = (track: Evidence) => `${fold(searchTrackTitle(track.name))}|${fold(track.artist)}`;
+  const albumKey = (album: CatalogAlbum) => `${fold(albumBaseTitle(album.title))}|${fold(album.artist)}`;
+  const songBacking = ranks(tracks, songKey, track => track.provider ?? "single");
+  const artistBacking = ranks(artists, artist => fold(artist.name), artist => artist.provider);
+  const albumBacking = ranks(albums, albumKey, album => album.provider);
+  // Each service's first ten songs.
+  const leading = services.map(service => tracks.filter(track => (track.provider ?? "single") === service).slice(0, 10)
+    .map(track => ({ credits: artistCredits([track.artist]), album: fold(albumBaseTitle(track.album)) }))).filter(list => list.length);
+  const share = (owns: (track: { credits: Set<string>; album: string }) => boolean) => leading.length ? leading.reduce((sum, list) => sum + list.filter(owns).length / list.length, 0) / leading.length : 0;
+  const best = (values: number[]) => Math.max(0, ...values);
+
+  const artistFit = (name: string) => {
+    const { named, coverage } = matchName(name, query);
+    return Math.min(named, coverage);
+  };
+  const seenArtists = new Set<string>();
+  const artistScore = best(artists.map(artist => {
+    const name = fold(artist.name);
+    if (seenArtists.has(name)) return 0;
+    seenArtists.add(name);
+    const fit = remembered(artist, query, () => artistFit(artist.name));
+    if (fit < 0.5) return 0;
+    const owned = share(track => track.credits.has(name));
+    return fit * (0.3 + 0.35 * artistBacking(name) + 0.35 * Math.min(1, 2 * owned));
+  }));
+  const seenSongs = new Set<string>();
+  const trackScore = best(tracks.map(track => {
+    const key = songKey(track);
+    if (seenSongs.has(key)) return 0;
+    seenSongs.add(key);
+    const fit = remembered(track, query, () => {
+      const match = matchEntry({ title: searchTrackTitle(track.name), artists: [track.artist] }, query);
+      return match.score * match.title;
+    });
+    return fit && fit * (0.3 + 0.7 * songBacking(key));
+  }));
+  const seenAlbums = new Set<string>();
+  const albumScore = best(albums.map(album => {
+    const key = albumKey(album);
+    if (seenAlbums.has(key)) return 0;
+    seenAlbums.add(key);
+    const title = fold(albumBaseTitle(album.title));
+    const credits = artistCredits(album.artists?.length ? album.artists.map(artist => artist.name) : [album.artist]);
+    const fit = remembered(album, query, () => {
+      // Its artist's evidence, when the query is that artist's name.
+      if (title === fold(album.artist) && artistFit(album.artist) >= 0.8) return 0;
+      const match = matchEntry({ title: album.title, notes: album.version ? [album.version] : [], artists: [...credits] }, query);
+      return match.score * match.title;
+    });
+    if (!fit) return 0;
+    const owned = share(track => track.album === title && [...track.credits].some(name => credits.has(name)));
+    return fit * (0.3 + 0.35 * albumBacking(key) + 0.35 * Math.min(1, 2 * owned));
+  }));
+  const scores: Record<SearchCategory, number> = { tracks: trackScore, artists: artistScore, albums: albumScore };
   return (["tracks", "artists", "albums"] as SearchCategory[]).sort((a, b) => scores[b] - scores[a]);
 }
